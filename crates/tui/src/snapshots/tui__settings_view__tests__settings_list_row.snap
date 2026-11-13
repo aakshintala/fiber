@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/settings_view_tests.rs
+expression: "drawn(&settings, None, 80, 24)"
+---
+ Settings  /settings                                                 Esc returns
+Changes save automatically
+
+ Appearance   Notifications   Models   Permissions   Sessions   Advanced
+
+› Compaction tokens      400k tokens
+
+  Repository extensions  none ›
+
+  Skills                 Open /skills ›
+
+  MCP servers            Open /mcp ›
+
+
+
+
+
+
+
+
+
+About compaction.tokens.
+compaction.tokens · using the default · changing compaction.tokens needs a reloa
+←→ tab · / search · Enter change · Tab layer · Delete reset

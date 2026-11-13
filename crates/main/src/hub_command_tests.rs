@@ -96,6 +96,7 @@ fn configure_reads_the_idle_exit() {
         configure(&home, Ok(workspace)).unwrap(),
         hub::Settings {
             idle_exit: Duration::from_millis(200),
+            keep_exited: 10,
             level: log::diag::Level::Info,
             port: None,
         }

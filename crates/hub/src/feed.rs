@@ -42,13 +42,109 @@ use support::lock;
 
 use crate::attention::{Attention, Seen};
 use crate::connection::{Hub, Refused, accept_result, reject, send as send_line};
-use crate::recent::{self, Left, PageError, RecentRow};
+use crate::recent::{self, Left, RecentRow};
 use crate::relay::valid_session_id;
 use crate::tick::Tick;
 
 mod fanout;
 mod settle;
 use settle::Settle;
+
+/// Answers `recent` after opportunistic archiving, using one loaded index
+/// snapshot for selection, cursor lookup, page and total.
+pub(crate) fn recent_for_hub(
+    hub: &Hub,
+    args: &Map<String, Value>,
+) -> Result<Option<Value>, Refused> {
+    let text = |key: &str| match args.get(key) {
+        None => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.as_str())),
+        Some(_) => Err(invalid()),
+    };
+    let before = text("before")?;
+    let project = text("project")?;
+    let archived = match args.get("archived") {
+        None => false,
+        Some(Value::Bool(wanted)) => *wanted,
+        Some(_) => return Err(invalid()),
+    };
+    if args
+        .keys()
+        .any(|key| key != "before" && key != "project" && key != "archived")
+    {
+        return Err(invalid());
+    }
+    let raw_snapshot = recent::read_all(&hub.home);
+    let newest_snapshot = recent::newest_first(raw_snapshot.clone());
+    let running: BTreeSet<String> = lock(&hub.feed.state)
+        .entries
+        .iter()
+        .filter(|(_, entry)| matches!(entry, Entry::Running(_)))
+        .map(|(id, _)| id.clone())
+        .collect();
+    let candidates = recent::archive_candidates(
+        &newest_snapshot,
+        project,
+        hub.keep_exited,
+        &running,
+        |workspace| std::fs::metadata(workspace).map(|_| ()),
+    );
+    let pre_archive = recent::listed_from_rows(&hub.home, raw_snapshot.clone(), project);
+    let mut snapshot = newest_snapshot;
+    for row in &mut snapshot {
+        if candidates.contains(&row.session_id) && crate::archive::try_archive(hub, row) {
+            row.archived = true;
+        }
+    }
+    let rows = recent::listed_from_rows(&hub.home, snapshot.into_iter().rev().collect(), project);
+    let answer = if archived {
+        recent::page_from_rows(rows, before, &running, true)
+    } else {
+        let suffix_start = match before {
+            None => 0,
+            Some(before) => match pre_archive
+                .iter()
+                .position(|row| row.session_id.0 == before && !row.archived)
+            {
+                Some(index) => index + 1,
+                None => {
+                    return Err(Refused {
+                        code: ErrorCode::InvalidArguments,
+                        message: "`before` names no session in the list.".to_owned(),
+                    });
+                }
+            },
+        };
+        let post_archive: std::collections::BTreeMap<_, _> = rows
+            .into_iter()
+            .map(|row| (row.session_id.clone(), row))
+            .collect();
+        let total = post_archive
+            .values()
+            .filter(|row| !row.archived && !running.contains(&row.session_id.0))
+            .count();
+        let page = pre_archive
+            .into_iter()
+            .skip(suffix_start)
+            .filter_map(|row| {
+                post_archive
+                    .get(&row.session_id)
+                    .filter(|row| !row.archived)
+                    .cloned()
+            })
+            .filter(|row| !running.contains(&row.session_id.0))
+            .take(recent::RECENT_PAGE)
+            .collect();
+        Ok((page, total))
+    };
+    match answer {
+        Ok((rows, total)) => Ok(Some(serde_json::json!({"sessions": rows, "total": total}))),
+        Err(recent::PageError::UnknownBefore) => Err(Refused {
+            code: ErrorCode::InvalidArguments,
+            message: "`before` names no session in the list.".to_owned(),
+        }),
+    }
+}
 
 /// The bound, for tests: production capacity lives in [`spawn_writer`].
 #[cfg(test)]
@@ -419,6 +515,7 @@ impl Feed {
     /// `recent`: a page of exited sessions, newest first. With
     /// `archived`, only archived sessions; without it, archived sessions
     /// are left out.
+    #[cfg(test)]
     pub(crate) fn recent(&self, args: &Map<String, Value>) -> Result<Option<Value>, Refused> {
         let text = |key: &str| match args.get(key) {
             None => Ok(None),
@@ -448,7 +545,7 @@ impl Feed {
             Ok((rows, total)) => Ok(Some(
                 serde_json::json!({ "sessions": rows, "total": total }),
             )),
-            Err(PageError::UnknownBefore) => Err(Refused {
+            Err(recent::PageError::UnknownBefore) => Err(Refused {
                 code: ErrorCode::InvalidArguments,
                 message: "`before` names no session in the list.".to_owned(),
             }),

@@ -13,7 +13,8 @@ use ratatui::style::Modifier;
 
 use super::{
     Act, Applies, Ctx, Request, SCREEN_ROWS, Screen, ScreenRow, Settings, applies, applies_text,
-    as_typed, layers, shown_value,
+    as_typed, layers, next_number_value, next_text_value, number_list, number_slider,
+    refresh_millis, shown_value, slider_bar, text_list,
 };
 use crate::ThemeSetting;
 use crate::configure::{Layer, SettingControl, SettingRow, Shown, WriteScope};
@@ -239,12 +240,46 @@ fn open(fake: &Fake) -> Settings {
 }
 
 /// The view over `fake` on `tab`.
+fn focus_non_numeric(settings: &mut Settings, fake: &Fake) -> bool {
+    let item = settings.items().into_iter().find(|item| match item {
+        super::Item::Key(at) => {
+            let row = &settings.rows[*at];
+            number_slider(&row.key).is_none()
+                && number_list(&row.key).is_none()
+                && text_list(&row.key).is_none()
+        }
+        super::Item::Screen(_) => true,
+    });
+    let Some(item) = item else { return false };
+    settings.focus = settings.focus_of(item);
+    settings.place(&ctx(fake));
+    true
+}
+
 fn tab(fake: &Fake, tab: SettingsTab) -> Settings {
     let mut settings = open(fake);
     while settings.tab != tab {
+        assert!(
+            focus_non_numeric(&mut settings, fake),
+            "{} has only numeric rows",
+            super::tab_name(settings.tab)
+        );
         settings.edit_key(Edit::Right, &ctx(fake));
     }
     settings
+}
+
+#[test]
+fn every_tab_has_a_non_numeric_row_for_tab_navigation() {
+    let fake = Fake::new(rows());
+    for tab_ in SettingsTab::ALL {
+        let mut settings = tab(&fake, tab_);
+        assert!(
+            focus_non_numeric(&mut settings, &fake),
+            "{} has only numeric rows",
+            super::tab_name(tab_)
+        );
+    }
 }
 
 /// The view over `fake` with the row for `key` focused, on its tab.
@@ -261,7 +296,8 @@ fn at(fake: &Fake, key: &str) -> Settings {
             })
         })
         .unwrap_or_else(|| panic!("no tabbed row {key}"));
-    let mut settings = tab(fake, tab_of);
+    let mut settings = open(fake);
+    settings.tab = tab_of;
     settings.focus = Some(super::Focus::Key(key.to_owned()));
     settings.place(&ctx(fake));
     settings
@@ -385,7 +421,7 @@ fn the_view_opens_on_appearance_with_the_autosave_line_and_tab_bar() {
 |
 |› Hover         [x] On
 |
-|  Rail width    30% of screen width · 24 columns  project
+|  Rail width    ▕█████░░░▏ 30% of screen width · 24 columns  project
 |
 |  Theme         Default
 |
@@ -419,7 +455,7 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 |› Hover         [x] On
 |
-|  Rail width    30% of screen width · 24 columns  project
+|  Rail width    ▕█████░░░▏ 30% of screen width · 24 columns  project
 |
 |  Theme         Default
 |
@@ -564,7 +600,7 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 |› Diagnostics level  info
 |
-|  Hub port           Not set
+|
 |
 |
 |
@@ -769,6 +805,7 @@ fn left_and_right_wrap_between_the_first_and_last_tabs() {
     assert_eq!(settings.tab, SettingsTab::Appearance);
     // Between tabs it still steps one at a time.
     for want in &SettingsTab::ALL[1..] {
+        assert!(focus_non_numeric(&mut settings, &fake));
         edit(&mut settings, &fake, Edit::Right);
         assert_eq!(settings.tab, *want);
     }
@@ -795,6 +832,8 @@ fn a_key_with_no_tab_has_no_row_and_every_tabbed_key_has_exactly_one() {
         .collect();
     drawn_keys.sort();
     want.sort();
+    assert!(drawn_keys.iter().all(|key| key != "hub.port"));
+    want.retain(|key| key != "hub.port");
     assert_eq!(drawn_keys, want);
     assert!(
         !drawn_keys
@@ -1031,6 +1070,18 @@ fn a_narrow_frame_scrolls_the_tab_bar_to_keep_the_open_tab() {
 // Controls.
 
 /// The fixture rows with `key` holding `shown` from `layer`.
+fn editor_fake() -> Fake {
+    Fake::new(vec![on(
+        SettingsTab::Appearance,
+        "Editor",
+        "tui.editor",
+        value("\"24h\""),
+        "global",
+        ANY,
+        SettingControl::Text,
+    )])
+}
+
 fn with(key: &str, shown: Shown, layer: &str) -> Vec<SettingRow> {
     rows()
         .into_iter()
@@ -1255,44 +1306,12 @@ fn deleting_a_theme_resets_it_and_applies_the_inherited_one() {
 }
 
 #[test]
-fn a_number_opens_a_field_in_the_value_place_and_enter_saves_it_as_typed() {
-    let fake = Fake::new(rows());
+fn a_bounded_number_steps_instead_of_opening_a_text_field() {
+    let fake = Fake::new(with("tui.rail.width", value("30"), "project"));
     let mut settings = at(&fake, "tui.rail.width");
     one(&mut settings, &fake, Key::Enter);
-    // The field holds the value and sits where the value was.
-    expect(
-        &screen(&settings),
-        r#"
-| Settings  /settings                                                 Esc returns
-|Changes save automatically
-|
-| Appearance   Notifications   Models   Permissions   Sessions   Advanced
-|
-|  Hover         [x] On
-|
-|› Rail width    30
-|
-|  Theme         Default
-|
-|  Key bindings  Open /keys ›
-|
-|
-|
-|
-|
-|
-|
-|
-|
-|About tui.rail.width.
-|tui.rail.width · set in project · Applies when the terminal starts again.
-|Enter save · Esc cancel
-"#,
-    );
-    typed(&mut settings, &fake, "5");
-    one(&mut settings, &fake, Key::Enter);
-    assert_eq!(writes(&fake), [w(Layer::Project, "tui.rail.width", "305")]);
     assert!(matches!(settings.mode, super::Mode::Rows));
+    assert_eq!(writes(&fake), [w(Layer::Project, "tui.rail.width", "31")]);
     assert_eq!(settings.said, ["Saved to project config."]);
 }
 
@@ -1300,18 +1319,14 @@ fn a_number_opens_a_field_in_the_value_place_and_enter_saves_it_as_typed() {
 fn a_saved_write_rereads_and_says_the_file() {
     let fake = Fake::new(rows());
     let mut settings = at(&fake, "compaction.tokens");
-    // Tab moves the default to project before Enter opens its field.
+    // Tab moves the default to project before Enter steps the list.
     *support::lock(&fake.rows_after) = Some(with("compaction.tokens", value("400000"), "project"));
     press(&mut settings, &fake, &[Key::Tab, Key::Enter]);
-    for _ in 0..6 {
-        one(&mut settings, &fake, Key::Backspace);
-    }
-    typed(&mut settings, &fake, "200000");
     let reads = fake.reads().len();
     one(&mut settings, &fake, Key::Enter);
     assert_eq!(
         writes(&fake).last(),
-        Some(&w(Layer::Project, "compaction.tokens", "200000"))
+        Some(&w(Layer::Project, "compaction.tokens", "600000"))
     );
     assert!(matches!(settings.mode, super::Mode::Rows));
     assert_eq!(fake.reads().len(), reads + 1);
@@ -1325,8 +1340,8 @@ fn a_saved_write_rereads_and_says_the_file() {
 
 #[test]
 fn free_text_is_saved_as_a_string_whatever_it_looks_like() {
-    let fake = Fake::new(rows());
-    let mut settings = at(&fake, "model_lists.refresh_after");
+    let fake = editor_fake();
+    let mut settings = at(&fake, "tui.editor");
     one(&mut settings, &fake, Key::Enter);
     press(
         &mut settings,
@@ -1335,12 +1350,9 @@ fn free_text_is_saved_as_a_string_whatever_it_looks_like() {
     );
     typed(&mut settings, &fake, "7d");
     one(&mut settings, &fake, Key::Enter);
-    assert_eq!(
-        writes(&fake),
-        [w(Layer::Global, "model_lists.refresh_after", "\"7d\"")]
-    );
+    assert_eq!(writes(&fake), [w(Layer::Global, "tui.editor", "\"7d\"")]);
     // Text that parses as JSON is still text.
-    let mut again = at(&fake, "model_lists.refresh_after");
+    let mut again = at(&fake, "tui.editor");
     one(&mut again, &fake, Key::Enter);
     press(
         &mut again,
@@ -1351,64 +1363,28 @@ fn free_text_is_saved_as_a_string_whatever_it_looks_like() {
     one(&mut again, &fake, Key::Enter);
     assert_eq!(
         writes(&fake).last(),
-        Some(&w(Layer::Global, "model_lists.refresh_after", "\"12\""))
+        Some(&w(Layer::Global, "tui.editor", "\"12\""))
     );
 }
 
 #[test]
-fn a_refused_value_keeps_the_field_and_the_draft_with_the_error_under_it() {
-    let fake = Fake::new(rows());
+fn a_refused_numeric_step_keeps_the_value_and_reports_the_error() {
+    let fake = Fake::new(with("tui.rail.width", value("30"), "project"));
     refuse(&fake, "tui.rail.width must be a number");
     let mut settings = at(&fake, "tui.rail.width");
     one(&mut settings, &fake, Key::Enter);
-    typed(&mut settings, &fake, "x");
-    one(&mut settings, &fake, Key::Enter);
-    let super::Mode::Field(field) = &settings.mode else {
-        panic!("the field closed on a refused value");
-    };
-    assert_eq!(field.draft.expand(), "30x");
+    assert!(matches!(settings.mode, super::Mode::Rows));
+    assert_eq!(writes(&fake), [w(Layer::Project, "tui.rail.width", "31")]);
     assert_eq!(settings.said, ["tui.rail.width must be a number"]);
-    expect(
-        &screen(&settings),
-        r#"
-| Settings  /settings                                                 Esc returns
-|Changes save automatically
-|
-| Appearance   Notifications   Models   Permissions   Sessions   Advanced
-|
-|  Hover         [x] On
-|
-|› Rail width    30x
-|
-|  Theme         Default
-|
-|  Key bindings  Open /keys ›
-|
-|
-|
-|
-|
-|
-|
-|
-|About tui.rail.width.
-|tui.rail.width · set in project · Applies when the terminal starts again.
-|tui.rail.width must be a number
-|Enter save · Esc cancel
-"#,
-    );
-    // Esc closes the field and writes nothing more.
-    let before = writes(&fake).len();
     one(&mut settings, &fake, Key::Esc);
     assert!(matches!(settings.mode, super::Mode::Rows));
-    assert_eq!(writes(&fake).len(), before);
-    assert!(settings.said.is_empty());
+    assert_eq!(writes(&fake).len(), 1);
 }
 
 #[test]
 fn esc_in_a_field_cancels_with_no_write() {
-    let fake = Fake::new(rows());
-    let mut settings = at(&fake, "tui.rail.width");
+    let fake = editor_fake();
+    let mut settings = at(&fake, "tui.editor");
     press(
         &mut settings,
         &fake,
@@ -1422,8 +1398,8 @@ fn esc_in_a_field_cancels_with_no_write() {
 
 #[test]
 fn the_field_takes_paste_and_moves_its_caret_by_characters() {
-    let fake = Fake::new(rows());
-    let mut settings = at(&fake, "model_lists.refresh_after");
+    let fake = editor_fake();
+    let mut settings = at(&fake, "tui.editor");
     one(&mut settings, &fake, Key::Enter);
     press(
         &mut settings,
@@ -1444,7 +1420,7 @@ fn the_field_takes_paste_and_moves_its_caret_by_characters() {
     // reset the value.
     edit(&mut settings, &fake, Edit::Delete);
     edit(&mut settings, &fake, Edit::Right);
-    assert_eq!(settings.tab, SettingsTab::Models);
+    assert_eq!(settings.tab, SettingsTab::Appearance);
     assert!(resets(&fake).is_empty());
     let super::Mode::Field(field) = &settings.mode else {
         panic!("no field");
@@ -1454,14 +1430,14 @@ fn the_field_takes_paste_and_moves_its_caret_by_characters() {
 
 #[test]
 fn the_wheel_and_clicks_do_not_retarget_an_open_field() {
-    let fake = Fake::new(rows());
-    let mut settings = at(&fake, "tui.rail.width");
+    let fake = editor_fake();
+    let mut settings = at(&fake, "tui.editor");
     one(&mut settings, &fake, Key::Enter);
     settings.wheel(false, &ctx(&fake));
     settings.click(Spot::Row(0), &ctx(&fake));
     assert_eq!(
         settings.focus,
-        Some(super::Focus::Key("tui.rail.width".to_owned()))
+        Some(super::Focus::Key("tui.editor".to_owned()))
     );
     assert!(matches!(settings.mode, super::Mode::Field(_)));
 }
@@ -1616,6 +1592,12 @@ fn a_value_set_by_dash_c_is_read_only_whatever_opens_it() {
         for press_ in [Key::Enter, Key::Char(' '), Key::Tab] {
             let act = one(&mut settings, &fake, press_.clone());
             assert!(matches!(act, Act::Stay), "{key} {press_:?}");
+        }
+        if matches!(key, "tui.rail.width" | "model_lists.refresh_after") {
+            for arrow in [Edit::Left, Edit::Right] {
+                let act = edit(&mut settings, &fake, arrow.clone());
+                assert!(matches!(act, Act::Stay), "{key} {arrow:?}");
+            }
         }
         let act = edit(&mut settings, &fake, Edit::Delete);
         assert!(matches!(act, Act::Stay), "{key}");
@@ -1812,7 +1794,7 @@ fn a_refused_reset_says_why_and_leaves_the_row() {
     assert_eq!(settings.said, ["changed meanwhile"]);
     assert_eq!(
         row_of(&screen(&settings), "Rail width"),
-        "› Rail width 30% of screen width · 24 columns project"
+        "› Rail width ▕█████░░░▏ 30% of screen width · 24 columns project"
     );
 }
 
@@ -1831,9 +1813,7 @@ fn a_remote_terminals_client_keys_offer_only_global() {
     assert!(resets(&fake).is_empty());
     // A change still saves, to global.
     one(&mut settings, &fake, Key::Enter);
-    typed(&mut settings, &fake, "1");
-    one(&mut settings, &fake, Key::Enter);
-    assert_eq!(writes(&fake), [w(Layer::Global, "tui.rail.width", "301")]);
+    assert_eq!(writes(&fake), [w(Layer::Global, "tui.rail.width", "31")]);
 }
 
 #[test]
@@ -2725,7 +2705,7 @@ fn choosing_a_theme_writes_the_global_tui_theme_queues_it_and_returns_to_the_tab
 |
 |  Hover         [x] On
 |
-|  Rail width    30% of screen width · 24 columns  project
+|  Rail width    ▕█████░░░▏ 30% of screen width · 24 columns  project
 |
 |› Theme         Default
 |
@@ -2797,6 +2777,7 @@ fn applies_by_key() {
         ("hubs.x.address", Applies::NextConnection),
         ("hub.default", Applies::NextConnection),
         ("hub.idle_exit_ms", Applies::HubStart),
+        ("session.keep_exited", Applies::HubStart),
         ("diagnostics.level", Applies::ProcessStart),
         ("model", Applies::NewSessions),
         ("thinking", Applies::NewSessions),
@@ -3001,8 +2982,7 @@ fn settings_metadata_screen_commands_are_registered() {
     }
 }
 
-// The two stored whole-screen snapshots: a tab with a reload cost, and a
-// number field open in its row.
+// Stored whole-screen snapshots for ordinary, slider and stepped-list rows.
 
 #[test]
 fn settings_80x24() {
@@ -3013,11 +2993,40 @@ fn settings_80x24() {
 
 #[test]
 fn settings_editing() {
-    let fake = Fake::new(rows());
-    let mut settings = at(&fake, "compaction.tokens");
+    let mut all = rows();
+    all.push(on(
+        SettingsTab::Appearance,
+        "Editor",
+        "tui.editor",
+        value("\"vim\""),
+        "project",
+        PERSON,
+        SettingControl::Text,
+    ));
+    let fake = Fake::new(all);
+    let mut settings = at(&fake, "tui.editor");
     one(&mut settings, &fake, Key::Enter);
     typed(&mut settings, &fake, "5");
+    let super::Mode::Field(field) = &settings.mode else {
+        panic!("no field");
+    };
+    assert_eq!(field.draft.expand(), "vim5");
     insta::assert_snapshot!("settings_editing", drawn(&settings, None, 80, 24));
+    assert!(fake.writes().is_empty());
+}
+
+#[test]
+fn settings_slider_row() {
+    let fake = Fake::new(rows());
+    let settings = at(&fake, "tui.rail.width");
+    insta::assert_snapshot!("settings_slider_row", drawn(&settings, None, 80, 24));
+}
+
+#[test]
+fn settings_list_row() {
+    let fake = Fake::new(rows());
+    let settings = at(&fake, "compaction.tokens");
+    insta::assert_snapshot!("settings_list_row", drawn(&settings, None, 80, 24));
 }
 
 // Geometry, scrolling and redaction.
@@ -3083,6 +3092,18 @@ fn a_number_row_shows_its_unit_in_row_text() {
         number("compaction.window_fraction", "0.5"),
         "50% of the context window"
     );
+    assert_eq!(
+        number("compaction.window_fraction", "0.525"),
+        "52.5% of the context window (custom)"
+    );
+    assert_eq!(
+        number("compaction.window_fraction", "0.95"),
+        "95% of the context window (custom)"
+    );
+    assert_eq!(
+        number("compaction.window_fraction", "0.45"),
+        "45% of the context window (custom)"
+    );
     assert_eq!(number("cache.warm_cap", "2"), "2 cache lifetimes");
     assert_eq!(number("cache.warm_cap", "1"), "1 cache lifetime");
     assert_eq!(number("cache.warm_cap", "0"), "0 cache lifetimes");
@@ -3098,9 +3119,9 @@ fn a_number_row_shows_its_unit_in_row_text() {
     assert_eq!(number("compaction.tokens", "1000"), "1k tokens (custom)");
     assert_eq!(number("compaction.tokens", "999"), "999 tokens (custom)");
     assert_eq!(number("compaction.tokens", "0"), "0 tokens (custom)");
-    // Dollars: zero reads "No limit".
+    // A stored zero is custom; the unset row is Default.
     assert_eq!(number("budget.usd", "10"), "$10");
-    assert_eq!(number("budget.usd", "0"), "No limit");
+    assert_eq!(number("budget.usd", "0"), "$0 (custom)");
     assert_eq!(number("budget.usd", "7"), "$7 (custom)");
     assert_eq!(number("budget.usd", "10.5"), "$10.5 (custom)");
     // Block counts, singular against plural.
@@ -3131,6 +3152,10 @@ fn a_number_row_shows_its_unit_in_row_text() {
     assert_eq!(number("retry.max_delay_ms", "-60000"), "-60 s (custom)");
     // Durations keep their unit word; off-list values read custom.
     assert_eq!(text("model_lists.refresh_after", Text, "\"24h\""), "24 h");
+    assert_eq!(
+        text("model_lists.refresh_after", Text, "\"1440m\""),
+        "1440 min"
+    );
     assert_eq!(text("model_lists.refresh_after", Text, "\"3d\""), "3 d");
     assert_eq!(
         text("model_lists.refresh_after", Text, "\"90m\""),
@@ -3158,6 +3183,377 @@ fn a_number_row_shows_its_unit_in_row_text() {
 /// columns after the region's limits, read from the terminal width
 /// while the draw width keeps the room and the cut (`docs/tui.md`,
 /// `/settings`, "Controls").
+#[test]
+fn slider_bar_clamps_its_endpoints_and_rejects_values_outside_the_range() {
+    let shown = |text: &str| value(text);
+    let range = (10.0, 40.0, 1.0);
+    assert_eq!(
+        slider_bar(range, &shown("10")),
+        Some("▕░░░░░░░░▏".to_owned())
+    );
+    assert_eq!(
+        slider_bar(range, &shown("40")),
+        Some("▕████████▏".to_owned())
+    );
+    assert_eq!(
+        slider_bar(range, &shown("20")),
+        Some("▕███░░░░░▏".to_owned())
+    );
+    assert_eq!(
+        slider_bar(range, &shown("9.999")),
+        Some("▕░░░░░░░░▏".to_owned())
+    );
+    assert_eq!(
+        slider_bar(range, &shown("40.001")),
+        Some("▕████████▏".to_owned())
+    );
+}
+
+#[test]
+fn numeric_controls_match_the_documented_values_and_include_defaults() {
+    let sliders = [
+        ("tui.rail.width", (10.0, 40.0, 1.0), 15.0),
+        ("tui.panel.width", (15.0, 45.0, 1.0), 21.0),
+        ("quota.notice_at", (50.0, 95.0, 5.0), 80.0),
+        ("compaction.window_fraction", (0.5, 0.9, 0.05), 0.7),
+        ("cache.warm_cap", (0.0, 11.0, 1.0), 2.0),
+        ("retry.attempts", (0.0, 10.0, 1.0), 3.0),
+    ];
+    for (key, want, default) in sliders {
+        assert_eq!(number_slider(key), Some(want), "{key}");
+        assert!((want.0..=want.1).contains(&default), "{key}");
+    }
+    let lists: [(&str, &[f64], f64); 8] = [
+        (
+            "compaction.tokens",
+            &[
+                100_000.0,
+                200_000.0,
+                400_000.0,
+                600_000.0,
+                800_000.0,
+                1_000_000.0,
+            ],
+            400_000.0,
+        ),
+        ("budget.usd", &[0.0, 1.0, 5.0, 10.0, 25.0, 50.0, 100.0], 0.0),
+        (
+            "reviewer.block_limits.consecutive",
+            &[1.0, 2.0, 3.0, 5.0, 10.0],
+            3.0,
+        ),
+        (
+            "reviewer.block_limits.session",
+            &[5.0, 10.0, 20.0, 50.0, 100.0],
+            20.0,
+        ),
+        (
+            "retry.initial_delay_ms",
+            &[500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0],
+            2_000.0,
+        ),
+        (
+            "retry.max_delay_ms",
+            &[10_000.0, 30_000.0, 60_000.0, 120_000.0, 300_000.0],
+            60_000.0,
+        ),
+        (
+            "session.idle_exit_ms",
+            &[300_000.0, 900_000.0, 1_800_000.0, 3_600_000.0, 7_200_000.0],
+            1_800_000.0,
+        ),
+        ("session.keep_exited", &[0.0, 5.0, 10.0, 20.0, 50.0], 10.0),
+    ];
+    for (key, want, default) in lists {
+        assert_eq!(number_list(key), Some(want), "{key}");
+        assert!(want.contains(&default), "{key}");
+    }
+    assert_eq!(number_list("hub.idle_exit_ms"), None);
+    assert_eq!(
+        number_list("session.keep_exited"),
+        Some(&[0.0, 5.0, 10.0, 20.0, 50.0][..])
+    );
+    assert_eq!(number_list("tui.rail.width"), None);
+    assert_eq!(
+        text_list("model_lists.refresh_after"),
+        Some(&["1h", "6h", "12h", "24h", "3d", "7d"][..])
+    );
+    let refresh_values = text_list("model_lists.refresh_after").unwrap();
+    assert!(refresh_values.contains(&"24h"));
+    assert_eq!(refresh_values.len(), 6);
+    // The display and the control share each list table's membership.
+    assert_eq!(
+        shown_value(&on(
+            SettingsTab::Sessions,
+            "tokens",
+            "compaction.tokens",
+            value("400000"),
+            "default",
+            ANY,
+            SettingControl::Number
+        ))
+        .0,
+        "400k tokens"
+    );
+    assert_eq!(
+        shown_value(&on(
+            SettingsTab::Sessions,
+            "budget",
+            "budget.usd",
+            value("0"),
+            "default",
+            ANY,
+            SettingControl::Number
+        ))
+        .0,
+        "$0 (custom)"
+    );
+}
+
+#[test]
+fn keep_exited_lists_and_persists_the_documented_session_counts() {
+    let row = |shown| {
+        on(
+            SettingsTab::Sessions,
+            "Keep exited",
+            "session.keep_exited",
+            shown,
+            "project",
+            ANY,
+            SettingControl::Number,
+        )
+    };
+    assert_eq!(super::number_text("session.keep_exited", "0"), "Keep all");
+    assert_eq!(super::number_text("session.keep_exited", "5"), "5 sessions");
+    assert_eq!(
+        super::number_text("session.keep_exited", "7"),
+        "7 sessions (custom)"
+    );
+    assert_eq!(
+        applies_text("session.keep_exited", None),
+        "Applies when the hub starts again."
+    );
+
+    let fake = Fake::new(vec![row(value("10"))]);
+    let mut settings = at(&fake, "session.keep_exited");
+    assert!(screen(&settings).contains("Keep exited"));
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "session.keep_exited", "20")]
+    );
+    assert_eq!(
+        next_number_value(number_list("session.keep_exited").unwrap(), 20.0, true),
+        Some(50.0)
+    );
+
+    let fake = Fake::new(vec![row(value("10"))]);
+    refuse(&fake, "session.keep_exited is read-only");
+    let mut settings = at(&fake, "session.keep_exited");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "session.keep_exited", "20")]
+    );
+    assert_eq!(settings.said, ["session.keep_exited is read-only"]);
+}
+
+#[test]
+fn a_custom_list_steps_to_the_nearest_value_in_each_direction_and_wraps() {
+    let values = number_list("compaction.tokens").unwrap();
+    assert_eq!(next_number_value(values, 300_000.0, true), Some(400_000.0));
+    assert_eq!(next_number_value(values, 300_000.0, false), Some(200_000.0));
+    assert_eq!(
+        next_number_value(values, 100_000.0, false),
+        Some(1_000_000.0)
+    );
+    assert_eq!(
+        next_number_value(values, 1_000_000.0, true),
+        Some(100_000.0)
+    );
+    assert_eq!(next_number_value(values, 0.0, true), Some(100_000.0));
+    assert_eq!(
+        next_number_value(values, 2_000_000.0, false),
+        Some(1_000_000.0)
+    );
+    let refresh = text_list("model_lists.refresh_after").unwrap();
+    assert_eq!(next_text_value(refresh, "90m", true), Some("6h"));
+    assert_eq!(next_text_value(refresh, "90m", false), Some("1h"));
+    assert_eq!(next_text_value(refresh, "1h", false), Some("7d"));
+    assert_eq!(next_text_value(refresh, "7d", true), Some("1h"));
+    assert_eq!(refresh_millis("90m"), Some(5_400_000));
+}
+
+#[test]
+fn refresh_after_arrows_step_its_list_without_changing_tabs() {
+    for (edit_key, next) in [(Edit::Right, "3d"), (Edit::Left, "12h")] {
+        let fake = Fake::new(rows());
+        let mut settings = at(&fake, "model_lists.refresh_after");
+        let tab = settings.tab;
+        edit(&mut settings, &fake, edit_key);
+        assert_eq!(settings.tab, tab);
+        assert_eq!(settings.tab, SettingsTab::Models);
+        assert_eq!(
+            writes(&fake),
+            [w(
+                Layer::Global,
+                "model_lists.refresh_after",
+                &format!("\"{next}\"")
+            )]
+        );
+    }
+}
+
+#[test]
+fn left_and_right_on_a_slider_step_the_value_without_changing_tabs() {
+    for (edit_key, next) in [(Edit::Right, "31"), (Edit::Left, "29")] {
+        let fake = Fake::new(with("tui.rail.width", value("30"), "project"));
+        let mut settings = at(&fake, "tui.rail.width");
+        let tab = settings.tab;
+        edit(&mut settings, &fake, edit_key);
+        assert_eq!(settings.tab, tab);
+        assert_eq!(writes(&fake), [w(Layer::Project, "tui.rail.width", next)]);
+    }
+}
+
+#[test]
+fn sliders_step_by_their_range_and_enter_wraps_only_at_the_top() {
+    let fake = Fake::new(with("tui.rail.width", value("30"), "project"));
+    let mut settings = at(&fake, "tui.rail.width");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(writes(&fake), [w(Layer::Project, "tui.rail.width", "31")]);
+
+    let fake = Fake::new(with("tui.rail.width", value("40"), "project"));
+    let mut settings = at(&fake, "tui.rail.width");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(writes(&fake), [w(Layer::Project, "tui.rail.width", "10")]);
+
+    let fake = Fake::new(with("tui.rail.width", value("10"), "project"));
+    let mut settings = at(&fake, "tui.rail.width");
+    edit(&mut settings, &fake, Edit::Left);
+    assert!(writes(&fake).is_empty());
+    edit(&mut settings, &fake, Edit::Right);
+    assert_eq!(writes(&fake), [w(Layer::Project, "tui.rail.width", "11")]);
+}
+
+#[test]
+fn list_rows_step_forward_and_budget_no_limit_resets_the_override() {
+    let fake = Fake::new(rows());
+    let mut settings = at(&fake, "compaction.tokens");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "compaction.tokens", "600000")]
+    );
+
+    let row = on(
+        SettingsTab::Sessions,
+        "Budget",
+        "budget.usd",
+        value("1"),
+        "project",
+        ANY,
+        SettingControl::Number,
+    );
+    let fake = Fake::new(vec![row]);
+    let mut settings = at(&fake, "budget.usd");
+    edit(&mut settings, &fake, Edit::Left);
+    assert!(writes(&fake).is_empty());
+    assert_eq!(resets(&fake), [w(Layer::Project, "budget.usd", "1")]);
+}
+
+#[test]
+fn a_custom_number_steps_to_the_next_list_entry_in_requested_direction() {
+    let fake = Fake::new(with("compaction.tokens", value("300000"), "project"));
+    let mut settings = at(&fake, "compaction.tokens");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "compaction.tokens", "400000")]
+    );
+
+    let fake = Fake::new(with("compaction.tokens", value("300000"), "project"));
+    let mut settings = at(&fake, "compaction.tokens");
+    edit(&mut settings, &fake, Edit::Left);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "compaction.tokens", "200000")]
+    );
+}
+
+#[test]
+fn invalid_numeric_values_do_not_write_and_unset_controls_step_from_defaults() {
+    for shown in [value("\"wide\""), value("\"soon\"")] {
+        let key = if shown == value("\"wide\"") {
+            "tui.rail.width"
+        } else {
+            "model_lists.refresh_after"
+        };
+        let fake = Fake::new(with(key, shown, "project"));
+        let mut settings = at(&fake, key);
+        one(&mut settings, &fake, Key::Enter);
+        assert!(writes(&fake).is_empty(), "{key}");
+    }
+
+    let fake = Fake::new(with("tui.rail.width", Shown::Unset, "project"));
+    let mut settings = at(&fake, "tui.rail.width");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(writes(&fake), [w(Layer::Project, "tui.rail.width", "16")]);
+
+    let fake = Fake::new(with("model_lists.refresh_after", Shown::Unset, "project"));
+    let mut settings = at(&fake, "model_lists.refresh_after");
+    edit(&mut settings, &fake, Edit::Right);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "model_lists.refresh_after", "\"3d\"")]
+    );
+}
+
+#[test]
+fn budget_zero_is_custom_and_arrows_move_between_zero_and_unset() {
+    let row = |shown| {
+        on(
+            SettingsTab::Sessions,
+            "Budget",
+            "budget.usd",
+            shown,
+            "project",
+            ANY,
+            SettingControl::Number,
+        )
+    };
+    let fake = Fake::new(vec![row(value("0"))]);
+    let mut settings = at(&fake, "budget.usd");
+    assert_eq!(shown_value(settings.selected().unwrap()).0, "$0 (custom)");
+    edit(&mut settings, &fake, Edit::Right);
+    assert_eq!(writes(&fake), [w(Layer::Project, "budget.usd", "1")]);
+
+    let fake = Fake::new(vec![row(value("0"))]);
+    let mut settings = at(&fake, "budget.usd");
+    edit(&mut settings, &fake, Edit::Left);
+    assert!(writes(&fake).is_empty());
+    assert_eq!(resets(&fake), [w(Layer::Project, "budget.usd", "0")]);
+
+    let fake = Fake::new(vec![row(Shown::Unset)]);
+    let mut settings = at(&fake, "budget.usd");
+    assert_eq!(shown_value(settings.selected().unwrap()).0, "Default");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(writes(&fake), [w(Layer::Project, "budget.usd", "1")]);
+}
+
+#[test]
+fn slider_custom_values_step_to_nearest_tick_and_off_range_values_clamp() {
+    assert_eq!(super::slider_step(0.525, 0.5, 0.9, 0.05, true, false), 0.55);
+    assert_eq!(super::slider_step(0.525, 0.5, 0.9, 0.05, false, false), 0.5);
+    assert_eq!(super::slider_step(0.95, 0.5, 0.9, 0.05, false, false), 0.9);
+    assert_eq!(super::slider_step(0.95, 0.5, 0.9, 0.05, true, true), 0.5);
+    assert_eq!(super::slider_step(0.45, 0.5, 0.9, 0.05, true, false), 0.5);
+    let stepped = (0..8).fold(0.5, |value, _| {
+        super::slider_step(value, 0.5, 0.9, 0.05, true, false)
+    });
+    assert!((stepped - 0.9).abs() < 1e-12);
+}
+
 #[test]
 fn a_width_row_counts_columns_for_its_width() {
     use SettingControl::Number;
@@ -3309,16 +3705,17 @@ fn the_wheel_over_the_theme_choices_previews_only_when_the_selection_moves() {
 
 #[test]
 fn a_field_and_a_page_print_without_their_draft() {
-    let fake = Fake::new(rows());
-    let mut settings = at(&fake, "tui.rail.width");
+    let fake = editor_fake();
+    let mut settings = at(&fake, "tui.editor");
     one(&mut settings, &fake, Key::Enter);
     typed(&mut settings, &fake, "sekret");
     let field = format!("{:?}", settings.mode);
     assert!(field.contains("Field"), "{field}");
-    assert!(field.contains("tui.rail.width"), "{field}");
+    assert!(field.contains("tui.editor"), "{field}");
     assert!(field.contains("redacted"), "{field}");
     assert!(!field.contains("sekret"), "{field}");
 
+    let fake = Fake::new(rows());
     let mut settings = page(&fake, "scoped_models");
     press(&mut settings, &fake, &[Key::Enter]);
     typed(&mut settings, &fake, "sekret");
@@ -3495,7 +3892,7 @@ fn settings_search_matches_letter_activation_and_slash_empty_query() {
     let mut settings = tab(&fake, SettingsTab::Sessions);
     one(&mut settings, &fake, Key::Char('/'));
     assert_eq!(query_of(&settings), "");
-    assert_eq!(settings.items().len(), 22);
+    assert_eq!(settings.items().len(), 21);
     assert_eq!(
         settings.focus,
         Some(super::Focus::Key("tui.hover".to_owned()))
@@ -3574,7 +3971,7 @@ fn settings_search_matches_case_insensitively_and_by_substring_with_backspace_an
     one(&mut settings, &fake, Key::Char('/'));
     one(&mut settings, &fake, Key::Backspace);
     assert_eq!(query_of(&settings), "");
-    assert_eq!(settings.items().len(), 22);
+    assert_eq!(settings.items().len(), 21);
     // A paste lands as one line: the newline and the tab go.
     let mut settings = open(&fake);
     one(&mut settings, &fake, Key::Char('/'));
@@ -3827,7 +4224,7 @@ fn settings_search_escape_keeps_the_match_in_its_tab_and_closes_next() {
 |
 |  Hover          [x] On                                               Appearance
 |
-|  Rail width     30% of screen width · 24 columns  project            Appearance
+|  Rail width     ▕█████░░░▏ 30% of screen wid… · 24 columns  project  Appearance
 |
 |  Theme          Default                                              Appearance
 |
@@ -4058,8 +4455,18 @@ fn settings_search_controls_save_through_the_existing_control_and_layer() {
 
 #[test]
 fn settings_search_controls_field_owns_its_keys_until_it_cancels() {
-    let fake = Fake::new(rows());
-    let mut settings = searched(&fake, "rail");
+    let mut all = rows();
+    all.push(on(
+        SettingsTab::Appearance,
+        "Editor",
+        "tui.editor",
+        value("\"vim\""),
+        "project",
+        PERSON,
+        SettingControl::Text,
+    ));
+    let fake = Fake::new(all);
+    let mut settings = searched(&fake, "editor");
     one(&mut settings, &fake, Key::Enter);
     assert!(matches!(settings.mode, super::Mode::Field(_)));
     // Letters, a slash and a paste land in the field, never the query.
@@ -4069,20 +4476,20 @@ fn settings_search_controls_field_owns_its_keys_until_it_cancels() {
     let super::Mode::Field(field) = &settings.mode else {
         panic!("no field");
     };
-    assert_eq!(field.draft.expand(), "30ab/3");
-    assert_eq!(query_of(&settings), "rail");
+    assert_eq!(field.draft.expand(), "vimab/3");
+    assert_eq!(query_of(&settings), "editor");
     assert!(fake.writes().is_empty());
     // The field's own Esc writes nothing and keeps the search: the next
     // Esc clears it onto the match, as the ruling says.
     one(&mut settings, &fake, Key::Esc);
     assert!(matches!(settings.mode, super::Mode::Rows));
-    assert_eq!(query_of(&settings), "rail");
+    assert_eq!(query_of(&settings), "editor");
     assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
     assert!(settings.search.is_none());
     assert_eq!(settings.tab, SettingsTab::Appearance);
     assert_eq!(
         settings.focus,
-        Some(super::Focus::Key("tui.rail.width".to_owned()))
+        Some(super::Focus::Key("tui.editor".to_owned()))
     );
 }
 
@@ -4306,9 +4713,11 @@ fn settings_search_controls_ctrl_g_and_plain_keys_keep_their_routes() {
         matches!(&act, Act::OpenLocal(Some(path)) if *path == file(Layer::Project)),
         "{act:?}"
     );
-    // Clearing restores ordinary keys: Left and Right switch tabs again.
+    // Clearing restores ordinary keys: after focusing a non-numeric row,
+    // Left and Right switch tabs again.
     assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
     assert!(settings.search.is_none());
+    assert!(focus_non_numeric(&mut settings, &fake));
     edit(&mut settings, &fake, Edit::Right);
     assert_eq!(settings.tab, SettingsTab::Notifications);
     // The theme choices still open outside any search.

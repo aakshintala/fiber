@@ -137,6 +137,7 @@ fn configure(home: &Path, workspace: std::io::Result<PathBuf>) -> Result<hub::Se
     .map_err(|error| doors::failure(error.code(), error.to_string()))?;
     Ok(hub::Settings {
         idle_exit: settings::hub_idle_exit(&config),
+        keep_exited: settings::keep_exited(&config),
         level: if config::diagnostics_debug(&config) {
             log::diag::Level::Debug
         } else {

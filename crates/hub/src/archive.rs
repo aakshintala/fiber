@@ -6,7 +6,7 @@
 //! since the marker only counts past the last `fiber_started`.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, TryLockError};
 
 use contract::clock::wall_ms;
 use contract::events::{Empty, Event};
@@ -19,6 +19,52 @@ use crate::feed::{Forgotten, invalid};
 use crate::recent::{self, Left, RecentRow};
 use crate::relay::valid_session_id;
 use crate::resume::not_found;
+
+/// Tries the archive path for a listing candidate without waiting for
+/// either lock. `false` leaves it eligible for a later listing.
+pub(crate) fn try_archive(hub: &Hub, candidate: &RecentRow) -> bool {
+    let _gate = match hub.resume_gate.try_lock() {
+        Ok(guard) => guard,
+        Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(TryLockError::WouldBlock) => return false,
+    };
+    let _recent = match hub.feed.recent_mutation().try_lock() {
+        Ok(guard) => guard,
+        Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(TryLockError::WouldBlock) => return false,
+    };
+    archive_loaded(hub, candidate).is_ok()
+}
+
+/// Applies the normal archive event and index effects to an already loaded
+/// recent row. Both serialization guards are held by the caller.
+fn archive_loaded(hub: &Hub, candidate: &RecentRow) -> Result<(), Refused> {
+    let session = &candidate.session_id;
+    let Some((project, dir)) = recent::lookup_logged(&hub.home, session) else {
+        return Err(not_found(session));
+    };
+    if !log::is_plain_dir(&dir) {
+        return Err(not_found(session));
+    }
+    if hub.feed.live().iter().any(|(id, _)| id == &session.0) {
+        return Err(held(session));
+    }
+    let sessions = dir.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
+    let log = match log::Log::open(&sessions, session.clone(), Arc::clone(&hub.clock)) {
+        Ok(log) => log,
+        Err(log::Error::Held { .. }) => return Err(held(session)),
+        Err(log::Error::NotFound(_)) => return Err(not_found(session)),
+        Err(error) => return Err(io_failed(session, &error)),
+    };
+    if !log::is_archived(&dir) {
+        log.append(&Event::Archived(Empty {}), None, None)
+            .map_err(|error| io_failed(session, &error))?;
+    }
+    let row = marked(candidate.clone());
+    recent::append(&hub.home, &row).map_err(|error| io_failed(session, &error))?;
+    hub.feed.forget(&session.0, &project, Forgotten::Archived);
+    Ok(())
+}
 
 /// `archive`: appends `archived` to `session`'s log and re-appends its
 /// derived row with `archived` true. Accepted with no result, once both

@@ -296,7 +296,7 @@ pub(crate) fn applies(key: &str) -> Applies {
         Applies::TerminalStart
     } else if key == "hub.default" || key.starts_with("hubs.") {
         Applies::NextConnection
-    } else if key.starts_with("hub.") {
+    } else if key == "session.keep_exited" || key.starts_with("hub.") {
         Applies::HubStart
     } else if key == "diagnostics.level" {
         Applies::ProcessStart
@@ -637,7 +637,9 @@ impl Settings {
                         .iter()
                         .enumerate()
                         .filter(|(_, row)| {
-                            row.presentation.tab == Some(tab) && key_matches(row, &needle)
+                            row.key != "hub.port"
+                                && row.presentation.tab == Some(tab)
+                                && key_matches(row, &needle)
                         })
                         .map(|(at, _)| Item::Key(at)),
                 );
@@ -658,7 +660,7 @@ impl Settings {
             .rows
             .iter()
             .enumerate()
-            .filter(|(_, row)| row.presentation.tab == Some(self.tab))
+            .filter(|(_, row)| row.key != "hub.port" && row.presentation.tab == Some(self.tab))
             .map(|(at, _)| Item::Key(at))
             .collect();
         items.extend(
@@ -1190,6 +1192,19 @@ impl Settings {
             }
             Mode::Choices { .. } => Act::Stay,
             Mode::Rows => match &edit {
+                Edit::Left | Edit::Right
+                    if self.search.is_none()
+                        && self.selected().is_some_and(|row| {
+                            number_slider(&row.key).is_some()
+                                || number_list(&row.key).is_some()
+                                || text_list(&row.key).is_some()
+                        }) =>
+                {
+                    let row = self.selected().cloned();
+                    row.map_or(Act::Stay, |row| {
+                        self.step_number(ctx, &row, edit == Edit::Right, false)
+                    })
+                }
                 // Left and Right never switch tabs with a search open:
                 // they edit the query instead.
                 Edit::Left | Edit::Right if self.search.is_some() => {
@@ -1387,6 +1402,14 @@ impl Settings {
                 self.request = Some(Request::Model);
                 Act::Stay
             }
+            (SettingControl::Number, _) if number_slider(&row.key).is_some() => {
+                self.step_number(ctx, &row, true, true)
+            }
+            (SettingControl::Number | SettingControl::Text, _)
+                if number_list(&row.key).is_some() =>
+            {
+                self.step_number(ctx, &row, true, true)
+            }
             (SettingControl::Number | SettingControl::Text, value) => {
                 let mut draft = Draft::default();
                 draft.set(&current_text(value).unwrap_or_default());
@@ -1417,6 +1440,66 @@ impl Settings {
                 Act::Stay
             }
         }
+    }
+
+    /// Steps one numeric setting by its documented slider or list control.
+    fn step_number(&mut self, ctx: &Ctx<'_>, row: &SettingRow, forward: bool, enter: bool) -> Act {
+        if is_run(row) {
+            return Act::Stay;
+        }
+        let text =
+            current_text(&row.value).or_else(|| numeric_default(&row.key).map(str::to_owned));
+        let Some(text) = text else {
+            return Act::Stay;
+        };
+        let layer = Self::write_layer(row);
+        if let Some(values) = text_list(&row.key) {
+            let Some(next) = next_text_value(values, &text, forward) else {
+                return Act::Stay;
+            };
+            self.save(ctx, layer, &row.key, &quoted(next));
+            return Act::Stay;
+        }
+        let Some(value) = as_number(&text) else {
+            return Act::Stay;
+        };
+        if row.key == "budget.usd" && matches!(row.value, Shown::Value(_)) && value == 0.0 {
+            if forward {
+                self.save(ctx, layer, &row.key, "1");
+            } else if let Some(expected) = layer_named(&row.layer).map(|_| text.as_str()) {
+                match ctx.seam.reset(ctx.workspace, layer, &row.key, expected) {
+                    Ok(_) => self.reread(ctx),
+                    Err(error) => self.said = vec![error.message],
+                }
+            }
+            return Act::Stay;
+        }
+        if let Some((minimum, maximum, step)) = number_slider(&row.key) {
+            let next = slider_step(value, minimum, maximum, step, forward, enter);
+            if next == value {
+                return Act::Stay;
+            }
+            self.save(ctx, layer, &row.key, &trimmed(next));
+            return Act::Stay;
+        }
+        let Some(values) = number_list(&row.key) else {
+            return Act::Stay;
+        };
+        let Some(next) = next_number_value(values, value, forward) else {
+            return Act::Stay;
+        };
+        if row.key == "budget.usd" && next == 0.0 {
+            let Some(expected) = layer_named(&row.layer).map(|_| text.as_str()) else {
+                return Act::Stay;
+            };
+            match ctx.seam.reset(ctx.workspace, layer, &row.key, expected) {
+                Ok(_) => self.reread(ctx),
+                Err(error) => self.said = vec![error.message],
+            }
+        } else {
+            self.save(ctx, layer, &row.key, &trimmed(next));
+        }
+        Act::Stay
     }
 
     /// Writes one fixed value, and applies the theme once it saved.
@@ -2071,6 +2154,17 @@ impl Settings {
                     .map(|columns| format!(" · {columns} columns"))
             }),
         };
+        let value = match item {
+            Item::Key(at) => self.row(at).map_or_else(
+                || value.clone(),
+                |row| {
+                    number_slider(&row.key)
+                        .and_then(|range| slider_bar(range, &row.value))
+                        .map_or_else(|| value.clone(), |bar| format!("{bar} {value}"))
+                },
+            ),
+            Item::Screen(_) => value,
+        };
         let annotation_room = annotation
             .as_ref()
             .map_or(0, |name| text::width(name) + GAP);
@@ -2253,6 +2347,321 @@ fn tokens_text(n: f64) -> String {
     format!("{} tokens", trimmed(n))
 }
 
+const COMPACTION_TOKEN_VALUES: &[f64] = &[
+    100_000.0,
+    200_000.0,
+    400_000.0,
+    600_000.0,
+    800_000.0,
+    1_000_000.0,
+];
+const BUDGET_VALUES: &[f64] = &[0.0, 1.0, 5.0, 10.0, 25.0, 50.0, 100.0];
+const REVIEWER_CONSECUTIVE_VALUES: &[f64] = &[1.0, 2.0, 3.0, 5.0, 10.0];
+const REVIEWER_SESSION_VALUES: &[f64] = &[5.0, 10.0, 20.0, 50.0, 100.0];
+const INITIAL_DELAY_VALUES: &[f64] = &[500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0];
+const MAX_DELAY_VALUES: &[f64] = &[10_000.0, 30_000.0, 60_000.0, 120_000.0, 300_000.0];
+const SESSION_IDLE_VALUES: &[f64] = &[300_000.0, 900_000.0, 1_800_000.0, 3_600_000.0, 7_200_000.0];
+const KEEP_EXITED_VALUES: &[f64] = &[0.0, 5.0, 10.0, 20.0, 50.0];
+const REFRESH_AFTER_VALUES: &[&str] = &["1h", "6h", "12h", "24h", "3d", "7d"];
+
+#[derive(Clone, Copy)]
+enum NumericKind {
+    Slider {
+        minimum: f64,
+        maximum: f64,
+        step: f64,
+    },
+    NumberList(&'static [f64]),
+    TextList(&'static [&'static str]),
+}
+
+#[derive(Clone, Copy)]
+enum NumberFormat {
+    Width,
+    PercentUsed,
+    FractionPercent,
+    CacheLifetimes,
+    Retries,
+    Tokens,
+    Dollars,
+    Blocks,
+    Milliseconds,
+    RefreshDuration,
+    KeptSessions,
+}
+
+#[derive(Clone, Copy)]
+struct NumericSpec {
+    key: &'static str,
+    default: Option<&'static str>,
+    kind: NumericKind,
+    format: NumberFormat,
+}
+
+const NUMERIC_SPECS: &[NumericSpec] = &[
+    NumericSpec {
+        key: "tui.rail.width",
+        default: Some("15"),
+        kind: NumericKind::Slider {
+            minimum: 10.0,
+            maximum: 40.0,
+            step: 1.0,
+        },
+        format: NumberFormat::Width,
+    },
+    NumericSpec {
+        key: "tui.panel.width",
+        default: Some("21"),
+        kind: NumericKind::Slider {
+            minimum: 15.0,
+            maximum: 45.0,
+            step: 1.0,
+        },
+        format: NumberFormat::Width,
+    },
+    NumericSpec {
+        key: "quota.notice_at",
+        default: Some("80"),
+        kind: NumericKind::Slider {
+            minimum: 50.0,
+            maximum: 95.0,
+            step: 5.0,
+        },
+        format: NumberFormat::PercentUsed,
+    },
+    NumericSpec {
+        key: "compaction.window_fraction",
+        default: Some("0.7"),
+        kind: NumericKind::Slider {
+            minimum: 0.5,
+            maximum: 0.9,
+            step: 0.05,
+        },
+        format: NumberFormat::FractionPercent,
+    },
+    NumericSpec {
+        key: "cache.warm_cap",
+        default: Some("2"),
+        kind: NumericKind::Slider {
+            minimum: 0.0,
+            maximum: 11.0,
+            step: 1.0,
+        },
+        format: NumberFormat::CacheLifetimes,
+    },
+    NumericSpec {
+        key: "retry.attempts",
+        default: Some("3"),
+        kind: NumericKind::Slider {
+            minimum: 0.0,
+            maximum: 10.0,
+            step: 1.0,
+        },
+        format: NumberFormat::Retries,
+    },
+    NumericSpec {
+        key: "compaction.tokens",
+        default: Some("400000"),
+        kind: NumericKind::NumberList(COMPACTION_TOKEN_VALUES),
+        format: NumberFormat::Tokens,
+    },
+    NumericSpec {
+        key: "budget.usd",
+        default: Some("0"),
+        kind: NumericKind::NumberList(BUDGET_VALUES),
+        format: NumberFormat::Dollars,
+    },
+    NumericSpec {
+        key: "reviewer.block_limits.consecutive",
+        default: Some("3"),
+        kind: NumericKind::NumberList(REVIEWER_CONSECUTIVE_VALUES),
+        format: NumberFormat::Blocks,
+    },
+    NumericSpec {
+        key: "reviewer.block_limits.session",
+        default: Some("20"),
+        kind: NumericKind::NumberList(REVIEWER_SESSION_VALUES),
+        format: NumberFormat::Blocks,
+    },
+    NumericSpec {
+        key: "retry.initial_delay_ms",
+        default: Some("2000"),
+        kind: NumericKind::NumberList(INITIAL_DELAY_VALUES),
+        format: NumberFormat::Milliseconds,
+    },
+    NumericSpec {
+        key: "retry.max_delay_ms",
+        default: Some("60000"),
+        kind: NumericKind::NumberList(MAX_DELAY_VALUES),
+        format: NumberFormat::Milliseconds,
+    },
+    NumericSpec {
+        key: "session.idle_exit_ms",
+        default: Some("1800000"),
+        kind: NumericKind::NumberList(SESSION_IDLE_VALUES),
+        format: NumberFormat::Milliseconds,
+    },
+    NumericSpec {
+        key: "session.keep_exited",
+        default: Some("10"),
+        kind: NumericKind::NumberList(KEEP_EXITED_VALUES),
+        format: NumberFormat::KeptSessions,
+    },
+    NumericSpec {
+        key: "model_lists.refresh_after",
+        default: Some("24h"),
+        kind: NumericKind::TextList(REFRESH_AFTER_VALUES),
+        format: NumberFormat::RefreshDuration,
+    },
+];
+
+fn numeric_spec(key: &str) -> Option<&'static NumericSpec> {
+    NUMERIC_SPECS.iter().find(|spec| spec.key == key)
+}
+
+/// A number list's choices, shared by display and stepping.
+fn number_list(key: &str) -> Option<&'static [f64]> {
+    match numeric_spec(key)?.kind {
+        NumericKind::NumberList(values) => Some(values),
+        NumericKind::Slider { .. } | NumericKind::TextList(_) => None,
+    }
+}
+
+fn text_list(key: &str) -> Option<&'static [&'static str]> {
+    match numeric_spec(key)?.kind {
+        NumericKind::TextList(values) => Some(values),
+        NumericKind::Slider { .. } | NumericKind::NumberList(_) => None,
+    }
+}
+
+/// A slider's inclusive minimum, maximum and step.
+fn slider_bar((minimum, maximum, _step): (f64, f64, f64), shown: &Shown) -> Option<String> {
+    let Shown::Value(text) = shown else {
+        return None;
+    };
+    let value = as_number(text)?;
+    if value < minimum {
+        return Some(format!("▕{}▏", "░".repeat(8)));
+    }
+    if value > maximum {
+        return Some(format!("▕{}▏", "█".repeat(8)));
+    }
+    let fraction = (value - minimum) / (maximum - minimum);
+    let fill = (0_u32..8)
+        .take_while(|tick| fraction >= (f64::from(*tick) + 0.5) / 8.0)
+        .count();
+    Some(format!(
+        "▕{}{}▏",
+        "█".repeat(fill.min(8)),
+        "░".repeat(8usize.saturating_sub(fill))
+    ))
+}
+
+/// Slider minimum, maximum and step for a documented numeric key.
+fn slider_step(
+    value: f64,
+    minimum: f64,
+    maximum: f64,
+    step: f64,
+    forward: bool,
+    enter: bool,
+) -> f64 {
+    if value < minimum {
+        return minimum;
+    }
+    if value > maximum {
+        return if enter && forward { minimum } else { maximum };
+    }
+    let position = (value - minimum) / step;
+    let nearest = position.round();
+    let on_tick = (position - nearest).abs() < 1e-9;
+    let tick = if on_tick {
+        nearest + if forward { 1.0 } else { -1.0 }
+    } else if forward {
+        position.ceil()
+    } else {
+        position.floor()
+    };
+    let next = (minimum + tick * step).clamp(minimum, maximum);
+    if enter && forward && on_tick && value == maximum {
+        minimum
+    } else {
+        next
+    }
+}
+
+fn numeric_default(key: &str) -> Option<&'static str> {
+    numeric_spec(key)?.default
+}
+
+fn number_slider(key: &str) -> Option<(f64, f64, f64)> {
+    match numeric_spec(key)?.kind {
+        NumericKind::Slider {
+            minimum,
+            maximum,
+            step,
+        } => Some((minimum, maximum, step)),
+        NumericKind::NumberList(_) | NumericKind::TextList(_) => None,
+    }
+}
+
+/// A list's next value, with directional selection for custom values.
+fn next_number_value(values: &[f64], current: f64, forward: bool) -> Option<f64> {
+    let at = values.iter().position(|value| *value == current);
+    let to = match at {
+        Some(at) if forward => (at + 1) % values.len(),
+        Some(at) => (at + values.len() - 1) % values.len(),
+        None if forward => values
+            .iter()
+            .position(|value| *value > current)
+            .unwrap_or(0),
+        None => values
+            .iter()
+            .rposition(|value| *value < current)
+            .unwrap_or(values.len() - 1),
+    };
+    values.get(to).copied()
+}
+
+fn refresh_millis(text: &str) -> Option<u64> {
+    let raw = as_typed(text);
+    let (count, unit) = raw.split_at(raw.len().checked_sub(1)?);
+    let count = count.parse::<u64>().ok()?;
+    count.checked_mul(match unit {
+        "s" => 1_000,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        "d" => 86_400_000,
+        _ => return None,
+    })
+}
+
+fn next_text_value(
+    values: &'static [&'static str],
+    current: &str,
+    forward: bool,
+) -> Option<&'static str> {
+    let current_ms = refresh_millis(current)?;
+    let at = values
+        .iter()
+        .position(|value| refresh_millis(value) == Some(current_ms));
+    let to = match at {
+        Some(at) if forward => (at + 1) % values.len(),
+        Some(at) => (at + values.len() - 1) % values.len(),
+        None if forward => values
+            .iter()
+            .position(|value| refresh_millis(value).is_some_and(|candidate| candidate > current_ms))
+            .unwrap_or(0),
+        None => values
+            .iter()
+            .rposition(|value| {
+                refresh_millis(value).is_some_and(|candidate| candidate < current_ms)
+            })
+            .unwrap_or(values.len() - 1),
+    };
+    values.get(to).copied()
+}
+
 /// A listed value as given, anything else with "(custom)" after it.
 fn listed(n: f64, values: &[f64], text: String) -> String {
     if values.contains(&n) {
@@ -2270,62 +2679,50 @@ fn number_text(key: &str, text: &str) -> String {
     let Some(n) = as_number(text) else {
         return as_typed(text);
     };
-    match key {
-        "tui.rail.width" | "tui.panel.width" => format!("{}% of screen width", trimmed(n)),
-        "quota.notice_at" => format!("{}% used", trimmed(n)),
-        "compaction.window_fraction" => {
+    let Some(spec) = numeric_spec(key) else {
+        return if key == "hub.idle_exit_ms" {
+            listed(n, SESSION_IDLE_VALUES, ms_text(n))
+        } else {
+            as_typed(text)
+        };
+    };
+    let shown = match spec.format {
+        NumberFormat::Width => format!("{}% of screen width", trimmed(n)),
+        NumberFormat::PercentUsed => format!("{}% used", trimmed(n)),
+        NumberFormat::FractionPercent => {
             format!("{}% of the context window", trimmed(n * 100.0))
         }
-        "cache.warm_cap" => counted(n, "cache lifetime", "cache lifetimes"),
-        "retry.attempts" => counted(n, "retry", "retries"),
-        "compaction.tokens" => listed(
+        NumberFormat::CacheLifetimes => counted(n, "cache lifetime", "cache lifetimes"),
+        NumberFormat::Retries => counted(n, "retry", "retries"),
+        NumberFormat::Tokens => listed(n, number_list(key).unwrap_or(&[]), tokens_text(n)),
+        NumberFormat::Dollars if n == 0.0 => "$0 (custom)".to_owned(),
+        NumberFormat::Dollars => listed(
             n,
-            &[
-                100_000.0,
-                200_000.0,
-                400_000.0,
-                600_000.0,
-                800_000.0,
-                1_000_000.0,
-            ],
-            tokens_text(n),
+            number_list(key).unwrap_or(&[]),
+            format!("${}", trimmed(n)),
         ),
-        "budget.usd" => {
-            if n == 0.0 {
-                "No limit".to_owned()
-            } else {
-                listed(
-                    n,
-                    &[1.0, 5.0, 10.0, 25.0, 50.0, 100.0],
-                    format!("${}", trimmed(n)),
-                )
-            }
-        }
-        "reviewer.block_limits.consecutive" => listed(
+        NumberFormat::Blocks => listed(
             n,
-            &[1.0, 2.0, 3.0, 5.0, 10.0],
+            number_list(key).unwrap_or(&[]),
             counted(n, "block", "blocks"),
         ),
-        "reviewer.block_limits.session" => listed(
+        NumberFormat::Milliseconds => listed(n, number_list(key).unwrap_or(&[]), ms_text(n)),
+        NumberFormat::RefreshDuration => refresh_text(text),
+        NumberFormat::KeptSessions if n == 0.0 => "Keep all".to_owned(),
+        NumberFormat::KeptSessions => listed(
             n,
-            &[5.0, 10.0, 20.0, 50.0, 100.0],
-            counted(n, "block", "blocks"),
+            number_list(key).unwrap_or(&[]),
+            counted(n, "session", "sessions"),
         ),
-        "retry.initial_delay_ms" => {
-            listed(n, &[500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0], ms_text(n))
+    };
+    if let Some((minimum, maximum, step)) = number_slider(key) {
+        let position = (n - minimum) / step;
+        let custom = n < minimum || n > maximum || (position - position.round()).abs() >= 1e-9;
+        if custom {
+            return format!("{shown} (custom)");
         }
-        "retry.max_delay_ms" => listed(
-            n,
-            &[10_000.0, 30_000.0, 60_000.0, 120_000.0, 300_000.0],
-            ms_text(n),
-        ),
-        "hub.idle_exit_ms" | "session.idle_exit_ms" => listed(
-            n,
-            &[300_000.0, 900_000.0, 1_800_000.0, 3_600_000.0, 7_200_000.0],
-            ms_text(n),
-        ),
-        _ => as_typed(text),
     }
+    shown
 }
 
 /// A duration string with its unit word spaced out: "24h" reads
@@ -2349,7 +2746,11 @@ fn refresh_text(text: &str) -> String {
         return raw;
     }
     let shown = format!("{count} {word}");
-    if ["1h", "6h", "12h", "24h", "3d", "7d"].contains(&raw.as_str()) {
+    if text_list("model_lists.refresh_after").is_some_and(|values| {
+        values
+            .iter()
+            .any(|value| refresh_millis(value) == refresh_millis(&raw))
+    }) {
         shown
     } else {
         format!("{shown} (custom)")
@@ -2394,6 +2795,7 @@ fn shown_value(row: &SettingRow) -> (String, Option<String>) {
             format!("{} ›", list_text(text))
         }
         (SettingControl::Number, Shown::Value(text)) => number_text(&row.key, text),
+        (SettingControl::Number | SettingControl::Text, Shown::Unset) => "Default".to_owned(),
         (SettingControl::Text, Shown::Value(text)) if row.key == "model_lists.refresh_after" => {
             refresh_text(text)
         }

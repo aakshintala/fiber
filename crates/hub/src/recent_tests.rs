@@ -11,7 +11,7 @@
 use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -747,6 +747,88 @@ fn a_before_outside_the_partition_is_unknown() {
             .0
             .is_empty()
     );
+}
+
+#[test]
+fn automatic_archive_candidates_union_missing_and_retention_without_recounting() {
+    let temp = Temp::new();
+    let mut rows = Vec::new();
+    for n in 1..=12 {
+        let mut row = temp.row(n, "p", Left::Exited, Some("idle"));
+        row.workspace = format!("/workspace/{n}");
+        rows.push(row);
+    }
+    rows.reverse();
+    let mut stats = Vec::new();
+    let selected = archive_candidates(&rows, None, 10, &BTreeSet::new(), |workspace| {
+        stats.push(workspace.to_owned());
+        if workspace.ends_with("/1") {
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        } else {
+            Ok(())
+        }
+    });
+    assert_eq!(
+        selected,
+        BTreeSet::from([SessionId(id(1)), SessionId(id(2))])
+    );
+    assert_eq!(stats.len(), 12);
+    assert!(stats.contains(&"/workspace/1".to_owned()));
+
+    let mut already_archived = rows.clone();
+    already_archived[0].archived = true;
+    let mut stats = Vec::new();
+    let selected = archive_candidates(
+        &already_archived,
+        Some("p"),
+        0,
+        &BTreeSet::new(),
+        |workspace| {
+            stats.push(workspace.to_owned());
+            if workspace.ends_with("/2") {
+                Err(io::Error::from(io::ErrorKind::NotFound))
+            } else if workspace.ends_with("/3") {
+                Err(io::Error::from(io::ErrorKind::PermissionDenied))
+            } else {
+                Ok(())
+            }
+        },
+    );
+    assert_eq!(selected, BTreeSet::from([SessionId(id(2))]));
+    assert_eq!(stats.len(), 11, "archived row is not statted");
+}
+
+#[test]
+fn automatic_archive_zero_keeps_all_except_missing_and_scopes_stats() {
+    let temp = Temp::new();
+    let mut rows = vec![temp.row(1, "p", Left::Exited, None)];
+    rows[0].workspace = "/missing".to_owned();
+    rows.push(temp.row(2, "q", Left::Exited, None));
+    rows.push(temp.row(3, "p", Left::Crashed, None));
+    rows.push(temp.row(4, "p", Left::Exited, None));
+    let mut stats = Vec::new();
+    let selected = archive_candidates(&rows, Some("p"), 0, &BTreeSet::new(), |workspace| {
+        stats.push(workspace.to_owned());
+        Err(io::Error::from(io::ErrorKind::PermissionDenied))
+    });
+    assert!(
+        selected.is_empty(),
+        "unknown stat errors are non-destructive"
+    );
+    assert_eq!(
+        stats.len(),
+        2,
+        "crashed and other project rows are not statted"
+    );
+
+    let selected = archive_candidates(&rows, None, 0, &BTreeSet::new(), |workspace| {
+        if workspace == "/missing" {
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        } else {
+            Ok(())
+        }
+    });
+    assert_eq!(selected, BTreeSet::from([SessionId(id(1))]));
 }
 
 #[test]

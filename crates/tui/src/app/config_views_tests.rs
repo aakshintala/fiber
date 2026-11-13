@@ -70,6 +70,24 @@ fn fake() -> Arc<Fake> {
     Arc::new(fake)
 }
 
+/// A seam with a free-text setting after the numeric Settings rows.
+fn fake_with_editor() -> Arc<Fake> {
+    let fake = fake();
+    fake.rows
+        .lock()
+        .expect("fixture rows mutex")
+        .as_mut()
+        .expect("fixture rows")
+        .push(appearance(controlled(
+            "tui.editor",
+            Shown::Value("\"vim\"".to_owned()),
+            "global",
+            WriteScope::Any { repo: false },
+            SettingControl::Text,
+        )));
+    fake
+}
+
 /// An app on home at 80x24 in `/w`, with `seam`.
 fn home(seam: Arc<Fake>) -> App {
     let mut app = App::new(PathBuf::from("/w"));
@@ -314,9 +332,11 @@ fn an_approval_waits_until_the_view_closes() {
 
 #[test]
 fn opening_a_view_drops_its_unsaved_field() {
-    let seam = fake();
+    let seam = fake_with_editor();
     let mut app = attached(Arc::clone(&seam));
     slash_settings(&mut app);
+    app.on_key(Key::Down, now());
+    app.on_key(Key::Down, now());
     app.on_key(Key::Enter, now());
     app.on_key(Key::Char('9'), now());
     let draft = |app: &App| {
@@ -558,8 +578,10 @@ fn a_save_says_the_reload_cost_of_the_session_on_screen() {
 
 #[test]
 fn an_edit_goes_to_the_open_field_not_the_input_box() {
-    let mut app = attached(fake());
+    let mut app = attached(fake_with_editor());
     slash_settings(&mut app);
+    app.on_key(Key::Down, now());
+    app.on_key(Key::Down, now());
     app.on_key(Key::Enter, now());
     app.on_edit(Edit::Paste("9".to_owned()));
     let text = app
@@ -2736,6 +2758,9 @@ fn wheel_over_doctor_scrolls_the_list_not_the_conversation() {
 fn enter_row(app: &mut App, tab: SettingsTab, down: usize) -> Effect {
     let at = SettingsTab::ALL.iter().position(|t| *t == tab).unwrap();
     for _ in 0..at {
+        // The fixture's first Appearance row is numeric; move to its
+        // following Theme row before an arrow can switch tabs.
+        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
         app.on_edit(Edit::Right);
     }
     for _ in 0..down {

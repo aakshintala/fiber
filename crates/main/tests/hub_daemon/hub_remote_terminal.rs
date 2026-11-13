@@ -557,9 +557,10 @@ fn bare_fiber_on_a_listed_hub_opens_the_hubs_home() {
                 .iter()
                 .any(|row| row.contains("Hover") && row.contains("[ ] Off"))
     });
-    for _ in 0..2 {
-        run.write(b"\x1b[C");
-    }
+    run.write(b"\x1b[B");
+    run.write(b"\x1b[C");
+    run.write(b"\x1b[B");
+    run.write(b"\x1b[C");
     run.wait_screen("the hub settings", |screen| {
         screen
             .rows

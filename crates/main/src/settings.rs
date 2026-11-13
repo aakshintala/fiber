@@ -21,6 +21,15 @@ pub(crate) fn idle_exit(config: &Config) -> Duration {
     Duration::from_millis(ms)
 }
 
+/// How many exited sessions each project keeps before the hub archives
+/// older ones (`session.keep_exited`).
+pub(crate) fn keep_exited(config: &Config) -> usize {
+    config
+        .count("session.keep_exited", None)
+        .and_then(|count| usize::try_from(count).ok())
+        .unwrap_or(10)
+}
+
 /// How long a hub a client started stays running with no client
 /// connected, from `hub.idle_exit_ms` (`docs/configuration.md`). `0`
 /// exits at the first empty wait.
