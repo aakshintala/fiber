@@ -290,3 +290,16 @@ crates/extensions/src/lua/vm.rs	fiber-4767	plan	2026-11-13T17:56:18Z	roundhouse-
 crates/extensions/src/host_tests.rs	fiber-4767	plan	2026-11-13T17:56:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/lua/schedule_tests.rs	fiber-4767	plan	2026-11-13T17:56:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/extension_host/extension_codemode.rs	fiber-4767	plan	2026-11-13T17:56:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/src/reviewer_tests.rs	fiber-4637	plan	2026-11-13T17:58:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/src/lifecycle_tests.rs	fiber-4637	plan	2026-11-13T17:58:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/contract/src/codes_tests.rs	fiber-4637	plan	2026-11-13T17:58:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/contract/src/events_tests.rs	fiber-4637	plan	2026-11-13T17:58:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/cli/src/models.rs	fiber-4637	plan	2026-11-13T17:58:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/cli/src/setup.rs	fiber-4637	plan	2026-11-13T17:58:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/model_picker_tests.rs	fiber-4637	plan	2026-11-13T17:58:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/model-routing.md	fiber-4637	plan	2026-11-13T17:58:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+research/opencode-thinking/README.md	fiber-4637	plan	2026-11-13T17:58:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+research/opencode-thinking/raw/zen-exo-free.json	fiber-4637	plan	2026-11-13T17:58:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing.md	fiber-4637	plan	2026-11-13T17:58:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing/running.md	fiber-4637	plan	2026-11-13T17:58:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/workflow.md	fiber-4637	plan	2026-11-13T17:58:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
