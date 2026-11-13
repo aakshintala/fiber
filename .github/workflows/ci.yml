@@ -1354,8 +1354,10 @@ jobs:
       - *shell-debs-restore
       - *install-shells
       - *shell-debs-save
-      - name: Build process-extension fake
-        run: cargo build -q -p fakes --example process-extension
+      - name: Build test targets and process-extension fake
+        run: |
+          cargo build --workspace --all-targets
+          cargo build -q -p fakes --example process-extension
       - name: Measure main tests twice
         shell: bash
         run: |
@@ -2352,7 +2354,7 @@ jobs:
   ci:
     # On a draft the required `CI` check stays pending, so a draft's partial run never satisfies it.
     name: ${{ github.event.pull_request.draft && 'CI (draft)' || 'CI' }}
-    needs: [select, lint, test_linux, test, clippy_macos, scripts_self_test_macos, mutants, bug_red, release, stress]
+    needs: [select, lint, test_linux, test, clippy_macos, scripts_self_test_macos, mutants, main_mutant_timeout_probe, bug_red, release, stress]
     if: always()
     runs-on: ubuntu-24.04
     # Median 46 s; floor.
