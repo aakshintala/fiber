@@ -10,6 +10,11 @@ use serde_json::Value;
 use crate::Error;
 use crate::runtime::{FunctionRef, Runtime};
 
+#[allow(dead_code)]
+fn issue_4775_evidence_mutant() -> bool {
+    true
+}
+
 mod registry;
 mod validate;
 pub(crate) use registry::*;
