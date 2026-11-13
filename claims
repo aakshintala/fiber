@@ -492,3 +492,8 @@ crates/extensions/src/host_tests.rs	fiber-4767	plan	2026-11-13T16:44:16Z	Amoghs-
 crates/extensions/src/lua/schedule_tests.rs	fiber-4767	plan	2026-11-13T16:44:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/extension_host/extension_codemode.rs	fiber-4767	plan	2026-11-13T16:44:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/ci.yml	fiber-4809	plan	2026-11-13T16:48:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/log/src/scan.rs	fiber-4351	plan	2026-11-13T16:50:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/log/src/scan_tests.rs	fiber-4351	plan	2026-11-13T16:50:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/log/src/write.rs	fiber-4351	plan	2026-11-13T16:50:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/log/src/write_tests.rs	fiber-4351	plan	2026-11-13T16:50:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/keeper_child_tests.rs	fiber-4351	plan	2026-11-13T16:50:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
