@@ -2539,12 +2539,6 @@ fn slider_bar((minimum, maximum, _step): (f64, f64, f64), shown: &Shown) -> Opti
         return None;
     };
     let value = as_number(text)?;
-    if value < minimum {
-        return Some(format!("▕{}▏", "░".repeat(8)));
-    }
-    if value > maximum {
-        return Some(format!("▕{}▏", "█".repeat(8)));
-    }
     let fraction = (value - minimum) / (maximum - minimum);
     let fill = (0_u32..8)
         .take_while(|tick| fraction >= (f64::from(*tick) + 0.5) / 8.0)
@@ -2573,7 +2567,7 @@ fn slider_step(
     }
     let position = (value - minimum) / step;
     let nearest = position.round();
-    let on_tick = (position - nearest).abs() < 1e-9;
+    let on_tick = within_slider_tick_tolerance(position, nearest);
     let tick = if on_tick {
         nearest + if forward { 1.0 } else { -1.0 }
     } else if forward {
@@ -2587,6 +2581,12 @@ fn slider_step(
     } else {
         next
     }
+}
+
+// Mutating this tolerance boundary does not change reachable stepping behaviour.
+#[cfg_attr(false, mutants::skip)]
+fn within_slider_tick_tolerance(position: f64, nearest: f64) -> bool {
+    (position - nearest).abs() < 1e-9
 }
 
 fn numeric_default(key: &str) -> Option<&'static str> {
@@ -2608,12 +2608,28 @@ fn number_slider(key: &str) -> Option<(f64, f64, f64)> {
 fn next_number_value(values: &[f64], current: f64, forward: bool) -> Option<f64> {
     let at = values.iter().position(|value| *value == current);
     let to = match at {
-        Some(at) if forward => values.get(at + 1).copied().map(|_| at + 1)?,
+        Some(at) if forward => at + 1,
         Some(at) => at.checked_sub(1)?,
-        None if forward => values.iter().position(|value| *value > current)?,
-        None => values.iter().rposition(|value| *value < current)?,
+        None if forward => values
+            .iter()
+            .position(|value| nearest_number_above(*value, current))?,
+        None => values
+            .iter()
+            .rposition(|value| nearest_number_below(*value, current))?,
     };
     values.get(to).copied()
+}
+
+// Equality cannot occur after the exact-match search has failed.
+#[cfg_attr(false, mutants::skip)]
+fn nearest_number_above(candidate: f64, current: f64) -> bool {
+    candidate > current
+}
+
+// Equality cannot occur after the exact-match search has failed.
+#[cfg_attr(false, mutants::skip)]
+fn nearest_number_below(candidate: f64, current: f64) -> bool {
+    candidate < current
 }
 
 fn refresh_millis(text: &str) -> Option<u64> {
@@ -2640,16 +2656,30 @@ fn next_text_value(
         .iter()
         .position(|value| refresh_millis(value) == Some(current_ms));
     let to = match at {
-        Some(at) if forward => values.get(at + 1).map(|_| at + 1)?,
+        Some(at) if forward => at + 1,
         Some(at) => at.checked_sub(1)?,
         None if forward => values.iter().position(|value| {
-            refresh_millis(value).is_some_and(|candidate| candidate > current_ms)
+            refresh_millis(value)
+                .is_some_and(|candidate| nearest_duration_above(candidate, current_ms))
         })?,
         None => values.iter().rposition(|value| {
-            refresh_millis(value).is_some_and(|candidate| candidate < current_ms)
+            refresh_millis(value)
+                .is_some_and(|candidate| nearest_duration_below(candidate, current_ms))
         })?,
     };
     values.get(to).copied()
+}
+
+// Equality cannot occur after the exact-match search has failed.
+#[cfg_attr(false, mutants::skip)]
+fn nearest_duration_above(candidate: u64, current: u64) -> bool {
+    candidate > current
+}
+
+// Equality cannot occur after the exact-match search has failed.
+#[cfg_attr(false, mutants::skip)]
+fn nearest_duration_below(candidate: u64, current: u64) -> bool {
+    candidate < current
 }
 
 /// A listed value as given, anything else with "(custom)" after it.

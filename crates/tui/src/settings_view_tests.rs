@@ -13,8 +13,8 @@ use ratatui::style::Modifier;
 
 use super::{
     Act, Applies, Ctx, Request, SCREEN_ROWS, Screen, ScreenRow, Settings, applies, applies_text,
-    as_typed, layers, next_number_value, next_text_value, number_list, number_slider,
-    refresh_millis, shown_value, slider_bar, text_list,
+    as_typed, layers, next_number_value, next_text_value, number_list, number_slider, number_text,
+    refresh_millis, shown_value, slider_bar, slider_step, text_list,
 };
 use crate::ThemeSetting;
 use crate::configure::{Layer, SettingControl, SettingRow, Shown, WriteScope};
@@ -3448,6 +3448,25 @@ fn budget_zero_special_case_requires_both_key_and_zero_value() {
 }
 
 #[test]
+fn number_and_duration_lists_step_forward_from_the_middle() {
+    let fake = Fake::new(with("compaction.tokens", value("400000"), "project"));
+    let mut settings = at(&fake, "compaction.tokens");
+    edit(&mut settings, &fake, Edit::Right);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "compaction.tokens", "600000")]
+    );
+
+    let fake = Fake::new(with("model_lists.refresh_after", value("\"6h\""), "global"));
+    let mut settings = at(&fake, "model_lists.refresh_after");
+    edit(&mut settings, &fake, Edit::Right);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "model_lists.refresh_after", "\"12h\"")]
+    );
+}
+
+#[test]
 fn enter_on_a_non_slider_number_opens_its_field() {
     let fake = Fake::new(with("compaction.tokens", value("400000"), "project"));
     let mut settings = at(&fake, "compaction.tokens");
@@ -3510,6 +3529,37 @@ fn enter_at_the_top_of_compaction_token_list_wraps_to_first_value() {
         writes(&fake),
         [w(Layer::Global, "compaction.tokens", "100000")]
     );
+}
+
+#[test]
+fn number_control_edges_do_not_write_and_slider_maximum_steps_down() {
+    let fake = Fake::new(with("compaction.tokens", value("1000000"), "global"));
+    let mut settings = at(&fake, "compaction.tokens");
+    edit(&mut settings, &fake, Edit::Right);
+    assert!(writes(&fake).is_empty());
+
+    let fake = Fake::new(with("compaction.tokens", value("100000"), "global"));
+    let mut settings = at(&fake, "compaction.tokens");
+    edit(&mut settings, &fake, Edit::Left);
+    assert!(writes(&fake).is_empty());
+
+    let fake = Fake::new(with("model_lists.refresh_after", value("\"7d\""), "global"));
+    let mut settings = at(&fake, "model_lists.refresh_after");
+    edit(&mut settings, &fake, Edit::Right);
+    assert!(writes(&fake).is_empty());
+
+    let fake = Fake::new(with("tui.rail.width", value("40"), "project"));
+    let mut settings = at(&fake, "tui.rail.width");
+    edit(&mut settings, &fake, Edit::Left);
+    assert_eq!(writes(&fake), [w(Layer::Project, "tui.rail.width", "39")]);
+    assert_eq!(slider_step(40.0, 10.0, 40.0, 1.0, false, false), 39.0);
+    assert_eq!(slider_step(41.0, 10.0, 40.0, 1.0, true, false), 40.0);
+    assert_eq!(slider_step(41.0, 10.0, 40.0, 1.0, false, true), 40.0);
+}
+
+#[test]
+fn number_text_marks_non_tick_slider_values_custom() {
+    assert_eq!(number_text("tui.rail.width", "15"), "15% of screen width");
 }
 
 #[test]
