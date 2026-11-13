@@ -643,8 +643,16 @@ fn ready_times_out_at_the_deadline_and_the_drop_ends_the_connection() {
     rest_of(&peer);
     deadline().recv_or_fail(&reader_arrived, "reader pause before dead");
     deadline().recv_or_fail(&drop_arrived, "drop pause before retain");
+    release_reader.send(()).unwrap();
+    release_drop.send(()).unwrap();
+    let (joined, join_result) = mpsc::channel();
+    thread::spawn(move || match joined.send(waiting.join()) {
+        Ok(()) | Err(_) => {}
+    });
+    deadline()
+        .recv_or_fail(&join_result, "timed-out handover worker to finish")
+        .unwrap();
     assert!(host.handover_peers().is_empty());
-    drop((release_reader, release_drop));
 }
 
 #[test]
