@@ -1,6 +1,6 @@
 //! Fetches and merges the advisory models.dev catalog over generated provider data.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -193,13 +193,27 @@ pub struct Applied {
     /// Notices raised while applying the catalog.
     pub notices: Vec<Notice>,
     /// Installed references explicitly marked deprecated by the catalog.
-    pub deprecated: std::collections::BTreeSet<String>,
+    pub deprecated: BTreeSet<String>,
+}
+
+impl Applied {
+    /// Removes deprecated models from the installed providers' lists.
+    pub fn retain_listed(&self, providers: &mut Providers) -> Vec<Notice> {
+        let mut notices = Vec::new();
+        for name in providers.names().map(str::to_owned).collect::<Vec<_>>() {
+            let mut data = providers.data(&name);
+            data.models
+                .retain(|model| !self.deprecated.contains(&format!("{name}/{}", model.id)));
+            notices.extend(providers.set_models(&name, data.models));
+        }
+        notices
+    }
 }
 
 /// Tracks deprecated models already noticed in one session.
 pub struct ModelDeprecations {
-    deprecated: std::collections::BTreeSet<String>,
-    seen: Mutex<std::collections::BTreeSet<String>>,
+    deprecated: BTreeSet<String>,
+    seen: Mutex<bool>,
 }
 
 impl ModelDeprecations {
@@ -207,17 +221,20 @@ impl ModelDeprecations {
     pub fn new(references: impl IntoIterator<Item = String>) -> Self {
         Self {
             deprecated: references.into_iter().collect(),
-            seen: Mutex::new(std::collections::BTreeSet::new()),
+            seen: Mutex::new(false),
         }
     }
 
-    /// Returns the first-run notice for a deprecated model reference.
+    /// Returns the session's first notice for a deprecated model reference.
     pub fn notice_for(&self, reference: &str) -> Option<Notice> {
-        if !self.deprecated.contains(reference)
-            || !support::lock(&self.seen).insert(reference.to_owned())
-        {
+        if !self.deprecated.contains(reference) {
             return None;
         }
+        let mut seen = support::lock(&self.seen);
+        if *seen {
+            return None;
+        }
+        *seen = true;
         Some(Notice {
             code: ErrorCode::ModelDeprecated,
             message: format!("The model {reference} is deprecated."),

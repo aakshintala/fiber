@@ -209,6 +209,7 @@ pub(crate) struct Switching {
     /// factories over it. `None` until the session shares its writer, and
     /// a switch then carries no factories.
     diag: Option<Arc<log::diag::Diag>>,
+    /// The session tracker shared by startup and each model switch.
     deprecations: Arc<extensions::models_dev::ModelDeprecations>,
 }
 

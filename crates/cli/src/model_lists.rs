@@ -260,13 +260,9 @@ fn lists_before_fill_with_fetch(
         clock.wall(),
         &mut providers,
     );
+    let filter_notices = catalog.retain_listed(&mut providers);
     notices.extend(catalog.notices);
-    for name in providers.names().map(str::to_owned).collect::<Vec<_>>() {
-        let mut data = providers.data(&name);
-        data.models
-            .retain(|model| !catalog.deprecated.contains(&format!("{name}/{}", model.id)));
-        notices.extend(providers.set_models(&name, data.models));
-    }
+    notices.extend(filter_notices);
     providers.retain_credentialed(&config);
     Ok((providers, config, notices, lookup))
 }

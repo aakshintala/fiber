@@ -192,7 +192,7 @@ fn models_dev_apply_returns_only_fresh_catalog_deprecated_references() {
 }
 
 #[test]
-fn models_dev_deprecation_tracker_notices_once_per_reference_and_session() {
+fn models_dev_deprecation_tracker_notices_once_per_session() {
     let tracker = extensions::models_dev::ModelDeprecations::new([
         "acme/old".to_owned(),
         "acme/older".to_owned(),
@@ -202,7 +202,7 @@ fn models_dev_deprecation_tracker_notices_once_per_reference_and_session() {
     assert_eq!(first.code, ErrorCode::ModelDeprecated);
     assert!(first.message.contains("acme/old"));
     assert!(tracker.notice_for("acme/old").is_none());
-    assert!(tracker.notice_for("acme/older").is_some());
+    assert!(tracker.notice_for("acme/older").is_none());
     assert!(
         extensions::models_dev::ModelDeprecations::new(["acme/old".to_owned()])
             .notice_for("acme/old")
