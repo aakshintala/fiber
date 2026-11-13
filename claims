@@ -45,8 +45,6 @@ docs/errors.md	fiber-4746	plan	2026-11-12T19:53:48Z	Amoghs-MacBook-Pro:/Users/aa
 crates/hub/src/lib_tests.rs	fiber-4598	plan	2026-11-12T20:06:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/idle_tests.rs	fiber-4598	plan	2026-11-12T20:06:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/directories_tests.rs	fiber-4598	plan	2026-11-12T20:11:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/src/reviewer.rs	fiber-4473	plan	2026-11-12T20:18:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/src/reviewer_tests.rs	fiber-4473	plan	2026-11-12T20:18:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tui.md	fiber-4582	plan	2026-11-12T20:22:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/runtime.rs	fiber-4691	grant	2026-11-12T20:23:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
 crates/extensions/src/runtime/queued.rs	fiber-4691	grant	2026-11-12T20:23:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4691-process-cmd-tool	
