@@ -1,7 +1,7 @@
 //! The keeper process (`docs/tools.md`, "The keeper"). No providers or hooks.
 
 use std::collections::{BTreeMap, HashSet};
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::ExitStatusExt as _;
@@ -19,6 +19,100 @@ use contract::keeper::{Exit, FromKeeper, KeptJob, Spawn, Stream, ToKeeper};
 use jobs::keeper::{Step, Supervisor};
 use log::Log;
 use rustix::process::Signal;
+
+fn trace_lock_holders(path: &std::path::Path) {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let Ok(metadata) = fs::metadata(path) else {
+        eprintln!("FIBER4351_TRACE proc_lock_scan path={path:?} metadata=unavailable");
+        return;
+    };
+    let device = metadata.dev();
+    let inode = metadata.ino();
+    let Ok(locks) = fs::read_to_string("/proc/locks") else {
+        eprintln!("FIBER4351_TRACE proc_locks unavailable");
+        return;
+    };
+    let major = ((device >> 8) & 0xfff) | ((device >> 32) & !0xfff);
+    let minor = (device & 0xff) | ((device >> 12) & !0xff);
+    let lock_device = format!("{major:02x}:{minor:02x}:{inode}");
+    let matching_locks: Vec<_> = locks
+        .lines()
+        .filter(|line| line.split_whitespace().nth(5) == Some(lock_device.as_str()))
+        .collect();
+    eprintln!(
+        "FIBER4351_TRACE keeper_pid={} ppid={}",
+        std::process::id(),
+        fs::read_to_string(format!("/proc/{}/stat", std::process::id()))
+            .ok()
+            .and_then(|stat| stat.rsplit_once(')').map(|(_, rest)| rest
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or("unknown")
+                .to_owned()))
+            .unwrap_or_else(|| "unknown".to_owned())
+    );
+    eprintln!(
+        "FIBER4351_TRACE proc_lock_scan path={path:?} device={lock_device} matching_locks={matching_locks:?}"
+    );
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let fd_dir = entry.path().join("fd");
+        let Ok(fds) = fs::read_dir(fd_dir) else {
+            continue;
+        };
+        for fd in fds.flatten() {
+            let Ok(target) = fs::read_link(fd.path()) else {
+                continue;
+            };
+            if target != path {
+                continue;
+            }
+            let stat_path = entry.path().join("stat");
+            let stat = fs::read_to_string(stat_path).ok();
+            let (ppid, start) = stat
+                .as_deref()
+                .and_then(|s| {
+                    s.rsplit_once(')').map(|(_, rest)| {
+                        let fields: Vec<_> = rest.split_whitespace().collect();
+                        (
+                            fields.get(1).copied().unwrap_or("unknown"),
+                            fields.get(19).copied().unwrap_or("unknown"),
+                        )
+                    })
+                })
+                .unwrap_or(("unknown", "unknown"));
+            let cmdline = fs::read(entry.path().join("cmdline"))
+                .ok()
+                .map(|bytes| String::from_utf8_lossy(&bytes).replace('\0', " "))
+                .unwrap_or_else(|| "unavailable".into());
+            let fdnum = fd.file_name().to_string_lossy().into_owned();
+            let info =
+                fs::read_to_string(entry.path().join("fdinfo").join(&fdnum)).unwrap_or_default();
+            let flags = info
+                .lines()
+                .find(|line| line.starts_with("flags:"))
+                .unwrap_or("flags: unavailable");
+            eprintln!(
+                "FIBER4351_TRACE lock_fd pid={pid} ppid={ppid} starttime={start} cmdline={cmdline:?} role=unknown fd={fdnum} {flags:?} O_CLOEXEC={} proc_locks={:?}",
+                flags
+                    .split_once(':')
+                    .and_then(|(_, value)| u32::from_str_radix(value.trim(), 8).ok())
+                    .is_some_and(|value| value & 0o2000000 != 0),
+                matching_locks
+            );
+        }
+    }
+}
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
@@ -325,6 +419,7 @@ impl Runtime {
                         }
                         Err(error @ log::Error::Held { .. }) => {
                             eprintln!("FIBER4351_TRACE Log::open_as Err={error:?}");
+                            trace_lock_holders(&dir.join("session.lock"));
                             self.discard();
                             let steps = lock(&self.supervisor).lock_lost();
                             eprintln!("FIBER4351_TRACE lock_lost steps={steps:?}");
