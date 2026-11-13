@@ -46,6 +46,25 @@ pub(crate) fn try_archive(
     archived
 }
 
+/// Tries an unarchived listing candidate and updates the loaded order with
+/// every row appended by that attempt.
+pub(crate) fn try_archive_into_snapshot(
+    hub: &Hub,
+    candidate: &RecentRow,
+    snapshot: &mut Vec<RecentRow>,
+) {
+    if !snapshot
+        .iter()
+        .any(|row| row.session_id == candidate.session_id && !row.archived)
+    {
+        return;
+    }
+    for row in try_archive(hub, candidate, snapshot) {
+        snapshot.retain(|existing| existing.session_id != row.session_id);
+        snapshot.insert(0, row);
+    }
+}
+
 /// Archives a candidate and its exited delegate descendants from the same
 /// loaded index snapshot. Both serialization guards are held by the caller.
 fn archive_tree(

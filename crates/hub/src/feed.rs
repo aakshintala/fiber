@@ -92,12 +92,8 @@ pub(crate) fn recent_for_hub(
     let pre_archive = recent::listed_from_rows(&hub.home, raw_snapshot.clone(), project);
     let mut snapshot = newest_snapshot;
     for candidate in snapshot.clone() {
-        if candidates.contains(&candidate.session_id) && !candidate.archived {
-            let archived = crate::archive::try_archive(hub, &candidate, &snapshot);
-            for row in archived {
-                snapshot.retain(|existing| existing.session_id != row.session_id);
-                snapshot.insert(0, row);
-            }
+        if candidates.contains(&candidate.session_id) {
+            crate::archive::try_archive_into_snapshot(hub, &candidate, &mut snapshot);
         }
     }
     let rows = recent::listed_from_rows(&hub.home, snapshot.into_iter().rev().collect(), project);
