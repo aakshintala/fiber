@@ -388,7 +388,9 @@ fn stepped(
     std::thread::Builder::new()
         .name("loop-step".to_owned())
         .spawn(move || {
-            let code = lp.step(input, &rx);
+            let code = lp
+                .step(input, &rx)
+                .expect("loop step completes without terminal failure");
             done.send((code, lp, rx)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -411,7 +413,8 @@ fn a_graphics_error_event_fails_the_transmitted_image() {
     let (mut lp, _rx) = stepped(lp, rx, display_answer(&command));
     drop(tx);
 
-    lp.handle_events(vec![Event::Reply(Reply::Graphics { id: 1, ok: false })]);
+    lp.handle_events(vec![Event::Reply(Reply::Graphics { id: 1, ok: false })])
+        .expect("a failed graphics reply leaves the loop running");
 
     assert_eq!(
         lp.app.notice(),
@@ -599,7 +602,13 @@ fn kitty_event_loop_draws_at_chunk_boundary() {
     assert!(lp.kitty_failed.load(Ordering::SeqCst));
     // The sink holds exactly the error position with nothing after it, and
     // the next step quits through the failed-draw exit.
-    assert_eq!(lp.step(Input::KittyFailed, &rx), Some(1));
+    let error = lp
+        .step(Input::KittyFailed, &rx)
+        .expect_err("a failed image write exits the loop");
+    assert_eq!(
+        error.to_string(),
+        "terminal: could not send an image to the terminal"
+    );
 }
 
 /// `kitty_failed` sets the flag and wakes an idle loop: with either half
@@ -1029,7 +1038,9 @@ fn run(
     std::thread::Builder::new()
         .name("loop-run".to_owned())
         .spawn(move || {
-            let code = lp.run(&rx);
+            let code = lp
+                .run(&rx)
+                .expect("loop completes without terminal failure");
             done.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -1132,7 +1143,9 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
     std::thread::Builder::new()
         .name("loop-step".to_owned())
         .spawn(move || {
-            let code = lp.step(Input::Bytes(Vec::new()), &rx);
+            let code = lp
+                .step(Input::Bytes(Vec::new()), &rx)
+                .expect("loop step completes without terminal failure");
             done.send((code, lp, rx)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -1176,7 +1189,10 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
         .collect();
     assert_eq!(held, ["a", "command_accepted", "resize", "b"]);
     while let Some(input) = lp.hub.pop_stashed() {
-        assert_eq!(lp.step(input, &rx), None);
+        assert_eq!(
+            (lp.step(input, &rx)).expect("event loop result succeeds"),
+            None
+        );
     }
     assert_eq!(lp.app.draft(), "ab");
     assert_eq!(lp.app.notice(), None);
@@ -1545,7 +1561,7 @@ fn frames_sweep_notices_before_and_after_the_draw() {
     // Frame one: the pre-draw sweep births the pushed event at the
     // birth instant, the draw shows it, and the post-draw sweep past
     // the fade expires it before arming: drawn once, stacked never.
-    assert_eq!(lp.frame(&rx), None);
+    assert_eq!((lp.frame(&rx)).expect("event loop result succeeds"), None);
     assert!(shown(&lp).contains("frame fade probe"), "{}", shown(&lp));
     assert!(lp.app.notices().is_empty());
     assert_eq!(lp.app.take_wake(), None);
@@ -1553,13 +1569,13 @@ fn frames_sweep_notices_before_and_after_the_draw() {
     // at its instant and the arm covers its expiry.
     lp.app
         .push_notice(ErrorCode::IoFailed, "second probe".to_owned());
-    assert_eq!(lp.frame(&rx), None);
+    assert_eq!((lp.frame(&rx)).expect("event loop result succeeds"), None);
     assert!(shown(&lp).contains("second probe"), "{}", shown(&lp));
     assert_eq!(notice_codes(&lp.app), ["io_failed"]);
     assert_eq!(lp.app.take_wake(), Some(past + crate::app::FADE));
     // Frame three past that expiry: the pre-draw sweep removes it
     // before the draw, so it never draws and nothing arms.
-    assert_eq!(lp.frame(&rx), None);
+    assert_eq!((lp.frame(&rx)).expect("event loop result succeeds"), None);
     assert!(lp.app.notices().is_empty());
     assert!(!shown(&lp).contains("second probe"), "{}", shown(&lp));
     assert_eq!(lp.app.take_wake(), None);
@@ -1841,7 +1857,7 @@ fn queued_hub_lines_draw_one_frame() {
     drop(tx);
     // Every line queued before the loop runs: one run of waiting lines
     // draws one frame.
-    assert_eq!(lp.run(&rx), 0);
+    assert_eq!((lp.run(&rx)).expect("event loop result succeeds"), 0);
     assert_eq!(flushes.get(), 1, "one frame for the queued lines");
     let screen = crate::view::text(lp.screen.backend().inner.buffer());
     assert!(screen.contains("marker three"), "{screen}");
@@ -1861,6 +1877,7 @@ fn run_queued(
     }
     drop(tx);
     lp.run(&rx)
+        .expect("queued loop run completes without terminal failure")
 }
 
 /// One turn's lines with `marker` as its reply, numbered from `seq`.
@@ -2276,7 +2293,9 @@ fn a_held_fold_fails_the_no_progress_window() {
         .name("held-fold-run".to_owned())
         .spawn(move || {
             super::pause::install(reached_tx, release);
-            let code = lp.run(&rx);
+            let code = lp
+                .run(&rx)
+                .expect("loop completes without terminal failure");
             done.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -2622,7 +2641,9 @@ fn resume_open_replays_the_log_to_the_tail() {
         .name("resume-run".to_owned())
         .spawn(move || {
             super::pause::install(fold_reached_tx, fold_release);
-            let code = lp.run(&rx);
+            let code = lp
+                .run(&rx)
+                .expect("loop completes without terminal failure");
             done.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -2826,7 +2847,9 @@ fn a_key_that_opens_a_delegate_leaves_nothing_held() {
     std::thread::Builder::new()
         .name("delegate-run".to_owned())
         .spawn(move || {
-            let code = lp.run(&rx);
+            let code = lp
+                .run(&rx)
+                .expect("loop completes without terminal failure");
             done.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -2851,7 +2874,9 @@ fn a_quit_in_its_own_batch_leaves_nothing_held() {
     std::thread::Builder::new()
         .name("quit-run".to_owned())
         .spawn(move || {
-            let code = lp.run(&rx);
+            let code = lp
+                .run(&rx)
+                .expect("loop completes without terminal failure");
             done.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -2898,7 +2923,9 @@ fn a_hub_batch_holds_while_folding() {
     std::thread::Builder::new()
         .name("hub-run".to_owned())
         .spawn(move || {
-            let code = lp.run(&rx);
+            let code = lp
+                .run(&rx)
+                .expect("loop completes without terminal failure");
             done.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -3296,7 +3323,10 @@ fn a_failed_write_grants_no_retry_until_the_reader_disconnects() {
     );
     // The reader's end of the stream gives the permit.
     let (_idle_tx, idle) = mpsc::channel();
-    assert_eq!(lp.step(Input::Disconnected, &idle), None);
+    assert_eq!(
+        (lp.step(Input::Disconnected, &idle)).expect("event loop result succeeds"),
+        None
+    );
     assert_eq!(retry.held(), Some(Duration::from_millis(500)));
 }
 
@@ -3338,7 +3368,9 @@ fn hooks_results_waiting_on_history_are_stashed_then_folded_stale() {
     std::thread::Builder::new()
         .name("loop-step".to_owned())
         .spawn(move || {
-            let code = lp.step(Input::Bytes(Vec::new()), &rx);
+            let code = lp
+                .step(Input::Bytes(Vec::new()), &rx)
+                .expect("loop step completes without terminal failure");
             done.send((code, lp, rx)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -3378,7 +3410,10 @@ fn hooks_results_waiting_on_history_are_stashed_then_folded_stale() {
         .collect();
     assert_eq!(held, ["names", "installed"]);
     while let Some(input) = lp.hub.pop_stashed() {
-        assert_eq!(lp.step(input, &rx), None);
+        assert_eq!(
+            (lp.step(input, &rx)).expect("event loop result succeeds"),
+            None
+        );
     }
     // Stale tickets fold to nothing: no draft, no notice, no session.
     assert_eq!(lp.app.draft(), "");

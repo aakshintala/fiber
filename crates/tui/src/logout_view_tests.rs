@@ -94,6 +94,24 @@ fn wheel_clamps_a_leaving_focus_to_the_window() {
     );
 }
 
+#[test]
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
+fn arrows_wrap_between_target_rows() {
+    let fake = fake_with(many_targets());
+    let context = ctx_h(&fake, 24);
+    let mut logout = Logout::open(&context);
+    logout.key(&Key::Up, &context);
+    assert_eq!(
+        logout.selected, 30,
+        "Up from the first target wraps to last"
+    );
+    logout.key(&Key::Down, &context);
+    assert_eq!(
+        logout.selected, 1,
+        "Down from the last target wraps to first"
+    );
+}
+
 /// Ordinary arrow keys still move one target after wheel movement, and
 /// the wheeled top survives while both targets remain visible.
 #[test]
@@ -178,4 +196,51 @@ fn body_len_counts_wrapped_status_and_short_draw_clips() {
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
     let _ = logout.draw(area, &mut buf, &mut targets);
+}
+
+/// Confirming a deletion redraws the list from the rows returned by the re-list.
+#[test]
+fn confirmed_delete_draws_only_the_relisted_rows() {
+    let fake = fake_with(vec![
+        LoginTarget {
+            name: "removed".to_owned(),
+            kind: LoginKind::Key,
+            label: None,
+        },
+        LoginTarget {
+            name: "remaining".to_owned(),
+            kind: LoginKind::Key,
+            label: None,
+        },
+    ]);
+    let context = ctx_h(&fake, 24);
+    let mut logout = Logout::open(&context);
+    assert!(matches!(logout.key(&Key::Enter, &context), Act::Stay));
+
+    let remaining = fake_with(vec![LoginTarget {
+        name: "remaining".to_owned(),
+        kind: LoginKind::Key,
+        label: None,
+    }]);
+    *fake.logout.lock().expect("logout rows") =
+        remaining.logout.lock().expect("remaining rows").clone();
+    assert!(matches!(logout.key(&Key::Enter, &context), Act::Stay));
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut actual = Buffer::empty(area);
+    let _ = logout.draw(area, &mut actual, &mut Vec::new());
+
+    let mut expected = Logout::open(&ctx_h(
+        &fake_with(vec![LoginTarget {
+            name: "remaining".to_owned(),
+            kind: LoginKind::Key,
+            label: None,
+        }]),
+        24,
+    ));
+    expected.said = logout.said.clone();
+    let mut expected_buf = Buffer::empty(area);
+    let _ = expected.draw(area, &mut expected_buf, &mut Vec::new());
+
+    assert_eq!(actual, expected_buf, "the complete relisted screen");
 }

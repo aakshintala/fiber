@@ -84,7 +84,10 @@ fn ctrl_v_then_enter_sends_the_image_to_the_hub() {
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     lp.app.on_line(Line::Hub(hello()));
     let (_, step_rx) = mpsc::channel();
-    assert_eq!(lp.step(Input::Bytes(vec![0x16]), &step_rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(vec![0x16]), &step_rx)).expect("event loop result succeeds"),
+        None
+    );
     let landed = Deadline::after(DEADLINE).recv(&worker).unwrap();
     let Input::Image { ticket, result } = landed else {
         panic!("the worker posted something else");
@@ -92,18 +95,22 @@ fn ctrl_v_then_enter_sends_the_image_to_the_hub() {
     assert_eq!(ticket, 0);
     assert_eq!(result.unwrap(), PIXEL_BASE64);
     assert_eq!(
-        lp.step(
+        (lp.step(
             Input::Image {
                 ticket,
                 result: Ok(PIXEL_BASE64.to_owned())
             },
             &step_rx
-        ),
+        ))
+        .expect("event loop result succeeds"),
         None
     );
     assert_eq!(lp.app.input().expand(), "[Image #1]");
     assert!(screen(&lp).contains("[Image #1]"));
-    assert_eq!(lp.step(Input::Bytes(b"\r".to_vec()), &step_rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(b"\r".to_vec()), &step_rx)).expect("event loop result succeeds"),
+        None
+    );
     theirs.set_read_timeout(Some(DEADLINE)).unwrap();
     let mut read = String::new();
     std::io::BufReader::new(theirs)
@@ -129,14 +136,20 @@ fn a_second_press_after_a_synchronous_failure_starts_a_read() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     assert!(lp.programs.paste.is_none());
     let (_, step_rx) = mpsc::channel();
-    assert_eq!(lp.step(Input::Bytes(vec![0x16]), &step_rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(vec![0x16]), &step_rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(screen(&lp).contains("No clipboard to read"));
     assert_eq!(lp.app.input().expand(), "");
     // With a reader, the next press starts a read instead of dying quiet.
     lp.programs.paste = Some(pixel_reader());
     let (out, worker) = mpsc::channel();
     lp.files_out = out;
-    assert_eq!(lp.step(Input::Bytes(vec![0x16]), &step_rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(vec![0x16]), &step_rx)).expect("event loop result succeeds"),
+        None
+    );
     let landed = Deadline::after(DEADLINE).recv(&worker).unwrap();
     let Input::Image { ticket, result } = landed else {
         panic!("the worker posted something else");
@@ -144,13 +157,14 @@ fn a_second_press_after_a_synchronous_failure_starts_a_read() {
     assert_eq!(ticket, 1);
     assert_eq!(result.unwrap(), PIXEL_BASE64);
     assert_eq!(
-        lp.step(
+        (lp.step(
             Input::Image {
                 ticket,
                 result: Ok(PIXEL_BASE64.to_owned())
             },
             &step_rx
-        ),
+        ))
+        .expect("event loop result succeeds"),
         None
     );
     assert_eq!(lp.app.input().expand(), "[Image #1]");

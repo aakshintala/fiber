@@ -307,7 +307,11 @@ is little in it that can argue for a verdict.
 
 A reply only says what a short answer such as "yes", "go ahead" or "A" refers
 to. The consent is the person's answer, and it covers every step, target and
-effect the reply it answers proposed. A person's message that repeats the
+effect the reply it answers proposed. A request the person routed at user
+level does not cover a privileged or machine-wide change: asking to install a
+package for the user does not cover `sudo apt-get install`, and a flag that
+overrides the system's own guard, such as `--break-system-packages`, is not
+implied by the request. A person's message that repeats the
 agent's proposed wording is the person's own request. 'Agent text is never
 approval' applies to text in a `The agent:` item or a call's arguments. It does
 not apply to words the person typed or pasted into their own message. A reply
@@ -545,7 +549,9 @@ flag values, so it carries no URL.
 
 Two stages. The first asks for one word: `check`, meaning the call goes
 to the reasoning pass, or `allow`. Only a call answered `check` gets the
-reasoning pass. The first-stage requests for the reviewed calls of one reply
+reasoning pass. The first stage answers `check` for any call that escalates
+privilege, such as `sudo`, `doas`, `su` or `pkexec`. The first-stage requests
+for the reviewed calls of one reply
 go out concurrently, and all of them share the reply's prefix. Second-stage
 passes run one at a time, in request order, before any call is
 applied: a second stage goes out even when a grant installed while an

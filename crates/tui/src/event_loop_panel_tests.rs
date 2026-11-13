@@ -58,7 +58,10 @@ fn focus_and_stale_keypress_send_quota_through_the_loop() {
         });
         lp.hub.store(ours);
         let events = lp.parser.feed(bytes);
-        assert_eq!(lp.handle_events(events), None);
+        assert_eq!(
+            (lp.handle_events(events)).expect("event loop result succeeds"),
+            None
+        );
         lp.hub.hang_up();
         let text = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv_or_fail(&rx, "the loop's quota command");

@@ -327,7 +327,7 @@ fn run(
     if json {
         for row in &rows {
             let line = serde_json::to_string(row).map_err(CliError::ModelRow)?;
-            write_line(out, &line).map_err(CliError::from)?;
+            write_line(out, &line)?;
         }
         return Ok(());
     }
@@ -336,7 +336,7 @@ fn run(
         return Ok(());
     }
     for line in &text_lines(&rows) {
-        write_line(out, line).map_err(CliError::from)?;
+        write_line(out, line)?;
     }
     Ok(())
 }

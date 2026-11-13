@@ -12,6 +12,11 @@
 /// process.
 pub const HUB_SESSION_MARKER: &str = "FIBER_HUB_SESSION";
 
+/// Maximum characters in one monitor line before it is marked as cut.
+pub const MONITOR_LINE_LIMIT: usize = 500;
+/// Maximum characters in one monitor delivery before it is marked as cut.
+pub const MONITOR_DELIVERY_LIMIT: usize = 3_000;
+
 pub mod clock;
 mod codes;
 pub mod commands;

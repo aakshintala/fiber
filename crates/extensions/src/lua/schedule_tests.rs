@@ -1403,17 +1403,9 @@ fiber.command("arm_exec", {{ timeout = 5000, run = function()
   return "armed" end }})
 fiber.command("plain", {{ timeout = 5000, run = function() return "plain" end }})
 "#,
-        ready = shell_quote(ready),
-        block = shell_quote(block),
+        ready = fakes::shell_quote(ready),
+        block = fakes::shell_quote(block),
     )
-}
-
-/// Single-quotes `path` for the `sh -c` line in [`timer_init`].
-// debt: third copy across three test crates (ceiling three); upgrade
-// trigger: a fourth copy, or the next edit to any of them, moves it into
-// fakes.
-fn shell_quote(path: &std::path::Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
 /// Commands for the gated-hold test: `arm_gated` sets a timer whose
@@ -1431,9 +1423,9 @@ fn gated_timer_init(
   host.after(100, function() host.exec("sh", {{ "-c", "echo $$ > {ready}; read _ < {gate}; read _ < {block}; exit 0" }}) return "fired" end, {{ timeout = 5000 }})
   return "armed" end }})
 "#,
-        ready = shell_quote(ready),
-        gate = shell_quote(gate),
-        block = shell_quote(block),
+        ready = fakes::shell_quote(ready),
+        gate = fakes::shell_quote(gate),
+        block = fakes::shell_quote(block),
     )
 }
 

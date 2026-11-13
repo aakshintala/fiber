@@ -15,8 +15,7 @@
 
 use crate::support;
 
-#[path = "../support/hub_start.rs"]
-mod hub_start;
+use crate::hub_start;
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};

@@ -60,17 +60,7 @@ fn hub_cases() -> Vec<(doors::Error, ErrorCode)> {
 }
 
 #[test]
-fn hub_failure_preserves_local_text_and_listed_error_codes() {
-    for (error, code) in hub_cases() {
-        let expected = if matches!(error, doors::Error::Local(_)) {
-            "the hub: down".into()
-        } else {
-            error.to_string()
-        };
-        let failure = super::hub_failure(error);
-        assert_eq!(failure.code, code);
-        assert_eq!(failure.message, expected);
-    }
+fn hub_error_conversion_preserves_local_text_and_listed_error_codes() {
     for (error, code) in hub_cases() {
         let expected = if matches!(error, doors::Error::Local(_)) {
             "the hub: down".to_owned()
@@ -1136,7 +1126,7 @@ fn an_accepted_delete_with_a_failing_writer_is_io_failed_and_stays_deleted() {
     let (got, sent, connects): (Result<(), CliError>, Value, usize) =
         Deadline::after(HUB_DEADLINE).recv(&rx).unwrap();
     let error = got.unwrap_err();
-    assert!(matches!(&error, CliError::Forwarded(_)), "{error:?}");
+    assert!(matches!(&error, CliError::StandardOutput(_)), "{error:?}");
     assert_eq!(error.code(), ErrorCode::IoFailed);
     assert_eq!(
         sent,

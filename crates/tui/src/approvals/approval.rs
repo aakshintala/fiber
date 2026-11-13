@@ -468,11 +468,9 @@ impl Approval {
                     .iter()
                     .position(|choice| *choice == self.cursor)
                     .unwrap_or_default();
-                let next = if *key == Key::Up {
-                    now.saturating_sub(1)
-                } else {
-                    now.saturating_add(1)
-                };
+                let len = choices.len();
+                let next =
+                    crate::swapped::wrap_step(now, len, if *key == Key::Up { -1 } else { 1 });
                 if let Some(choice) = choices.get(next) {
                     self.cursor = *choice;
                 }

@@ -190,8 +190,7 @@ fn prune_listed(
         write_line(
             out,
             &format!("would free {}", format_size(preview.would_free)),
-        )
-        .map_err(CliError::from)?;
+        )?;
         return Ok(());
     }
     if ask.yes {
@@ -211,7 +210,7 @@ fn prune_listed(
 /// Prints each preview line.
 fn print_lines(out: &mut dyn Write, lines: &[String]) -> Result<(), CliError> {
     for line in lines {
-        write_line(out, line).map_err(CliError::from)?;
+        write_line(out, line)?;
     }
     Ok(())
 }
@@ -302,7 +301,7 @@ fn finish_listed(
     err: &mut dyn Write,
     confirmed: &Confirmed,
 ) -> Result<(), CliError> {
-    write_line(out, &format!("freed {}", format_size(confirmed.freed))).map_err(CliError::from)?;
+    write_line(out, &format!("freed {}", format_size(confirmed.freed)))?;
     if confirmed.failures.is_empty() {
         return Ok(());
     }
@@ -379,7 +378,7 @@ fn prune_run(
             &crashes,
             now,
         )?;
-        write_line(out, &format!("freed {}", format_size(0))).map_err(CliError::from)?;
+        write_line(out, &format!("freed {}", format_size(0)))?;
         return Ok(());
     }
     let would_free = session_listed_bytes(&selected.rows)
@@ -397,8 +396,7 @@ fn prune_run(
             &crashes,
             now,
         )?;
-        write_line(out, &format!("would free {}", format_size(would_free)))
-            .map_err(CliError::from)?;
+        write_line(out, &format!("would free {}", format_size(would_free)))?;
         return Ok(());
     }
     print_rows(
@@ -447,7 +445,7 @@ fn prune_run(
         Err(e) => {
             // No `delete` was accepted: every remaining directory fails
             // with the connection error, as `reconcile` reports.
-            let failure = crate::sessions::hub_failure(e);
+            let failure = Failure::from(CliError::Hub(e));
             let results: Vec<Result<(), Failure>> = selected
                 .deletes
                 .iter()
@@ -472,7 +470,7 @@ fn prune_run(
     let mut send = |id: &SessionId, cascade: bool, _expect: Option<&BTreeSet<SessionId>>| {
         sent += 1;
         let command_id = format!("c_prune_{sent}");
-        crate::sessions::send_delete(&mut read, &command_id, id, cascade)
+        crate::sessions::delete_value(&mut read, &command_id, id, cascade).map_err(Failure::from)
     };
     let results = delete_sessions(&selected.deletes, &none, &mut send);
     reconcile(
@@ -529,7 +527,7 @@ fn print_rows(
     now: SystemTime,
 ) -> Result<(), CliError> {
     for line in listing_lines(sessions, worktrees, pinned, logs, crashes, now) {
-        write_line(out, &line).map_err(CliError::from)?;
+        write_line(out, &line)?;
     }
     Ok(())
 }
@@ -1121,7 +1119,7 @@ fn finish(
     diag_total: usize,
     other_total: usize,
 ) -> Result<(), CliError> {
-    write_line(out, &format!("freed {}", format_size(freed))).map_err(CliError::from)?;
+    write_line(out, &format!("freed {}", format_size(freed)))?;
     if failures.is_empty() {
         return Ok(());
     }

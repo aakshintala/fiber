@@ -350,6 +350,8 @@ A cache entry also expires after its lifetime with no request.
   must render identically when it later appears in history, because the chain
   depends on it. Where a provider routes by key, its key is the reviewed
   session's own id plus `reviewer`, a delegate's included.
+- The notes proposal request has its own cache key: the session's id plus
+  `:notes`, isolating proposals from conversation and reviewer caches.
 - The system prompt holds only what is fixed for the session. What it holds
   and what feeds it is `docs/system-prompt.md`.
 

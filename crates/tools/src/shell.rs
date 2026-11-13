@@ -623,13 +623,20 @@ impl Tool for Shell {
     }
 
     fn with_cap(&self, cap: usize) -> Option<Arc<dyn Tool>> {
-        Some(Arc::new(Self {
-            bound: Bound {
+        let mut shell = self.clone();
+        if cap == usize::MAX {
+            shell.bound = Bound {
+                start: usize::MAX,
+                end: 0,
+            };
+            shell.artifacts = None;
+        } else {
+            shell.bound = Bound {
                 start: cap.saturating_sub(cap / 2),
                 end: cap / 2,
-            },
-            ..self.clone()
-        }))
+            };
+        }
+        Some(Arc::new(shell))
     }
 
     fn guidelines(&self) -> Option<String> {
