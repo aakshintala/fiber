@@ -190,6 +190,7 @@ fn run_set(
     err: &mut dyn Write,
     clock: &dyn contract::clock::Clock,
 ) -> Result<PathBuf, CliError> {
+    config::refuse_overlapping_repository(home, workspace, layer)?;
     let (_, project) = project_of(home, workspace)?;
     let parsed = serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.into()));
     let mut notices = Vec::new();
