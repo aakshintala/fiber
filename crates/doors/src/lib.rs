@@ -86,6 +86,15 @@ pub fn exit_code(failure: &Failure) -> i32 {
     }
 }
 
+/// The exit code for a failed standard-output write: only a broken pipe is quiet.
+pub fn stdout_write_exit_code(error: &io::Error) -> i32 {
+    if error.kind() == io::ErrorKind::BrokenPipe {
+        0
+    } else {
+        1
+    }
+}
+
 /// `fiber ask`'s prompt (`docs/invocation.md`, "Getting a prompt in").
 ///
 /// The source is the arguments alone. Stdin is read only when `dash` is set,

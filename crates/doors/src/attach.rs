@@ -134,8 +134,20 @@ pub fn attach(
                 printing = true;
             }
             OutputKind::TurnCompleted if printing => {
-                emit(out, &raw)?;
-                return Ok(exit_code(&envelope));
+                let code = exit_code(&envelope);
+                if let Err(error) = emit(out, &raw) {
+                    if code != 0 {
+                        return Ok(code);
+                    }
+                    let SessionError::StdoutFailed { source } = error else {
+                        return Err(error);
+                    };
+                    if crate::stdout_write_exit_code(&source) == 0 {
+                        return Ok(0);
+                    }
+                    return Err(SessionError::StdoutFailed { source });
+                }
+                return Ok(code);
             }
             OutputKind::FiberExited if printing => return Err(ended(id)),
             OutputKind::TurnStarted

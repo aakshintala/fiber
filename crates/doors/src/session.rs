@@ -1336,9 +1336,7 @@ fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) -> std::io::Resul
 /// "What a caller gets back"). A reader that went away, or a line that
 /// cannot be written, stops the copy, never the session.
 fn write_until_stop(out: &mut dyn Write, line: &contract::Envelope) -> std::io::Result<bool> {
-    if client::write_line(out, line).is_err() {
-        return Ok(true);
-    }
+    client::write_line(out, line)?;
     Ok(line.kind() == EventKind::FiberExited
         || line.kind() == EventKind::Rewound
         || line.kind() == EventKind::Moved)

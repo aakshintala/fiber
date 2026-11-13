@@ -248,11 +248,8 @@ fn finish<E: Into<CliError>>(result: Result<(), E>) -> i32 {
 fn finish_code<E: Into<CliError>>(result: Result<i32, E>) -> i32 {
     match result.map_err(Into::into) {
         Ok(code) => code,
-        Err(CliError::StandardOutput(error) | CliError::DoctorReport(error))
-            if error.kind() == io::ErrorKind::BrokenPipe =>
-        {
-            0
-        }
+        Err(CliError::StandardOutput(error)) if doors::stdout_write_exit_code(&error) == 0 => 0,
+        Err(CliError::DoctorReport(error)) if error.kind() == io::ErrorKind::BrokenPipe => 0,
         Err(error) => fail(error.into()),
     }
 }

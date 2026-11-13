@@ -333,6 +333,8 @@ with `fiber extension list`.
 
 Every other command stops quietly with exit 0 when standard output is closed early, as with `| head`; any other failed write to standard output is an error, with exit 1.
 
+A command that has already failed keeps its own exit code and error, and a failed write to standard output changes neither.
+
 ```sh
 fiber ask "review the diff on this branch"
 fiber ask < brief.md

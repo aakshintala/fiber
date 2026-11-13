@@ -1,4 +1,4 @@
-//! Closed stdout handling for list commands.
+//! Closed stdout handling for commands that write a session stream or list output.
 
 #![allow(
     clippy::unwrap_used,
@@ -99,5 +99,14 @@ fn full_stdout_remains_an_error() {
     let full = fs::File::options().write(true).open("/dev/full").unwrap();
     let output = run_with_hub(&["sessions"], Stdio::from(full));
     assert_eq!(output.status.code(), Some(1));
-    assert!(!output.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr).lines().count(),
+        1,
+        "{:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr).trim(),
+        "fiber: standard output: No space left on device (os error 28)"
+    );
 }

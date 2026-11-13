@@ -1030,7 +1030,7 @@ pub(crate) fn assemble_session(
                 crate::shutdown::start(signals, &cancel, &session, jobs.clone(), reads)
             {
                 servers.stop();
-                close(
+                return close_with_result(
                     session,
                     log,
                     &home,
@@ -1038,8 +1038,8 @@ pub(crate) fn assemble_session(
                     &workspace,
                     &*clock,
                     &keeper,
+                    Ok(code),
                 );
-                return Ok(code);
             }
             match signals.commit(|| {
                 r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), true)
@@ -1054,7 +1054,7 @@ pub(crate) fn assemble_session(
             }) {
                 Err(code) => {
                     servers.stop();
-                    close(
+                    return close_with_result(
                         session,
                         log,
                         &home,
@@ -1062,12 +1062,12 @@ pub(crate) fn assemble_session(
                         &workspace,
                         &*clock,
                         &keeper,
+                        Ok(code),
                     );
-                    return Ok(code);
                 }
                 Ok(Err(e)) => {
                     servers.stop();
-                    close(
+                    return close_with_result(
                         session,
                         log,
                         &home,
@@ -1075,8 +1075,8 @@ pub(crate) fn assemble_session(
                         &workspace,
                         &*clock,
                         &keeper,
+                        Err(failed(e.code(), e)),
                     );
-                    return Err(failed(e.code(), e));
                 }
                 Ok(Ok(())) => {}
             }
@@ -1100,7 +1100,7 @@ pub(crate) fn assemble_session(
                 && let Err(error) = handed.finish()
             {
                 servers.stop();
-                close(
+                return close_with_result(
                     session,
                     log,
                     &home,
@@ -1108,11 +1108,11 @@ pub(crate) fn assemble_session(
                     &workspace,
                     &*clock,
                     &keeper,
+                    Err(failed(
+                        ErrorCode::IoFailed,
+                        format!("The keeper did not finish handing over its jobs: {error}."),
+                    )),
                 );
-                return Err(failed(
-                    ErrorCode::IoFailed,
-                    format!("The keeper did not finish handing over its jobs: {error}."),
-                ));
             }
             let code = run_turn(
                 &session,
@@ -1193,7 +1193,7 @@ pub(crate) fn assemble_session(
                 },
             );
             servers.stop();
-            close(
+            close_with_result(
                 session,
                 log,
                 &home,
@@ -1201,8 +1201,8 @@ pub(crate) fn assemble_session(
                 &workspace,
                 &*clock,
                 &keeper,
-            );
-            Ok(code)
+                Ok(code),
+            )
         }
         fresh @ Start::New { .. }
         | fresh @ Start::Delegate { .. }
@@ -1566,7 +1566,7 @@ pub(crate) fn assemble_session(
             let reads = switching.reads();
             if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
                 servers.stop();
-                close(
+                return close_with_result(
                     session,
                     log,
                     &home,
@@ -1574,8 +1574,8 @@ pub(crate) fn assemble_session(
                     &workspace,
                     &*clock,
                     &keeper,
+                    Ok(code),
                 );
-                return Ok(code);
             }
             let inbox_wake = session.inbox_wake();
             let rewrites = session.rewrites();
@@ -1775,7 +1775,7 @@ pub(crate) fn assemble_session(
                 }
             }
             servers.stop();
-            close(
+            close_with_result(
                 session,
                 log,
                 &home,
@@ -1783,8 +1783,8 @@ pub(crate) fn assemble_session(
                 &workspace,
                 &*clock,
                 &keeper,
-            );
-            Ok(code)
+                Ok(code),
+            )
         }
     }
 }
@@ -1849,7 +1849,7 @@ mod tests;
 /// appends the session's `recent.jsonl` row with what it stopped on, its
 /// last `session_status` (`docs/state.md`, "Fiber home").
 /// A session `close` deleted, never prompted, leaves nothing behind.
-pub(crate) fn close(
+fn close_with_result(
     session: Session,
     log: Arc<Log>,
     home: &Path,
@@ -1857,7 +1857,8 @@ pub(crate) fn close(
     workspace: &Path,
     clock: &dyn contract::clock::Clock,
     keeper: &crate::keeper::Host,
-) {
+    result: Result<i32, Failure>,
+) -> Result<i32, Failure> {
     keeper.send_shutdown();
     let status = log
         .latest("session_status")
@@ -1865,12 +1866,29 @@ pub(crate) fn close(
     // The clone keeps the session lock held until the exited row is
     // published: without it the lock releases inside `close` before the
     // row lands, and an archive in between would be reset by the row.
-    session.close(Arc::clone(&log));
+    let copy_result = session.close(Arc::clone(&log));
     #[cfg(test)]
     pause_before_row();
     // A row that cannot be written loses only the listing, not the log.
     hub::append_exited(home, dir, workspace, status, clock).unwrap_or(());
     drop(log);
+    combine_close_result(result, copy_result)
+}
+
+fn combine_close_result(
+    result: Result<i32, Failure>,
+    copy_result: std::io::Result<()>,
+) -> Result<i32, Failure> {
+    match (result, copy_result) {
+        (Err(failure), _) => Err(failure),
+        (Ok(code), _) if code != 0 => Ok(code),
+        (Ok(_), Ok(())) => Ok(0),
+        (Ok(_), Err(error)) if doors::stdout_write_exit_code(&error) == 0 => Ok(0),
+        (Ok(_), Err(error)) => Err(failed(
+            ErrorCode::IoFailed,
+            format!("stdout could not be written: {error}"),
+        )),
+    }
 }
 
 /// Test seam: armed once by the close-publication test; fires after the
