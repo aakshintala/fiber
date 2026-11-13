@@ -349,10 +349,6 @@ crates/main/tests/screens/snapshots/screens__journeys__model_picker_open.snap	fi
 crates/main/src/keeper.rs	fiber-4351	plan	2026-11-13T12:20:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/keeper_restore.rs	fiber-4351	plan	2026-11-13T12:20:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/resume.rs	fiber-4351	plan	2026-11-13T12:20:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/bench/examples/bench/linux.rs:121-121	fiber-4791	plan	2026-11-13T12:20:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4791-idle-thread-name	
-crates/bench/examples/bench/linux_tests.rs:146-147	fiber-4791	plan	2026-11-13T12:20:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4791-idle-thread-name	
-crates/bench/examples/bench/linux_tests.rs:173-178	fiber-4791	plan	2026-11-13T12:20:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4791-idle-thread-name	
-crates/bench/examples/bench/linux_tests.rs:179-180	fiber-4791	plan	2026-11-13T12:20:31Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4791-idle-thread-name	
 Cargo.lock:978-979	fiber-4755	plan	2026-11-13T12:26:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4755-idle-rss	
 crates/config/src/cache.rs:144-145	fiber-4755	plan	2026-11-13T12:26:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4755-idle-rss	
 crates/config/src/lib.rs:49-50	fiber-4755	plan	2026-11-13T12:26:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4755-idle-rss	
