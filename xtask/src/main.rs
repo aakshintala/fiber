@@ -194,7 +194,7 @@ fn main() -> ExitCode {
     }
 }
 
-/// Whether to print the plan's budget-breach exemption message.
+/// Whether to report a selected bug-red job suppressed by the exemption.
 fn report_budget_breach(event: &str, selected: bool, suppressed: bool) -> bool {
     event == "pull_request" && selected && suppressed
 }
@@ -258,14 +258,24 @@ fn run(args: &[String]) -> Result<bool, String> {
             let body = optional(rest, "--pr-body").unwrap_or_default();
             let bug_red_was_selected = plan.jobs.get("bug_red") == Some(&true);
             let plan = select::plan_with_budget_breach_body(plan, bug, &body);
-            if report_budget_breach(
+            let budget_breach = report_budget_breach(
                 &event,
                 bug_red_was_selected,
                 plan.jobs.get("bug_red") == Some(&false),
-            ) {
-                eprintln!(
-                    "budget breach exemption: bug-red jobs skipped; reviewers judge Base/Head measurements"
-                );
+            );
+            if budget_breach {
+                let summary = std::env::var("GITHUB_STEP_SUMMARY")
+                    .map_err(|e| format!("GITHUB_STEP_SUMMARY: {e}"))?;
+                use std::io::Write;
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(summary)
+                    .map_err(|e| format!("GITHUB_STEP_SUMMARY: {e}"))?;
+                writeln!(
+                    file,
+                    "Budget breach exemption: bug-red legs skipped; reviewers judge Base/Head measurements."
+                )
+                .map_err(|e| format!("GITHUB_STEP_SUMMARY: {e}"))?;
             }
             let plan =
                 select::plan_with_changed_paths(plan, event == "pull_request", &changed_paths);
@@ -284,7 +294,7 @@ fn run(args: &[String]) -> Result<bool, String> {
                 "shard_timeout={}",
                 select::shard_timeout_minutes(mutant_count)
             );
-            if bug && select::budget_breach_section(&body) {
+            if budget_breach {
                 println!("budget_breach=true");
             }
             println!(

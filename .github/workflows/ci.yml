@@ -1468,7 +1468,7 @@ jobs:
   bug_red:
     name: Bug fix fails at the red commit
     needs: [select, bug_red_linux, bug_red_macos]
-    if: always() && needs.select.result == 'success' && (fromJSON(needs.select.outputs.jobs).bug_red || needs.select.outputs.budget_breach == 'true')
+    if: always() && needs.select.result == 'success' && fromJSON(needs.select.outputs.jobs).bug_red
     runs-on: ubuntu-24.04
     # Collector only reads the two leg results; median under 5 minutes.
     timeout-minutes: 5
@@ -1479,11 +1479,7 @@ jobs:
       MACOS_RESULT: ${{ needs.bug_red_macos.result }}
     steps:
       - *checkout-full
-      - name: Report budget-breach exemption
-        if: needs.select.outputs.budget_breach == 'true'
-        run: echo "Budget breach exemption: bug-red legs skipped; Base/Head measurements justify the exception."
       - name: Collect bug-red leg results
-        if: needs.select.outputs.budget_breach != 'true'
         run: scripts/bug-red --collect "$LINUX_STATUS" "$MACOS_STATUS"
 
   release:

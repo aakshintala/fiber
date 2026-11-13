@@ -232,6 +232,11 @@ fn budget_breach_fences_require_matching_marker_and_sufficient_width() {
             false,
         ),
         (
+            "heading after closed fence",
+            "~~~md\nexample\n~~~\n## Budget breach\nBase: x\nHead: y",
+            true,
+        ),
+        (
             "heading whitespace",
             "##  Budget breach\nBase: x\nHead: y",
             true,
