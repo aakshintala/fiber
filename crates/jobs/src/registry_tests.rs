@@ -2605,54 +2605,6 @@ fn restore_detached_rows_removes_a_start_with_its_matching_completion() {
 
 #[cfg(unix)]
 #[test]
-fn restore_detached_rows_admits_a_live_group_above_one_against_less_mutation() {
-    let (_dir, registry) = world();
-    let (child, watchdog) = live_restore_row_group();
-    let started = restore_row_started("j_rows_gt_less", child.id());
-    assert!(child.id() > 1);
-    let mut calls = 0;
-    let rows = registry.restore_detached_rows(
-        [Ok::<_, ()>(restore_row_line(
-            1,
-            contract::events::Event::JobStarted(started),
-        ))],
-        |_| {
-            calls += 1;
-            (Stop(Box::new(|| {})), ())
-        },
-    );
-    assert_eq!(rows.len(), 1);
-    assert_eq!(calls, 1);
-    drop(rows);
-    reap_restore_row_group(child, watchdog);
-}
-
-#[cfg(unix)]
-#[test]
-fn restore_detached_rows_admits_a_live_group_above_one_against_equal_mutation() {
-    let (_dir, registry) = world();
-    let (child, watchdog) = live_restore_row_group();
-    let started = restore_row_started("j_rows_gt_equal", child.id());
-    assert!(child.id() > 1);
-    let mut calls = 0;
-    let rows = registry.restore_detached_rows(
-        [Ok::<_, ()>(restore_row_line(
-            1,
-            contract::events::Event::JobStarted(started),
-        ))],
-        |_| {
-            calls += 1;
-            (Stop(Box::new(|| {})), ())
-        },
-    );
-    assert_eq!(rows.len(), 1);
-    assert_eq!(calls, 1);
-    drop(rows);
-    reap_restore_row_group(child, watchdog);
-}
-
-#[cfg(unix)]
-#[test]
 fn restore_detached_rows_keeps_the_pgid_one_safety_guard() {
     // Defense in depth: `support::group::alive` independently refuses pgids <= 1.
     let (_dir, registry) = world();

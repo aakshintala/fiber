@@ -947,7 +947,7 @@ fn restored_disappearance_preserves_indeterminate_failure_payload() {
 
 #[cfg(debug_assertions)]
 #[test]
-fn restored_drain_deadline_survivor_reports_only_at_deadline() {
+fn restored_group_surviving_kill_reports_once_at_drain_deadline() {
     use super::RestoredLivenessEvent::{AfterKillLoopTop, DrainDeadline};
 
     let dir = fakes::TempDir::new("fiber-detached-restored-drain-deadline");
