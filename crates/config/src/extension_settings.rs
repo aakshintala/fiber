@@ -61,6 +61,10 @@ impl ExtensionSettings {
         self.overlay.insert(full_name(extension), repository);
     }
 
+    pub(crate) fn home(&self) -> &Path {
+        &self.home
+    }
+
     /// The workspace whose `.fiber/` is the repository layer.
     pub fn workspace(&self) -> &Path {
         &self.workspace

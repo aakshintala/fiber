@@ -316,6 +316,10 @@ impl Config {
         &self.notices
     }
 
+    pub(crate) fn fiber_home_path(&self) -> &Path {
+        self.extensions.home()
+    }
+
     /// One extension's settings files.
     pub fn extensions(&self) -> &ExtensionSettings {
         &self.extensions
@@ -625,7 +629,7 @@ const HOOKS_EXTENSION: &str = "github.com/aakshintala/fiber/extensions/hooks";
 /// Reads what the workspace's `.fiber/` declares, under the same plain-file
 /// checks as [`Config::load`]. A repository with none gets an empty
 /// [`Declared`].
-pub fn declared(workspace: &Path) -> Result<Declared, ConfigError> {
+pub fn declared(workspace: &Path, _fiber_home: &Path) -> Result<Declared, ConfigError> {
     let mut declared = Declared::default();
     let (file, repository) = read_repository(workspace)?;
     if let Some(value) = repository {
