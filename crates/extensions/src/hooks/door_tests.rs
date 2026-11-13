@@ -691,6 +691,122 @@ fn own_tool_hooks_fail_when_reached_and_run_normally_after_the_answer() {
 }
 
 #[test]
+fn process_command_inner_call_refuses_owner_hooks() {
+    use crate::runtime::ProcessInvoke;
+    use contract::hook::{AfterToolCall, AfterToolOutcome, BeforeToolOutcome, CheckOutcome, Hooks};
+    let home = Home::new();
+    home.install(
+        "x",
+        "fiber.hook('before_tool', {timeout=1000,on_failure='blocking',run=function() end})\nfiber.hook('before_tool', {phase='check',timeout=1000,on_failure='blocking',run=function() end})\nfiber.hook('after_tool', {phase='sanitize',timeout=1000,on_failure='blocking',run=function() end})",
+    );
+    let session = home.load();
+    let (send, rx) = mpsc::channel();
+    session.deliver_to(send);
+    let invoked: ProcessInvoke = Arc::new(|_, _, _, inner_calls| {
+        inner_calls
+            .unwrap()
+            .run("fiber.test/x", "read", json!({}))
+            .map_err(|message| crate::Error::Lua {
+                extension: "fiber.test/x".to_owned(),
+                message,
+            })?;
+        Ok(Some(json!("returned")))
+    });
+    let command = session.runtime.install_process_handler(
+        "fiber.test/x",
+        contract::CommandId("registered".into()),
+        "run",
+        invoked,
+    );
+    let queued = Arc::new(
+        session
+            .runtime
+            .queue_command(&command, contract::CommandId("cmd_process".into()), "")
+            .unwrap(),
+    );
+    let waiting = Arc::clone(&queued);
+    let (result_tx, result_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = result_tx.send(waiting.wait());
+    });
+    queued.release();
+    let Delivery::InnerCall(request) =
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "process command inner call")
+    else {
+        panic!("expected inner call");
+    };
+    let contract::inbox::InnerCallRequest { taken, answer, .. } = request;
+    let caller = Arc::clone(&session);
+    let (before, check, after, outside_thread) = bounded(move || {
+        (taken)();
+        let before = before_call(&caller);
+        let check = caller.check_tool(&contract::hook::BeforeToolCall {
+            tool: "read",
+            arguments: &serde_json::Map::new(),
+            declared: &contract::shapes::DeclaredEffects {
+                effects: vec![contract::shapes::Effect::Reads],
+                reversible: true,
+                paths: None,
+                confined: false,
+            },
+        });
+        let after = caller.after_tool(&AfterToolCall {
+            tool: "read",
+            arguments: &serde_json::Map::new(),
+            status: contract::events::CallStatus::Completed,
+            content: "raw",
+            details: None,
+            process: None,
+            spilled: None,
+            not_regular: false,
+            delivery: None,
+        });
+        let outside_session = Arc::clone(&caller);
+        let outside_thread = thread::spawn(move || before_call(&outside_session))
+            .join()
+            .unwrap();
+        (before, check, after, outside_thread)
+    });
+    let BeforeToolOutcome::Failed(before_failure) = before.outcome else {
+        panic!("the process command's before_tool hook must fail");
+    };
+    assert_eq!(before_failure.extension, "fiber.test/x");
+    assert_eq!(
+        before_failure.message,
+        "The `before_tool` hook would wait behind its extension's command"
+    );
+
+    let CheckOutcome::Failed(check_failure) = check.outcome else {
+        panic!("the process command's check hook must fail");
+    };
+    assert_eq!(check_failure.extension, "fiber.test/x");
+    assert_eq!(
+        check_failure.message,
+        "The `before_tool` hook would wait behind its extension's command"
+    );
+
+    let AfterToolOutcome::Failed(after_failure) = after.outcome else {
+        panic!("the process command's after_tool hook must fail");
+    };
+    assert_eq!(after_failure.extension, "fiber.test/x");
+    assert_eq!(
+        after_failure.message,
+        "The `after_tool` hook would wait behind its extension's command"
+    );
+    let BeforeToolOutcome::Unchanged = outside_thread.outcome else {
+        panic!("an unrelated thread's outer hook must not be refused");
+    };
+    assert!(outside_thread.notices.is_empty());
+    answer(tool_answer());
+    assert_eq!(
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&result_rx, "process command callback result")
+            .unwrap(),
+        json!("returned")
+    );
+}
+
+#[test]
 fn earlier_hooks_run_and_a_refusal_before_the_own_hook_wins() {
     use contract::hook::BeforeToolOutcome;
     for refusing in [true, false] {
@@ -720,9 +836,16 @@ fn earlier_hooks_run_and_a_refusal_before_the_own_hook_wins() {
         else {
             panic!("expected inner call");
         };
-        (request.taken)();
+        let contract::inbox::InnerCallRequest {
+            taken,
+            answer: reply,
+            ..
+        } = request;
         let caller = session.clone();
-        let answer = bounded(move || before_call(&caller));
+        let answer = bounded(move || {
+            (taken)();
+            before_call(&caller)
+        });
         assert!(answer.notices.is_empty());
         if refusing {
             let BeforeToolOutcome::Refused(refusal) = answer.outcome else {
@@ -738,7 +861,7 @@ fn earlier_hooks_run_and_a_refusal_before_the_own_hook_wins() {
         }
         assert_eq!(fs::read_to_string(earlier).unwrap(), "y");
         assert!(!own.exists());
-        (request.answer)(tool_answer());
+        reply(tool_answer());
         Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&result, "ordered command end")
             .unwrap();
