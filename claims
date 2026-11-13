@@ -365,3 +365,6 @@ crates/main/src/configure/remote_tests.rs	fiber-4583	plan	2026-11-13T21:41:17Z	A
 docs/invocation.md	fiber-4583	plan	2026-11-13T21:41:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/hooks.rs	fiber-4583	plan	2026-11-13T22:10:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/hooks_tests.rs	fiber-4583	plan	2026-11-13T22:10:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/skills.rs	fiber-4774	plan	2026-11-13T22:24:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/skills_tests.rs	fiber-4774	plan	2026-11-13T22:24:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/system-prompt.md	fiber-4774	plan	2026-11-13T22:24:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
