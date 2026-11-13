@@ -508,3 +508,5 @@ xtask/tests/cli.rs	fiber-4801	plan	2026-11-13T15:54:44Z	Amoghs-MacBook-Pro:/User
 xtask/src/select.rs	fiber-4801	plan	2026-11-13T16:07:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing.md	fiber-4801	plan	2026-11-13T16:07:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/workflow.md	fiber-4801	plan	2026-11-13T16:07:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/src/host.rs	fiber-4767	plan	2026-11-13T16:18:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/lua/schedule.rs	fiber-4767	plan	2026-11-13T16:18:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
