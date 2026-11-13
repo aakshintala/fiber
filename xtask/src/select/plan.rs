@@ -298,7 +298,7 @@ pub(crate) fn plan_with_budget_breach_body(mut plan: Plan, bug: bool, body: &str
 }
 
 /// Whether the body has a complete budget-breach section outside fenced code.
-fn budget_breach_section(body: &str) -> bool {
+pub(crate) fn budget_breach_section(body: &str) -> bool {
     let mut fence: Option<(u8, usize)> = None;
     let mut in_section = false;
     let mut base = false;

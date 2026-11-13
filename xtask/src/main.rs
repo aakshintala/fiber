@@ -194,6 +194,11 @@ fn main() -> ExitCode {
     }
 }
 
+/// Whether to print the plan's budget-breach exemption message.
+fn report_budget_breach(event: &str, selected: bool, suppressed: bool) -> bool {
+    event == "pull_request" && selected && suppressed
+}
+
 /// Runs one command. Ok(false) means a check failed.
 fn run(args: &[String]) -> Result<bool, String> {
     let (command, rest) = args
@@ -253,10 +258,11 @@ fn run(args: &[String]) -> Result<bool, String> {
             let body = optional(rest, "--pr-body").unwrap_or_default();
             let bug_red_was_selected = plan.jobs.get("bug_red") == Some(&true);
             let plan = select::plan_with_budget_breach_body(plan, bug, &body);
-            if event == "pull_request"
-                && bug_red_was_selected
-                && plan.jobs.get("bug_red") == Some(&false)
-            {
+            if report_budget_breach(
+                &event,
+                bug_red_was_selected,
+                plan.jobs.get("bug_red") == Some(&false),
+            ) {
                 eprintln!(
                     "budget breach exemption: bug-red jobs skipped; reviewers judge Base/Head measurements"
                 );
@@ -278,6 +284,9 @@ fn run(args: &[String]) -> Result<bool, String> {
                 "shard_timeout={}",
                 select::shard_timeout_minutes(mutant_count)
             );
+            if bug && select::budget_breach_section(&body) {
+                println!("budget_breach=true");
+            }
             println!(
                 "ten_turns={}",
                 if select::ten_turns_runs(&flag(rest, "--event")?, &release_paths) {
@@ -1288,3 +1297,27 @@ mod check_resources_tests;
 #[cfg(test)]
 #[path = "main_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod budget_breach_dispatch_tests {
+    use super::{report_budget_breach, run};
+
+    #[test]
+    fn budget_breach_message_requires_pull_request_selected_and_suppressed() {
+        for (event, selected, suppressed, expected) in [
+            ("pull_request", true, true, true),
+            ("push", true, true, false),
+            ("workflow_dispatch", true, true, false),
+            ("pull_request", false, true, false),
+            ("pull_request", true, false, false),
+            ("push", false, false, false),
+        ] {
+            assert_eq!(report_budget_breach(event, selected, suppressed), expected);
+        }
+    }
+
+    #[test]
+    fn invalid_command_is_an_error() {
+        assert!(run(&["not-a-command".to_owned()]).is_err());
+    }
+}
