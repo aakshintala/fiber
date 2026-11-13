@@ -239,7 +239,7 @@ fn open(fake: &Fake) -> Settings {
     Settings::open(&ctx(fake), Vec::new())
 }
 
-/// The view over `fake` on `tab`.
+/// Focuses a row whose arrows switch tabs rather than edit its value.
 fn focus_non_numeric(settings: &mut Settings, fake: &Fake) -> bool {
     let item = settings.items().into_iter().find(|item| match item {
         super::Item::Key(at) => {
@@ -540,9 +540,9 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 | Appearance   Notifications   Models   Permissions   Sessions   Advanced
 |
-|› Reviewer model          Not set ›
+|› Reviewer model          Default
 |
-|  Sandbox writable paths  none ›
+|  Sandbox writable paths  Default
 |
 |  Sandbox                 [x] On  repository
 |
@@ -571,7 +571,7 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 |› Compaction tokens      400k tokens
 |
-|  Repository extensions  none ›
+|  Repository extensions  Default
 |
 |  Skills                 Open /skills ›
 |
@@ -1069,7 +1069,7 @@ fn a_narrow_frame_scrolls_the_tab_bar_to_keep_the_open_tab() {
 
 // Controls.
 
-/// The fixture rows with `key` holding `shown` from `layer`.
+/// A genuine free-text editor row for field-routing tests.
 fn editor_fake() -> Fake {
     Fake::new(vec![on(
         SettingsTab::Appearance,
@@ -3151,10 +3151,7 @@ fn a_number_row_shows_its_unit_in_row_text() {
     assert_eq!(number("retry.max_delay_ms", "-60000"), "-60 s (custom)");
     // Durations keep their unit word; off-list values read custom.
     assert_eq!(text("model_lists.refresh_after", Text, "\"24h\""), "24 h");
-    assert_eq!(
-        text("model_lists.refresh_after", Text, "\"1440m\""),
-        "1440 min"
-    );
+    assert_eq!(text("model_lists.refresh_after", Text, "\"1440m\""), "24 h");
     assert_eq!(text("model_lists.refresh_after", Text, "\"3d\""), "3 d");
     assert_eq!(
         text("model_lists.refresh_after", Text, "\"90m\""),
@@ -3178,10 +3175,7 @@ fn a_number_row_shows_its_unit_in_row_text() {
     assert_eq!(number("tui.rail.width", "\"wide\""), "wide");
 }
 
-/// A width row ends with its columns on the terminal: the share's
-/// columns after the region's limits, read from the terminal width
-/// while the draw width keeps the room and the cut (`docs/tui.md`,
-/// `/settings`, "Controls").
+/// The slider's bar clamps at both endpoints and shows intermediate fill.
 #[test]
 fn slider_bar_clamps_its_endpoints_and_rejects_values_outside_the_range() {
     let shown = |text: &str| value(text);
@@ -3208,6 +3202,10 @@ fn slider_bar_clamps_its_endpoints_and_rejects_values_outside_the_range() {
     );
 }
 
+/// Lists the exact ordered values, defaults and counts in the `/settings`
+/// Controls tables (`docs/tui.md`, `/settings`, "Controls"), including exact
+/// order and defaults. The refresh list's six entries and listed `24h`
+/// default are pinned below.
 #[test]
 fn numeric_controls_match_the_documented_values_and_include_defaults() {
     let sliders = [
@@ -3310,14 +3308,8 @@ fn a_custom_list_steps_to_the_nearest_value_in_each_direction_and_wraps() {
     let values = number_list("compaction.tokens").unwrap();
     assert_eq!(next_number_value(values, 300_000.0, true), Some(400_000.0));
     assert_eq!(next_number_value(values, 300_000.0, false), Some(200_000.0));
-    assert_eq!(
-        next_number_value(values, 100_000.0, false),
-        Some(1_000_000.0)
-    );
-    assert_eq!(
-        next_number_value(values, 1_000_000.0, true),
-        Some(100_000.0)
-    );
+    assert_eq!(next_number_value(values, 100_000.0, false), None);
+    assert_eq!(next_number_value(values, 1_000_000.0, true), None);
     assert_eq!(next_number_value(values, 0.0, true), Some(100_000.0));
     assert_eq!(
         next_number_value(values, 2_000_000.0, false),
@@ -3326,8 +3318,8 @@ fn a_custom_list_steps_to_the_nearest_value_in_each_direction_and_wraps() {
     let refresh = text_list("model_lists.refresh_after").unwrap();
     assert_eq!(next_text_value(refresh, "90m", true), Some("6h"));
     assert_eq!(next_text_value(refresh, "90m", false), Some("1h"));
-    assert_eq!(next_text_value(refresh, "1h", false), Some("7d"));
-    assert_eq!(next_text_value(refresh, "7d", true), Some("1h"));
+    assert_eq!(next_text_value(refresh, "1h", false), None);
+    assert_eq!(next_text_value(refresh, "7d", true), None);
     assert_eq!(refresh_millis("90m"), Some(5_400_000));
 }
 
@@ -3349,6 +3341,13 @@ fn refresh_after_arrows_step_its_list_without_changing_tabs() {
             )]
         );
     }
+    let fake = Fake::new(rows());
+    let mut settings = at(&fake, "model_lists.refresh_after");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "model_lists.refresh_after", "\"3d\"")]
+    );
 }
 
 #[test]
@@ -3501,6 +3500,8 @@ fn slider_custom_values_step_to_nearest_tick_and_off_range_values_clamp() {
     assert!((stepped - 0.9).abs() < 1e-12);
 }
 
+/// A width row counts columns after region limits, read from terminal width
+/// while draw width keeps room and cut (`docs/tui.md`, `/settings`, "Controls").
 #[test]
 fn a_width_row_counts_columns_for_its_width() {
     use SettingControl::Number;
@@ -3765,7 +3766,7 @@ fn settings_search_matches_label_and_path_across_tabs() {
         let shown = screen(&settings);
         assert_eq!(
             row_of(&shown, "Reviewer model"),
-            "› Reviewer model Not set › Permissions",
+            "› Reviewer model Default Permissions",
             "{query}"
         );
     }
@@ -3777,7 +3778,7 @@ fn settings_search_matches_label_and_path_across_tabs() {
 |
 |/ reviewer
 |
-|› Reviewer model  Not set ›                                          Permissions
+|› Reviewer model  Default                                            Permissions
 |
 |
 |
@@ -3839,6 +3840,8 @@ fn settings_search_matches_letter_activation_and_slash_empty_query() {
     let mut settings = tab(&fake, SettingsTab::Sessions);
     one(&mut settings, &fake, Key::Char('/'));
     assert_eq!(query_of(&settings), "");
+    // One result per eligible key and screen row (`docs/tui.md`,
+    // `/settings`, "Rows"); count and order are contractual.
     assert_eq!(settings.items().len(), 21);
     assert_eq!(
         settings.focus,

@@ -2753,8 +2753,8 @@ fn wheel_over_doctor_scrolls_the_list_not_the_conversation() {
 
 // The screen rows, the launch overrides and the `-c` guard, through the app.
 
-/// Presses Right until the open view is on `tab`, then Down `down` rows,
-/// and returns what Enter on that row does.
+/// Presses Right until the open view is on `tab`, focusing a non-numeric
+/// row before each switch, then Down `down` rows and returns what Enter does.
 fn enter_row(app: &mut App, tab: SettingsTab, down: usize) -> Effect {
     let at = SettingsTab::ALL.iter().position(|t| *t == tab).unwrap();
     for _ in 0..at {

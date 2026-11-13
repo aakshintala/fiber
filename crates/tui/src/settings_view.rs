@@ -1406,7 +1406,7 @@ impl Settings {
                 self.step_number(ctx, &row, true, true)
             }
             (SettingControl::Number | SettingControl::Text, _)
-                if number_list(&row.key).is_some() =>
+                if number_list(&row.key).is_some() || text_list(&row.key).is_some() =>
             {
                 self.step_number(ctx, &row, true, true)
             }
@@ -2601,23 +2601,18 @@ fn number_slider(key: &str) -> Option<(f64, f64, f64)> {
 fn next_number_value(values: &[f64], current: f64, forward: bool) -> Option<f64> {
     let at = values.iter().position(|value| *value == current);
     let to = match at {
-        Some(at) if forward => (at + 1) % values.len(),
-        Some(at) => (at + values.len() - 1) % values.len(),
-        None if forward => values
-            .iter()
-            .position(|value| *value > current)
-            .unwrap_or(0),
-        None => values
-            .iter()
-            .rposition(|value| *value < current)
-            .unwrap_or(values.len() - 1),
+        Some(at) if forward => values.get(at + 1).copied().map(|_| at + 1)?,
+        Some(at) => at.checked_sub(1)?,
+        None if forward => values.iter().position(|value| *value > current)?,
+        None => values.iter().rposition(|value| *value < current)?,
     };
     values.get(to).copied()
 }
 
 fn refresh_millis(text: &str) -> Option<u64> {
     let raw = as_typed(text);
-    let (count, unit) = raw.split_at(raw.len().checked_sub(1)?);
+    let split = raw.char_indices().next_back()?.0;
+    let (count, unit) = raw.split_at(split);
     let count = count.parse::<u64>().ok()?;
     count.checked_mul(match unit {
         "s" => 1_000,
@@ -2638,18 +2633,14 @@ fn next_text_value(
         .iter()
         .position(|value| refresh_millis(value) == Some(current_ms));
     let to = match at {
-        Some(at) if forward => (at + 1) % values.len(),
-        Some(at) => (at + values.len() - 1) % values.len(),
-        None if forward => values
-            .iter()
-            .position(|value| refresh_millis(value).is_some_and(|candidate| candidate > current_ms))
-            .unwrap_or(0),
-        None => values
-            .iter()
-            .rposition(|value| {
-                refresh_millis(value).is_some_and(|candidate| candidate < current_ms)
-            })
-            .unwrap_or(values.len() - 1),
+        Some(at) if forward => values.get(at + 1).map(|_| at + 1)?,
+        Some(at) => at.checked_sub(1)?,
+        None if forward => values.iter().position(|value| {
+            refresh_millis(value).is_some_and(|candidate| candidate > current_ms)
+        })?,
+        None => values.iter().rposition(|value| {
+            refresh_millis(value).is_some_and(|candidate| candidate < current_ms)
+        })?,
     };
     values.get(to).copied()
 }
@@ -2715,7 +2706,16 @@ fn number_text(key: &str, text: &str) -> String {
 /// "24 h". A value outside the stepping list reads with "(custom)"
 /// after it; anything unparseable keeps its raw text.
 fn refresh_text(text: &str) -> String {
-    let raw = as_typed(text);
+    let original = as_typed(text);
+    let raw = text_list("model_lists.refresh_after")
+        .and_then(|values| {
+            values
+                .iter()
+                .copied()
+                .find(|value| refresh_millis(value) == refresh_millis(&original))
+        })
+        .unwrap_or(&original)
+        .to_owned();
     let at = raw.len().saturating_sub(1);
     if !raw.is_char_boundary(at) {
         return raw;
@@ -2765,27 +2765,18 @@ fn shown_value(row: &SettingRow) -> (String, Option<String>) {
             .map(|(name, layer)| format!("{name} ({layer})"))
             .collect::<Vec<_>>()
             .join(", "),
-        (
-            SettingControl::Fixed(_) | SettingControl::Theme | SettingControl::Boolean,
-            Shown::Unset,
-        ) => "Default".to_owned(),
+        (_, Shown::Unset) => "Default".to_owned(),
         (SettingControl::Boolean, Shown::Value(text)) => {
             if text == "true" { "[x] On" } else { "[ ] Off" }.to_owned()
         }
-        (SettingControl::Model, Shown::Unset) => "Not set ›".to_owned(),
         (SettingControl::Model, Shown::Value(text)) => format!("{} ›", as_typed(text)),
-        (SettingControl::StringList | SettingControl::RepositoryExtensions, Shown::Unset) => {
-            "none ›".to_owned()
-        }
         (SettingControl::StringList | SettingControl::RepositoryExtensions, Shown::Value(text)) => {
             format!("{} ›", list_text(text))
         }
         (SettingControl::Number, Shown::Value(text)) => number_text(&row.key, text),
-        (SettingControl::Number | SettingControl::Text, Shown::Unset) => "Default".to_owned(),
         (SettingControl::Text, Shown::Value(text)) if row.key == "model_lists.refresh_after" => {
             refresh_text(text)
         }
-        (_, Shown::Unset) => "Not set".to_owned(),
         (_, Shown::Value(text)) => as_typed(text),
     };
     let tag = match (&row.value, row.layer.as_str()) {

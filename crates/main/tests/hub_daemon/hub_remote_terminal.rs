@@ -558,8 +558,20 @@ fn bare_fiber_on_a_listed_hub_opens_the_hubs_home() {
                 .any(|row| row.contains("Hover") && row.contains("[ ] Off"))
     });
     run.write(b"\x1b[B");
+    run.wait_screen("the non-numeric Appearance row", |screen| {
+        screen
+            .rows
+            .iter()
+            .any(|row| row.contains("› Inline images"))
+    });
     run.write(b"\x1b[C");
+    run.wait_screen("the focused Notifications row", |screen| {
+        screen.rows.iter().any(|row| row.contains("› Quota notice"))
+    });
     run.write(b"\x1b[B");
+    run.wait_screen("the non-numeric Notifications row", |screen| {
+        screen.rows.iter().any(|row| row.contains("› Bell"))
+    });
     run.write(b"\x1b[C");
     run.wait_screen("the hub settings", |screen| {
         screen
