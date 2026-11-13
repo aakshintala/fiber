@@ -18,19 +18,30 @@ use super::{combine_close_result, report};
 
 #[test]
 fn nonzero_session_stdout_error_keeps_existing_exit_and_stderr() {
-    let existing = crate::failed(ErrorCode::Usage, "the session failed");
     for error in [
         std::io::Error::from(std::io::ErrorKind::BrokenPipe),
         std::io::Error::other("full disk"),
     ] {
-        let result = combine_close_result(Err(existing.clone()), Err(error));
-        let failure = result.expect_err("the session failure remains the command result");
-        assert_eq!(doors::exit_code(&failure), 2);
-        assert_eq!(failure.message, "the session failed");
+        let result = combine_close_result(Ok(2), Err(error));
+        assert_eq!(
+            result.expect("the session's nonzero code takes precedence"),
+            2
+        );
     }
 
-    let result = combine_close_result(Ok(0), Ok(()));
-    assert_eq!(result.expect("successful close preserves success"), 0);
+    assert_eq!(
+        combine_close_result(
+            Ok(0),
+            Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+        )
+        .expect("BrokenPipe is quiet for a successful session"),
+        0
+    );
+    let failure = combine_close_result(Ok(0), Err(std::io::Error::other("full disk")))
+        .expect_err("another copy failure changes success to failure");
+    assert_eq!(doors::exit_code(&failure), 1);
+    assert_eq!(failure.message, "stdout could not be written: full disk");
+    assert_eq!(combine_close_result(Ok(0), Ok(())).unwrap(), 0);
 }
 use fakes::Deadline;
 

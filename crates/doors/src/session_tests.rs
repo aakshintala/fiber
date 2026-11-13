@@ -35,7 +35,7 @@ use fakes::clock::FakeClock;
 use log::Log;
 use serde_json::{Map, Value};
 
-use super::{Gate, Session, write_until_stop};
+use super::{Gate, Session, drain, write_until_stop};
 use crate::SessionError;
 
 #[allow(
@@ -72,6 +72,34 @@ fn stdout_copy_preserves_the_writer_error_kind() {
         let error = write_until_stop(&mut FailedStdout(kind), &line)
             .expect_err("the copy returns the original write error");
         assert_eq!(error.kind(), kind);
+    }
+}
+
+#[test]
+fn stdout_stop_control_drain_propagates_writer_errors_without_stopping_session() {
+    for kind in [io::ErrorKind::BrokenPipe, io::ErrorKind::Other] {
+        let opened = Opened::open(Vec::new());
+        let mut watcher = opened.log.watch();
+        watcher.injector().push_kept(crate::client::control_line(
+            &opened.id,
+            crate::client::ControlKind::Stop,
+            0,
+        ));
+        opened
+            .log
+            .append(&Event::Clients(Clients { count: 0 }), None, None)
+            .unwrap();
+        let error = drain(&mut watcher, &mut FailedStdout(kind))
+            .expect_err("the catch-up drain returns its writer error");
+        assert_eq!(error.kind(), kind);
+        opened
+            .log
+            .append(&Event::Clients(Clients { count: 1 }), None, None)
+            .expect("the session log remains usable after its copy fails");
+        opened
+            .session
+            .close(opened.log)
+            .expect("the session closes normally after the copy fails");
     }
 }
 

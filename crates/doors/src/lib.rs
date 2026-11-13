@@ -152,3 +152,18 @@ pub fn exit_before_session(failure: Failure, out: &mut dyn Write, err: &mut dyn 
 }
 
 pub use support::mint;
+
+#[cfg(test)]
+mod stdout_write_tests {
+    #[test]
+    fn stdout_write_exit_code_quiets_only_broken_pipe() {
+        assert_eq!(
+            super::stdout_write_exit_code(&std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+            0
+        );
+        assert_eq!(
+            super::stdout_write_exit_code(&std::io::Error::other("full disk")),
+            1
+        );
+    }
+}

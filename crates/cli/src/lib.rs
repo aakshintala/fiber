@@ -287,3 +287,24 @@ fn with_dirs_code<E: Into<CliError>>(run: impl FnOnce(&Path, &Path) -> Result<i3
     };
     finish_code(ran)
 }
+
+#[cfg(test)]
+mod stdout_write_tests {
+    use super::{CliError, finish_code};
+
+    #[test]
+    fn finish_code_quiets_only_broken_pipe_for_both_stdout_errors() {
+        for error in [
+            CliError::StandardOutput(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+            CliError::DoctorReport(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+        ] {
+            assert_eq!(finish_code(Err::<i32, _>(error)), 0);
+        }
+        for error in [
+            CliError::StandardOutput(std::io::Error::other("full disk")),
+            CliError::DoctorReport(std::io::Error::other("full disk")),
+        ] {
+            assert_eq!(finish_code(Err::<i32, _>(error)), 1);
+        }
+    }
+}

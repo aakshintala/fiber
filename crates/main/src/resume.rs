@@ -5,7 +5,7 @@
 //! and the first write. A session another process holds is attached to
 //! instead (`docs/invocation.md`, "Processes").
 
-use std::io::{self, Write};
+use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -313,9 +313,8 @@ pub(crate) fn ask_resume(
                     if doors::stdout_write_exit_code(&source) == 0 {
                         0
                     } else {
-                        writeln!(io::stderr(), "fiber: stdout could not be written: {source}")
-                            .unwrap_or(());
-                        1
+                        let error = doors::SessionError::StdoutFailed { source };
+                        crate::fail(failed(error.code(), error))
                     }
                 }
                 Err(e) => ask_failed(Failure::from(e)),

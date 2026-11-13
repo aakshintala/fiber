@@ -1196,14 +1196,11 @@ fn open_in(
     let wake: Arc<dyn Wake> = wake;
     clock.subscribe(Arc::downgrade(&wake));
     let printer_stop = printer_watcher.injector();
-    let printer = match thread::Builder::new()
-        .name("stdout".to_owned())
-        .spawn(move || print(printer_watcher, out))
-    {
+    let printer = match spawn("stdout", move || print(printer_watcher, out)) {
         Ok(printer) => printer,
-        Err(source) => {
+        Err(error) => {
             remove_socket(&socket);
-            return Err(SessionError::ThreadSpawn { source });
+            return Err(error);
         }
     };
     Ok(Session {
@@ -1217,9 +1214,10 @@ fn open_in(
     })
 }
 
-fn spawn<F>(name: &str, body: F) -> Result<JoinHandle<()>, SessionError>
+fn spawn<F, T>(name: &str, body: F) -> Result<JoinHandle<T>, SessionError>
 where
-    F: FnOnce() + Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
 {
     thread::Builder::new()
         .name(name.to_owned())
@@ -1331,8 +1329,8 @@ fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) -> std::io::Resul
     Ok(())
 }
 
-/// Writes `line`, reporting whether printing stops after it: a failed
-/// write, `fiber_exited`, `rewound` or `moved` (`docs/invocation.md`,
+/// Writes `line`, reporting whether printing stops after it:
+/// `fiber_exited`, `rewound` or `moved` (`docs/invocation.md`,
 /// "What a caller gets back"). A reader that went away, or a line that
 /// cannot be written, stops the copy, never the session.
 fn write_until_stop(out: &mut dyn Write, line: &contract::Envelope) -> std::io::Result<bool> {

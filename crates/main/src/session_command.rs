@@ -1888,10 +1888,10 @@ fn combine_close_result(
         (Ok(code), _) if code != 0 => Ok(code),
         (Ok(_), Ok(())) => Ok(0),
         (Ok(_), Err(error)) if doors::stdout_write_exit_code(&error) == 0 => Ok(0),
-        (Ok(_), Err(error)) => Err(failed(
-            ErrorCode::IoFailed,
-            format!("stdout could not be written: {error}"),
-        )),
+        (Ok(_), Err(source)) => {
+            let error = doors::SessionError::StdoutFailed { source };
+            Err(failed(error.code(), error))
+        }
     }
 }
 
