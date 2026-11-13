@@ -1183,6 +1183,14 @@ fn write_frame(writer: &mut impl Write, line: &FromKeeper) -> io::Result<()> {
     writer.write_all(&bytes)
 }
 
+fn trace_exit_status(status: i32) {
+    if let Some(path) = std::env::var_os("FIBER4351_TRACE_FILE") {
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(file, "FIBER4351_TRACE keeper exit status: {status}");
+        }
+    }
+}
+
 pub(crate) fn run(id: String, clock: Arc<dyn Clock>) -> i32 {
     std::panic::set_hook(Box::new(|info| {
         let reason = info
@@ -1192,11 +1200,13 @@ pub(crate) fn run(id: String, clock: Arc<dyn Clock>) -> i32 {
             .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
             .unwrap_or("non-string panic payload");
         eprintln!("FIBER4351_TRACE panic: {reason}");
+        trace_exit_status(101);
     }));
     let home = match config::fiber_home(std::env::var_os("FIBER_HOME"), std::env::var_os("HOME")) {
         Ok(home) => home,
         Err(error) => {
             eprintln!("FIBER4351_TRACE configuration/home failure: {error}");
+            trace_exit_status(1);
             return 1;
         }
     };
@@ -1204,6 +1214,7 @@ pub(crate) fn run(id: String, clock: Arc<dyn Clock>) -> i32 {
         Ok(fd) => UnixStream::from(fd),
         Err(error) => {
             eprintln!("FIBER4351_TRACE stdout dup failure: {error}");
+            trace_exit_status(1);
             return 1;
         }
     };
@@ -1218,11 +1229,7 @@ pub(crate) fn run(id: String, clock: Arc<dyn Clock>) -> i32 {
             1
         }
     };
-    if let Some(path) = std::env::var_os("FIBER4351_TRACE_FILE") {
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-            let _ = writeln!(file, "FIBER4351_TRACE keeper exit status: {status}");
-        }
-    }
+    trace_exit_status(status);
     status
 }
 
