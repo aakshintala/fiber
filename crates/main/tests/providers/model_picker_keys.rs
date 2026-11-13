@@ -174,6 +174,8 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
         filtered.iter().all(|row| !row.contains("gamma")),
         "gamma dropped out: {filtered:?}"
     );
+    // Move focus from the query to the sole filtered result before Ctrl+S.
+    run.write(b"\x1b[B");
     // Ctrl+S chooses at once for this session only: the picker closes and
     // the panel names the session's new model. The filtered list above
     // proves the choice is taken.

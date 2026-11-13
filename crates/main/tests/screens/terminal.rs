@@ -2800,6 +2800,7 @@ fn choosing_a_model_mid_turn_notices_that_it_applies_when_the_turn_ends() {
         |grid| shows(grid, "1 of 3 models"),
         || session_model_changed(&setup),
     );
+    run.write(b"\x1b[B");
     run.write(b"\r");
     let sent = run.wait_screen_reporting(
         "the pending-choice notice",
@@ -2847,8 +2848,9 @@ fn choosing_a_level_mid_turn_notices_that_it_applies_when_the_turn_ends() {
         |grid| shows(grid, "2 of 3 models"),
         || session_model_changed(&setup),
     );
-    // Left moves the focused row's chip from high to medium; Enter
-    // chooses the model with its touched level.
+    // Move focus to the matching model row, then move its level chip
+    // from high to medium before choosing it.
+    run.write(b"\x1b[B");
     run.write(b"\x1b[D");
     run.write(b"\r");
     let sent = run.wait_screen_reporting(
@@ -2899,6 +2901,7 @@ fn choosing_a_model_while_idle_applies_at_once_with_no_pending_notice() {
         |grid| shows(grid, "1 of 3 models"),
         || session_model_changed(&setup),
     );
+    run.write(b"\x1b[B");
     run.write(b"\r");
     // The idle switch applies at once: the card names the new model with
     // no pending notice on the way there.
@@ -2940,6 +2943,7 @@ fn choosing_an_unreadable_model_mid_turn_replaces_the_pending_notice_with_its_re
         |grid| shows(grid, "1 of 3 models"),
         || session_model_changed(&setup),
     );
+    run.write(b"\x1b[B");
     run.write(b"\r");
     run.wait_screen_reporting(
         "the pending-choice notice",
@@ -3145,6 +3149,7 @@ fn credential_after_a_queued_model_switch_saves_to_the_queued_provider() {
     run.wait_screen("the other model", |grid| {
         grid.contents.contains("1 of 2 models")
     });
+    run.write(b"\x1b[B");
     run.write(b"\r");
     // The model is written only after its command is accepted. Its exact
     // saved value proves admission while the approval still holds the turn.

@@ -1,5 +1,6 @@
 ---
 source: crates/main/tests/screens/journeys.rs
+assertion_line: 306
 expression: "fold_fixture_tmp(&grid_text(&opened.rows, opened.cursor, opened.hide_cursor,\n&ids))"
 ---
   Models  /model                                                               Esc returns
@@ -8,7 +9,7 @@ expression: "fold_fixture_tmp(&grid_text(&opened.rows, opened.cursor, opened.hid
      Type to search █
      2 models                                                           ⟳ refresh all
      fake [freshness]
-     › alpha-1 ● current                                                            —
+       alpha-1 ● current                                                            —
            fixed thinking
        beta-2                                                       switch ~10 tokens
            fixed thinking

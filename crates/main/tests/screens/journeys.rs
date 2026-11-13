@@ -337,6 +337,7 @@ fn journey_model_picker_by_name_switch_answer_quit_from_picker() {
     run.wait_screen("the beta-filtered list", |screen| {
         shows(screen, "1 of 2 models") && shows(screen, "beta-2") && !shows(screen, "opus 5.5")
     });
+    run.write(b"\x1b[B");
     run.write(b"\r");
     run.wait_screen("the closed picker", |screen| {
         !shows(screen, "Type to search") && shows(screen, "›")
@@ -997,6 +998,7 @@ fn journey_drag_notice_copies_its_text() {
     run.wait_screen("the beta-filtered list", |screen| {
         shows(screen, "1 of 2 models") && shows(screen, "beta-2")
     });
+    run.write(b"\x1b[B");
     let selection_from = run.output().len();
     run.write(b"\r");
     run.wait_bytes(selection_from, b"\x1b[?2026l", "the switch_pending frame");
