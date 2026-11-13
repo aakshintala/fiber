@@ -515,6 +515,100 @@ fn the_second_stage_reads_a_verdict_and_a_reason() {
 }
 
 #[test]
+fn the_second_stage_reads_a_reason_and_a_verdict() {
+    assert!(
+        read_second("block\n— This sends the message as the user.").is_err(),
+        "a verdict-first reply does not read"
+    );
+    assert_eq!(
+        read_second("— This sends the message as the user.\nallow"),
+        Ok(Second::Allow {
+            reason: Some("This sends the message as the user.".into()),
+        })
+    );
+
+    for (text, expected) in [
+        (
+            "The command deletes the requested file.\nblock",
+            Second::Block {
+                reason: "The command deletes the requested file.".into(),
+            },
+        ),
+        (
+            "The operation is already authorized.\nallow",
+            Second::Allow {
+                reason: Some("The operation is already authorized.".into()),
+            },
+        ),
+        ("allow", Second::Allow { reason: None }),
+        (
+            "—\n— second point\nblock",
+            Second::Block {
+                reason: "— second point".into(),
+            },
+        ),
+        (
+            "- first\n- second\nblock",
+            Second::Block {
+                reason: "first\n- second".into(),
+            },
+        ),
+        (
+            "—\nsecond point\nblock",
+            Second::Block {
+                reason: "second point".into(),
+            },
+        ),
+        (
+            "first point  \nsecond point \t\nallow",
+            Second::Allow {
+                reason: Some("first point  \nsecond point".into()),
+            },
+        ),
+        (
+            "reason\n  `ALLOW` . \t",
+            Second::Allow {
+                reason: Some("reason".into()),
+            },
+        ),
+        (
+            "reason\n*allow*",
+            Second::Allow {
+                reason: Some("reason".into()),
+            },
+        ),
+        (
+            "reason\n**block**",
+            Second::Block {
+                reason: "reason".into(),
+            },
+        ),
+        (
+            "reason\nallow .",
+            Second::Allow {
+                reason: Some("reason".into()),
+            },
+        ),
+    ] {
+        assert_eq!(read_second(text), Ok(expected), "{text:?}");
+    }
+
+    for text in [
+        "block",
+        "—\nblock",
+        "block: reason",
+        "*allow",
+        "allow*",
+        "reason\nblock: x",
+        "reason\nverdict: allow",
+        "reason\nallow...",
+    ] {
+        assert!(read_second(text).is_err(), "{text:?}");
+    }
+    assert_eq!(read_second("—\nallow"), Ok(Second::Allow { reason: None }));
+}
+
+#[test]
 fn the_system_prompt_carries_the_notes_after_the_shared_instructions() {
     let shared = "## shared\n\nBe careful.";
     assert_eq!(system_prompt(shared, ""), shared);
