@@ -303,3 +303,4 @@ crates/main/tests/commands/main.rs:37-38	fiber-4704	plan	2026-11-13T05:37:32Z	ro
 crates/main/tests/commands/stdout_errors.rs	fiber-4704	plan	2026-11-13T05:37:32Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4704-broken-pipe	
 docs/invocation.md:333-334	fiber-4704	plan	2026-11-13T05:37:32Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4704-broken-pipe	
 scripts/look-diff	fiber-4780	grant	2026-11-13T05:46:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4780-shared-selftest-list	
+crates/main/tests/hub_daemon/hub_list.rs	fiber-4598	plan	2026-11-13T06:04:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
