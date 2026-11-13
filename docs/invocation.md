@@ -331,6 +331,8 @@ credentials or stdin, so they succeed when home is empty or no provider is
 installed. A failed write to stdout is ignored and the exit is still 0, as
 with `fiber extension list`.
 
+Every other command stops quietly with exit 0 when standard output is closed early, as with `| head`; any other failed write to standard output is an error, with exit 1.
+
 ```sh
 fiber ask "review the diff on this branch"
 fiber ask < brief.md

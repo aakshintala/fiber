@@ -1126,7 +1126,7 @@ fn an_accepted_delete_with_a_failing_writer_is_io_failed_and_stays_deleted() {
     let (got, sent, connects): (Result<(), CliError>, Value, usize) =
         Deadline::after(HUB_DEADLINE).recv(&rx).unwrap();
     let error = got.unwrap_err();
-    assert!(matches!(&error, CliError::Forwarded(_)), "{error:?}");
+    assert!(matches!(&error, CliError::StandardOutput(_)), "{error:?}");
     assert_eq!(error.code(), ErrorCode::IoFailed);
     assert_eq!(
         sent,

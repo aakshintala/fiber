@@ -693,11 +693,12 @@ fn a_failed_stdout_write_is_io_failed() {
         &mut err,
     )
     .unwrap_err();
-    let crate::CliError::Forwarded(failure) = &failure else {
-        panic!("expected a forwarded failure, got {failure:?}");
+    let crate::CliError::StandardOutput(error) = &failure else {
+        panic!("expected a stdout failure, got {failure:?}");
     };
-    assert_eq!(failure.code, ErrorCode::IoFailed);
-    assert_eq!(failure.message, "standard output: closed");
+    assert_eq!(failure.code(), ErrorCode::IoFailed);
+    assert_eq!(error.kind(), io::ErrorKind::Other);
+    assert_eq!(error.to_string(), "closed");
 }
 
 #[test]
