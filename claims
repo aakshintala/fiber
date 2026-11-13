@@ -506,3 +506,11 @@ crates/main/tests/commands/stdout_errors.rs	fiber-4786	plan	2026-11-13T15:01:52Z
 crates/main/src/session_command_tests.rs	fiber-4786	plan	2026-11-13T15:01:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/invocation.md	fiber-4786	plan	2026-11-13T15:01:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/ci.yml	fiber-4801	plan	2026-11-13T15:18:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/ci.md	fiber-4801	plan	2026-11-13T15:54:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/main.rs	fiber-4801	plan	2026-11-13T15:54:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/select/plan.rs	fiber-4801	plan	2026-11-13T15:54:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/select/plan_tests.rs	fiber-4801	plan	2026-11-13T15:54:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/select/reuse.rs	fiber-4801	plan	2026-11-13T15:54:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/select/reuse_tests.rs	fiber-4801	plan	2026-11-13T15:54:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/select_tests.rs	fiber-4801	plan	2026-11-13T15:54:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/tests/cli.rs	fiber-4801	plan	2026-11-13T15:54:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
