@@ -3350,6 +3350,128 @@ fn a_custom_list_steps_to_the_nearest_value_in_each_direction_and_wraps() {
     assert_eq!(next_text_value(refresh, "1h", false), None);
     assert_eq!(next_text_value(refresh, "7d", true), None);
     assert_eq!(refresh_millis("90m"), Some(5_400_000));
+    assert_eq!(refresh_millis("1s"), Some(1_000));
+}
+
+#[test]
+fn numeric_controls_pin_comparison_edges_and_directional_selection() {
+    let range = (10.0, 40.0, 1.0);
+    for (text, want) in [
+        ("9.999", "▕░░░░░░░░▏"),
+        ("10", "▕░░░░░░░░▏"),
+        ("10.001", "▕░░░░░░░░▏"),
+        ("39.999", "▕████████▏"),
+        ("40", "▕████████▏"),
+        ("40.001", "▕████████▏"),
+    ] {
+        assert_eq!(
+            slider_bar(range, &value(text)),
+            Some(want.to_owned()),
+            "{text}"
+        );
+    }
+    assert_eq!(super::slider_step(40.0, 10.0, 40.0, 1.0, true, false), 40.0);
+    assert_eq!(super::slider_step(40.0, 10.0, 40.0, 1.0, true, true), 10.0);
+    assert_eq!(super::slider_step(9.0, 10.0, 40.0, 1.0, false, false), 10.0);
+
+    let values = number_list("compaction.tokens").unwrap();
+    assert_eq!(next_number_value(values, 300_000.0, true), Some(400_000.0));
+    assert_eq!(next_number_value(values, 300_000.0, false), Some(200_000.0));
+    assert_eq!(next_number_value(values, 100_000.0, true), Some(200_000.0));
+    assert_eq!(
+        next_number_value(values, 1_000_000.0, false),
+        Some(800_000.0)
+    );
+    assert_eq!(next_number_value(values, 1_000_000.0, true), None);
+    assert_eq!(next_number_value(values, 100_000.0, false), None);
+
+    let durations = text_list("model_lists.refresh_after").unwrap();
+    assert_eq!(next_text_value(durations, "90m", true), Some("6h"));
+    assert_eq!(next_text_value(durations, "90m", false), Some("1h"));
+    assert_eq!(next_text_value(durations, "1h", true), Some("6h"));
+    assert_eq!(next_text_value(durations, "6h", false), Some("1h"));
+    assert_eq!(next_text_value(durations, "1h", false), None);
+    assert_eq!(next_text_value(durations, "7d", true), None);
+
+    assert_eq!(
+        super::number_text("compaction.window_fraction", "0.5"),
+        "50% of the context window"
+    );
+    assert_eq!(
+        super::number_text("compaction.window_fraction", "0.9"),
+        "90% of the context window"
+    );
+    assert_eq!(
+        super::number_text("compaction.window_fraction", "0.499"),
+        "49.9% of the context window (custom)"
+    );
+    assert_eq!(
+        super::number_text("compaction.window_fraction", "0.901"),
+        "90.1% of the context window (custom)"
+    );
+    assert_eq!(super::number_text("budget.usd", "100"), "$100");
+    assert_eq!(
+        super::number_text("budget.usd", "100.001"),
+        "$100.001 (custom)"
+    );
+}
+
+#[test]
+fn budget_zero_special_case_requires_both_key_and_zero_value() {
+    let budget = on(
+        SettingsTab::Sessions,
+        "Budget",
+        "budget.usd",
+        value("5"),
+        "project",
+        ANY,
+        SettingControl::Number,
+    );
+    let fake = Fake::new(vec![budget]);
+    let mut settings = at(&fake, "budget.usd");
+    edit(&mut settings, &fake, Edit::Right);
+    assert_eq!(writes(&fake), [w(Layer::Project, "budget.usd", "10")]);
+
+    let zero = on(
+        SettingsTab::Sessions,
+        "Warm cap",
+        "cache.warm_cap",
+        value("0"),
+        "project",
+        ANY,
+        SettingControl::Number,
+    );
+    let fake = Fake::new(vec![zero]);
+    let mut settings = at(&fake, "cache.warm_cap");
+    edit(&mut settings, &fake, Edit::Right);
+    assert_eq!(writes(&fake), [w(Layer::Project, "cache.warm_cap", "1")]);
+}
+
+#[test]
+fn enter_on_a_non_slider_number_opens_its_field() {
+    let fake = Fake::new(with("compaction.tokens", value("400000"), "project"));
+    let mut settings = at(&fake, "compaction.tokens");
+    one(&mut settings, &fake, Key::Enter);
+    assert!(matches!(settings.mode, super::Mode::Rows));
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "compaction.tokens", "600000")]
+    );
+
+    let row = on(
+        SettingsTab::Sessions,
+        "Unbounded number",
+        "test.number",
+        value("8080"),
+        "project",
+        ANY,
+        SettingControl::Number,
+    );
+    let fake = Fake::new(vec![row]);
+    let mut settings = at(&fake, "test.number");
+    one(&mut settings, &fake, Key::Enter);
+    assert!(matches!(settings.mode, super::Mode::Field(_)));
+    assert!(fake.writes().is_empty());
 }
 
 #[test]
