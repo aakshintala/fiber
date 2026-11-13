@@ -3403,7 +3403,7 @@ fn numeric_controls_pin_comparison_edges_and_directional_selection() {
     );
     assert_eq!(
         super::number_text("compaction.window_fraction", "0.499"),
-        "49.9% of the context window (custom)"
+        "49.9% of the context window"
     );
     assert_eq!(
         super::number_text("compaction.window_fraction", "0.901"),
