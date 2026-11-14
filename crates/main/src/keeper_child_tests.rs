@@ -125,14 +125,23 @@ fn accept_error_backoff_doubles_caps_and_resets_after_accept() {
     );
     runtime.listen(socket.clone(), listener);
     let mut expected = Duration::from_millis(10);
+    let mut acceptor = None;
     for _ in 0..9 {
         let until = clock.now() + expected;
-        clock
+        let parked = clock
             .mark_parked(until, Deadline::after(Duration::from_secs(10)))
             .expect("acceptor parks at backoff");
+        let threads = parked.threads();
+        assert_eq!(threads.len(), 1, "only the acceptor parks at its backoff");
+        let thread = threads[0];
+        if let Some(acceptor) = acceptor {
+            assert_eq!(thread, acceptor, "the same acceptor handles every backoff");
+        } else {
+            acceptor = Some(thread);
+        }
         clock.advance_when_parked(
             Some(until),
-            None,
+            Some(thread),
             expected,
             &Deadline::after(Duration::from_secs(10)),
         );
@@ -142,13 +151,20 @@ fn accept_error_backoff_doubles_caps_and_resets_after_accept() {
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(3270));
     let writer = UnixStream::connect(&socket).expect("connect after injected errors");
     let _ = writer;
+    let acceptor = acceptor.expect("backoff parks identify the acceptor thread");
     let reset_at = clock.now() + Duration::from_millis(10);
-    clock
+    let parked = clock
         .mark_parked(reset_at, Deadline::after(Duration::from_secs(10)))
         .expect("successful accept resets delay to 10 ms");
+    assert!(
+        parked.threads().contains(&acceptor),
+        "the acceptor parks at the reset backoff"
+    );
+    // The candidate also waits on this fake clock, but at its own 5 s read
+    // deadline. Advance only the acceptor's 10 ms backoff.
     clock.advance_when_parked(
         Some(reset_at),
-        None,
+        Some(acceptor),
         Duration::from_millis(10),
         &Deadline::after(Duration::from_secs(10)),
     );
