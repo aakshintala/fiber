@@ -75,9 +75,8 @@ impl Setup {
         self.root.path().join("workspace")
     }
 
-    /// Places extension `fake` with model `m` at `base_url` and this
-    /// credential source.
-    fn place_fake(&self, base_url: &str, credential: Value) {
+    /// Places extension `fake` with these models and credential source.
+    fn place_fake(&self, base_url: &str, credential: Value, models: Value, placeholders: bool) {
         let dir = self.home().join("extensions").join("fake");
         fs::create_dir_all(dir.join("providers")).unwrap();
         fs::write(
@@ -87,40 +86,15 @@ impl Setup {
             .to_string(),
         )
         .unwrap();
-        fs::write(
-            dir.join("providers").join("fake.json"),
-            json!({"name": "fake", "credential": credential, "models": [
-                {"id": "m", "protocol": "openai-responses",
-                 "base_url": base_url, "context_window": 1000},
-            ]})
-            .to_string(),
-        )
-        .unwrap();
-        fakes::write_record(&dir);
-    }
-
-    /// Places a provider whose models use the `workspace` placeholder.
-    /// Its credential is stored only when `credentialed` is true.
-    fn place_templated_fake(&self, models: Value, credentialed: bool) {
-        let dir = self.home().join("extensions").join("fake");
-        fs::create_dir_all(dir.join("providers")).unwrap();
-        fs::write(
-            dir.join("extension.json"),
-            json!({"name": "fake", "version": "v1.0.0", "fiber": "0.1.0", "api": 1,
-                   "providers": {"fake": ["https://{workspace}/v1"]}})
-            .to_string(),
-        )
-        .unwrap();
-        fs::write(
-            dir.join("providers").join("fake.json"),
-            json!({"name": "fake", "placeholders": {"workspace": {}}, "models": models})
-                .to_string(),
-        )
-        .unwrap();
-        fakes::write_record(&dir);
-        if credentialed {
-            self.store("fake", "default", "key");
+        let mut provider = json!({"name": "fake", "models": models});
+        if !credential.is_null() {
+            provider["credential"] = credential;
         }
+        if placeholders {
+            provider["placeholders"] = json!({"workspace": {}});
+        }
+        fs::write(dir.join("providers/fake.json"), provider.to_string()).unwrap();
+        fakes::write_record(&dir);
     }
 
     fn place_invalid_host(&self) {
@@ -149,6 +123,9 @@ impl Setup {
         self.place_fake(
             "http://127.0.0.1:1/v1",
             json!({"env": "FIBER_TEST_FAKE_KEY"}),
+            json!([{"id": "m", "protocol": "openai-responses",
+                    "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
+            false,
         );
         self.write_config(&json!({"model": "fake/m"}));
         self.store("fake", "work", "k");
@@ -456,7 +433,13 @@ fn an_extension_for_another_api_is_a_stderr_notice() {
 #[test]
 fn doctor_groups_missing_host_models_for_a_credentialed_provider() {
     let setup = Setup::new();
-    setup.place_templated_fake(Setup::templated_models(&["one", "two"]), true);
+    setup.place_fake(
+        "https://{workspace}/v1",
+        Value::Null,
+        Setup::templated_models(&["one", "two"]),
+        true,
+    );
+    setup.store("fake", "default", "key");
     setup.write_config(&json!({"model": "fake/one"}));
 
     let (_, _, err) = setup.report(&env_of(&[]));
@@ -471,7 +454,13 @@ fn doctor_groups_missing_host_models_for_a_credentialed_provider() {
 #[test]
 fn doctor_keeps_other_notices_beside_the_grouped_host_notice() {
     let setup = Setup::new();
-    setup.place_templated_fake(Setup::templated_models(&["one", "two"]), true);
+    setup.place_fake(
+        "https://{workspace}/v1",
+        Value::Null,
+        Setup::templated_models(&["one", "two"]),
+        true,
+    );
+    setup.store("fake", "default", "key");
     setup.write_config(&json!({"model": "fake/one"}));
     setup.write_repo(&json!({"zzz_unknown": 1}));
 
@@ -486,7 +475,12 @@ fn doctor_keeps_other_notices_beside_the_grouped_host_notice() {
 #[test]
 fn doctor_suppresses_missing_host_for_an_uncredentialed_provider() {
     let setup = Setup::new();
-    setup.place_templated_fake(Setup::templated_models(&["one"]), false);
+    setup.place_fake(
+        "https://{workspace}/v1",
+        Value::Null,
+        Setup::templated_models(&["one"]),
+        true,
+    );
     setup.write_config(&json!({"model": "fake/one"}));
 
     let (_, out, err) = setup.report(&env_of(&[]));
@@ -498,7 +492,13 @@ fn doctor_suppresses_missing_host_for_an_uncredentialed_provider() {
 #[test]
 fn doctor_keeps_invalid_host_notice_per_model_for_a_credentialed_provider() {
     let setup = Setup::new();
-    setup.place_templated_fake(Setup::templated_models(&["one", "two"]), true);
+    setup.place_fake(
+        "https://{workspace}/v1",
+        Value::Null,
+        Setup::templated_models(&["one", "two"]),
+        true,
+    );
+    setup.store("fake", "default", "key");
     setup.write_config(&json!({"model": "fake/one"}));
     setup.place_invalid_host();
 
@@ -518,7 +518,12 @@ fn doctor_keeps_invalid_host_notice_per_model_for_a_credentialed_provider() {
 #[test]
 fn doctor_suppresses_invalid_host_for_an_uncredentialed_provider() {
     let setup = Setup::new();
-    setup.place_templated_fake(Setup::templated_models(&["one"]), false);
+    setup.place_fake(
+        "https://{workspace}/v1",
+        Value::Null,
+        Setup::templated_models(&["one"]),
+        true,
+    );
     setup.write_config(&json!({"model": "fake/one"}));
     setup.place_invalid_host();
 
@@ -532,9 +537,13 @@ fn doctor_suppresses_invalid_host_for_an_uncredentialed_provider() {
 fn no_request_reaches_the_provider_and_no_command_runs() {
     let setup = Setup::new();
     let server = fakes::ProviderServer::start(Vec::<fakes::Response>::new()).unwrap();
+    let url = server.url();
     setup.place_fake(
-        &server.url(),
+        &url,
         json!({"command": ["touch", setup.home().join("marker").to_str().unwrap()]}),
+        json!([{"id": "m", "protocol": "openai-responses",
+                "base_url": url, "context_window": 1000}]),
+        false,
     );
     setup.write_config(&json!({"model": "fake/m"}));
     let (ready, _, _) = setup.report(&env_of(&[]));
@@ -874,6 +883,9 @@ fn doctor_blocker_reader_returns_only_line_and_key_flag() {
     setup.place_fake(
         "http://127.0.0.1:1/v1",
         json!({"env": "FIBER_TEST_FAKE_KEY"}),
+        json!([{"id": "m", "protocol": "openai-responses",
+                "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
+        false,
     );
     setup.write_config(&json!({"model": "fake/m"}));
     let key = first_blocker(

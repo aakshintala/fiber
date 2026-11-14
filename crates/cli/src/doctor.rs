@@ -74,21 +74,9 @@ fn run(inputs: &Inputs<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Result<
         inputs.env,
         inputs.has_userinfo,
     );
-    let mut notices = checked
-        .notices
-        .iter()
-        .chain(&checked.model_notices)
-        .map(|notice| clean(&notice.message))
-        .collect::<Vec<_>>();
-    notices.extend(
-        checked
-            .unconfigured
-            .iter()
-            .filter_map(|group| group.notice(&|_| true).map(|notice| clean(&notice.message))),
-    );
-    for notice in notices {
+    for notice in &checked.notices {
         // A notice lost to a closed stderr changes nothing.
-        drop(writeln!(err, "fiber: {notice}"));
+        drop(writeln!(err, "fiber: {}", clean(&notice.message)));
     }
     let mut report = |line: &str| writeln!(out, "{line}").map_err(CliError::DoctorReport);
     report(&format!("fiber {}", inputs.version))?;
