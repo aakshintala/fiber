@@ -1083,6 +1083,7 @@ fn editor_fake() -> Fake {
     )])
 }
 
+/// Builds settings rows with `key` set to `shown` at `layer` for tests.
 fn with(key: &str, shown: Shown, layer: &str) -> Vec<SettingRow> {
     rows()
         .into_iter()
