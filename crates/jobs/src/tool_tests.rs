@@ -2091,7 +2091,9 @@ fn detached_group_settled(pgid: u32, deadline: Deadline) -> bool {
         if deadline.left().is_zero() {
             return false;
         }
-        match Deadline::after(fakes::POLL).recv(&hold) {
+        // Mirrors fakes::POLL: the same 10 ms probe interval, spelled as a literal
+        // so budget-bounds can read the bound below 60 s.
+        match Deadline::after(Duration::from_millis(10)).recv(&hold) {
             Ok(()) | Err(_) => {}
         }
     }
