@@ -2863,7 +2863,7 @@ fn an_artifact_write_failure() {
     // `docs/compaction.md`, "Overflow": the overflow arm writes each
     // missing artifact (step 1) before asking for the note (step 2); a
     // failed write stays inline with one watcher-only `notice`
-    // (`docs/events.md`, "notice"; `docs/errors.md`, "Registry",
+    // (`docs/events.md`, "Durable and ephemeral"; `docs/errors.md`, "Registry",
     // `io_failed`).
     let mut world = auto_world(vec![
         run_tokens_tool_answer("get_weather", json!({}), fakes::CONTEXT_WINDOW + 1, 3, 0),

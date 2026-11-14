@@ -2317,7 +2317,7 @@ fn a_result_whose_artifact_cannot_be_written_stays_in_the_note_request() {
     // the last step's results aside and asks for the note on the smaller
     // request, so the ordered kinds below hold with the notice set aside.
     // The failed write stays inline with a watcher-only `notice`
-    // (`docs/events.md`, "notice"); a notice names no position, so it is
+    // (`docs/events.md`, "Durable and ephemeral"); a notice names no position, so it is
     // asserted as a count, not in order.
     let without_notice: Vec<Envelope> = lines
         .iter()
@@ -2356,7 +2356,7 @@ fn a_result_whose_artifact_cannot_be_written_stays_in_the_note_request() {
         "completed"
     );
     let notice = &of_kind(&lines, "notice")[0].payload;
-    // `docs/events.md`, "notice": the failed write is a failure outside
+    // `docs/events.md`, "Durable and ephemeral": the failed write is a failure outside
     // any action, carried as an ephemeral notice; `docs/errors.md`,
     // "Registry": `io_failed` names the path that refused the write.
     assert_eq!(notice["code"], "io_failed");
