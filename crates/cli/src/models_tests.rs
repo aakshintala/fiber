@@ -730,6 +730,32 @@ fn reap_group_leader(
 }
 
 #[test]
+fn models_omits_catalog_deprecated_rows_but_keeps_other_models() {
+    let setup = Setup::new();
+    let models = json!([
+        {"id":"retired", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000},
+        {"id":"active", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}
+    ]);
+    setup.install("acme-ext", "acme", &models);
+    let provider_file = setup.home().join("extensions/acme-ext/providers/acme.json");
+    let mut data: Value = serde_json::from_slice(&fs::read(&provider_file).unwrap()).unwrap();
+    data["models_dev"] = json!({"source":"acme"});
+    fs::write(provider_file, data.to_string()).unwrap();
+    setup.write_config(&json!({"model_lists":{"models_dev":true,"refresh_after":"1h"}}));
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"acme":{"retired":{"status":"deprecated"}}}"#,
+    )
+    .unwrap();
+
+    let (result, stdout, _) = setup.run(None, false, &|_| Ok(()), fakes::clock::FakeClock::new());
+
+    assert!(result.is_ok());
+    assert!(!stdout.contains("acme/retired"), "{stdout}");
+    assert!(stdout.contains("acme/active"), "{stdout}");
+}
+
+#[test]
 fn models_exits_zero_and_prints_the_row() {
     // Runs in a child with a Fiber home holding one provider, so the exit
     // code is `models`' own. The parent checks the code and the row: a code

@@ -242,6 +242,115 @@ fn models_dev_provider_metadata_blocks_match_the_committed_provider_files() {
 }
 
 #[test]
+fn models_dev_apply_returns_only_fresh_catalog_deprecated_references() {
+    let setup = Setup::new();
+    let mut data = provider("acme", &["retired", "active", "unknown"]);
+    data["models_dev"] = json!({"source":"acme"});
+    let source = setup.source("acme", &manifest("acme"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let config = config(&setup, &[]);
+    let now = fakes::clock::FakeClock::new().wall();
+    let mut providers = Providers::load_enabled(&setup.home(), &config).unwrap().0;
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"acme":{"retired":{"status":"deprecated"},"active":{"status":"active"}}}"#,
+    )
+    .unwrap();
+
+    let result = extensions::models_dev::apply(
+        &setup.home(),
+        true,
+        Some(Duration::from_secs(60)),
+        now,
+        &mut providers,
+    );
+
+    assert_eq!(
+        result.deprecated,
+        ["acme/retired"].into_iter().map(str::to_owned).collect()
+    );
+    assert!(result.notices.is_empty());
+
+    let disabled = extensions::models_dev::apply(&setup.home(), false, None, now, &mut providers);
+    assert!(disabled.deprecated.is_empty());
+
+    let file = config::models_dev_cache_file(&setup.home()).unwrap();
+    for (age, expected) in [(59, true), (60, true), (61, false)] {
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(now - Duration::from_secs(age))
+            .unwrap();
+        let applied = extensions::models_dev::apply(
+            &setup.home(),
+            true,
+            Some(Duration::from_secs(60)),
+            now,
+            &mut providers,
+        );
+        assert_eq!(
+            applied.deprecated.contains("acme/retired"),
+            expected,
+            "age {age}"
+        );
+    }
+
+    config::write_models_dev(&setup.home(), b"{").unwrap();
+    let invalid = extensions::models_dev::apply(&setup.home(), true, None, now, &mut providers);
+    assert!(invalid.deprecated.is_empty());
+
+    std::fs::remove_file(file).unwrap();
+    let missing = extensions::models_dev::apply(&setup.home(), true, None, now, &mut providers);
+    assert!(missing.deprecated.is_empty());
+}
+
+#[test]
+fn applied_retain_listed_drops_only_catalog_deprecated_models() {
+    let setup = Setup::new();
+    let mut providers = installed(
+        &setup,
+        &[("acme", provider("acme", &["retired", "active"]))],
+    );
+    let applied = extensions::models_dev::Applied {
+        notices: Vec::new(),
+        deprecated: ["acme/retired".to_owned()].into_iter().collect(),
+    };
+
+    let notices = applied.retain_listed(&mut providers);
+
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(
+        providers
+            .data("acme")
+            .models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        ["active"]
+    );
+}
+
+#[test]
+fn models_dev_deprecation_tracker_notices_once_per_session() {
+    let tracker = extensions::models_dev::ModelDeprecations::new([
+        "acme/old".to_owned(),
+        "acme/older".to_owned(),
+    ]);
+    assert!(tracker.notice_for("acme/unknown").is_none());
+    let first = tracker.notice_for("acme/old").unwrap();
+    assert_eq!(first.code, ErrorCode::ModelDeprecated);
+    assert!(first.message.contains("acme/old"));
+    assert!(tracker.notice_for("acme/old").is_none());
+    assert!(tracker.notice_for("acme/older").is_none());
+    assert!(
+        extensions::models_dev::ModelDeprecations::new(["acme/old".to_owned()])
+            .notice_for("acme/old")
+            .is_some()
+    );
+}
+
+#[test]
 fn models_dev_fills_vendor_context_before_load_admission() {
     let setup = Setup::new();
     let mut data = provider("acme", &["m"]);

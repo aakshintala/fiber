@@ -256,11 +256,16 @@ fn lists_before_fill_with_fetch(
             }
         }
     }
-    notices.extend(extensions::models_dev::apply(
+    let catalog = extensions::models_dev::apply(
         home,
         config::models_dev_enabled(&config),
+        Some(config::refresh_after(&config)),
+        clock.wall(),
         &mut providers,
-    ));
+    );
+    let filter_notices = catalog.retain_listed(&mut providers);
+    notices.extend(catalog.notices);
+    notices.extend(filter_notices);
     providers.retain_credentialed(&config);
     Ok((providers, config, notices, lookup))
 }
