@@ -8,6 +8,8 @@ use std::fs::{File, OpenOptions};
 #[cfg(target_os = "linux")]
 use std::io::Write as _;
 #[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd as _;
+#[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt as _;
 #[cfg(target_os = "linux")]
 use std::path::{Path, PathBuf};
@@ -93,16 +95,20 @@ fn keeper_fixture() {
             baseline: Some(baseline),
         }),
     };
-    let (_child, _listing, _streams) = match crate::keeper_spawn(&spec) {
+    let (mut child, _listing, _streams) = match crate::keeper_spawn(&spec) {
         Ok(spawned) => spawned,
         Err(error) => {
             eprintln!("the keeper fixture could not spawn its writer: {error}");
             std::process::exit(1);
         }
     };
+    // Reap the direct child, so it never lingers as a zombie: in the
+    // grandchild case the leader exits at once while the separately
+    // executed descendant lives on in its own group. The streams stay open
+    // here, so a later acknowledgement is never lost to a closed pipe.
+    let _ = child.wait();
     // Park until the parent kills this process: the writer outlives it in
-    // its own process group. The streams stay open here, so the writer's
-    // acknowledgement is never lost to a closed pipe.
+    // its own process group.
     let mut stdin = std::io::stdin();
     let mut parked = [0u8; 1];
     use std::io::Read as _;
@@ -456,10 +462,35 @@ fn begin_recovery_waits_for_the_live_writer() {
         death.baseline.exists(),
         "begin recovery snapshots a fresh baseline"
     );
-    let report = begin.guard.finish();
+    let recorded = baseline::read_baseline(&death.baseline).expect("the fresh baseline reads");
+    let fiber_entry = recorded
+        .entries
+        .iter()
+        .find(|entry| entry.display == ".fiber")
+        .expect("the snapshot records the protected dir");
+    let baseline::EntryKind::Dir { children, .. } = &fiber_entry.kind else {
+        panic!(
+            "the protected dir snapshots as a dir, got {:?}",
+            fiber_entry.kind
+        );
+    };
+    let keep = children
+        .get("keep.txt")
+        .expect("the snapshot records the protected file");
     assert!(
-        report.is_empty(),
-        "the fresh snapshot leaves the end nothing to restore, got {report:?}"
+        matches!(keep, baseline::EntryKind::File { bytes, .. } if bytes == b"original"),
+        "the fresh snapshot records the restored bytes, got {keep:?}"
+    );
+    let report = begin.guard.finish();
+    assert_eq!(
+        report.restored,
+        vec![".fiber".to_owned()],
+        "the end carries the recovery, each path once"
+    );
+    assert!(
+        report.failed.is_empty(),
+        "the end adds no failure, got {:?}",
+        report.failed
     );
     if let Some(watch) = death.group_watch.take() {
         watch.stand_down(fakes::Deadline::after(WAIT));
@@ -512,6 +543,414 @@ fn a_live_grandchild_holds_recovery_off_after_the_leader_exits() {
         b"original",
         "startup recovery restores the descendant's bytes"
     );
+    if let Some(watch) = death.group_watch.take() {
+        watch.stand_down(fakes::Deadline::after(WAIT));
+    }
+}
+
+/// A build_inner spec for `work`: `sandbox` carries the confinement the
+/// keeper would send, or none for the disabled case.
+#[cfg(target_os = "linux")]
+fn spawn_spec(
+    work: &Path,
+    marker: &Path,
+    sandbox: Option<contract::keeper::Sandbox>,
+) -> contract::keeper::Spawn {
+    contract::keeper::Spawn {
+        id: "keeper-lock-probe".to_owned(),
+        program: PathBuf::from("/bin/sh"),
+        args: vec!["-c".to_owned(), format!("touch {}", quote(marker))],
+        cwd: work.to_path_buf(),
+        env: Vec::new(),
+        stdin: contract::keeper::HostStdin::Null,
+        timeout_ms: None,
+        output_cap: OUTPUT_CAP,
+        sandbox,
+    }
+}
+
+/// Enabled confinement over `fiber_home`, the settings the keeper's spawn
+/// carries.
+#[cfg(target_os = "linux")]
+fn enabled_settings(fiber_home: &Path) -> super::super::sandbox::Settings {
+    super::super::sandbox::Settings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: fiber_home.to_path_buf(),
+    }
+}
+
+/// Runs the spawned marker to its exit on a worker and reports the wait,
+/// so a hung spawn fails the test instead of hanging it.
+#[cfg(target_os = "linux")]
+fn reap(mut child: std::process::Child, what: &'static str) {
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let status = child.wait().unwrap_or_else(|_| panic!("{what} reaps"));
+        done.send(status)
+            .unwrap_or_else(|_| panic!("{what} reports"));
+    });
+    let status = fakes::Deadline::after(WAIT)
+        .recv(&finished)
+        .unwrap_or_else(|_| panic!("{what} exits"));
+    assert!(status.success(), "{what} exits successfully, got {status}");
+}
+
+/// A missing supplied lock fails before execution: no substitute state is
+/// created and the marker command never runs.
+#[cfg(target_os = "linux")]
+#[test]
+fn missing_supplied_lock_fails_before_execution() {
+    let work = fakes::TempDir::new("fiber-keeper-lock-missing");
+    let home = sandbox_home::SandboxHome::protected();
+    let settings = enabled_settings(home.fiber_home());
+    let marker = work.path().join("marker");
+    let baseline = work.path().join("protected-paths").join("baseline.json");
+    let spec = spawn_spec(
+        work.path(),
+        &marker,
+        Some(contract::keeper::Sandbox {
+            enabled: true,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: home.fiber_home().to_path_buf(),
+            workspace: work.path().to_path_buf(),
+            baseline: Some(baseline.clone()),
+        }),
+    );
+    let Err(error) = super::build_inner(
+        &spec,
+        super::MovePolicy::Stay,
+        &settings,
+        work.path(),
+        Some(&baseline),
+        super::super::sandbox::install,
+    ) else {
+        panic!("a missing lock fails");
+    };
+    assert!(
+        error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<super::SandboxApply>())
+            .is_some(),
+        "a missing lock is a sandbox-apply failure, got {error:?}"
+    );
+    assert!(!marker.is_file(), "no command runs after a missing lock");
+    let weird = work.path().join("weird.json");
+    let mut renamed = spec;
+    renamed.sandbox.as_mut().expect("sandbox set").baseline = Some(weird.clone());
+    let Err(error) = super::build_inner(
+        &renamed,
+        super::MovePolicy::Stay,
+        &settings,
+        work.path(),
+        Some(&weird),
+        super::super::sandbox::install,
+    ) else {
+        panic!("a misnamed baseline fails");
+    };
+    assert!(
+        error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<super::SandboxApply>())
+            .is_some(),
+        "a misnamed baseline is a sandbox-apply failure, got {error:?}"
+    );
+    assert!(
+        !marker.is_file(),
+        "no command runs after a misnamed baseline"
+    );
+}
+
+/// An exclusive holder fails the shared take before execution: the marker
+/// command never runs.
+#[cfg(target_os = "linux")]
+#[test]
+fn exclusive_holder_fails_before_execution() {
+    let work = fakes::TempDir::new("fiber-keeper-lock-exclusive");
+    let home = sandbox_home::SandboxHome::protected();
+    let settings = enabled_settings(home.fiber_home());
+    let state = work.path().join("protected-paths");
+    std::fs::create_dir_all(&state).expect("state dir created");
+    let lock = state.join("active.lock");
+    let exclusive = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock)
+        .expect("the lock opens");
+    exclusive.lock().expect("the exclusive hold takes");
+    let baseline = state.join("baseline.json");
+    let marker = work.path().join("marker");
+    let spec = spawn_spec(
+        work.path(),
+        &marker,
+        Some(contract::keeper::Sandbox {
+            enabled: true,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: home.fiber_home().to_path_buf(),
+            workspace: work.path().to_path_buf(),
+            baseline: Some(baseline.clone()),
+        }),
+    );
+    let Err(error) = super::build_inner(
+        &spec,
+        super::MovePolicy::Stay,
+        &settings,
+        work.path(),
+        Some(&baseline),
+        super::super::sandbox::install,
+    ) else {
+        panic!("an exclusive holder fails");
+    };
+    assert!(
+        error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<super::SandboxApply>())
+            .is_some(),
+        "an exclusive holder is a sandbox-apply failure, got {error:?}"
+    );
+    assert!(
+        !marker.is_file(),
+        "no command runs against an exclusive holder"
+    );
+    drop(exclusive);
+}
+
+/// Enabled confinement without a supplied baseline spawns as before, with
+/// no inherited hold to fail on.
+#[cfg(target_os = "linux")]
+#[test]
+fn no_baseline_spawns_without_an_inherited_hold() {
+    let work = fakes::TempDir::new("fiber-keeper-lock-no-baseline");
+    let home = sandbox_home::SandboxHome::protected();
+    let settings = enabled_settings(home.fiber_home());
+    let marker = work.path().join("marker");
+    let spec = spawn_spec(work.path(), &marker, None);
+    let (child, _listing, _streams) = super::build_inner(
+        &spec,
+        super::MovePolicy::Stay,
+        &settings,
+        work.path(),
+        None,
+        super::super::sandbox::install,
+    )
+    .expect("no baseline still spawns");
+    reap(child, "the unbaselined spawn");
+    assert!(marker.is_file(), "the command runs without a baseline");
+}
+
+/// Disabled confinement ignores a supplied baseline and spawns as before.
+#[cfg(target_os = "linux")]
+#[test]
+fn disabled_spawns_without_an_inherited_hold() {
+    let work = fakes::TempDir::new("fiber-keeper-lock-disabled");
+    let home = sandbox_home::SandboxHome::protected();
+    let settings = super::super::sandbox::Settings {
+        enabled: false,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: home.fiber_home().to_path_buf(),
+    };
+    let baseline = work.path().join("protected-paths").join("baseline.json");
+    let marker = work.path().join("marker");
+    let spec = spawn_spec(
+        work.path(),
+        &marker,
+        Some(contract::keeper::Sandbox {
+            enabled: false,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: home.fiber_home().to_path_buf(),
+            workspace: work.path().to_path_buf(),
+            baseline: Some(baseline.clone()),
+        }),
+    );
+    let (child, _listing, _streams) = super::build_inner(
+        &spec,
+        super::MovePolicy::Stay,
+        &settings,
+        work.path(),
+        Some(&baseline),
+        super::super::sandbox::install,
+    )
+    .expect("disabled confinement still spawns");
+    reap(child, "the disabled spawn");
+    assert!(marker.is_file(), "the command runs while disabled");
+}
+
+/// A policy the kernel refuses releases the inherited hold: after the
+/// failed spawn an exclusive take succeeds, so nothing strands in the
+/// dropped command.
+#[cfg(target_os = "linux")]
+#[test]
+fn failed_install_releases_the_inherited_hold() {
+    fn refused(_: &mut super::super::sandbox::Prepared) -> Result<(), i32> {
+        Err(libc::EPERM)
+    }
+    let work = fakes::TempDir::new("fiber-keeper-lock-install-fail");
+    let fiber = work.path().join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    std::fs::write(fiber.join("keep.txt"), b"original").expect("file written");
+    let home = sandbox_home::SandboxHome::protected();
+    let settings = enabled_settings(home.fiber_home());
+    let state_home = work.path().join("state-home");
+    let (handle, startup) = ProtectedPaths::open(&state_home, work.path()).expect("open recovers");
+    assert!(startup.is_none(), "a fresh project recovers nothing");
+    let begin = handle.begin(work.path()).expect("begin snapshots");
+    let active = begin.guard.dir.active_lock.clone();
+    let baseline = begin.guard.dir.baseline.clone();
+    drop(begin.guard);
+    let marker = work.path().join("marker");
+    let spec = spawn_spec(
+        work.path(),
+        &marker,
+        Some(contract::keeper::Sandbox {
+            enabled: true,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: home.fiber_home().to_path_buf(),
+            workspace: work.path().to_path_buf(),
+            baseline: Some(baseline.clone()),
+        }),
+    );
+    let Err(error) = super::build_inner(
+        &spec,
+        super::MovePolicy::Stay,
+        &settings,
+        work.path(),
+        Some(&baseline),
+        refused,
+    ) else {
+        panic!("a refused policy fails");
+    };
+    assert!(
+        error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<super::SandboxApply>())
+            .is_some(),
+        "a refused policy is a sandbox-apply failure, got {error:?}"
+    );
+    assert!(!marker.is_file(), "no command runs after a refused policy");
+    let probe = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&active)
+        .expect("the lock opens");
+    probe
+        .try_lock()
+        .unwrap_or_else(|_| panic!("the failed spawn released its hold"));
+    probe.unlock().expect("the probe releases");
+}
+
+/// The parent's hold stays close-on-exec, so an unrelated exec from the
+/// same parent does not inherit it.
+#[cfg(target_os = "linux")]
+#[test]
+fn parent_hold_is_not_inherited() {
+    use rustix::fd::AsFd as _;
+    let work = fakes::TempDir::new("fiber-keeper-lock-cloexec");
+    let state = work.path().join("protected-paths");
+    std::fs::create_dir_all(&state).expect("state dir created");
+    let baseline = state.join("baseline.json");
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(state.join("active.lock"))
+        .expect("the lock exists");
+    let held = super::super::sandbox::protected::inherit_active(&baseline).expect("the hold takes");
+    let flags = rustix::io::fcntl_getfd(held.as_fd()).expect("the descriptor flags read");
+    assert!(
+        flags.contains(rustix::io::FdFlags::CLOEXEC),
+        "the parent hold stays close-on-exec"
+    );
+    let fd = held.as_raw_fd();
+    let mut probe = Command::new("/bin/sh");
+    probe
+        .arg("-c")
+        .arg(format!("test ! -e /proc/self/fd/{fd}"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let output = fakes::children::grouped_output(&mut probe, WAIT).expect("the probe runs");
+    assert!(
+        output.status.success(),
+        "an unrelated exec inherits no hold, got {}",
+        output.status
+    );
+}
+
+/// Two holds share the project until both release: releasing either leaves
+/// an exclusive probe waiting, and the last release frees it.
+#[cfg(target_os = "linux")]
+#[test]
+fn two_holds_share_until_both_release() {
+    let work = fakes::TempDir::new("fiber-keeper-lock-two-holds");
+    let state = work.path().join("protected-paths");
+    std::fs::create_dir_all(&state).expect("state dir created");
+    let baseline = state.join("baseline.json");
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(state.join("active.lock"))
+        .expect("the lock exists");
+    let first =
+        super::super::sandbox::protected::inherit_active(&baseline).expect("the first hold takes");
+    let second =
+        super::super::sandbox::protected::inherit_active(&baseline).expect("the second hold takes");
+    drop(first);
+    let lone = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(state.join("active.lock"))
+        .expect("the lock opens");
+    assert!(
+        matches!(lone.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+        "one remaining hold still blocks an exclusive take"
+    );
+    drop(second);
+    lone.try_lock()
+        .unwrap_or_else(|_| panic!("the last release frees the lock"));
+    lone.unlock().expect("the probe releases");
+}
+
+/// The exclusive probe succeeds while the keeper fixture itself remains
+/// alive: the parent dropped its copy at spawn, so no keeper-wide hold
+/// leaks past the writer's exit.
+#[cfg(target_os = "linux")]
+#[test]
+fn exclusive_take_succeeds_while_the_keeper_lives() {
+    let mut death = KeeperDeath::start("simple");
+    drop(death.session.take());
+    death.release_writer();
+    assert!(
+        support::group::alive(death.keeper_id),
+        "the keeper fixture outlives the writer"
+    );
+    support::group::signal(death.keeper_id, rustix::process::Signal::KILL)
+        .expect("the keeper dies");
+    let mut keeper = death.keeper.take().expect("the keeper is known");
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let status = keeper.wait().unwrap_or_else(|_| panic!("the keeper reaps"));
+        done.send(status)
+            .unwrap_or_else(|_| panic!("the reap reports"));
+    });
+    let status = fakes::Deadline::after(WAIT)
+        .recv(&finished)
+        .unwrap_or_else(|_| panic!("the keeper reaps"));
+    assert!(
+        status.code().is_none(),
+        "the keeper died by signal, not by exit: {status}"
+    );
+    drop(death.keeper_stdin.take());
     if let Some(watch) = death.group_watch.take() {
         watch.stand_down(fakes::Deadline::after(WAIT));
     }
