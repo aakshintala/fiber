@@ -75,6 +75,7 @@ fn catalogue() -> Catalogue {
                 default_level: Some("high".to_owned()),
                 configured: None,
                 roles: vec!["deep".to_owned(), "review".to_owned()],
+                is_new: false,
                 name: None,
                 price: Some(Price {
                     micros_per_mtok: 3_750_000,
@@ -91,6 +92,7 @@ fn catalogue() -> Catalogue {
                 default_level: None,
                 configured: None,
                 roles: Vec::new(),
+                is_new: false,
                 name: None,
                 price: None,
             },
@@ -102,6 +104,7 @@ fn catalogue() -> Catalogue {
                 default_level: None,
                 configured: Some("low".to_owned()),
                 roles: Vec::new(),
+                is_new: false,
                 name: None,
                 price: None,
             },
@@ -113,6 +116,7 @@ fn catalogue() -> Catalogue {
                 default_level: Some("low".to_owned()),
                 configured: Some("high".to_owned()),
                 roles: vec!["chat".to_owned()],
+                is_new: false,
                 name: None,
                 price: Some(Price {
                     micros_per_mtok: 2_000_000,
@@ -247,6 +251,7 @@ fn priced() -> Catalogue {
                     default_level: None,
                     configured: None,
                     roles: vec![],
+                    is_new: false,
                     price,
                 }
             })
@@ -257,6 +262,10 @@ fn priced() -> Catalogue {
 
 /// An attached session with a last call only when `usage` names its input.
 fn priced_session(usage: Option<u64>) -> App {
+    priced_session_with(usage, priced())
+}
+
+fn priced_session_with(usage: Option<u64>, catalogue: Catalogue) -> App {
     let mut app = attached(160, 48);
     let mut event = contract::Envelope {
         kind: EventKind::PreambleBuilt,
@@ -288,9 +297,27 @@ fn priced_session(usage: Option<u64>) -> App {
         .clone();
         app.on_line(crate::link::Line::Session(event));
     }
-    app.on_models(Ok(priced()));
+    app.on_models(Ok(catalogue));
     open(&mut app);
     app
+}
+
+#[test]
+fn a_vendor_only_model_shows_its_new_marker_without_a_price() {
+    let mut catalogue = priced();
+    catalogue.models[2].is_new = true;
+    let app = priced_session_with(Some(84_000), catalogue);
+
+    let text = screen(&app, 160, 48);
+    let (_, new_model) = find_row(&text, "p3");
+    let (_, known_model) = find_row(&text, "p1");
+    assert!(new_model.contains("· new"), "{new_model}");
+    assert!(!new_model.contains("/M"), "{new_model}");
+    assert!(!new_model.contains("free"), "{new_model}");
+    assert!(new_model.contains("switch ~84k tokens"), "{new_model}");
+    assert!(!new_model.contains('$'), "{new_model}");
+    assert!(!known_model.contains("· new"), "{known_model}");
+    insta::assert_snapshot!("vendor-only-model", text);
 }
 
 #[test]
@@ -786,6 +813,7 @@ fn logged_out_separator_takes_space_after_a_model_section() {
                 roles: Vec::new(),
                 current: false,
                 scoped: false,
+                is_new: false,
                 price: None,
                 cost: None,
                 levels: Vec::new(),
@@ -1093,6 +1121,7 @@ fn wheel_moves_the_picker_top_by_three_body_rows() {
             levels: vec!["low".to_owned()],
             default_level: Some("low".to_owned()),
             configured: None,
+            is_new: false,
             roles: Vec::new(),
             name: None,
             price: None,
@@ -2318,6 +2347,7 @@ fn wheel_up_with_focus_on_the_new_exclusive_bottom_clamps_inside() {
             levels: vec!["low".to_owned()],
             default_level: Some("low".to_owned()),
             configured: None,
+            is_new: false,
             roles: Vec::new(),
             name: None,
             price: None,
@@ -2413,6 +2443,7 @@ fn wheel_up_resetting_to_zero_clamps_past_a_nonmatching_first_row() {
             levels: vec!["low".to_owned()],
             default_level: Some("low".to_owned()),
             configured: None,
+            is_new: false,
             roles: Vec::new(),
             name: None,
             price: None,
@@ -2608,6 +2639,7 @@ fn layout_view(
                 roles: Vec::new(),
                 current: false,
                 scoped: false,
+                is_new: false,
                 price: None,
                 cost: None,
                 levels: Vec::new(),

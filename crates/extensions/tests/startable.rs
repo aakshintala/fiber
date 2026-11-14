@@ -9,6 +9,7 @@ use extensions::{context_window, takes, thinking_refusal};
 /// otherwise.
 fn model(window: Option<u64>, levels: &[ThinkingLevel], protocol: Protocol) -> ModelData {
     ModelData {
+        is_new: false,
         id: "m".to_owned(),
         name: None,
         protocol,

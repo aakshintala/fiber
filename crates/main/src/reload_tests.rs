@@ -1016,6 +1016,73 @@ fn provider_reload_refreshes_an_old_cached_list() {
 }
 
 #[test]
+fn provider_reload_admits_a_vendor_only_model_before_validation() {
+    let mut fixture = Fixture::new();
+    fixture.install_fake(fake_models_without_levels());
+    std::fs::write(
+        fixture.rig.home.join("extensions/fake/providers/fake.lua"),
+        "fiber.provider(\"fake\", { models = { timeout = 5000, run = function() return { {id=\"vendor-only\", protocol=\"openai-responses\", base_url=\"http://127.0.0.1:9/v1\"} } end } })",
+    )
+    .unwrap();
+    config::write_model_cache(&fixture.rig.home, "fake", &fake_models_without_levels()).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(fixture.rig.home.join("cache/models/fake.json"))
+        .unwrap()
+        .set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 - 2 * 86_400),
+        )
+        .unwrap();
+    fixture.touch_fake_source();
+
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    let snapshot = fixture.delegates.resolve_snapshot();
+    assert_eq!(
+        (snapshot.lookup)("fiber:fake/vendor-only"),
+        Ok("fake/vendor-only".to_owned())
+    );
+}
+
+#[test]
+fn provider_reload_uses_catalog_metadata_for_a_newly_listed_model() {
+    let mut fixture = Fixture::new();
+    fixture.install_fake(fake_models_without_levels());
+    let mut data: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture.fake_data()).unwrap()).unwrap();
+    data["models_dev"] = json!({"source":"fake", "pins":{}});
+    std::fs::write(fixture.fake_data(), data.to_string()).unwrap();
+    config::write_models_dev(
+        &fixture.rig.home,
+        br#"{"fake":{"vendor-only":{"limit":{"context":2000,"output":300},"modalities":{"input":["text","image"]}}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        fixture.rig.home.join("extensions/fake/providers/fake.lua"),
+        "fiber.provider(\"fake\", { models = { timeout = 5000, run = function() return { {id=\"vendor-only\", protocol=\"openai-responses\", base_url=\"http://127.0.0.1:9/v1\"} } end } })",
+    )
+    .unwrap();
+    config::write_model_cache(&fixture.rig.home, "fake", &fake_models_without_levels()).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(fixture.rig.home.join("cache/models/fake.json"))
+        .unwrap()
+        .set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 - 2 * 86_400),
+        )
+        .unwrap();
+    fixture.touch_fake_source();
+
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    let snapshot = fixture.delegates.resolve_snapshot();
+    assert_eq!(
+        (snapshot.lookup)("fiber:fake/vendor-only"),
+        Ok("fake/vendor-only".to_owned())
+    );
+}
+
+#[test]
 fn provider_reload_models_error_keeps_the_old_catalogue() {
     let mut fixture = Fixture::new();
     fixture.install_fake(fake_models_without_levels());
@@ -1046,14 +1113,14 @@ fn provider_reload_models_error_keeps_the_old_catalogue() {
     // installed notices are held before it runs.
     let notices = prepared.notices.clone();
     (prepared.installed)();
-    // The provider keeps its old list: the old reference resolves, and
-    // the new level is refused.
+    // The provider keeps its old list, while the current package table
+    // still supplies metadata for that listed model.
     let snapshot = fixture.delegates.resolve_snapshot();
     assert_eq!((snapshot.lookup)("fiber:fake/m"), Ok("fake/m".to_owned()));
-    let Err(reason) = (snapshot.lookup)("fiber:fake/m:high") else {
-        panic!("a level the model does not take resolves");
-    };
-    assert!(reason.contains("not one model `fake/m` takes"), "{reason}");
+    assert_eq!(
+        (snapshot.lookup)("fiber:fake/m:high"),
+        Ok("fake/m:high".to_owned())
+    );
     // The failure reaches the session as a notice naming the extension.
     assert!(
         notices

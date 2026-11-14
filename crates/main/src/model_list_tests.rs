@@ -215,6 +215,42 @@ fn picker_catalogue_read_serves_cached_models_dev_fields() {
         .find(|entry| entry.reference == "acme/m")
         .unwrap();
     assert_eq!(entry.name.as_deref(), Some("Live model name"));
+    assert!(!entry.is_new);
+}
+
+#[test]
+fn picker_catalogue_carries_the_vendor_only_marker() {
+    let setup = Setup::new("fiber-model-list-new-marker");
+    setup.install_data("acme-ext", "acme", &["known"], &json!({}));
+    setup.write_config(&json!({}));
+    config::write_model_cache(
+        &setup.home(),
+        "acme",
+        &json!([
+            {"id":"vendor-only", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1"},
+            {"id":"known", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1"}
+        ]),
+    )
+    .unwrap();
+    let called = Cell::new(false);
+
+    let catalogue = read(
+        &setup.home(),
+        &setup.workspace(),
+        tui::Refresh::Cached,
+        now(),
+        &unloaded(&called),
+        &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+
+    let markers: Vec<(&str, bool)> = catalogue
+        .models
+        .iter()
+        .map(|entry| (entry.id.as_str(), entry.is_new))
+        .collect();
+    assert_eq!(markers, [("vendor-only", true), ("known", false)]);
 }
 
 #[test]

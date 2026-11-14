@@ -190,6 +190,8 @@ pub(crate) struct ModelRow {
     pub(crate) current: bool,
     /// Whether the scope keeps it, while the toggle shows every model.
     pub(crate) scoped: bool,
+    /// Whether no metadata source knows the vendor-listed model.
+    pub(crate) is_new: bool,
     /// Its input and output prices at the session's size.
     pub(crate) price: Option<String>,
     /// Its rebuild cost, or "—" on the current model.
@@ -1209,6 +1211,7 @@ impl ModelPicker {
                     roles: entry.roles.clone(),
                     current,
                     scoped: open.show_all && self.scoped.contains(&entry.reference),
+                    is_new: entry.is_new,
                     price: price_text(entry.price.as_ref(), ctx.usage),
                     cost: ctx.usage.map(|tokens| {
                         if current {

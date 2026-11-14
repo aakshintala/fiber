@@ -156,6 +156,7 @@ fn choose_session_model(app: &mut App) {
             default_level: None,
             configured: None,
             roles: Vec::new(),
+            is_new: false,
             name: None,
             price: None,
         }],

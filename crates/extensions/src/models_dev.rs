@@ -162,15 +162,7 @@ pub fn merge_admission(
     models: Vec<ModelData>,
     enabled: bool,
 ) -> Vec<ModelData> {
-    let catalog = if enabled {
-        config::read_models_dev(home)
-            .ok()
-            .flatten()
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-            .unwrap_or_else(|| Value::Object(Default::default()))
-    } else {
-        Value::Object(Default::default())
-    };
+    let catalog = load_catalog(home, enabled);
     let path = extension_dir
         .join("providers")
         .join(format!("{provider}.json"));
@@ -189,18 +181,32 @@ pub fn merge_admission(
     enrich(models, &generated, &meta, &catalog)
 }
 
+fn load_catalog(home: &Path, enabled: bool) -> Value {
+    if !enabled {
+        return Value::Object(Default::default());
+    }
+    config::read_models_dev(home)
+        .ok()
+        .flatten()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .unwrap_or_else(|| Value::Object(Default::default()))
+}
+
 fn cautious(models: Vec<ModelData>) -> Vec<ModelData> {
     models.into_iter().map(cautious_model).collect()
 }
 
 fn cautious_model(mut model: ModelData) -> ModelData {
     model.is_new = true;
-    model.input = vec!["text".to_owned()];
-    model.thinking_levels.clear();
-    model.thinking_default = None;
-    model.context_window = Some(128_000);
-    model.max_output_tokens = Some(8_192);
-    model.cost = None;
+    if model.input.is_empty() {
+        model.input.push("text".to_owned());
+    }
+    if model.context_window.is_none() {
+        model.context_window = Some(128_000);
+    }
+    if model.max_output_tokens.is_none() {
+        model.max_output_tokens = Some(8_192);
+    }
     model
 }
 
@@ -221,18 +227,30 @@ fn enrich(
             }
             model.is_new = false;
             if let Some(table) = table {
-                model.name.clone_from(&table.name);
-                model.context_window = table.context_window;
-                model.max_output_tokens = table.max_output_tokens;
-                model.input.clone_from(&table.input);
-                model.cost.clone_from(&table.cost);
-                model.thinking_levels.clone_from(&table.thinking_levels);
-                model.thinking_default = table.thinking_default;
-            }
-            if fetched.is_some() {
-                if let Some(merged) = merge(vec![model.clone()], meta, catalog).into_iter().next() {
-                    model = merged;
+                if model.name.is_none() {
+                    model.name.clone_from(&table.name);
                 }
+                if model.context_window.is_none_or(|value| value == 0) {
+                    model.context_window = table.context_window;
+                }
+                if model.max_output_tokens.is_none_or(|value| value == 0) {
+                    model.max_output_tokens = table.max_output_tokens;
+                }
+                if model.input.is_empty() {
+                    model.input.clone_from(&table.input);
+                }
+                if model.cost.is_none() {
+                    model.cost.clone_from(&table.cost);
+                }
+                if model.thinking_levels.is_empty() {
+                    model.thinking_levels.clone_from(&table.thinking_levels);
+                    model.thinking_default = table.thinking_default;
+                }
+            }
+            if fetched.is_some()
+                && let Some(merged) = merge(vec![model.clone()], meta, catalog).into_iter().next()
+            {
+                model = merged;
             }
             model
         })
@@ -245,14 +263,38 @@ pub fn apply(
     enabled: bool,
     providers: &mut Providers,
 ) -> Vec<contract::events::Notice> {
+    if !enabled {
+        return Vec::new();
+    }
+    let Some(bytes) = config::read_models_dev(home).ok().flatten() else {
+        return Vec::new();
+    };
+    let Ok(catalog) = serde_json::from_slice::<Value>(&bytes) else {
+        return Vec::new();
+    };
     let names: Vec<String> = providers.names().map(str::to_owned).collect();
     let mut notices = Vec::new();
     for name in names {
         let base = providers
             .provider_source_dir(&name)
             .unwrap_or_else(|| home.join("providers").join(&name));
+        let path = base.join("providers").join(format!("{name}.json"));
+        let Ok(bytes) = fs::read(path) else {
+            continue;
+        };
+        let Ok(file) = serde_json::from_slice::<Value>(&bytes) else {
+            continue;
+        };
+        let Some(meta) = meta_of(&file) else {
+            continue;
+        };
+        let generated: Vec<ModelData> = file
+            .get("models")
+            .cloned()
+            .and_then(|models| serde_json::from_value(models).ok())
+            .unwrap_or_default();
         let mut data = providers.data(&name);
-        data.models = merge_admission(home, &base, &name, data.models, enabled);
+        data.models = enrich(data.models, &generated, &meta, &catalog);
         notices.extend(providers.set_models(&name, data.models));
     }
     notices
@@ -328,13 +370,15 @@ fn resolve(id: &str, meta: &CatalogMeta) -> (String, String) {
     if let Some(source) = meta.source.as_ref() {
         return (source.clone(), id.to_owned());
     }
+    if let Some(source) = meta.source_aliases.get(id)
+        && let Some(prefix) = meta.strip_prefix.as_deref()
+    {
+        return (
+            source.clone(),
+            id.strip_prefix(prefix).unwrap_or(id).to_owned(),
+        );
+    }
     if let Some(source) = meta.source_aliases.get(id) {
-        if let Some(prefix) = meta.strip_prefix.as_deref() {
-            return (
-                source.clone(),
-                id.strip_prefix(prefix).unwrap_or(id).to_owned(),
-            );
-        }
         if meta.split_source {
             return (
                 source.clone(),

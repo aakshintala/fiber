@@ -68,6 +68,7 @@ fn entry(reference: &str, levels: &[&str]) -> ModelEntry {
         default_level: None,
         configured: None,
         roles: Vec::new(),
+        is_new: false,
         name: None,
         price: None,
     }

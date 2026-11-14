@@ -40,6 +40,16 @@ fn vendor_only_models_receive_cautious_defaults_and_a_host_marker() {
             "base_url": "http://127.0.0.1:1/v1"
         }))
         .unwrap(),
+        serde_json::from_value(json!({
+            "id": "vendor-reported",
+            "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:1/v1",
+            "context_window": 32_000,
+            "max_output_tokens": 4_000,
+            "input": ["text", "image"],
+            "cost": {"input": 0.1, "output": 0.2}
+        }))
+        .unwrap(),
     ];
 
     let enriched = extensions::models_dev::merge_admission(
@@ -58,6 +68,13 @@ fn vendor_only_models_receive_cautious_defaults_and_a_host_marker() {
     assert_eq!(model.max_output_tokens, Some(8_192));
     assert!(model.cost.is_none());
     assert!(model.is_new);
+
+    let reported = &enriched[1];
+    assert_eq!(reported.context_window, Some(32_000));
+    assert_eq!(reported.max_output_tokens, Some(4_000));
+    assert_eq!(reported.input, ["text", "image"]);
+    assert!(reported.cost.is_some());
+    assert!(reported.is_new);
 }
 
 #[test]

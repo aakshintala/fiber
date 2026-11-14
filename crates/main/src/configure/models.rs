@@ -73,6 +73,7 @@ fn entry(entry: &tui::ModelEntry) -> Value {
         ("id".to_owned(), json!(entry.id)),
         ("levels".to_owned(), json!(entry.levels)),
         ("roles".to_owned(), json!(entry.roles)),
+        ("is_new".to_owned(), json!(entry.is_new)),
     ]);
     if let Some(name) = &entry.name {
         drop(value.insert("name".to_owned(), json!(name)));

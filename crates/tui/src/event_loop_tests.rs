@@ -62,6 +62,7 @@ fn test_catalogue() -> crate::ReadModels {
                 default_level: None,
                 configured: None,
                 roles: Vec::new(),
+                is_new: false,
                 price: None,
             }],
             ..Default::default()
@@ -494,6 +495,7 @@ fn models_diagnostic_records_nonempty_post_apply_catalogue_size() {
             default_level: None,
             configured: None,
             roles: Vec::new(),
+            is_new: false,
             price: None,
         }],
         ..Catalogue::default()
@@ -3345,6 +3347,7 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
                 default_level: None,
                 configured: None,
                 roles: Vec::new(),
+                is_new: false,
                 name: None,
                 price: None,
             }],
@@ -3480,6 +3483,7 @@ fn one_model() -> crate::Catalogue {
             default_level: None,
             configured: None,
             roles: Vec::new(),
+            is_new: false,
             name: None,
             price: None,
         }],

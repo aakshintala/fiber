@@ -1326,6 +1326,7 @@ fn catalogue_answers_decode_field_for_field() {
                     {"reference": "acme/m1", "provider": "acme", "id": "m1",
                      "name": "Acme One", "levels": ["low", "high"],
                      "default_level": "low", "configured": "high", "roles": ["main"],
+                     "is_new": true,
                      "price": {"micros_per_mtok": 3000000, "input": 3000000,
                                "output": 15000000, "tiers": [
                                 {"input_tokens_above": 500000, "micros_per_mtok": 9000000,
@@ -1365,6 +1366,7 @@ fn catalogue_answers_decode_field_for_field() {
                     default_level: Some("low".to_owned()),
                     configured: Some("high".to_owned()),
                     roles: vec!["main".to_owned()],
+                    is_new: true,
                     price: Some(Price {
                         micros_per_mtok: 3000000,
                         input: 3000000,
@@ -1394,6 +1396,7 @@ fn catalogue_answers_decode_field_for_field() {
                     default_level: None,
                     configured: None,
                     roles: Vec::new(),
+                    is_new: false,
                     price: None,
                 },
             ],
@@ -1512,6 +1515,7 @@ fn catalogue_answers_decode_their_edges_and_reject_the_rest() {
         .unwrap();
     assert_eq!(catalogue.models.len(), 1);
     assert_eq!(catalogue.models[0].levels, vec!["low".to_owned()]);
+    assert!(!catalogue.models[0].is_new, "an older hub omits the marker");
     // Each malformed answer is an io_failed naming models, with no partial catalogue.
     for (what, answer) in [
         (
@@ -1539,6 +1543,12 @@ fn catalogue_answers_decode_their_edges_and_reject_the_rest() {
         (
             "a model without reference",
             json!({"models": [{"provider": "a", "id": "m", "levels": [], "roles": []}],
+                   "notices": [], "lists": []}),
+        ),
+        (
+            "is_new not boolean",
+            json!({"models": [{"reference": "a/m", "provider": "a", "id": "m",
+                               "levels": [], "roles": [], "is_new": "yes"}],
                    "notices": [], "lists": []}),
         ),
         (

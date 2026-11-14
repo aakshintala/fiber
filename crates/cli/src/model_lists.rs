@@ -227,7 +227,10 @@ fn lists_before_fill_with_fetch(
         ModelLists::Refresh { check_age } => {
             let max_age = check_age.then(|| config::refresh_after(&config));
             refreshed(
-                &config,
+                RefreshContext {
+                    home,
+                    config: &config,
+                },
                 load,
                 &mut providers,
                 &mut notices,
@@ -284,13 +287,19 @@ fn cached_lists(
     Ok(())
 }
 
+/// The home and its merged settings used by one joined list refresh.
+struct RefreshContext<'a> {
+    home: &'a Path,
+    config: &'a Config,
+}
+
 /// Loads the Lua providers, refreshes them with `max_age`, joins every
 /// refresh, and drops the extensions before returning, so no VM stays
 /// resident. A joined list replaces its provider's; a failed refresh is
 /// one [`Notice`] with code `extension_failed` naming the extension, and
 /// the cached list stays.
 fn refreshed(
-    config: &Config,
+    context: RefreshContext<'_>,
     load: &dyn Fn(&Config) -> SessionExtensions,
     providers: &mut Providers,
     notices: &mut Vec<Notice>,
@@ -298,8 +307,8 @@ fn refreshed(
     run: config::Runner<'_>,
     lookup: &dyn Fn(&str) -> Option<String>,
 ) {
-    let loaded = load(config);
-    notices.extend(providers.add_session(&loaded, config, run, lookup));
+    let loaded = load(context.config);
+    notices.extend(providers.add_session(&loaded, context.config, run, lookup));
     // A `StartedRefresh` names the provider; the notice names the
     // extension that registered it (`docs/model-routing.md`, "Model
     // discovery": an `extension_failed` notice names the extension).
@@ -314,7 +323,7 @@ fn refreshed(
         .map(|(_, provider)| Arc::clone(provider))
         .collect();
     for (name, handle) in
-        extensions::refresh_lists(&wanted, providers, config, max_age, run, lookup)
+        extensions::refresh_lists(&wanted, providers, context.config, max_age, run, lookup)
     {
         let extension = extension_of
             .get(name.as_str())
@@ -323,7 +332,12 @@ fn refreshed(
             .to_owned();
         match handle.join() {
             Ok(Ok(models)) => {
-                notices.extend(providers.set_models(&name, models));
+                notices.extend(providers.set_models_with_catalog(
+                    context.home,
+                    config::models_dev_enabled(context.config),
+                    &name,
+                    models,
+                ));
             }
             Ok(Err(error)) => {
                 notices.push(Notice {

@@ -20,8 +20,9 @@ use std::path::Path;
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::journey::{
-    ctx_size_drawn, dismiss_cache_rebuild, grid_text, install_picker_provider, only_session,
-    provider_full, provider_heading, reply, shows, shows_row, stalled, tui_off, working_elapsed,
+    ctx_size_drawn, dismiss_cache_rebuild, grid_text, install_picker_provider,
+    install_vendor_picker_provider, only_session, provider_full, provider_heading, reply, shows,
+    shows_row, stalled, tui_off, working_elapsed,
 };
 use support::pty::{Grid, KITTY_PUSH, MOTION, Run, WAITING_TITLE, drag_bytes, until_hub_exits};
 use support::{PIXEL, PIXEL_BASE64, Setup, TRUECOLOUR, write_json};
@@ -386,6 +387,95 @@ fn journey_model_picker_by_name_switch_answer_quit_from_picker() {
     run.wait_screen("the name-filtered list again", |screen| {
         shows(screen, "1 of 2 models") && shows(screen, "alpha-1")
     });
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the restored terminal", |screen| {
+        !screen.alternate_screen && !screen.hide_cursor
+    });
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+}
+
+/// A vendor-only model appears as new, can be chosen from the picker, and
+/// receives the next turn at the fake provider endpoint.
+#[test]
+fn journey_vendor_only_model_runs_a_turn() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([reply("Initial."), reply("Vendor answer.")]).unwrap();
+    install_vendor_picker_provider(&setup, &server);
+    let mut run = Run::spawn(
+        &setup,
+        120,
+        32,
+        &[],
+        &[
+            ("TERM", "xterm-256color"),
+            ("FIBER_TEST_FAKE_KEY", "sk-test"),
+        ],
+    );
+    let ids = vec!["known".to_owned(), "vendor-only".to_owned()];
+
+    run.ready();
+    let from = run.output().len();
+    run.write(b"first turn\r");
+    run.wait_screen("the initial provider answer", |screen| {
+        shows(screen, "Initial.")
+    });
+    run.turn_finished(from);
+
+    run.write(b"\x0c");
+    let opened = run.wait_screen("the picker with the vendor-only model", |screen| {
+        shows(screen, "Type to search")
+            && shows(screen, "known")
+            && shows(screen, "vendor-only")
+            && shows(screen, "· new")
+    });
+    assert!(shows(&opened, "vendor-only"), "{opened:?}");
+    assert!(shows(&opened, "· new"), "{opened:?}");
+    insta::assert_snapshot!(
+        "vendor_model_turn",
+        fold_fixture_tmp(&grid_text(
+            &opened.rows,
+            opened.cursor,
+            opened.hide_cursor,
+            &ids
+        ))
+    );
+
+    run.write(b"vendor-only");
+    run.wait_screen("the filtered vendor-only model", |screen| {
+        shows(screen, "1 of 2 models") && shows(screen, "vendor-only") && shows(screen, "· new")
+    });
+    run.write(b"\r");
+    run.wait_screen("the closed model picker", |screen| {
+        !shows(screen, "Type to search")
+    });
+
+    let from = run.output().len();
+    run.write(b"second turn\r");
+    run.wait_screen("the vendor-only model answer", |screen| {
+        shows(screen, "Vendor answer.")
+    });
+    run.turn_finished(from);
+    let answered = run.wait_screen("the completed vendor-only turn", |screen| {
+        shows(screen, "Vendor answer.")
+            && screen
+                .rows
+                .iter()
+                .filter(|row| row.contains("▣ completed"))
+                .count()
+                == 2
+            && !shows(screen, "Esc to interrupt")
+    });
+    assert!(shows(&answered, "Vendor answer."), "{answered:?}");
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "the two turns reach the fake endpoint");
+    assert_eq!(requests[0].path, "/v1/responses");
+    assert_eq!(requests[1].path, "/v1/responses");
+    let first: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(first["model"], "known");
+    assert_eq!(second["model"], "vendor-only");
     run.write(b"\x03\x03\r");
     run.wait_screen("the restored terminal", |screen| {
         !screen.alternate_screen && !screen.hide_cursor

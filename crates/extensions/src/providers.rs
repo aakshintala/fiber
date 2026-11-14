@@ -917,7 +917,7 @@ impl Providers {
             }
         };
         let catalog = home.and_then(|home| {
-            self.provider_source_dir(extension)
+            self.extension_source_dir(extension)
                 .map(|dir| (home, dir, config::models_dev_enabled(config)))
         });
         let admitted = self.admit(&name, extension, &mut models, catalog);
@@ -1273,6 +1273,30 @@ impl Providers {
                 .iter()
                 .map(|notice| (notice.code.clone(), notice.message.clone())),
         );
+    }
+
+    /// Replaces a provider's models after enriching a refreshed list from
+    /// its installed package table and the cached models.dev catalog.
+    pub fn set_models_with_catalog(
+        &mut self,
+        home: &Path,
+        enabled: bool,
+        name: &str,
+        models: Vec<ModelData>,
+    ) -> Vec<Notice> {
+        let owner = self
+            .declared
+            .iter()
+            .find(|(_, entries)| entries.contains_key(name))
+            .map(|(extension, _)| extension.clone());
+        let Some(owner) = owner else {
+            return self.set_models(name, models);
+        };
+        let dir = self
+            .extension_source_dir(&owner)
+            .unwrap_or_else(|| config::extensions_dir(home).join(&owner));
+        let models = crate::models_dev::merge_admission(home, &dir, name, models, enabled);
+        self.set_models(name, models)
     }
 
     /// Replaces the models held under `name` with a background refresh's

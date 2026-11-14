@@ -571,11 +571,21 @@ impl State {
         {
             match handle.join() {
                 Ok(Ok(models)) => {
-                    notices.extend(providers.set_models(&name, models));
+                    notices.extend(providers.set_models_with_catalog(
+                        &self.sources.home,
+                        config::models_dev_enabled(config),
+                        &name,
+                        models,
+                    ));
                 }
                 Ok(Err(error)) => {
                     if let Some(old) = before.get(&name) {
-                        notices.extend(providers.set_models(&name, old.clone()));
+                        notices.extend(providers.set_models_with_catalog(
+                            &self.sources.home,
+                            config::models_dev_enabled(config),
+                            &name,
+                            old.clone(),
+                        ));
                     }
                     // One entry per failed join, mirroring the notice
                     // below, with no name-skip.
@@ -597,7 +607,12 @@ impl State {
                 }
                 Err(_) => {
                     if let Some(old) = before.get(&name) {
-                        notices.extend(providers.set_models(&name, old.clone()));
+                        notices.extend(providers.set_models_with_catalog(
+                            &self.sources.home,
+                            config::models_dev_enabled(config),
+                            &name,
+                            old.clone(),
+                        ));
                     }
                     // One entry per failed join, mirroring the notice
                     // below, with no name-skip.
