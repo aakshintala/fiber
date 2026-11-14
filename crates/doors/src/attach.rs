@@ -456,45 +456,6 @@ fn emit(out: &mut dyn Write, raw: &[u8]) -> Result<(), SessionError> {
     support::framing::write_line(out, raw).map_err(|source| SessionError::StdoutFailed { source })
 }
 
-#[cfg(test)]
-mod stdout_tests {
-    use std::io::{self, Write};
-
-    struct FailedWriter(io::ErrorKind);
-
-    impl Write for FailedWriter {
-        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-            Err(io::Error::from(self.0))
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn emit_uses_shared_stdout_error_decision() {
-        for (kind, code) in [
-            (io::ErrorKind::BrokenPipe, 0),
-            (io::ErrorKind::StorageFull, 1),
-        ] {
-            let error = super::emit(&mut FailedWriter(kind), b"line")
-                .expect_err("the writer failure is retained");
-            let super::SessionError::StdoutFailed { source } = &error else {
-                panic!("emit returns the typed stdout failure");
-            };
-            assert_eq!(source.kind(), kind);
-            assert_eq!(crate::stdout_write_exit_code(source), code);
-            if code != 0 {
-                assert_eq!(
-                    error.to_string(),
-                    format!("stdout could not be written: {source}")
-                );
-            }
-        }
-    }
-}
-
 /// Any command's rejection code and message, read from the answer line's
 /// payload map. Envelope readers pass `envelope.payload` to [`rejection`]
 /// directly; raw-line readers pass the whole line here.
@@ -547,4 +508,43 @@ pub(crate) fn check_version(id: &SessionId, line: &Value) -> Result<(), SessionE
 /// `fiber_exited` arrived before this turn completed.
 fn ended(id: &SessionId) -> SessionError {
     SessionError::SessionEnded { id: id.clone() }
+}
+
+#[cfg(test)]
+mod stdout_tests {
+    use std::io::{self, Write};
+
+    struct FailedWriter(io::ErrorKind);
+
+    impl Write for FailedWriter {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from(self.0))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn emit_uses_shared_stdout_error_decision() {
+        for (kind, code) in [
+            (io::ErrorKind::BrokenPipe, 0),
+            (io::ErrorKind::StorageFull, 1),
+        ] {
+            let error = super::emit(&mut FailedWriter(kind), b"line")
+                .expect_err("the writer failure is retained");
+            let super::SessionError::StdoutFailed { source } = &error else {
+                panic!("emit returns the typed stdout failure");
+            };
+            assert_eq!(source.kind(), kind);
+            assert_eq!(crate::stdout_write_exit_code(source), code);
+            if code != 0 {
+                assert_eq!(
+                    error.to_string(),
+                    format!("stdout could not be written: {source}")
+                );
+            }
+        }
+    }
 }
