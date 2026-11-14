@@ -209,6 +209,8 @@ pub(crate) struct Switching {
     /// factories over it. `None` until the session shares its writer, and
     /// a switch then carries no factories.
     diag: Option<Arc<log::diag::Diag>>,
+    /// The session tracker shared by startup and each model switch.
+    deprecations: Arc<extensions::models_dev::ModelDeprecations>,
 }
 
 /// What a switch publishes to the session's door when it applies.
@@ -300,8 +302,18 @@ impl Switching {
             loaded: Mutex::new(loaded.into_iter().collect()),
             reads,
             diag: None,
+            deprecations: Arc::new(extensions::models_dev::ModelDeprecations::new([])),
             delegates: OnceLock::new(),
         }
+    }
+
+    /// Shares the session's deprecated-model tracker across switches.
+    pub(crate) fn deprecations(
+        mut self,
+        deprecations: Arc<extensions::models_dev::ModelDeprecations>,
+    ) -> Self {
+        self.deprecations = deprecations;
+        self
     }
 
     /// Shares the session's diagnostic writer: a switch prepares observed
@@ -857,6 +869,9 @@ pub(crate) fn prepare(
         }
         shared.publish_resolve(&applied_reference);
     });
+    if let Some(notice) = switching.deprecations.notice_for(&reference) {
+        notices.push(notice);
+    }
     Ok(r#loop::Prepared {
         provider,
         model: r#loop::Model::from_resolved(

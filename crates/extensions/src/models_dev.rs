@@ -1,14 +1,16 @@
 //! Fetches and merges the advisory models.dev catalog over generated provider data.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime};
 
 use config::ModelData;
+use contract::ErrorCode;
+use contract::events::Notice;
 use serde_json::Value;
 
 use crate::Providers;
@@ -185,23 +187,82 @@ pub(crate) fn merge_admission(
     merge(models, &meta, &catalog)
 }
 
+/// Catalog overlays and deprecated references from the installed providers.
+#[derive(Debug, Default)]
+pub struct Applied {
+    /// Notices raised while applying the catalog.
+    pub notices: Vec<Notice>,
+    /// Installed references explicitly marked deprecated by the catalog.
+    pub deprecated: BTreeSet<String>,
+}
+
+impl Applied {
+    /// Removes deprecated models from the installed providers' lists.
+    pub fn retain_listed(&self, providers: &mut Providers) -> Vec<Notice> {
+        let mut notices = Vec::new();
+        for name in providers.names().map(str::to_owned).collect::<Vec<_>>() {
+            let mut data = providers.data(&name);
+            data.models
+                .retain(|model| !self.deprecated.contains(&format!("{name}/{}", model.id)));
+            notices.extend(providers.set_models(&name, data.models));
+        }
+        notices
+    }
+}
+
+/// Tracks deprecated models already noticed in one session.
+pub struct ModelDeprecations {
+    deprecated: BTreeSet<String>,
+    seen: Mutex<bool>,
+}
+
+impl ModelDeprecations {
+    /// Creates an independent per-session tracker from catalog references.
+    pub fn new(references: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            deprecated: references.into_iter().collect(),
+            seen: Mutex::new(false),
+        }
+    }
+
+    /// Returns the session's first notice for a deprecated model reference.
+    pub fn notice_for(&self, reference: &str) -> Option<Notice> {
+        if !self.deprecated.contains(reference) {
+            return None;
+        }
+        let mut seen = support::lock(&self.seen);
+        if *seen {
+            return None;
+        }
+        *seen = true;
+        Some(Notice {
+            code: ErrorCode::ModelDeprecated,
+            message: format!("The model {reference} is deprecated."),
+            extension: None,
+        })
+    }
+}
+
 /// Merge cached catalog fields into installed provider rows without adding models.
 pub fn apply(
     home: &Path,
     enabled: bool,
+    max_age: Option<Duration>,
+    now: SystemTime,
     providers: &mut Providers,
-) -> Vec<contract::events::Notice> {
+) -> Applied {
     if !enabled {
-        return Vec::new();
+        return Applied::default();
     }
     let Some(bytes) = config::read_models_dev(home).ok().flatten() else {
-        return Vec::new();
+        return Applied::default();
     };
     let Ok(catalog) = serde_json::from_slice::<Value>(&bytes) else {
-        return Vec::new();
+        return Applied::default();
     };
+    let fresh = matches!(config::models_dev_age(home, now), Ok(Some(age)) if max_age.is_none_or(|max| age <= max));
     let names: Vec<String> = providers.names().map(str::to_owned).collect();
-    let mut notices = Vec::new();
+    let mut applied = Applied::default();
     for name in names {
         let Ok(dir) = provider_dir(home, providers, &name) else {
             continue;
@@ -216,10 +277,26 @@ pub fn apply(
             continue;
         };
         let mut data = providers.data(&name);
+        if fresh {
+            for model in &data.models {
+                let (source, id) = resolve(&model.id, &meta);
+                if catalog
+                    .get(&source)
+                    .and_then(|provider| provider.get(&id))
+                    .and_then(|entry| entry.get("status"))
+                    .and_then(Value::as_str)
+                    == Some("deprecated")
+                {
+                    applied.deprecated.insert(format!("{name}/{}", model.id));
+                }
+            }
+        }
         data.models = merge(data.models, &meta, &catalog);
-        notices.extend(providers.set_models(&name, data.models));
+        applied
+            .notices
+            .extend(providers.set_models(&name, data.models));
     }
-    notices
+    applied
 }
 
 fn provider_dir(
