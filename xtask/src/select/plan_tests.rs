@@ -295,11 +295,31 @@ fn a_code_pull_request_runs_what_it_selected() {
     );
 }
 
+fn bug_pr_plan(count: u64) -> Plan {
+    plan(
+        "crates",
+        &strings(&["log"]),
+        "pull_request",
+        false,
+        true,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count,
+            reuse: None,
+        },
+    )
+}
+
 #[test]
 fn budget_breach_section_exempts_only_complete_unfenced_bug_prs() {
     let complete = "## Budget breach\nThe change fixes the measured regression.\nBase: 10 bytes\nHead: 12 bytes\n";
     let cases = [
         ("complete section", complete, true),
+        (
+            "second heading ends incomplete section",
+            "## Budget breach\nCause\n## Other\nBase: 10\nHead: 12",
+            false,
+        ),
         ("missing section", "Cause\nBase: 10\nHead: 12", false),
         ("missing Base", "## Budget breach\nCause\nHead: 12", false),
         ("missing Head", "## Budget breach\nCause\nBase: 10", false),
@@ -311,19 +331,7 @@ fn budget_breach_section_exempts_only_complete_unfenced_bug_prs() {
     ];
 
     for (name, body, exempt) in cases {
-        let selected = plan(
-            "crates",
-            &strings(&["log"]),
-            "pull_request",
-            false,
-            true,
-            MutantPlanInput {
-                labels: Vec::new(),
-                count: 0,
-                reuse: None,
-            },
-        );
-        let selected = plan_with_budget_breach_body(selected, true, body);
+        let selected = plan_with_budget_breach_body(bug_pr_plan(0), true, body);
         assert_eq!(selected.jobs["bug_red"], !exempt, "{name}");
     }
 
@@ -357,13 +365,13 @@ fn budget_breach_fences_require_matching_marker_and_sufficient_width() {
         ),
         (
             "short closing fence",
-            "````md\n## Budget breach\nBase: x\nHead: y\n```\n",
+            "````md\n## Budget breach\nBase: x\nHead: y\n```\n## Budget breach\nBase: x\nHead: y\n",
             false,
         ),
         (
             "matching wide close",
-            "~~~md\n## Budget breach\nBase: x\nHead: y\n~~~~\n",
-            false,
+            "~~~md\nexample\n~~~~\n## Budget breach\nBase: x\nHead: y\n",
+            true,
         ),
         (
             "heading after closed fence",
@@ -378,19 +386,7 @@ fn budget_breach_fences_require_matching_marker_and_sufficient_width() {
         ("exact heading", "## Budget breach\nBase: x\nHead: y", true),
     ];
     for (name, body, exempt) in cases {
-        let selected = plan(
-            "crates",
-            &strings(&["log"]),
-            "pull_request",
-            false,
-            true,
-            MutantPlanInput {
-                labels: Vec::new(),
-                count: 0,
-                reuse: None,
-            },
-        );
-        let result = plan_with_budget_breach_body(selected, true, body);
+        let result = plan_with_budget_breach_body(bug_pr_plan(0), true, body);
         assert_eq!(result.jobs["bug_red"], !exempt, "{name}");
     }
 }
@@ -398,18 +394,7 @@ fn budget_breach_fences_require_matching_marker_and_sufficient_width() {
 #[test]
 fn budget_breach_suppression_does_not_change_mutant_or_reuse_selection() {
     let body = "## Budget breach\nBase: 10 bytes\nHead: 12 bytes";
-    let ordinary = plan(
-        "crates",
-        &strings(&["log"]),
-        "pull_request",
-        false,
-        true,
-        MutantPlanInput {
-            labels: Vec::new(),
-            count: 40,
-            reuse: None,
-        },
-    );
+    let ordinary = bug_pr_plan(40);
     let suppressed = plan_with_budget_breach_body(ordinary.clone(), true, body);
     assert!(!suppressed.jobs["bug_red"]);
     assert_eq!(suppressed.jobs["mutants"], ordinary.jobs["mutants"]);
