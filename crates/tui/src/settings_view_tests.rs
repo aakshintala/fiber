@@ -1991,11 +1991,14 @@ fn a_click_focuses_a_row_and_a_blank_line_or_the_header_changes_nothing() {
     let mut settings = tab(&fake, SettingsTab::Models);
     let layout = settings.layout(80, 24, None);
     let second = layout.takes[1];
-    settings.click(Spot::Row(second), &ctx(&fake));
-    assert_eq!(
-        settings.focus,
-        Some(super::Focus::Key("model_lists.models_dev".to_owned()))
-    );
+    let mut by_enter = tab(&fake, SettingsTab::Models);
+    by_enter.focus_line(second, &ctx(&fake));
+    let enter_act = by_enter.key(&Key::Enter, &ctx(&fake));
+    let click_act = settings.click(Spot::Row(second), &ctx(&fake));
+    assert!(matches!(click_act, Act::Stay));
+    assert!(matches!(enter_act, Act::Stay));
+    assert_eq!(settings.focus, by_enter.focus);
+    assert_eq!(settings.page.is_some(), by_enter.page.is_some());
     // The line between two rows is not a row.
     settings.click(Spot::Row(second + 1), &ctx(&fake));
     assert_eq!(
@@ -2590,9 +2593,32 @@ fn deleting_the_list_row_resets_it_and_deleting_in_the_page_removes_an_entry() {
 fn the_pages_clicks_and_wheel_move_its_focus_only_outside_a_field() {
     let fake = Fake::new(rows());
     let mut settings = page(&fake, "scoped_models");
+    let entry = settings.page.as_ref().unwrap().entries[1].clone();
     settings.click(Spot::Row(1), &ctx(&fake));
     assert_eq!(settings.page.as_ref().unwrap().list.selected(), 1);
-    one(&mut settings, &fake, Key::Enter);
+    let draft = settings
+        .page
+        .as_ref()
+        .unwrap()
+        .field
+        .as_ref()
+        .unwrap()
+        .draft
+        .expand();
+    assert_eq!(draft, entry.as_str().unwrap());
+    one(&mut settings, &fake, Key::Char(' '));
+    assert_eq!(
+        settings
+            .page
+            .as_ref()
+            .unwrap()
+            .field
+            .as_ref()
+            .unwrap()
+            .draft
+            .expand(),
+        format!("{draft} ")
+    );
     settings.click(Spot::Row(0), &ctx(&fake));
     assert_eq!(
         settings.page.as_ref().unwrap().list.selected(),
@@ -2602,6 +2628,10 @@ fn the_pages_clicks_and_wheel_move_its_focus_only_outside_a_field() {
     assert!(fake.writes().is_empty());
     settings.wheel(true, &ctx(&fake));
     assert!(fake.writes().is_empty());
+
+    let mut by_space = page(&fake, "scoped_models");
+    one(&mut by_space, &fake, Key::Char(' '));
+    assert!(by_space.page.as_ref().unwrap().field.is_some());
 }
 
 // The theme choices `/theme` opens on.
@@ -4614,7 +4644,7 @@ fn settings_search_controls_save_through_the_existing_control_and_layer() {
     assert_eq!(settings.said, ["Saved to global config.".to_owned()]);
     // A filtered fixed row steps in the schema's order, as on its tab.
     let mut settings = searched(&fake, "thinking");
-    one(&mut settings, &fake, Key::Char(' '));
+    one(&mut settings, &fake, Key::Enter);
     assert_eq!(
         writes(&fake),
         [
@@ -4627,6 +4657,16 @@ fn settings_search_controls_save_through_the_existing_control_and_layer() {
         settings.focus,
         Some(super::Focus::Key("thinking".to_owned()))
     );
+}
+
+#[test]
+fn space_in_search_remains_query_text() {
+    let fake = Fake::new(rows());
+    let mut settings = searched(&fake, "thinking");
+    let before = writes(&fake);
+    one(&mut settings, &fake, Key::Char(' '));
+    assert_eq!(query_of(&settings), "thinking ");
+    assert_eq!(writes(&fake), before);
 }
 
 #[test]
