@@ -367,3 +367,13 @@ crates/main/tests/providers/model_picker_name.rs:46-47	fiber-3961	plan	2026-11-1
 crates/main/tests/providers/model_picker_name.rs:58-58	fiber-3961	plan	2026-11-14T10:31:30Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-3961-catalogue-stall	
 crates/main/tests/providers/model_picker_name.rs:60-60	fiber-3961	plan	2026-11-14T10:31:30Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-3961-catalogue-stall	
 crates/main/tests/providers/model_picker_name.rs:61-62	fiber-3961	plan	2026-11-14T10:31:30Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-3961-catalogue-stall	
+crates/tui/src/layout.rs::split	fiber-688	plan	2026-11-14T10:38:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/chrome.rs::layout_for	fiber-688	plan	2026-11-14T10:38:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/view.rs::render	fiber-688	plan	2026-11-14T10:38:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/view/home.rs::render	fiber-688	plan	2026-11-14T10:38:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/ext/input.rs::Input	fiber-688	plan	2026-11-14T10:38:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/ext/cache.rs::key_of	fiber-688	plan	2026-11-14T10:38:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/ext.rs::Renderer	fiber-688	plan	2026-11-14T10:38:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/src/tui_extensions.rs::input_value	fiber-688	plan	2026-11-14T10:38:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/ext_tests.rs::SlotRenderer	fiber-688	plan	2026-11-14T10:38:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+scripts/check	fiber-688	plan	2026-11-14T10:38:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
