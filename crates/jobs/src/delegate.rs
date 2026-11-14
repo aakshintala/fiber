@@ -929,10 +929,13 @@ pub(crate) mod test_rig {
                         match stdout.read(&mut bytes) {
                             Ok(0) | Err(_) => break,
                             Ok(count) => {
+                                let Some(output) = bytes.get(..count) else {
+                                    break;
+                                };
                                 if out_events
                                     .send(contract::keeper::HostEvent::Output {
                                         stream: contract::keeper::Stream::Out,
-                                        bytes: bytes[..count].to_vec(),
+                                        bytes: output.to_vec(),
                                     })
                                     .is_err()
                                 {
@@ -945,7 +948,9 @@ pub(crate) mod test_rig {
                 let actions = Arc::clone(&self.actions);
                 std::thread::spawn(move || {
                     if let Ok(status) = child.wait() {
-                        let _ = reader.join();
+                        if reader.join().is_err() {
+                            return;
+                        }
                         actions.lock().unwrap().push("exit");
                         let code = status.code();
                         let signal = status.signal();
