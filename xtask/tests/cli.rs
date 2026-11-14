@@ -518,6 +518,10 @@ fn plan_reuses_a_matching_pull_request_run_and_prints_its_identity() {
 #[test]
 fn plan_reports_budget_breach_exemption_and_preserves_mutant_selection() {
     let dir = workspace();
+    git(&dir, &["checkout", "-q", "-b", "pr"]);
+    dir.write("scripts/test-plan.sh", "#!/bin/sh\n");
+    git(&dir, &["add", "scripts/test-plan.sh"]);
+    git(&dir, &["commit", "-qm", "change script path"]);
     let summary = dir.path().join("summary.md");
     std::fs::write(&summary, "").unwrap();
     let summary_path = summary.to_str().unwrap();
@@ -544,7 +548,10 @@ fn plan_reports_budget_breach_exemption_and_preserves_mutant_selection() {
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("budget_breach=true\n"), "{out}");
     assert!(out.contains("jobs={\"bug_red\":false"), "{out}");
+    assert!(out.contains("\"scripts_self_test_macos\":true"), "{out}");
     assert!(out.contains("\"mutants\":true"), "{out}");
+    // `docs/ci.md`, "On every pull request that changes code": CI plans one
+    // shard per 15 mutants, rounded up; 40 mutants therefore produce three.
     assert!(out.contains("shards=[0,1,2]\n"), "{out}");
     assert_eq!(
         std::fs::read_to_string(&summary).unwrap(),
@@ -589,6 +596,10 @@ fn plan_reports_budget_breach_exemption_and_preserves_mutant_selection() {
     let (code, push_out) = xtask(&dir, &push, &[("GITHUB_STEP_SUMMARY", summary_path)], "");
     assert_eq!(code, 0, "{push_out}");
     assert!(!push_out.contains("budget_breach="), "{push_out}");
+    assert!(
+        push_out.contains("\"scripts_self_test_macos\":false"),
+        "{push_out}"
+    );
     assert!(!push_out.contains("jobs={\"bug_red\":true"), "{push_out}");
     assert_eq!(std::fs::read_to_string(&summary).unwrap(), "");
 }
