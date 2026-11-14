@@ -1,7 +1,7 @@
 //! Dynamic shell completion, isolated from the unstable engine API
 //! (`docs/invocation.md`, "Commands and flags").
 
-use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::Path;
 
@@ -41,15 +41,15 @@ fn separate_help_and_version_flags(command: clap::Command) -> clap::Command {
     let has_version_short = command
         .get_arguments()
         .any(|arg| arg.get_id() == "version-flag" && arg.get_short() == Some('v'));
-    let command = command.mut_args(|arg| {
+    let mut command = command.mut_args(|arg| {
         if arg.get_id() == "version-flag" {
             arg.short(None)
         } else {
             arg
         }
     });
-    let command = if has_help {
-        command
+    if has_help {
+        command = command
             .disable_help_flag(true)
             .arg(
                 Arg::new("fiber-completion-help-long")
@@ -60,19 +60,16 @@ fn separate_help_and_version_flags(command: clap::Command) -> clap::Command {
                 Arg::new("fiber-completion-help-short")
                     .short('h')
                     .action(ArgAction::SetTrue),
-            )
-    } else {
-        command
-    };
+            );
+    }
     if has_version_short {
-        command.arg(
+        command = command.arg(
             Arg::new("fiber-completion-version-short")
                 .short('v')
                 .action(ArgAction::SetTrue),
-        )
-    } else {
-        command
+        );
     }
+    command
 }
 
 fn attach_completers(
@@ -174,23 +171,15 @@ fn model_candidates_in(current: &OsStr, home: &Path, workspace: &Path) -> Vec<St
     };
     providers.retain_credentialed(&config);
 
-    let mut ids = std::collections::BTreeMap::<String, (String, bool)>::new();
+    let mut ids = BTreeMap::<String, BTreeSet<String>>::new();
     for provider in providers.names() {
         for model in providers.data(provider).models {
-            match ids.entry(model.id) {
-                Entry::Vacant(entry) => {
-                    entry.insert((provider.to_owned(), false));
-                }
-                Entry::Occupied(mut entry) if entry.get().0 != provider => {
-                    entry.get_mut().1 = true;
-                }
-                Entry::Occupied(_) => {}
-            }
+            ids.entry(model.id).or_default().insert(provider.to_owned());
         }
     }
     let prefix = current.to_string_lossy();
     ids.into_iter()
-        .filter(|(id, (_, ambiguous))| !ambiguous && id.starts_with(prefix.as_ref()))
+        .filter(|(id, seen)| seen.len() == 1 && id.starts_with(prefix.as_ref()))
         .map(|(id, _)| id)
         .collect()
 }

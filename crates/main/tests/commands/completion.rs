@@ -718,8 +718,8 @@ fn extension_remove_completes_installed_names() {
         setup.root.path(),
     );
     assert_eq!(output.status.code(), Some(0));
-    // The engine promises no order (`docs/invocation.md`, "Commands and
-    // flags"), so the probe compares the candidate set.
+    // Completion order is not significant, so the probe compares the
+    // candidate set.
     assert_eq!(
         String::from_utf8_lossy(&output.stdout)
             .lines()
@@ -843,8 +843,8 @@ fn model_values_complete_only_unique_switched_on_ids_on_visible_args() {
             "3",
         ),
     ] {
-        // The engine promises no order (`docs/invocation.md`, "Commands
-        // and flags"), so each probe compares the candidate set.
+        // Completion order is not significant, so each probe compares the
+        // candidate set.
         assert_eq!(
             probe_candidates(&setup, args, index, path)
                 .into_iter()
@@ -918,19 +918,20 @@ fn other_name_values_do_not_complete_installed_extensions() {
 }
 
 #[test]
-fn bash_login_completes_nothing_without_file_names() {
+fn login_values_complete_nothing() {
     let setup = Setup::without_provider();
-    fs::write(setup.root.path().join("a-file"), "").unwrap();
-    // A login value completes neither provider names nor file names.
+    // A login value completes no provider names. File-name fallback is a
+    // shell-side behaviour, pinned by the bash load test running in a
+    // directory that holds a file.
     assert!(
         probe_candidates(
             &setup,
             &["--", "fiber", "login", "provider-prefix"],
             "2",
-            "bash login value"
+            "login value"
         )
         .is_empty(),
-        "bash offered a file name instead of nothing"
+        "login offered a candidate instead of nothing"
     );
 }
 
