@@ -797,11 +797,13 @@ fn automatic_compaction_off_never_compacts() {
 }
 
 #[test]
-fn a_fresh_context_is_unmeasured_until_a_reply_measures_it() {
-    // A trigger of one token is passed by any context. Before the first
-    // reply nothing has measured the context, so the first request is sent;
-    // after the compaction the new context is unmeasured again, so the request
-    // from the note is sent too, and the turn does not compact twice.
+fn a_fresh_context_is_estimated_until_a_reply_measures_it() {
+    // `docs/compaction.md`, "Automatic": before each request Fiber checks
+    // how full the context is, and compacts when it reaches the trigger. A
+    // trigger of one token is passed by the fresh conversation estimate, so
+    // the step's first request is the note request. The following request
+    // gets the next scripted reply; this step runs one compaction, then one
+    // request from the new context.
     let mut session = session(
         vec![called(5), Scripted::text("The note."), said("Done.", 5)],
         CompactionSettings {
@@ -811,14 +813,41 @@ fn a_fresh_context_is_unmeasured_until_a_reply_measures_it() {
     );
 
     let (outcome, lines) = run(&mut session, "hi");
-    assert_kinds(
-        &lines,
-        &[OPENING, STEP, CALL_BODY, STEP, COMPACTED, REPLY, ENDED],
-    );
-
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_eq!(of_kind(&lines, "compaction_started").len(), 1);
-    assert_eq!(session.requests().len(), 3);
+    assert_eq!(session.requests().len(), 2);
+}
+
+#[test]
+fn a_resumed_session_above_the_trigger_compacts_before_its_first_request() {
+    let long_reply = "x".repeat(5_000);
+    let mut session = session(
+        vec![
+            said(&long_reply, 10),
+            Scripted::text("The note."),
+            Scripted::text("Done."),
+        ],
+        settings(),
+    );
+    let (outcome, _) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let previous_requests = session.requests().len();
+
+    session.resume(Vec::new());
+    let looped = session.looped.take().unwrap();
+    session.looped = Some(looped.compaction(settings()));
+    session.inbox.send(delivery("again")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+
+    let lines = session.lines();
+    // `docs/compaction.md`, "Automatic": the resumed estimate is over the
+    // trigger, so the step compacts before its first request: the note
+    // request, then the step's request from the new context.
+    lines
+        .iter()
+        .rposition(|line| line.kind() == EventKind::CompactionStarted)
+        .expect("the resumed turn compacts before its first request");
+    assert_eq!(session.requests().len(), previous_requests + 2);
 }
 
 #[test]
@@ -2284,17 +2313,64 @@ fn a_result_whose_artifact_cannot_be_written_stays_in_the_note_request() {
 
     let (outcome, lines) = run(&mut session, "hi");
 
+    // `docs/compaction.md`, "Overflow" steps 1-2: the overflow arm moves
+    // the last step's results aside and asks for the note on the smaller
+    // request, so the ordered kinds below hold with the notice set aside.
+    // The failed write stays inline with a watcher-only `notice`
+    // (`docs/events.md`, "Durable and ephemeral"); a notice names no position, so it is
+    // asserted as a count, not in order.
+    let without_notice: Vec<Envelope> = lines
+        .iter()
+        .filter(|line| line.kind() != EventKind::Notice)
+        .cloned()
+        .collect();
     assert_kinds(
-        &lines,
+        &without_notice,
         &[
-            OPENING, STEP, CALL_BODY, STEP, REJECTED, COMPACTED, REPLY, ENDED,
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            REJECTED,
+            &[
+                "compaction_started",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "assistant_message_delta",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "compaction_completed",
+                "opening_message",
+            ],
+            REPLY,
+            ENDED,
         ],
     );
+
+    assert_eq!(of_kind(&lines, "notice").len(), 1);
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_eq!(
         of_kind(&lines, "compaction_completed")[0].payload["outcome"],
         "completed"
+    );
+    let notice = &of_kind(&lines, "notice")[0].payload;
+    // `docs/events.md`, "Durable and ephemeral": the failed write is a failure outside
+    // any action, carried as an ephemeral notice; `docs/errors.md`,
+    // "Registry": `io_failed` names the path that refused the write.
+    assert_eq!(notice["code"], "io_failed");
+    assert!(
+        notice["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Could not write artifact artifacts/")
+    );
+    assert!(
+        notice["message"]
+            .as_str()
+            .unwrap()
+            .ends_with(". The result stays in the note request.")
     );
     let requests = session.requests();
     let asked = &requests[2].conversation;
@@ -2407,6 +2483,36 @@ fn an_estimate_exactly_at_the_window_is_sent() {
 }
 
 #[test]
+fn an_estimate_exactly_at_the_window_compacts_automatically() {
+    // 999 prompt tokens and a one-token result: 1,000, exactly the window.
+    // The overflow arm takes only a strictly larger estimate
+    // (`docs/compaction.md`, "Overflow"), so the automatic trigger fires
+    // (`docs/compaction.md`, "Automatic") on the same kinds as an
+    // estimate just below the trigger's window would.
+    let mut session = windowed(
+        vec![
+            called(WINDOW - 1),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        settings(),
+        WINDOW,
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, CALL_BODY, STEP, COMPACTED, REPLY, ENDED],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_eq!(
+        of_kind(&lines, "compaction_started")[0].payload["trigger"],
+        "auto"
+    );
+}
+
+#[test]
 fn automatic_compaction_off_skips_the_size_check() {
     let mut session = windowed(
         vec![called(WINDOW), said("Done.", 50)],
@@ -2424,8 +2530,8 @@ fn automatic_compaction_off_skips_the_size_check() {
 
 #[test]
 fn an_estimate_over_the_window_after_a_compaction_in_the_step_fails_the_turn() {
-    // The window is 1,000, so the automatic trigger is 700: it compacts at
-    // the step's start, and the next request is still estimated over.
+    // The estimate is over the 1,000-token window, so the automatic check
+    // routes the step through overflow compaction before the request.
     let mut session = windowed(
         vec![called(WINDOW), Scripted::text(&"x".repeat(8_000))],
         CompactionSettings {
