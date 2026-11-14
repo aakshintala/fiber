@@ -338,3 +338,8 @@ crates/loop/src/compaction/note.rs	fiber-4684	plan	2026-11-14T13:47:01Z	Amoghs-M
 crates/loop/src/timing_tests.rs	fiber-4684	plan	2026-11-14T13:47:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/lifecycle_tests.rs	fiber-4684	plan	2026-11-14T13:47:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/tests/compaction.rs	fiber-4684	plan	2026-11-14T13:47:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app.rs	fiber-688	plan	2026-11-14T13:56:10Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-688-part6	
+crates/tui/src/app/drag.rs	fiber-688	plan	2026-11-14T13:56:10Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-688-part6	
+crates/tui/src/app/select.rs	fiber-688	plan	2026-11-14T13:56:10Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-688-part6	
+crates/tui/src/app/panel.rs	fiber-688	plan	2026-11-14T13:56:10Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-688-part6	
+crates/tui/src/app/rail.rs	fiber-688	plan	2026-11-14T13:56:10Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-688-part6	
