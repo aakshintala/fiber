@@ -151,6 +151,8 @@ pub(crate) struct Skills {
     list: List,
     /// The two switches' shared state: the switch Space flips.
     focus: ScopeSwitches,
+    /// Whether keyboard activation targets the selected row rather than a switch.
+    row_focused: bool,
     /// The text pane while open.
     text: Option<Text>,
     /// What the last action said, shown below the rows.
@@ -173,6 +175,7 @@ impl Skills {
             focus: ScopeSwitches {
                 focus: SwitchScope::Project,
             },
+            row_focused: true,
             text: None,
             said,
         };
@@ -211,11 +214,12 @@ impl Skills {
         if *key == Key::CtrlG {
             return self.open_file();
         }
-        if *key == Key::Enter {
-            return self.enter(ctx);
-        }
-        if *key == Key::Char(' ') {
-            return self.switch(ctx);
+        if *key == Key::Enter || *key == Key::Char(' ') {
+            return if self.row_focused {
+                self.enter(ctx)
+            } else {
+                self.switch(ctx)
+            };
         }
         let shown = self.shown(ctx);
         if self.list.key(key, self.rows_len(ctx.width), shown) {
@@ -267,13 +271,31 @@ impl Skills {
         Act::Stay
     }
 
-    /// Handles one editing key: ← and → choose the row's switch.
+    /// Cycles the focus stops: row, project switch, everywhere switch.
     pub(crate) fn edit_key(&mut self, edit: &Edit) {
-        self.focus.edit_key(edit);
+        match edit {
+            Edit::Left if self.row_focused => {
+                self.row_focused = false;
+                self.focus.focus = SwitchScope::Everywhere;
+            }
+            Edit::Left if self.focus.focus == SwitchScope::Everywhere => {
+                self.focus.focus = SwitchScope::Project;
+            }
+            Edit::Left => self.row_focused = true,
+            Edit::Right if self.row_focused => {
+                self.row_focused = false;
+                self.focus.focus = SwitchScope::Project;
+            }
+            Edit::Right if self.focus.focus == SwitchScope::Project => {
+                self.focus.focus = SwitchScope::Everywhere;
+            }
+            Edit::Right => self.row_focused = true,
+            _ => {}
+        }
     }
 
-    /// A click: the ✕ closes, a row is selected, and a switch is selected
-    /// and flipped. In the text pane a row scrolls to the line.
+    /// A click: the ✕ closes, a row opens its text, and a switch is
+    /// selected and flipped. In the text pane a row scrolls to the line.
     pub(crate) fn click(&mut self, spot: Spot, ctx: &Ctx<'_>) -> Act {
         match spot {
             Spot::Close => Act::Close,
@@ -285,6 +307,8 @@ impl Skills {
                         .select(at, wrap(&text.raw, ctx.width).len(), shown);
                 } else {
                     self.list.select(at, self.rows_len(ctx.width), shown);
+                    self.row_focused = true;
+                    return self.enter(ctx);
                 }
                 // The new selection's details lines change the frame's
                 // available rows: clamp to the final frame.
@@ -298,6 +322,7 @@ impl Skills {
                 let shown = self.shown(ctx);
                 self.list.select(row, self.rows_len(ctx.width), shown);
                 self.focus.focus = ScopeSwitches::scope_for_at(at);
+                self.row_focused = false;
                 self.switch(ctx)
             }
         }
@@ -476,11 +501,17 @@ impl Skills {
             title: "Skills".to_owned(),
             command: "/skills".to_owned(),
             rows,
-            list: self.list,
+            list: if self.row_focused {
+                self.list
+            } else {
+                self.list.blur()
+            },
             gutter_mark: ratatui::style::Style::default(),
             below,
             field: None,
-            footer: "Enter shows the text · Ctrl+G opens its file".to_owned(),
+            footer:
+                "Enter/Space opens row text or toggles the focused switch · Ctrl+G opens its file"
+                    .to_owned(),
         }
     }
 
@@ -557,7 +588,8 @@ impl Skills {
             String::new()
         };
         let switch = |scope: SwitchScope, at: usize| {
-            let (text, ink) = ScopeSwitches::mark(selected, self.focus.focused() == scope);
+            let (text, ink) =
+                ScopeSwitches::mark(selected, !self.row_focused && self.focus.focused() == scope);
             let mark = (text, None, ink);
             let (word, ink) = if self.on_in_scope(&info.name, scope) {
                 ("[on]", Ink::Heading)

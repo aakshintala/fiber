@@ -775,13 +775,10 @@ fn selection_clamps_two_past_the_end() {
             repository("d"),
         ],
     );
-    skills.click(Spot::Row(6), &ctx(&fake));
-    assert_eq!(skills.list.selected(), 3);
     let context = Ctx {
         height: 4,
         ..ctx(&fake)
     };
-    skills.click(Spot::Row(0), &context);
     for _ in 0..3 {
         skills.key(&Key::Down, &context);
     }
@@ -827,6 +824,35 @@ fn a_switch_click_selects_focuses_and_flips() {
 }
 
 #[test]
+fn left_and_right_cycle_through_row_and_both_switches() {
+    let fake = fake_with(off(&[], &[]));
+    let mut skills = opened(&fake, &[repository("tdd")]);
+    skills.edit_key(&Edit::Left);
+    skills.key(&Key::Char(' '), &ctx(&fake));
+    assert!(
+        switched(&fake)
+            .iter()
+            .any(|change| change.2 == SwitchScope::Everywhere)
+    );
+
+    let row_fake = fake_with(off(&[], &[]));
+    let mut skills = opened(&row_fake, &[repository("tdd")]);
+    skills.edit_key(&Edit::Right);
+    skills.edit_key(&Edit::Left);
+    skills.key(&Key::Char(' '), &ctx(&row_fake));
+    assert!(switched(&row_fake).is_empty());
+    assert_eq!(skills.frame(80, 22).title, "Skill tdd");
+
+    let row_fake = fake_with(off(&[], &[]));
+    let mut skills = opened(&row_fake, &[repository("tdd")]);
+    skills.edit_key(&Edit::Left);
+    skills.edit_key(&Edit::Right);
+    skills.key(&Key::Char(' '), &ctx(&row_fake));
+    assert!(switched(&row_fake).is_empty());
+    assert_eq!(skills.frame(80, 22).title, "Skill tdd");
+}
+
+#[test]
 fn space_and_row_click_open_the_selected_skill_text() {
     let fake = text_fake("Test first.");
     let mut by_space = opened(&fake, &[repository("tdd")]);
@@ -834,14 +860,21 @@ fn space_and_row_click_open_the_selected_skill_text() {
     assert_eq!(by_space.frame(80, 22).title, "Skill tdd");
 
     let mut by_click = opened(&fake, &[repository("tdd")]);
+    by_click.edit_key(&Edit::Right);
     by_click.click(Spot::Row(0), &ctx(&fake));
     assert_eq!(by_click.frame(80, 22).title, "Skill tdd");
+    assert!(switched(&fake).is_empty());
+
+    by_click.key(&Key::Char(' '), &ctx(&fake));
+    assert_eq!(by_click.frame(80, 22).title, "Skill tdd");
+    assert!(switched(&fake).is_empty());
 }
 
 #[test]
 fn a_switch_rereads_and_says_next_turn_start() {
     let fake = fake_with(off(&[], &[]));
     let mut skills = opened(&fake, &[repository("tdd")]);
+    skills.edit_key(&Edit::Right);
     skills.key(&Key::Char(' '), &ctx(&fake));
     let frame = skills.frame(80, 22);
     assert_eq!(
@@ -873,7 +906,8 @@ fn a_shadowed_rows_switch_writes_its_name() {
     win.shadows = vec!["/home/skills/tdd/SKILL.md".to_owned()];
     let mut skills = opened(&fake, &[win, shadowed]);
     // The shadowed row is index 1, past the winner.
-    skills.click(Spot::Row(1), &ctx(&fake));
+    skills.key(&Key::Down, &ctx(&fake));
+    skills.edit_key(&Edit::Right);
     skills.key(&Key::Char(' '), &ctx(&fake));
     assert_eq!(
         switched(&fake),
@@ -907,8 +941,7 @@ fn other_edits_do_nothing() {
         skills.edit_key(&edit);
     }
     skills.key(&Key::Char(' '), &ctx(&fake));
-    assert_eq!(switched(&fake).len(), 1);
-    assert_eq!(switched(&fake)[0].2, SwitchScope::Project);
+    assert!(switched(&fake).is_empty());
 }
 
 /// A seam answering `body` for every skill text.
@@ -1219,13 +1252,7 @@ fn navigation_keeps_the_selected_row_visible_at_small_heights() {
             // Two past the last row clamps to it and stays visible.
             let rows = skills.frame(80, height).rows.len();
             skills.click(Spot::Row(rows + 1), &context);
-            let selected = skills.list.selected();
-            assert_eq!(selected, rows - 1, "height {height} key {key:?}");
-            let frame = skills.frame(80, height);
-            assert!(
-                frame_has_row(&frame, height, selected),
-                "height {height} key {key:?} selected {selected} {frame:?}"
-            );
+            assert_eq!(skills.frame(80, height).title, "Skill d");
         }
     }
 }
@@ -1335,7 +1362,10 @@ fn initial_frame_selects_the_first_skill() {
         "{head:?}"
     );
     assert!(head.contains("[on]"), "{head:?}");
-    assert_eq!(frame.footer, "Enter shows the text · Ctrl+G opens its file");
+    assert_eq!(
+        frame.footer,
+        "Enter/Space opens row text or toggles the focused switch · Ctrl+G opens its file"
+    );
     assert_eq!(frame.below[0], "Checks a diff.");
     // A row with no shadows names none.
     assert!(
@@ -1344,8 +1374,9 @@ fn initial_frame_selects_the_first_skill() {
             .any(|(text, _, _)| text.contains("shadows")),
         "{frame:?}"
     );
-    // Only the selected row marks its focused switch.
-    assert_eq!(frame.rows[0][1].0, "›");
+    // The row stop is focused at open; switches are unmarked.
+    assert!(frame.list.is_gutter());
+    assert_eq!(frame.rows[0][1].0, " ");
     assert_eq!(frame.rows[1][1].0, " ", "{frame:?}");
     assert_eq!(frame.rows[1][4].0, " ", "{frame:?}");
     // The drawn grid: the `› ` gutter on the focused row only, `[on]`
@@ -1376,7 +1407,9 @@ fn initial_frame_selects_the_first_skill() {
     }
     let footer = buf_row(&buf, 21, 160);
     assert!(
-        footer.contains("Enter shows the text · Ctrl+G opens its file"),
+        footer.contains(
+            "Enter/Space opens row text or toggles the focused switch · Ctrl+G opens its file"
+        ),
         "{footer:?}"
     );
     for x in 0..160 {
@@ -1454,7 +1487,9 @@ fn wheel_shifts_three_rows_and_keeps_a_visible_selection() {
         .map(|n| repository(&format!("skill-{n:02}")))
         .collect();
     let mut skills = opened(&fake, &infos);
-    skills.click(Spot::Row(10), &ctx(&fake));
+    for _ in 0..10 {
+        skills.key(&Key::Down, &ctx(&fake));
+    }
     assert_eq!(skills.list.selected(), 10);
     let top = skills.list.top();
     assert!(matches!(skills.wheel(false, &ctx(&fake)), Act::Stay));
@@ -1471,7 +1506,9 @@ fn wheel_move_clears_and_clamp_preserves_what_was_said() {
         .map(|n| repository(&format!("skill-{n:02}")))
         .collect();
     let mut skills = opened(&fake, &infos);
-    skills.click(Spot::Row(10), &ctx(&fake));
+    for _ in 0..10 {
+        skills.key(&Key::Down, &ctx(&fake));
+    }
     skills.said = vec!["noted".to_owned()];
     let top = skills.list.top();
     assert!(matches!(skills.wheel(false, &ctx(&fake)), Act::Stay));

@@ -13,6 +13,8 @@ use crate::configure_fake::{Fake, row};
 use crate::home::Launch;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
+use crate::mouse::TargetId;
+use crate::swapped::Spot;
 use contract::{HubEventKind, events::EventKind};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
@@ -312,6 +314,28 @@ fn file_closed_rereads_the_lists_and_the_text() {
 }
 
 #[test]
+fn row_click_opens_text_and_switch_click_toggles_through_the_app() {
+    let seam = fake();
+    if let Ok(mut texts) = seam.texts.lock() {
+        *texts = Ok("Test first.".to_owned());
+    }
+    let mut app = connected(Arc::clone(&seam));
+    let id = open_skills(&mut app);
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": skills_answer()}),
+    ));
+    app.on_click(TargetId::View(Spot::Row(0)));
+    assert_eq!(
+        app.config_view_screen().map(|frame| frame.title),
+        Some("Skill tdd".to_owned())
+    );
+    app.on_key(Key::Esc, now());
+    app.on_click(TargetId::View(Spot::Switch { row: 0, at: 0 }));
+    assert_eq!(seam.skill_switched.lock().unwrap().len(), 1);
+}
+
+#[test]
 fn left_and_right_reach_the_skills_view_not_the_draft() {
     let seam = fake();
     let mut app = connected(Arc::clone(&seam));
@@ -321,6 +345,7 @@ fn left_and_right_reach_the_skills_view_not_the_draft() {
         serde_json::json!({"command_id": id, "result": skills_answer()}),
     ));
     app.on_key(Key::Down, now());
+    app.on_edit(Edit::Right);
     app.on_edit(Edit::Right);
     app.on_key(Key::Char(' '), now());
     app.on_edit(Edit::Left);
