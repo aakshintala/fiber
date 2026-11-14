@@ -28,7 +28,9 @@ pub(crate) mod baseline;
 mod restore;
 
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions, TryLockError};
+#[cfg(target_os = "linux")]
+use std::fs::OpenOptions;
+use std::fs::{File, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
