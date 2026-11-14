@@ -2494,7 +2494,7 @@ fn delegate_starts_are_refused_from_provider_search_and_effects() {
                 &deliver,
             ) {
                 Admitted::Replied(crate::host::Reply::Delegate(Err((code, message)))) => {
-                    assert_eq!(code, contract::ErrorCode::InvalidArguments);
+                    assert_eq!(code, contract::ErrorCode::NotAvailable);
                     assert_eq!(message, "host.delegate: not available here");
                 }
                 Admitted::Asked { .. }

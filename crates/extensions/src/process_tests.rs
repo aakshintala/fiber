@@ -4544,7 +4544,7 @@ fn process_admission_parity() {
             if allowed {
                 assert_eq!(code, ErrorCode::Closing, "{ran_by}: {name}");
             } else {
-                assert_eq!(code, ErrorCode::InvalidArguments, "{ran_by}: {name}");
+                assert_eq!(code, ErrorCode::NotAvailable, "{ran_by}: {name}");
                 assert_eq!(message, expected, "{ran_by}: {name}");
             }
         }

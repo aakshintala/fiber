@@ -539,6 +539,7 @@ impl DelegateMessage {
             | ErrorCode::CredentialMissing
             | ErrorCode::DelegateSession
             | ErrorCode::DepthExceeded
+            | ErrorCode::NotAvailable
             | ErrorCode::ExtensionFailed
             | ErrorCode::ExtensionIncompatible
             | ErrorCode::ExtensionMissing

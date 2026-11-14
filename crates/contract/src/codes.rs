@@ -87,6 +87,8 @@ codes! {
     DelegateSession = "delegate_session",
     /// A delegate tool at depth 2.
     DepthExceeded = "depth_exceeded",
+    /// A host call was refused from a callback or session that cannot make it.
+    NotAvailable = "not_available",
     /// A command repeats the id of one the session already accepted.
     DuplicateCommand = "duplicate_command",
     /// An extension failed to start or missed its deadline.
