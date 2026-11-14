@@ -2920,10 +2920,14 @@ fn editor_picker_uses_path_order_and_saves_wait_for_gui_editors() {
     use std::os::unix::fs::PermissionsExt;
     let nvim = dir.path().join("nvim");
     std::fs::write(&nvim, "").unwrap();
+    std::fs::set_permissions(&nvim, std::fs::Permissions::from_mode(0o755)).unwrap();
     let code = dir.path().join("code");
     std::fs::write(&code, "").unwrap();
     std::fs::set_permissions(code, std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert_eq!(editors_on_path(Some(dir.path().as_os_str())), ["code"]);
+    assert_eq!(
+        editors_on_path(Some(dir.path().as_os_str())),
+        ["nvim", "code"]
+    );
 
     let fake = Fake::new(row_on(
         "tui.editor",
@@ -2939,30 +2943,21 @@ fn editor_picker_uses_path_order_and_saves_wait_for_gui_editors() {
         row_of(&screen(&settings), "Editor"),
         "› Editor nvim --wait ›"
     );
-    settings.open_dynamic_choices(
-        "tui.editor".to_owned(),
-        Layer::Global,
-        vec![
-            "Default".to_owned(),
-            "nvim".to_owned(),
-            "code".to_owned(),
-            "Other…".to_owned(),
-        ],
-        Some("code --wait".to_owned()),
-        &ctx(&fake),
-    );
+    settings.change_with_path(&ctx(&fake), Some(dir.path().as_os_str()));
+
     let super::Mode::Choices { list, .. } = &settings.mode else {
         panic!("editor choices did not open");
     };
     assert_eq!(
         list.selected(),
-        2,
+        1,
         "saved command did not select its program"
     );
-    settings.choose("code", &ctx(&fake));
-    assert!(
-        writes(&fake).is_empty(),
-        "choosing the already selected program wrote a value"
+    one(&mut settings, &fake, Key::Down);
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "tui.editor", "\"code --wait\"")]
     );
 
     let mut absolute = at(&fake, "tui.editor");
@@ -2979,8 +2974,9 @@ fn editor_picker_uses_path_order_and_saves_wait_for_gui_editors() {
     assert_eq!(list.selected(), 1);
     assert!(screen(&absolute).contains("code  (current)"));
     absolute.choose("code", &ctx(&fake));
-    assert!(
-        writes(&fake).is_empty(),
+    assert_eq!(
+        writes(&fake).len(),
+        1,
         "reselecting the current program wrote a value"
     );
 
@@ -3013,7 +3009,7 @@ fn editor_picker_uses_path_order_and_saves_wait_for_gui_editors() {
     );
     cancel.choose("Other…", &ctx(&fake));
     one(&mut cancel, &fake, Key::Esc);
-    assert_eq!(writes(&fake).len(), 1, "cancel wrote a value");
+    assert_eq!(writes(&fake).len(), 2, "cancel wrote a value");
 
     let empty_fake = Fake::new(row_on(
         "tui.editor",

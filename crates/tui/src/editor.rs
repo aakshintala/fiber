@@ -67,8 +67,7 @@ pub(crate) enum Target {
     Item,
 }
 
-/// The editor command: the configured value when non-empty, else `$VISUAL`,
-/// then `$EDITOR` when non-empty, read through `var`.
+/// The non-empty `$VISUAL` or `$EDITOR` fallback, in priority order.
 pub(crate) fn fallback(var: impl Fn(&str) -> Option<String>) -> Option<(&'static str, String)> {
     ["VISUAL", "EDITOR"].into_iter().find_map(|name| {
         var(name)
@@ -77,6 +76,8 @@ pub(crate) fn fallback(var: impl Fn(&str) -> Option<String>) -> Option<(&'static
     })
 }
 
+/// The editor command: the configured value when non-empty, else `$VISUAL`,
+/// then `$EDITOR` when non-empty, read through `var`.
 pub(crate) fn command(
     configured: Option<String>,
     var: impl Fn(&str) -> Option<String>,

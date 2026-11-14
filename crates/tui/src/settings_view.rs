@@ -1452,6 +1452,10 @@ impl Settings {
 
     /// Enter or Space on the focused row, by its control.
     fn change(&mut self, ctx: &Ctx<'_>) -> Act {
+        self.change_with_path(ctx, std::env::var_os("PATH").as_deref())
+    }
+
+    fn change_with_path(&mut self, ctx: &Ctx<'_>, path: Option<&std::ffi::OsStr>) -> Act {
         self.said.clear();
         let items = self.items();
         let Some(item) = self.focused(&items) else {
@@ -1503,7 +1507,7 @@ impl Settings {
             }
             (SettingControl::Text, _) if row.key == EDITOR => {
                 let mut choices = vec!["Default".to_owned()];
-                choices.extend(editors_on_path(std::env::var_os("PATH").as_deref()));
+                choices.extend(editors_on_path(path));
                 choices.push("Other…".to_owned());
                 self.open_dynamic_choices(row.key, layer, choices, current_text(&row.value), ctx);
                 Act::Stay
