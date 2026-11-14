@@ -2434,7 +2434,9 @@ impl contract::keeper::CommandHost for TestCommandHost {
         });
         std::thread::spawn(move || {
             if let Ok(status) = child.wait() {
-                let _ = reader.join();
+                if reader.join().is_err() {
+                    return;
+                }
                 let _sent =
                     events.send(contract::keeper::HostEvent::Exit(contract::keeper::Exit {
                         code: status.code(),
