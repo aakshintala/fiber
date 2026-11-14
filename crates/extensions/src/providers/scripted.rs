@@ -74,6 +74,7 @@ impl Providers {
             return;
         }
         data.models.push(ModelData {
+            is_new: false,
             id: id.to_owned(),
             name: None,
             protocol: Protocol::Scripted,

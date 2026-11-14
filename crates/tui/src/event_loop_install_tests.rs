@@ -54,6 +54,7 @@ fn loop_on_row(seam: &Arc<Fake>) -> (super::Loop<TestBackend>, Receiver<Input>) 
             default_level: None,
             configured: None,
             roles: Vec::new(),
+            is_new: false,
             name: None,
             price: None,
         }],
