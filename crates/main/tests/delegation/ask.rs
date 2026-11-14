@@ -2352,6 +2352,13 @@ fn an_openrouter_stream_closed_early_records_its_generation_at_once() {
     let setup = Setup::new_with_started_deadline();
     // The first stream names its generation and closes: no usage, no
     // `[DONE]`. The retry completes with the vendor's own figure.
+    support::write_json(
+        &setup.home().join("cache/models.dev/api.json"),
+        &json!({"z-ai": {"glm-5.3-flash": {
+            "cost": {"input": 0.000001, "output": 0.000002},
+            "limit": {"context": 128000}
+        }}}),
+    );
     let early = json!({"id": "gen-early", "object": "chat.completion.chunk", "choices": [
         {"index": 0, "delta": {"role": "assistant", "content": "Hel"}}]});
     let server = support::package::openrouter_ask_server(vec![
@@ -2402,7 +2409,7 @@ fn an_openrouter_stream_closed_early_records_its_generation_at_once() {
         .collect();
     assert_eq!(recorded.len(), 2, "{:?}", run.kinds());
     assert_eq!(recorded[0]["payload"]["generation_id"], "gen-early");
-    // No usage was seen, so the declared prices give 0 for its tokens.
+    // The models.dev fixture declares prices, so no usage gives 0 for its tokens.
     assert_eq!(recorded[0]["payload"]["cost"], json!(0.0));
     assert_eq!(recorded[1]["payload"]["generation_id"], "gen-ok");
     assert_eq!(recorded[1]["payload"]["cost"], json!(0.0000072));
