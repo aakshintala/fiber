@@ -243,11 +243,18 @@ impl Package {
     /// instead of writing another project's data.
     fn sessionless_project(
         name: &str,
+        home: &std::path::Path,
         workspace: &std::path::Path,
     ) -> Result<config::ProjectKey, (contract::ErrorCode, String)> {
         let identity = workspace
             .canonicalize()
             .unwrap_or_else(|_| workspace.to_path_buf());
+        config::ensure_project_layout(home, &identity).map_err(|source| {
+            (
+                source.code(),
+                format!("{name}: cannot migrate project data: {source}"),
+            )
+        })?;
         config::ProjectKey::new(log::project_key(&identity)).map_err(|source| {
             (
                 contract::ErrorCode::InvalidArguments,
@@ -373,7 +380,7 @@ impl Package {
                     Some(host) => (host.home.clone(), host.cwd.clone()),
                     None => Self::cli_context(&options.dir),
                 };
-                let project = Self::sessionless_project(&manifest.name, &workspace)?;
+                let project = Self::sessionless_project(&manifest.name, &home, &workspace)?;
                 let state = super::host::state::StateRegistry::standalone().store(&manifest.name);
                 let data_dirs = contract::events::ExtensionDataDirs {
                     machine: config::extension_data_dir(&home, &slug)

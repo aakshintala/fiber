@@ -48,7 +48,7 @@ fn run_ask(setup: &Setup, args: &[&str]) -> (Option<i32>, Vec<Value>, String) {
 /// The session's log file, from the ask's first stdout line.
 fn events_file(setup: &Setup, lines: &[Value]) -> std::path::PathBuf {
     let workspace = fs::canonicalize(setup.root.path().join("w")).unwrap();
-    let key = workspace.to_string_lossy().replace('/', "-");
+    let key = log::project_key(&workspace);
     setup
         .home()
         .join("projects")
@@ -94,7 +94,7 @@ fn a_failing_session_end_watcher_writes_its_data_directory_and_prints_under_fibe
 /// as the project key names it.
 fn sessions_dir(setup: &Setup) -> std::path::PathBuf {
     let workspace = fs::canonicalize(setup.workspace()).unwrap();
-    let key = workspace.to_string_lossy().replace('/', "-");
+    let key = log::project_key(&workspace);
     setup.home().join("projects").join(key).join("sessions")
 }
 

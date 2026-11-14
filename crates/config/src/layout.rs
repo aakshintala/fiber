@@ -40,6 +40,16 @@ pub fn ensure_project_layout(home: &Path, identity: &Path) -> Result<(), ConfigE
     }
 
     let projects = projects_dir(home);
+    match fs::symlink_metadata(&projects) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(ConfigError::Io {
+                file: projects,
+                source,
+            });
+        }
+        Ok(_) => {}
+    }
     fs::create_dir_all(&projects).map_err(|source| ConfigError::Io {
         file: projects.clone(),
         source,
@@ -292,6 +302,14 @@ mod tests {
         fs::write(home.path().join("layout"), b"2").unwrap();
         ensure_project_layout(home.path(), PathBuf::from("/none").as_path()).unwrap();
         assert_eq!(fs::read(home.path().join("layout")).unwrap(), b"2");
+    }
+
+    #[test]
+    fn layout_marker_without_project_state_keeps_projects_absent() {
+        let home = fakes::TempDir::new("config-layout-no-project");
+        ensure_project_layout(home.path(), PathBuf::from("/none").as_path()).unwrap();
+        assert_eq!(fs::read(home.path().join("layout")).unwrap(), b"2");
+        assert!(!projects_dir(home.path()).exists());
     }
 
     #[test]

@@ -61,7 +61,7 @@ impl Setup {
         let git = fs::canonicalize(self.root.path().join(name).join(".git")).unwrap();
         self.home()
             .join("projects")
-            .join(git.to_string_lossy().replace('/', "-"))
+            .join(log::project_key(&git))
             .join("approvals")
     }
 

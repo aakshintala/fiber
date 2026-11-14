@@ -115,7 +115,7 @@ fn hide_rail(setup: &support::Setup) {
 /// as the project key names it.
 fn sessions(setup: &support::Setup) -> PathBuf {
     let workspace = fs::canonicalize(setup.workspace()).unwrap();
-    let key = workspace.to_string_lossy().replace('/', "-");
+    let key = log::project_key(&workspace);
     setup.home().join("projects").join(key).join("sessions")
 }
 
@@ -1688,7 +1688,7 @@ fn read_optional(path: &Path) -> Option<Vec<u8>> {
 /// a session's credential, never any configuration file.
 fn snapshot_config(setup: &support::Setup) -> ConfigSnapshot {
     let workspace = fs::canonicalize(setup.workspace()).unwrap();
-    let key = workspace.to_string_lossy().replace('/', "-");
+    let key = log::project_key(&workspace);
     ConfigSnapshot {
         global: read_optional(&setup.home().join("config.json")),
         project: read_optional(&setup.home().join("projects").join(key).join("config.json")),

@@ -89,11 +89,11 @@ const LOCK: &str = "session.lock";
 /// The directory for bytes too large to inline.
 const ARTIFACTS: &str = "artifacts";
 
-/// A project's key (`docs/state.md`, "Projects"): its identity path with
-/// every `/` made `-`. `project` is that identity path, symlinks already
-/// resolved.
+/// A project's persisted key (`docs/state.md`, "Projects"): its legacy
+/// slug followed by the first 16 lowercase hex digits of the SHA-256 of its
+/// encoded identity path. `project` has symlinks already resolved.
 pub fn project_key(project: &Path) -> String {
-    project.to_string_lossy().replace('/', "-")
+    support::project_key::project_key(project)
 }
 
 /// The session directory of `id` in `project`: `home/projects/<key>/sessions/<id>`,

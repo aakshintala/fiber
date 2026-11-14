@@ -1430,6 +1430,9 @@ pub(crate) fn assemble_session(
                 &workspace,
                 crate::session_extensions::fetch(&clock),
             ));
+            let identity = worktree::project(&workspace);
+            config::ensure_project_layout(&home, &identity)
+                .map_err(|error| failed(error.code(), error))?;
             let log = match Log::create(&sessions, id.clone(), Arc::clone(&clock)) {
                 Ok(log) => Arc::new(log),
                 Err(e) => {
