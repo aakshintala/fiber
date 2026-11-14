@@ -438,3 +438,4 @@ crates/tui/src/bindings.rs	fiber-4591	plan	2026-11-14T11:26:17Z	Amoghs-MacBook-P
 crates/tui/src/bindings_tests.rs	fiber-4591	plan	2026-11-14T11:26:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/keymap_tests.rs	fiber-4591	plan	2026-11-14T11:26:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/snapshots/tui__rebind__view_tests__keys_focus_project_scrolled_80x24.snap	fiber-4591	plan	2026-11-14T11:26:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/home.rs	fiber-688	grant	2026-11-14T11:33:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-688-part6	
