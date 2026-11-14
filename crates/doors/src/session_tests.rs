@@ -76,9 +76,6 @@ fn stdout_copy_preserves_the_writer_error_kind() {
             .expect_err("the copy returns the original write error");
         assert_eq!(error.kind(), kind);
         assert_eq!(crate::stdout_write_exit_code(&error), code);
-        if code != 0 {
-            assert!(format!("stdout could not be written: {error}").contains(&error.to_string()));
-        }
     }
 }
 

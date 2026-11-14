@@ -195,7 +195,7 @@ fn an_isolated_fork_adopts_before_reading_its_point() {
 /// archive that landed in between.
 #[test]
 fn close_keeps_the_session_lock_until_the_row_is_published() {
-    use super::{close_with_result, pause_before_row_arm};
+    use super::{close, combine_close_result, pause_before_row_arm};
     use contract::SessionId;
     use doors::Session;
 
@@ -235,15 +235,9 @@ fn close_keeps_the_session_lock_until_the_row_is_published() {
         let home = home.path().to_path_buf();
         let dir = dir.clone();
         move || {
-            close_with_result(
-                session,
-                log,
-                &home,
-                &dir,
-                &workspace,
-                &*clock,
-                &keeper,
+            combine_close_result(
                 Ok(0),
+                close(session, log, &home, &dir, &workspace, &*clock, &keeper),
             )
             .expect("closing the session succeeds");
             home

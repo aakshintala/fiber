@@ -1030,15 +1030,17 @@ pub(crate) fn assemble_session(
                 crate::shutdown::start(signals, &cancel, &session, jobs.clone(), reads)
             {
                 servers.stop();
-                return close_with_result(
-                    session,
-                    log,
-                    &home,
-                    dir.path(),
-                    &workspace,
-                    &*clock,
-                    &keeper,
+                return combine_close_result(
                     Ok(code),
+                    close(
+                        session,
+                        log,
+                        &home,
+                        dir.path(),
+                        &workspace,
+                        &*clock,
+                        &keeper,
+                    ),
                 );
             }
             match signals.commit(|| {
@@ -1054,28 +1056,32 @@ pub(crate) fn assemble_session(
             }) {
                 Err(code) => {
                     servers.stop();
-                    return close_with_result(
-                        session,
-                        log,
-                        &home,
-                        dir.path(),
-                        &workspace,
-                        &*clock,
-                        &keeper,
+                    return combine_close_result(
                         Ok(code),
+                        close(
+                            session,
+                            log,
+                            &home,
+                            dir.path(),
+                            &workspace,
+                            &*clock,
+                            &keeper,
+                        ),
                     );
                 }
                 Ok(Err(e)) => {
                     servers.stop();
-                    return close_with_result(
-                        session,
-                        log,
-                        &home,
-                        dir.path(),
-                        &workspace,
-                        &*clock,
-                        &keeper,
+                    return combine_close_result(
                         Err(failed(e.code(), e)),
+                        close(
+                            session,
+                            log,
+                            &home,
+                            dir.path(),
+                            &workspace,
+                            &*clock,
+                            &keeper,
+                        ),
                     );
                 }
                 Ok(Ok(())) => {}
@@ -1100,18 +1106,20 @@ pub(crate) fn assemble_session(
                 && let Err(error) = handed.finish()
             {
                 servers.stop();
-                return close_with_result(
-                    session,
-                    log,
-                    &home,
-                    dir.path(),
-                    &workspace,
-                    &*clock,
-                    &keeper,
+                return combine_close_result(
                     Err(failed(
                         ErrorCode::IoFailed,
                         format!("The keeper did not finish handing over its jobs: {error}."),
                     )),
+                    close(
+                        session,
+                        log,
+                        &home,
+                        dir.path(),
+                        &workspace,
+                        &*clock,
+                        &keeper,
+                    ),
                 );
             }
             let code = run_turn(
@@ -1193,15 +1201,17 @@ pub(crate) fn assemble_session(
                 },
             );
             servers.stop();
-            close_with_result(
-                session,
-                log,
-                &home,
-                dir.path(),
-                &workspace,
-                &*clock,
-                &keeper,
+            combine_close_result(
                 Ok(code),
+                close(
+                    session,
+                    log,
+                    &home,
+                    dir.path(),
+                    &workspace,
+                    &*clock,
+                    &keeper,
+                ),
             )
         }
         fresh @ Start::New { .. }
@@ -1566,15 +1576,17 @@ pub(crate) fn assemble_session(
             let reads = switching.reads();
             if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
                 servers.stop();
-                return close_with_result(
-                    session,
-                    log,
-                    &home,
-                    dir.path(),
-                    &workspace,
-                    &*clock,
-                    &keeper,
+                return combine_close_result(
                     Ok(code),
+                    close(
+                        session,
+                        log,
+                        &home,
+                        dir.path(),
+                        &workspace,
+                        &*clock,
+                        &keeper,
+                    ),
                 );
             }
             let inbox_wake = session.inbox_wake();
@@ -1775,15 +1787,17 @@ pub(crate) fn assemble_session(
                 }
             }
             servers.stop();
-            close_with_result(
-                session,
-                log,
-                &home,
-                dir.path(),
-                &workspace,
-                &*clock,
-                &keeper,
+            combine_close_result(
                 Ok(code),
+                close(
+                    session,
+                    log,
+                    &home,
+                    dir.path(),
+                    &workspace,
+                    &*clock,
+                    &keeper,
+                ),
             )
         }
     }
@@ -1845,15 +1859,11 @@ pub(crate) fn report(signals: &doors::Signals, failure: Failure) -> i32 {
 #[path = "session_command_tests.rs"]
 mod tests;
 
-/// Ends a session process, however it ran: closes the door side, then
-/// appends the session's `recent.jsonl` row with what it stopped on, its
-/// last `session_status` (`docs/state.md`, "Fiber home").
-/// A session `close` deleted, never prompted, leaves nothing behind.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "closing carries the session lifecycle inputs and the process result together"
-)]
-fn close_with_result(
+/// Closes the door side, then appends the session's `recent.jsonl` row
+/// with what it stopped on, its last `session_status` (`docs/state.md`,
+/// "Fiber home"). A session `close` deleted, never prompted, leaves
+/// nothing behind.
+fn close(
     session: Session,
     log: Arc<Log>,
     home: &Path,
@@ -1861,8 +1871,7 @@ fn close_with_result(
     workspace: &Path,
     clock: &dyn contract::clock::Clock,
     keeper: &crate::keeper::Host,
-    result: Result<i32, Failure>,
-) -> Result<i32, Failure> {
+) -> std::io::Result<()> {
     keeper.send_shutdown();
     let status = log
         .latest("session_status")
@@ -1876,7 +1885,7 @@ fn close_with_result(
     // A row that cannot be written loses only the listing, not the log.
     hub::append_exited(home, dir, workspace, status, clock).unwrap_or(());
     drop(log);
-    combine_close_result(result, copy_result)
+    copy_result
 }
 
 fn combine_close_result(
@@ -1887,11 +1896,13 @@ fn combine_close_result(
         (Err(failure), _) => Err(failure),
         (Ok(code), _) if code != 0 => Ok(code),
         (Ok(_), Ok(())) => Ok(0),
-        (Ok(_), Err(error)) if doors::stdout_write_exit_code(&error) == 0 => Ok(0),
-        (Ok(_), Err(source)) => {
-            let error = doors::SessionError::StdoutFailed { source };
-            Err(failed(error.code(), error))
-        }
+        (Ok(_), Err(source)) => match doors::stdout_write_exit_code(&source) {
+            0 => Ok(0),
+            _ => {
+                let error = doors::SessionError::StdoutFailed { source };
+                Err(failed(error.code(), error))
+            }
+        },
     }
 }
 

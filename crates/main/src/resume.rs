@@ -355,44 +355,22 @@ fn in_launch_project(dir: &Path, in_project: &dyn Fn(&str) -> bool) -> bool {
     in_project(&started.workspace)
 }
 
-/// Whether `ask --resume` refuses the session as unknown: a missing worktree
-/// with a recorded repository is recreated first, so it resumes even outside
-/// the launch project; anything else must pass the launch-project predicate.
-/// The recreatable check runs first, so `in_project` is not called for a
-/// recreatable worktree.
-fn attach_stdout_exit_code(source: io::Error) -> i32 {
-    if doors::stdout_write_exit_code(&source) == 0 {
-        0
-    } else {
-        let error = doors::SessionError::StdoutFailed { source };
-        crate::fail(failed(error.code(), error))
-    }
-}
-
-#[cfg(test)]
-mod stdout_exit_tests {
-    use super::attach_stdout_exit_code;
-    use std::io;
-
-    #[test]
-    fn attach_stdout_exit_code_quiets_only_broken_pipe() {
-        assert_eq!(
-            attach_stdout_exit_code(io::Error::from(io::ErrorKind::BrokenPipe)),
-            0
-        );
-        assert_eq!(
-            attach_stdout_exit_code(io::Error::other("writer failed")),
-            1
-        );
-    }
-}
-
 fn resume_refused(
     recorded: Option<&Worktree>,
     dir: &Path,
     in_project: &dyn Fn(&str) -> bool,
 ) -> bool {
     !recreatable(recorded) && !in_launch_project(dir, in_project)
+}
+
+fn attach_stdout_exit_code(source: io::Error) -> i32 {
+    match doors::stdout_write_exit_code(&source) {
+        0 => 0,
+        _ => {
+            let error = doors::SessionError::StdoutFailed { source };
+            crate::fail(failed(error.code(), error))
+        }
+    }
 }
 
 /// The failure for a resume that finds the log held: a keeper-held lock
@@ -797,3 +775,21 @@ fn finish(
 #[cfg(test)]
 #[path = "resume_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod stdout_exit_tests {
+    use super::attach_stdout_exit_code;
+    use std::io;
+
+    #[test]
+    fn attach_stdout_exit_code_quiets_only_broken_pipe() {
+        assert_eq!(
+            attach_stdout_exit_code(io::Error::from(io::ErrorKind::BrokenPipe)),
+            0
+        );
+        assert_eq!(
+            attach_stdout_exit_code(io::Error::other("writer failed")),
+            1
+        );
+    }
+}
