@@ -446,3 +446,5 @@ docs/invocation.md:334-334	fiber-4786	plan	2026-11-14T00:48:40Z	roundhouse-7010-
 crates/loop/src/skills.rs:150-151	fiber-4774	plan	2026-11-14T01:01:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4774-skills-home-overlap	
 crates/loop/src/skills_tests.rs:1509-1510	fiber-4774	plan	2026-11-14T01:01:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4774-skills-home-overlap	
 docs/system-prompt.md:325-325	fiber-4774	plan	2026-11-14T01:01:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4774-skills-home-overlap	
+crates/cli/src/models_tests.rs	fiber-4636	plan	2026-11-14T01:03:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/setup_tests.rs	fiber-4636	plan	2026-11-14T01:03:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
