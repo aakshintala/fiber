@@ -377,3 +377,15 @@ crates/tui/src/ext.rs::Renderer	fiber-688	plan	2026-11-14T10:38:27Z	roundhouse-7
 crates/main/src/tui_extensions.rs::input_value	fiber-688	plan	2026-11-14T10:38:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/ext_tests.rs::SlotRenderer	fiber-688	plan	2026-11-14T10:38:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/check	fiber-688	plan	2026-11-14T10:38:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/src/completion.rs	fiber-452	plan	2026-11-14T10:54:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/main.rs	fiber-452	plan	2026-11-14T10:54:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/completion_tests.rs	fiber-452	plan	2026-11-14T10:54:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/commands/completion.rs	fiber-452	plan	2026-11-14T10:54:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/completion	fiber-452	plan	2026-11-14T10:54:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+Cargo.toml	fiber-452	plan	2026-11-14T10:54:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/Cargo.toml	fiber-452	plan	2026-11-14T10:54:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+Cargo.lock	fiber-452	plan	2026-11-14T10:54:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/invocation.md	fiber-452	plan	2026-11-14T10:54:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/dependencies.md	fiber-452	plan	2026-11-14T10:54:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/models.rs	fiber-452	plan	2026-11-14T10:54:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/lib.rs	fiber-452	plan	2026-11-14T10:54:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
