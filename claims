@@ -359,3 +359,5 @@ crates/cli/src/setup_tests.rs	fiber-4636	plan	2026-11-14T01:03:22Z	Amoghs-MacBoo
 crates/config/src/keys.rs	fiber-4583	grant	2026-11-14T01:08:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4583-settings-rows	
 crates/main/src/settings_metadata_tests.rs	fiber-4583	grant	2026-11-14T01:08:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4583-settings-rows	
 crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4583	grant	2026-11-14T01:08:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4583-settings-rows	
+crates/jobs/src/tool.rs	fiber-4817	plan	2026-11-14T01:11:15Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/jobs/src/tool_tests.rs	fiber-4817	plan	2026-11-14T01:11:15Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
