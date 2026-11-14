@@ -715,12 +715,12 @@ fn build_inner(
         // SAFETY: The closure runs between fork and exec, so it only runs
         // syscalls: clearing CLOEXEC on the inherited active hold with
         // `fcntl`, then Landlock `restrict_self` and seccomp `apply_filter`
-        // on a policy prepared before fork. Success performs no allocation:
-        // the ruleset is consumed through the borrowed policy and the
-        // seccomp program only borrowed, never moved or freed. A failure
-        // writes the raw errno to the sentinel, without formatting or
-        // allocation, and returns it, so spawn aborts and the command
-        // never runs unconfined.
+        // on a policy prepared before fork. Success performs no allocation
+        // and takes no lock: the ruleset is consumed through the borrowed
+        // policy and the seccomp program only borrowed, never moved or
+        // freed. A failure writes the raw errno to the sentinel, without
+        // formatting or allocation, and returns it, so spawn aborts and the
+        // command never runs unconfined.
         // See `docs/code-quality.md`, "`unsafe`".
         unsafe {
             use std::os::unix::process::CommandExt as _;
