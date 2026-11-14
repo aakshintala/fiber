@@ -332,9 +332,6 @@ crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4675	plan	2026-11-13
 crates/main/tests/screens/journeys.rs	fiber-4675	plan	2026-11-13T23:11:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screens/terminal.rs	fiber-4675	plan	2026-11-13T23:11:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tui.md	fiber-4675	plan	2026-11-13T23:11:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tools/src/shell/detached.rs	fiber-4816	plan	2026-11-13T23:39:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tools/src/shell/detached_tests.rs	fiber-4816	plan	2026-11-13T23:53:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/workflow.md	fiber-4816	plan	2026-11-13T23:53:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 .github/workflows/ci.yml:152-154	fiber-4801	plan	2026-11-14T00:05:25Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4801-mutants-reuse-xtask	
 .github/workflows/ci.yml:161-163	fiber-4801	plan	2026-11-14T00:05:25Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4801-mutants-reuse-xtask	
 .github/workflows/ci.yml:174-174	fiber-4801	plan	2026-11-14T00:05:25Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4801-mutants-reuse-xtask	
