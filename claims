@@ -492,3 +492,15 @@ crates/cli/src/doctor/startup.rs	fiber-4701	plan	2026-11-14T09:49:02Z	roundhouse
 crates/cli/src/doctor/doctor_tests.rs	fiber-4701	plan	2026-11-14T09:49:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/model-routing.md	fiber-4701	plan	2026-11-14T09:49:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/errors.md	fiber-4701	plan	2026-11-14T09:49:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/cli/src/models.rs	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/cli/src/models_tests.rs	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/cli/src/model_lists.rs	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/src/providers.rs	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/src/providers/placeholders.rs	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/contract/src/events/context.rs	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing.md	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/ci.md	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/workflow.md	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/code-quality.md	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/dependencies.md	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/performance.md	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
