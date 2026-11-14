@@ -85,6 +85,13 @@ fn keys_clicks_and_session_only() {
     assert_eq!(picker.key(&Key::Char('w'), 24), Pick::Stay);
     assert_eq!(picker.frame().list.selected(), 1);
     assert_eq!(
+        picker.key(&Key::Char(' '), 24),
+        Pick::Choose {
+            label: "home".to_owned(),
+            session_only: false
+        }
+    );
+    assert_eq!(
         picker.key(&Key::Enter, 24),
         Pick::Choose {
             label: "home".to_owned(),

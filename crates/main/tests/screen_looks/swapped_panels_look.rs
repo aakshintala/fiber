@@ -1107,7 +1107,7 @@ fn skills_setup() -> Setup {
 /// Only the row's own cells are read: the view does not span the full
 /// grid, so a side panel may draw to its right.
 fn skill_row(grid: &Grid) -> Option<(u16, String)> {
-    let want = "review · Checks a diff. · repo · seen · this project›[on] · everywhere [on] · shadows personal";
+    let want = "review · Checks a diff. · repo · seen · this project [on] · everywhere [on] · shadows personal";
     let y = find_row(grid, "shadows personal")?;
     let x = col_at_or(grid, y, "review · Checks a diff.")?;
     let end = x.checked_add(want.chars().count() as u16)?;
@@ -1119,11 +1119,11 @@ fn skill_row(grid: &Grid) -> Option<(u16, String)> {
 }
 
 /// Whether `text` reads the doc's row: `review · Checks a diff. · repo ·
-/// seen · this project›[on] · everywhere [on] · shadows personal`, the
-/// mark "›" on the focused this-project switch's side and a space on the
-/// other, the shadows clause past both switches.
+/// seen · this project [on] · everywhere [on] · shadows personal`, the
+/// row marker outside the cells, with both switches unmarked, and the
+/// shadows clause past both switches.
 fn reads_as_skill_row(text: &str) -> bool {
-    text == "review · Checks a diff. · repo · seen · this project›[on] · everywhere [on] · shadows personal"
+    text == "review · Checks a diff. · repo · seen · this project [on] · everywhere [on] · shadows personal"
 }
 
 /// The `/skills` screen once every property the test reads has drawn:
@@ -1147,11 +1147,11 @@ fn skills_ready(grid: &Grid) -> bool {
     else {
         return false;
     };
-    // The mark is bold on the focused side and a plain space on the
-    // other; the switch follows it.
+    // The row is focused at open, so both switch marks are plain spaces
+    // and remain unmarked.
     let project = grid.cell(at_project, y);
     let everywhere = grid.cell(at_everywhere, y);
-    if project.symbol != "›" || !project.bold || everywhere.symbol != " " || everywhere.bold {
+    if project.symbol != " " || project.bold || everywhere.symbol != " " || everywhere.bold {
         return false;
     }
     if !(switch_weighs(grid, y, at_project + 1, "[on]")
@@ -1159,10 +1159,17 @@ fn skills_ready(grid: &Grid) -> bool {
     {
         return false;
     }
-    let Some(footer) = find_row(grid, "Enter shows the text · Ctrl+G opens its file") else {
+    let Some(footer) = find_row(
+        grid,
+        "Enter/Space opens row text or toggles the focused switch · Ctrl+G opens its file",
+    ) else {
         return false;
     };
-    is_dim(grid, footer, "Enter shows the text · Ctrl+G opens its file")
+    is_dim(
+        grid,
+        footer,
+        "Enter/Space opens row text or toggles the focused switch · Ctrl+G opens its file",
+    )
 }
 
 #[test]
@@ -1183,7 +1190,7 @@ fn the_skills_view_matches_the_doc() {
     assert_eq!(grid.cell(x - 2, y).symbol, "›");
     assert!(!grid.cell(x - 2, y).inverse);
     assert!(is_plain_of_reverse(&grid, y, "review · Checks a diff. · "));
-    assert!(is_plain_of_reverse(&grid, y, "›[on] · everywhere [on]"));
+    assert!(is_plain_of_reverse(&grid, y, "[on] · everywhere [on]"));
     // `[on]` is bold and not dim on both switches.
     assert!(is_bold(&grid, y, "[on]"));
     let after = |label: &str| col_at(&grid, y, label) + label.chars().count() as u16;
@@ -1205,11 +1212,14 @@ fn the_skills_view_matches_the_doc() {
     // The last row is the doc's hint line, dim.
     assert!(!grid.contents.contains("↑↓ move"), "{}", grid.contents);
     assert!(!grid.contents.contains("choose a switch"));
-    let footer = row_with(&grid, "Enter shows the text · Ctrl+G opens its file");
+    let footer = row_with(
+        &grid,
+        "Enter/Space opens row text or toggles the focused switch · Ctrl+G opens its file",
+    );
     assert!(is_dim(
         &grid,
         footer,
-        "Enter shows the text · Ctrl+G opens its file"
+        "Enter/Space opens row text or toggles the focused switch · Ctrl+G opens its file"
     ));
     run.write(b"\x03\x03\r");
     assert_eq!(run.wait().status.code(), Some(0));
@@ -1264,7 +1274,7 @@ fn narrow_skills_setup() -> Setup {
 /// footer — so a partial redraw can't satisfy it (`docs/testing/screens.md`,
 /// "Screens"). Only then is the view ready for Enter.
 fn narrow_skills_ready(grid: &Grid) -> bool {
-    let want = "review · Checks a diff. · repo · seen · this project›[on] · everywhere [on] · shadows personal…";
+    let want = "review · Checks a diff. · repo · seen · this project [on] · everywhere [on] · shadows personal…";
     let Some(y) = find_row(grid, "shadows personal…") else {
         return false;
     };
@@ -1295,7 +1305,7 @@ fn narrow_skills_ready(grid: &Grid) -> bool {
     };
     let project = grid.cell(at_project, y);
     let everywhere = grid.cell(at_everywhere, y);
-    if project.symbol != "›" || !project.bold || everywhere.symbol != " " || everywhere.bold {
+    if project.symbol != " " || project.bold || everywhere.symbol != " " || everywhere.bold {
         return false;
     }
     if !(switch_weighs(grid, y, at_project + 1, "[on]")
@@ -1312,10 +1322,17 @@ fn narrow_skills_ready(grid: &Grid) -> bool {
     if loser_row.contains("shadows") {
         return false;
     }
-    let Some(footer) = find_row(grid, "Enter shows the text · Ctrl+G opens its file") else {
+    let Some(footer) = find_row(
+        grid,
+        "Enter/Space opens row text or toggles the focused switch · Ctrl+G opens its file",
+    ) else {
         return false;
     };
-    is_dim(grid, footer, "Enter shows the text · Ctrl+G opens its file")
+    is_dim(
+        grid,
+        footer,
+        "Enter/Space opens row text or toggles the focused switch · Ctrl+G opens its file",
+    )
 }
 
 /// Every property read after Enter has drawn: both complete shadow paths in

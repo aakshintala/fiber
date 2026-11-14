@@ -965,7 +965,7 @@ impl Settings {
                 Act::Stay
             }
             Mode::Choices { names, list, .. } => {
-                if *key == Key::Enter {
+                if key.is_enter_or_space() {
                     let name = names.get(list.selected()).cloned();
                     return name.map_or(Act::Stay, |name| self.choose(&name, ctx));
                 }
@@ -1007,7 +1007,11 @@ impl Settings {
             }
             return Act::Open(file.unwrap_or_else(|| ctx.seam.global_file()));
         }
-        if *key == Key::Enter || *key == Key::Char(' ') {
+        if *key == Key::Char(' ') && self.search.is_some() {
+            self.mutate_query(ctx, |query| query.insert(' '));
+            return Act::Stay;
+        }
+        if key.is_enter_or_space() {
             return self.change(ctx);
         }
         if *key == Key::Tab {
@@ -1270,6 +1274,7 @@ impl Settings {
                 && at <= page.entries.len()
             {
                 self.page_select(at, ctx);
+                self.page_key(&Key::Enter, ctx);
             }
             return Act::Stay;
         }
@@ -1281,9 +1286,13 @@ impl Settings {
                 None => Act::Stay,
             },
             (Spot::Row(at), Mode::Rows) => {
+                let layout = self.layout(ctx.width, ctx.height, ctx.usage);
+                if !matches!(layout.lines.get(at), Some(Line::Item(_))) {
+                    return Act::Stay;
+                }
                 self.focus_line(at, ctx);
                 self.said.clear();
-                Act::Stay
+                self.change(ctx)
             }
             (Spot::Row(_), Mode::Field(_)) => Act::Stay,
             // Only the model picker draws cells with targets of their
@@ -1756,7 +1765,9 @@ impl Settings {
         if *key == Key::Esc {
             self.page = None;
             self.said.clear();
-        } else if *key == Key::Enter {
+        } else if key.is_enter_or_space()
+            && (!page.objects || *key == Key::Enter || at == page.entries.len())
+        {
             let entry = page.entries.get(at);
             let mut draft = Draft::default();
             draft.set(&entry.map(entry_path).unwrap_or_default());

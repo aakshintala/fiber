@@ -1414,6 +1414,20 @@ fn clicking_a_file_list_row_chooses_that_file() {
 }
 
 #[test]
+fn space_opens_the_selected_file_but_not_a_folder_or_rule() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    open_files_from_totals(&mut app, 120, 35);
+    let first = ranked(app.panel_state().changes())[0].0.to_owned();
+    let request = command(app.on_key(Key::Char(' '), now()));
+    assert_eq!(request["args"]["command"], diff_command(&first));
+
+    for at in [0, 3, 4] {
+        assert_eq!(app.session_view_file_enter(at), Effect::None);
+    }
+}
+
+#[test]
 fn enter_on_a_folder_or_rule_row_sends_no_diff_request() {
     let mut app = files_attached(120, 35);
     many_changes(&mut app, 2);

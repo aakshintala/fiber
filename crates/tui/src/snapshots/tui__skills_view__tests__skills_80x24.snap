@@ -4,7 +4,7 @@ expression: "text.join(\"\\n\")"
 ---
  Skills  /skills                                                     Esc returns
   tdd · Test … · repo · seen · this project [on] · everywhere [on] · shadows …
-› tdd · Mine. · personal · hidden · this project›[on] · everywhere [on]
+› tdd · Mine. · personal · hidden · this project [on] · everywhere [on]
   recall · Remember. · memory · hidden · this project [on] · everywhere [on]
   built · Built in. · built in · hidden · this project [on] · everywhere [off]
 
@@ -25,4 +25,4 @@ expression: "text.join(\"\\n\")"
 
 Mine.
 shadowed by /w/.fiber/skills/tdd/SKILL.md
-Enter shows the text · Ctrl+G opens its file
+Enter/Space opens row text or toggles the focused switch · Ctrl+G opens its file

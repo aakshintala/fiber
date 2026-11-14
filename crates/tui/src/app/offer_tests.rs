@@ -678,6 +678,29 @@ fn going_home_drops_the_offer() {
     assert!(!app.offer_open());
 }
 
+#[test]
+fn space_sends_the_same_answer_as_enter_on_send() {
+    let mut app = offered();
+    press(&mut app, Key::Down);
+    press(&mut app, Key::Down);
+    press(&mut app, Key::Down);
+    let Effect::Send(lines) = press(&mut app, Key::Char(' ')) else {
+        panic!("Space on Send replies");
+    };
+    assert_eq!(sent(Effect::Send(lines)).len(), 1);
+    assert!(!app.offer_open());
+}
+
+#[test]
+fn clicking_an_item_opens_its_source() {
+    let mut app = with_source();
+    assert!(matches!(
+        app.on_click(crate::mouse::TargetId::Offer(crate::offer::Spot::Item(0))),
+        Effect::Send(_)
+    ));
+    assert!(app.offer.source_open());
+}
+
 /// A wheel report at (`col`, `row`): down steps toward the tail, up away
 /// from it, over the conversation column the offer takes.
 fn wheel(col: u16, row: u16, down: bool) -> Mouse {

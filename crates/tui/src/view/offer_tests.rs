@@ -246,6 +246,23 @@ fn an_extension_with_its_version_and_diff() {
 }
 
 #[test]
+fn item_header_has_a_click_target_separate_from_its_choices() {
+    let app = offered(json!([server("db", false)]), 80, 24);
+    let (_, targets) = draw(&app, 80, 24);
+    let item = rect_of(&targets, Spot::Item(0)).expect("item header target");
+    let chip = rect_of(
+        &targets,
+        Spot::Choice {
+            item: 0,
+            decision: OfferDecision::Approve,
+        },
+    )
+    .expect("choice target");
+    assert!(item.y < chip.y);
+    assert!(rect_of(&targets, Spot::Send).is_some());
+}
+
+#[test]
 fn three_items_scrolled_to_send() {
     let mut app = offered(
         json!([server("a", false), server("b", false), server("c", false)]),
