@@ -243,7 +243,7 @@ fn record_approval(
             .open(PathBuf::from(lock_name))
             .map_err(|e| approve_hint(&e.to_string()))?;
         lock_file.lock().map_err(|e| approve_hint(&e.to_string()))?;
-        let declared = config::declared(workspace)?;
+        let declared = config::declared(workspace, home)?;
         match declared.mcp_servers.get(name) {
             Some(current) if current == expected => current.clone(),
             _ => {
@@ -298,6 +298,7 @@ pub(crate) fn run_add(
         terminal,
     } = reads;
     let Streams { out: _, err } = streams;
+    config::refuse_overlapping_repository(home, workspace, layer)?;
     check_name(name)?;
     // Exactly one transport: both a url and a command, or neither, is a
     // usage error, as are `-e` and `--secret` with a url.
@@ -485,6 +486,7 @@ pub(crate) fn run_remove(
     name: &str,
     _streams: Streams<'_>,
 ) -> Result<(), CliError> {
+    config::refuse_overlapping_repository(home, workspace, layer)?;
     let (_, project) = project_of(home, workspace)?;
     if remove_entry(home, workspace, &project, layer, "mcp.servers", name)? {
         return Ok(());

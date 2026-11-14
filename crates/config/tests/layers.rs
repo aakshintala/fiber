@@ -5,6 +5,7 @@
 mod common;
 
 use std::fs;
+use std::os::unix::fs::symlink;
 
 use common::Setup;
 use config::{CredentialSource, ProjectKey, Source, reviewer_notes};
@@ -995,4 +996,54 @@ fn reviewer_notes_keeps_whitespace_and_versions_any_byte_change() {
     let notes = reviewer_notes(&setup.home(), &common::key()).unwrap();
     assert_eq!(notes.global.text, "  padded  \n");
     assert_ne!(notes.global.version, first);
+}
+
+#[test]
+fn symlinked_workspace_fiber_matching_home_skips_repository_layer() {
+    let setup = Setup::new();
+    let home = setup.home();
+    fs::create_dir_all(&home).unwrap();
+    fs::write(home.join("config.json"), r#"{"model":"global/model"}"#).unwrap();
+    symlink(&home, setup.workspace().join(".fiber")).unwrap();
+    let loaded = config::Config::load(config::Sources {
+        home: home.clone(),
+        workspace: setup.workspace(),
+        project: common::key(),
+        overrides: Vec::new(),
+    })
+    .unwrap();
+    assert_eq!(loaded.text("model", None).as_deref(), Some("global/model"));
+    assert_eq!(
+        loaded.get("model", None),
+        Some((
+            json!("global/model"),
+            Source::Global(home.join("config.json"))
+        ))
+    );
+    assert!(loaded.notices().is_empty(), "{:?}", loaded.notices());
+}
+
+#[test]
+fn home_at_workspace_fiber_is_not_read_as_repository_layer() {
+    let setup = Setup::new();
+    let workspace = setup.workspace();
+    let home = workspace.join(".fiber");
+    fs::create_dir_all(&home).unwrap();
+    fs::write(home.join("config.json"), r#"{"model":"global/model"}"#).unwrap();
+    let loaded = config::Config::load(config::Sources {
+        home: home.clone(),
+        workspace,
+        project: common::key(),
+        overrides: Vec::new(),
+    })
+    .unwrap();
+    assert_eq!(loaded.text("model", None).as_deref(), Some("global/model"));
+    assert_eq!(
+        loaded.get("model", None),
+        Some((
+            json!("global/model"),
+            Source::Global(home.join("config.json"))
+        ))
+    );
+    assert!(loaded.notices().is_empty(), "{:?}", loaded.notices());
 }

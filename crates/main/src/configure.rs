@@ -202,9 +202,11 @@ fn layer_to(layer: Layer) -> config::Layer {
 }
 
 /// One key's row.
-fn row(config: &Config, info: config::SettingInfo) -> SettingRow {
+fn row(config: &Config, info: config::SettingInfo, repository_available: bool) -> SettingRow {
     let scope = match info.scope {
-        config::WriteScope::Any { repo } => WriteScope::Any { repo },
+        config::WriteScope::Any { repo } => WriteScope::Any {
+            repo: repo && repository_available,
+        },
         config::WriteScope::GlobalOnly => WriteScope::GlobalOnly,
         config::WriteScope::RepoOnly => WriteScope::RepoOnly,
         config::WriteScope::PersonFiles => WriteScope::PersonFiles,
@@ -293,10 +295,11 @@ impl tui::Configure for Seam {
         overrides: &[String],
     ) -> Result<Vec<SettingRow>, ConfigureError> {
         let config = self.load_with(workspace, overrides)?;
+        let repository_available = !config::same_repository_home(workspace, &self.home);
         Ok(config
             .settings()
             .into_iter()
-            .map(|info| row(&config, info))
+            .map(|info| row(&config, info, repository_available))
             .collect())
     }
 

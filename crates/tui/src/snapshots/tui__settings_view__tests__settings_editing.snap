@@ -7,22 +7,22 @@ Changes save automatically
 
  Appearance   Notifications   Models   Permissions   Sessions   Advanced
 
-› Compaction tokens      4000005
+  Hover         [x] On
 
-  Repository extensions  Default ›
+  Rail width    ▕█████░░░▏ 30% of screen width · 24 columns  project
 
-  Skills                 Open /skills ›
+  Theme         Default
 
-  MCP servers            Open /mcp ›
+› Editor        vim5
 
-
-
-
+  Key bindings  Open /keys ›
 
 
 
 
 
-About compaction.tokens.
-compaction.tokens · using the default · changing compaction.tokens needs a reloa
+
+
+About tui.editor.
+tui.editor · set in project · Applies when the terminal starts again.
 Enter save · Esc cancel

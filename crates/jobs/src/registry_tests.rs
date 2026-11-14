@@ -2250,6 +2250,182 @@ fn restore_failures_record_nothing_and_leave_the_id_free() {
     drop(ok.end);
 }
 
+fn detached_started(id: &str, path: &std::path::Path) -> contract::events::JobStarted {
+    contract::events::JobStarted {
+        job_id: JobId(id.into()),
+        tool: Some("shell".into()),
+        extension: None,
+        description: "sleep 60".into(),
+        output_path: path.to_string_lossy().into_owned(),
+        pgid: None,
+        start_time: None,
+        kind: Some(contract::events::JobKind::Detached),
+    }
+}
+
+#[test]
+fn restore_detached_keeps_existing_log_and_writes_no_second_start() {
+    let dir = TempDir::new("fiber-jobs-restore-detached");
+    let root = dir.path().join("detached");
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("d_1_0.log");
+    std::fs::write(&path, b"kept\\n").unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    let recorder = Arc::new(Recorder::default());
+    let registry = Registry::new(dir.path().join("artifacts"), clock, recorder.clone());
+    let opened = registry
+        .restore_detached(detached_started("j_detached", &path), Stop(Box::new(|| {})))
+        .unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"kept\\n");
+    assert_eq!(opened.started.job_id, JobId("j_detached".into()));
+    assert!(
+        recorder.events().is_empty(),
+        "restore writes no job_started"
+    );
+    assert!(registry.list_text().contains("j_detached detached running"));
+    opened.end.0(contract::events::JobCompleted {
+        job_id: JobId("wrong_id".into()),
+        status: contract::events::Outcome::Failed,
+        error: None,
+        process: None,
+        output_tail: None,
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
+    });
+    assert!(
+        registry.list_text().contains("j_detached detached failed"),
+        "Registry::restore_detached must attach its recorded job id to End"
+    );
+}
+
+#[test]
+fn restore_detached_admits_paths_outside_root_and_missing_files() {
+    let dir = TempDir::new("fiber-jobs-restore-detached-path");
+    let root = dir.path().join("detached");
+    std::fs::create_dir(&root).unwrap();
+    let external = dir.path().join("outside.log");
+    std::fs::write(&external, b"untouched").unwrap();
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    std::fs::write(nested.join("x.log"), b"nested").unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    let registry = Registry::new(
+        dir.path().join("artifacts"),
+        clock,
+        Arc::new(Recorder::default()),
+    );
+    for (id, path) in [
+        ("j_outside", external.clone()),
+        ("j_nested", nested.join("x.log")),
+        ("j_missing", root.join("missing.log")),
+        ("j_root", root.to_path_buf()),
+    ] {
+        let result = registry.restore_detached(
+            detached_started(id, &path),
+            Stop(Box::new(|| panic!("restore must not signal"))),
+        );
+        let opened = result.unwrap_or_else(|error| panic!("{} rejected: {error}", path.display()));
+        assert_eq!(opened.path, path);
+        assert!(registry.contains(id), "restore omitted {id}");
+        drop(opened.end);
+    }
+    assert_eq!(std::fs::read(&external).unwrap(), b"untouched");
+    for id in ["j_outside", "j_nested", "j_missing", "j_root"] {
+        assert!(registry.list_text().contains(id), "{id} was not listed");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_admits_fifo_without_opening_or_blocking() {
+    let dir = TempDir::new("fiber-jobs-restore-detached-fifo");
+    let root = dir.path().join("detached");
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("d_fifo.log");
+    fakes::fifo(&path);
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    let registry = Arc::new(Registry::new(
+        dir.path().join("artifacts"),
+        clock,
+        Arc::new(Recorder::default()),
+    ));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let stop_calls = Arc::clone(&calls);
+    let (result_tx, result_rx) = mpsc::channel();
+    let worker_registry = Arc::clone(&registry);
+    let worker_path = path.clone();
+    let worker = thread::spawn(move || {
+        let result = worker_registry.restore_detached(
+            detached_started("j_fifo", &worker_path),
+            Stop(Box::new(move || {
+                stop_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })),
+        );
+        result_tx.send(result).unwrap();
+    });
+    let result = match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&result_rx) {
+        Ok(result) => result,
+        Err(_) => {
+            // If append-open regresses to blocking on the FIFO, open both
+            // ends to release the worker before failing the bounded test.
+            let _release = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap();
+            let result = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                .recv(&result_rx)
+                .expect("the FIFO reader releases the append-open");
+            if let Ok(opened) = result {
+                drop(opened.end);
+            }
+            worker.join().unwrap();
+            panic!("restore blocked while opening a FIFO");
+        }
+    };
+    worker.join().unwrap();
+    let opened = result.unwrap_or_else(|error| panic!("FIFO admission failed: {error}"));
+    assert!(registry.contains("j_fifo"));
+    assert!(registry.list_text().contains("j_fifo"));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    drop(opened.end);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn restore_detached_admits_symlink_path_without_following_it() {
+    use std::os::unix::fs::symlink;
+
+    let dir = TempDir::new("fiber-jobs-restore-detached-symlink");
+    let root = dir.path().join("detached");
+    std::fs::create_dir(&root).unwrap();
+    let target = dir.path().join("outside.log");
+    std::fs::write(&target, b"unchanged").unwrap();
+    let path = root.join("d_link.log");
+    symlink(&target, &path).unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    let registry = Registry::new(
+        dir.path().join("artifacts"),
+        clock,
+        Arc::new(Recorder::default()),
+    );
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let stop_calls = Arc::clone(&calls);
+    let result = registry.restore_detached(
+        detached_started("j_symlink", &path),
+        Stop(Box::new(move || {
+            stop_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })),
+    );
+    let opened = result.unwrap_or_else(|error| panic!("symlink admission failed: {error}"));
+    assert!(registry.contains("j_symlink"));
+    assert!(registry.list_text().contains("j_symlink"));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    drop(opened.end);
+    assert_eq!(std::fs::read(&target).unwrap(), b"unchanged");
+}
+
 #[test]
 fn restore_refuses_a_job_already_recorded() {
     let (dir, registry) = world();
@@ -2276,4 +2452,229 @@ fn restore_refuses_a_job_already_recorded() {
     let (stop, _) = stop_counter();
     assert!(registry.restore(clash, stop, None, false).is_err());
     drop((first.end, opened.end));
+}
+
+// `restore_detached_rows`: fold the event log and admit only outstanding,
+// live detached groups whose recorded identity still matches.
+
+#[cfg(unix)]
+fn restore_row_line(seq: u64, event: contract::events::Event) -> contract::Envelope {
+    contract::Envelope {
+        kind: contract::events::EventKind::from_name(event.kind()),
+        session_id: contract::SessionId("restore-rows".into()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(contract::Seq(seq)),
+        payload: event.payload().unwrap(),
+    }
+}
+
+#[cfg(unix)]
+fn restore_row_started(id: &str, pgid: u32) -> contract::events::JobStarted {
+    let mut started = detached_started(id, std::path::Path::new("detached.log"));
+    started.pgid = Some(pgid);
+    started.start_time = support::group::start_time(pgid);
+    started
+}
+
+#[cfg(unix)]
+fn live_restore_row_group() -> (std::process::Child, fakes::Watchdog) {
+    use std::os::unix::process::CommandExt as _;
+    let mut command = std::process::Command::new("sleep");
+    command.arg("60").process_group(0);
+    let child = command.spawn().expect("start a controlled process group");
+    let watchdog = fakes::Watchdog::group(child.id());
+    (child, watchdog)
+}
+
+#[cfg(unix)]
+fn reap_restore_row_group(mut child: std::process::Child, watchdog: fakes::Watchdog) {
+    drop(watchdog);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = tx.send(child.wait());
+    });
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&rx)
+        .expect("the restored-row child was reaped")
+        .expect("wait for the restored-row child");
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_returns_the_valid_detached_start() {
+    let (_dir, registry) = world();
+    let (child, watchdog) = live_restore_row_group();
+    let pgid = child.id();
+    let started = restore_row_started("j_rows_valid", pgid);
+    let rows = registry.restore_detached_rows(
+        [Ok::<_, ()>(restore_row_line(
+            1,
+            contract::events::Event::JobStarted(started.clone()),
+        ))],
+        |_| (Stop(Box::new(|| {})), "tracked"),
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.started, started);
+    assert_eq!(rows[0].1, "tracked");
+    drop(rows);
+    reap_restore_row_group(child, watchdog);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_uses_the_event_kind_discriminator() {
+    let (_dir, registry) = world();
+    let (child, watchdog) = live_restore_row_group();
+    let started = restore_row_started("j_rows_kind", child.id());
+    let line = restore_row_line(1, contract::events::Event::JobStarted(started));
+    assert_eq!(line.kind(), contract::events::EventKind::JobStarted);
+    let mut calls = 0;
+    let rows = registry.restore_detached_rows([Ok::<_, ()>(line)], |_| {
+        calls += 1;
+        (Stop(Box::new(|| {})), ())
+    });
+    assert_eq!(rows.len(), 1);
+    assert_eq!(calls, 1);
+    drop(rows);
+    reap_restore_row_group(child, watchdog);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_omits_a_live_non_detached_start() {
+    let (_dir, registry) = world();
+    let (child, watchdog) = live_restore_row_group();
+    let mut started = restore_row_started("j_rows_plain", child.id());
+    started.kind = None;
+    let mut calls = 0;
+    let rows = registry.restore_detached_rows(
+        [Ok::<_, ()>(restore_row_line(
+            1,
+            contract::events::Event::JobStarted(started),
+        ))],
+        |_| {
+            calls += 1;
+            (Stop(Box::new(|| {})), ())
+        },
+    );
+    assert!(rows.is_empty());
+    assert_eq!(calls, 0);
+    reap_restore_row_group(child, watchdog);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_removes_a_start_with_its_matching_completion() {
+    let (_dir, registry) = world();
+    let (child, watchdog) = live_restore_row_group();
+    let started = restore_row_started("j_rows_done", child.id());
+    let completed = JobCompleted {
+        job_id: started.job_id.clone(),
+        status: Outcome::Completed,
+        error: None,
+        process: None,
+        output_tail: None,
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
+    };
+    let mut calls = 0;
+    let rows = registry.restore_detached_rows(
+        [
+            Ok::<_, ()>(restore_row_line(
+                1,
+                contract::events::Event::JobStarted(started),
+            )),
+            Ok(restore_row_line(
+                2,
+                contract::events::Event::JobCompleted(completed),
+            )),
+        ],
+        |_| {
+            calls += 1;
+            (Stop(Box::new(|| {})), ())
+        },
+    );
+    assert!(rows.is_empty());
+    assert_eq!(calls, 0);
+    reap_restore_row_group(child, watchdog);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_omits_a_group_with_pgid_one() {
+    let (_dir, registry) = world();
+    let started = restore_row_started("j_rows_one", 1);
+    let mut calls = 0;
+    let rows = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        registry.restore_detached_rows(
+            [Ok::<_, ()>(restore_row_line(
+                1,
+                contract::events::Event::JobStarted(started),
+            ))],
+            |_| {
+                calls += 1;
+                (Stop(Box::new(|| {})), ())
+            },
+        )
+    }));
+    assert!(rows.is_ok(), "pgid 1 must not panic or be admitted");
+    assert!(rows.unwrap().is_empty());
+    assert_eq!(calls, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_omits_a_reaped_group_without_calling_parts() {
+    let (_dir, registry) = world();
+    let (mut child, watchdog) = live_restore_row_group();
+    let pgid = child.id();
+    drop(watchdog);
+    child
+        .wait()
+        .expect("reap the child once before testing its group");
+    assert!(!support::group::alive(pgid));
+    let started = restore_row_started("j_rows_dead", pgid);
+    let mut calls = 0;
+    let rows = registry.restore_detached_rows(
+        [Ok::<_, ()>(restore_row_line(
+            1,
+            contract::events::Event::JobStarted(started),
+        ))],
+        |_| {
+            calls += 1;
+            (Stop(Box::new(|| {})), ())
+        },
+    );
+    assert!(rows.is_empty());
+    assert_eq!(calls, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_omits_a_live_group_with_a_mismatched_start_time() {
+    let (_dir, registry) = world();
+    let (child, watchdog) = live_restore_row_group();
+    let mut started = restore_row_started("j_rows_identity", child.id());
+    let actual_start_time = started
+        .start_time
+        .expect("the live process group has a readable start time");
+    started.start_time = Some(actual_start_time.wrapping_add(1));
+    let mut calls = 0;
+    let rows = registry.restore_detached_rows(
+        [Ok::<_, ()>(restore_row_line(
+            1,
+            contract::events::Event::JobStarted(started),
+        ))],
+        |_| {
+            calls += 1;
+            (Stop(Box::new(|| {})), ())
+        },
+    );
+    assert!(rows.is_empty());
+    assert_eq!(calls, 0);
+    reap_restore_row_group(child, watchdog);
 }

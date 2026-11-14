@@ -86,6 +86,29 @@ fn settings_reads_the_session_workspaces_project_layer() {
 }
 
 #[test]
+fn settings_omit_repository_scope_when_workspace_fiber_is_home() {
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    let home = workspace.join(".fiber");
+    fs::create_dir_all(&home).unwrap_or_else(|e| panic!("mkdir: {e}"));
+    let seam = Seam::new(home);
+    assert_eq!(
+        row(&seam, &workspace, "compaction.tokens").scope,
+        WriteScope::Any { repo: false }
+    );
+    // Union settings declare Any without repository writes. With both
+    // operands false, repository scope must remain unavailable.
+    assert_eq!(
+        row(&seam, &workspace, "skills.disabled").scope,
+        WriteScope::Any { repo: false }
+    );
+    assert_eq!(
+        row(&seam, &dirs.workspace("two"), "compaction.tokens").scope,
+        WriteScope::Any { repo: true }
+    );
+}
+
+#[test]
 fn settings_carry_the_schemas_presentation_and_control() {
     let dirs = Dirs::new();
     let seam = Seam::new(dirs.home());

@@ -1,11 +1,14 @@
 //! The driver shell `builtin` returns runs a command.
 
+use std::os::unix::process::CommandExt;
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
-use contract::events::Event;
+use contract::events::{Event, JobCompleted, JobKind, JobStarted, Outcome};
+use contract::jobs::Jobs as _;
 use contract::tool::Cancel;
 use fakes::Deadline;
 use fakes::NoSkills;
@@ -24,6 +27,70 @@ struct Quiet;
 
 impl Emit for Quiet {
     fn emit(&self, _event: &Event) {}
+}
+
+fn event_line(session: &str, seq: u64, event: &Event) -> contract::Envelope {
+    contract::Envelope {
+        kind: contract::events::EventKind::from_name(event.kind()),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: seq,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(contract::Seq(seq)),
+        payload: event.payload().unwrap(),
+    }
+}
+
+fn live_group() -> (Child, u32, u64, fakes::Watchdog) {
+    let mut command = Command::new("sh");
+    command
+        .arg("-c")
+        .arg("exec sleep 60")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let child = command.spawn().unwrap();
+    let pgid = child.id();
+    let watchdog = fakes::Watchdog::group(pgid);
+    let deadline = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    fakes::wait_until("detached test group is alive", deadline, move || {
+        fakes::group_alive(pgid)
+    });
+    let start_time = support::group::start_time(pgid).expect("group leader identity");
+    (child, pgid, start_time, watchdog)
+}
+
+fn started_detached(
+    id: &str,
+    path: &std::path::Path,
+    pgid: Option<u32>,
+    start_time: Option<u64>,
+) -> Event {
+    Event::JobStarted(JobStarted {
+        job_id: contract::JobId(id.to_owned()),
+        tool: Some("shell".to_owned()),
+        extension: None,
+        description: "detached test process".to_owned(),
+        output_path: path.to_string_lossy().into_owned(),
+        pgid,
+        start_time,
+        kind: Some(JobKind::Detached),
+    })
+}
+
+fn completed_detached(id: &str) -> Event {
+    Event::JobCompleted(JobCompleted {
+        job_id: contract::JobId(id.to_owned()),
+        status: Outcome::Failed,
+        error: None,
+        process: None,
+        output_tail: None,
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
+    })
 }
 
 /// The delegates the `builtin` calls declare tools for: no model
@@ -71,6 +138,14 @@ pub(super) fn skills() -> Arc<dyn contract::skills::Skills> {
 /// within half of nextest's 120 s kill. A passing run never waits on it;
 /// it only bounds a hang.
 const CALL_WITHIN: Duration = Duration::from_secs(10);
+const LOG_ADMISSION_FAILURE_IDS: [&str; 6] = [
+    "j_missing_file",
+    "j_directory",
+    "j_nested",
+    "j_outside",
+    "j_symlink",
+    "j_fifo",
+];
 
 /// Runs one builtin tool call on its own thread and returns its output.
 /// Calling code that blocks is a wait too (`docs/testing.md`, "Waits and
@@ -85,6 +160,329 @@ fn ran(
         Deadline::after(CALL_WITHIN),
         move || tool.run(&arguments, &Never, &Quiet),
     )
+}
+
+#[test]
+fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools() {
+    let root = fakes::TempDir::new("fiber-builtin-detached-restore");
+    let home = root.path().join("home");
+    let detached = home.join("detached");
+    std::fs::create_dir_all(&detached).unwrap();
+    let session = log::SessionDir::new(
+        &log::sessions_dir(&home, root.path()),
+        &contract::SessionId("s_test".into()),
+    );
+    std::fs::create_dir_all(session.path()).unwrap();
+    let valid_path = detached.join("d_valid.log");
+    let contradicted_path = detached.join("d_contradicted.log");
+    let ended_path = detached.join("d_ended.log");
+    let unreadable_path = detached.join("d_unreadable.log");
+    std::fs::write(&valid_path, b"kept\n").unwrap();
+    std::fs::write(&contradicted_path, b"").unwrap();
+    std::fs::write(&ended_path, b"").unwrap();
+    std::fs::write(&unreadable_path, b"").unwrap();
+    let (mut valid_child, valid_pgid, valid_start, valid_watchdog) = live_group();
+    let mut admission_groups: Vec<_> = (0..LOG_ADMISSION_FAILURE_IDS.len())
+        .map(|_| live_group())
+        .collect();
+    let (mut contradicted_child, contradicted_pgid, contradicted_start, contradicted_watchdog) =
+        live_group();
+    let (mut ended_child, ended_pgid, ended_start, ended_watchdog) = live_group();
+    let (mut unreadable_child, unreadable_pgid, _, unreadable_watchdog) = live_group();
+    let (mut dead_child, dead_pgid, dead_start, dead_watchdog) = live_group();
+    let (mut no_row_child, no_row_pgid, _, no_row_watchdog) = live_group();
+    assert!(fakes::kill_group(dead_pgid, "KILL").unwrap());
+    let _status = dead_child.wait().expect("reap dead process");
+    assert!(fakes::group_empties(
+        dead_pgid,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    dead_watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let missing_path = detached.join("d_missing.log");
+    let directory_path = detached.join("d_directory.log");
+    std::fs::create_dir(&directory_path).unwrap();
+    let nested_root = detached.join("nested");
+    std::fs::create_dir(&nested_root).unwrap();
+    let nested_path = nested_root.join("d_nested.log");
+    std::fs::write(&nested_path, b"nested").unwrap();
+    let outside_path = home.join("outside.log");
+    std::fs::write(&outside_path, b"outside").unwrap();
+    let symlink_path = detached.join("d_symlink.log");
+    std::os::unix::fs::symlink(&outside_path, &symlink_path).unwrap();
+    let fifo_path = detached.join("d_fifo.log");
+    #[cfg(unix)]
+    fakes::fifo(&fifo_path);
+    let rows = [
+        event_line(
+            "s_test",
+            1,
+            &started_detached("j_valid", &missing_path, None, None),
+        ),
+        event_line(
+            "s_test",
+            2,
+            &started_detached("j_valid", &valid_path, Some(valid_pgid), Some(valid_start)),
+        ),
+        event_line(
+            "s_test",
+            3,
+            &started_detached(
+                "j_contradicted",
+                &contradicted_path,
+                Some(contradicted_pgid),
+                Some(contradicted_start.wrapping_add(1)),
+            ),
+        ),
+        event_line(
+            "s_test",
+            4,
+            &Event::JobStarted(JobStarted {
+                job_id: contract::JobId("j_ordinary".into()),
+                tool: Some("shell".into()),
+                extension: None,
+                description: "ordinary".into(),
+                output_path: valid_path.to_string_lossy().into_owned(),
+                pgid: Some(valid_pgid),
+                start_time: Some(valid_start),
+                kind: Some(JobKind::Job),
+            }),
+        ),
+        event_line(
+            "s_test",
+            5,
+            &started_detached("j_no_pgid", &valid_path, None, Some(valid_start)),
+        ),
+        event_line(
+            "s_test",
+            6,
+            &started_detached(
+                "j_missing_file",
+                &missing_path,
+                Some(admission_groups[0].1),
+                Some(admission_groups[0].2),
+            ),
+        ),
+        event_line(
+            "s_test",
+            7,
+            &started_detached(
+                "j_completed",
+                &ended_path,
+                Some(ended_pgid),
+                Some(ended_start),
+            ),
+        ),
+        event_line("s_test", 8, &completed_detached("j_completed")),
+        event_line(
+            "s_test",
+            9,
+            &started_detached(
+                "j_unreadable",
+                &unreadable_path,
+                Some(unreadable_pgid),
+                None,
+            ),
+        ),
+        event_line(
+            "s_test",
+            10,
+            &started_detached("j_dead", &ended_path, Some(dead_pgid), Some(dead_start)),
+        ),
+        event_line(
+            "s_test",
+            11,
+            &started_detached(
+                "j_directory",
+                &directory_path,
+                Some(admission_groups[1].1),
+                Some(admission_groups[1].2),
+            ),
+        ),
+        event_line(
+            "s_test",
+            12,
+            &started_detached(
+                "j_nested",
+                &nested_path,
+                Some(admission_groups[2].1),
+                Some(admission_groups[2].2),
+            ),
+        ),
+        event_line(
+            "s_test",
+            13,
+            &started_detached(
+                "j_outside",
+                &outside_path,
+                Some(admission_groups[3].1),
+                Some(admission_groups[3].2),
+            ),
+        ),
+        event_line(
+            "s_test",
+            14,
+            &started_detached(
+                "j_symlink",
+                &symlink_path,
+                Some(admission_groups[4].1),
+                Some(admission_groups[4].2),
+            ),
+        ),
+        #[cfg(unix)]
+        event_line(
+            "s_test",
+            15,
+            &started_detached(
+                "j_fifo",
+                &fifo_path,
+                Some(admission_groups[5].1),
+                Some(admission_groups[5].2),
+            ),
+        ),
+    ];
+    let mut log_text = String::new();
+    for row in rows {
+        log_text.push_str(&serde_json::to_string(&row).unwrap());
+        log_text.push('\n');
+    }
+    std::fs::write(session.path().join("events.jsonl"), log_text).unwrap();
+
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let artifacts = root.path().join("artifacts");
+    std::fs::create_dir(&artifacts).unwrap();
+    let registry = jobs::Registry::new(
+        artifacts,
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let (_tools, _infos, _driver, _forget, _images) = super::builtin(
+        root.path().join("fiber-stub"),
+        &home,
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &registry,
+        &Arc::new(tools::PathLocks::new()),
+        None,
+        &delegates(),
+        skills(),
+    )
+    .unwrap();
+    let jobs_tool = _tools
+        .iter()
+        .find(|(_, tool)| tool.definition().name == "jobs")
+        .map(|(_, tool)| Arc::clone(tool))
+        .expect("jobs tool is registered");
+    let listed = ran(
+        Arc::clone(&jobs_tool),
+        serde_json::json!({"action":"list"})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    let text = fakes::text_of(&listed);
+    assert!(text.contains("j_valid"), "restore is synchronous: {text}");
+    for admitted in LOG_ADMISSION_FAILURE_IDS {
+        assert!(
+            text.contains(admitted),
+            "invalid log path dropped {admitted}: {text}"
+        );
+    }
+    assert!(
+        text.contains("j_unreadable"),
+        "unknown identity remains listed for review: {text}"
+    );
+    for omitted in [
+        "j_contradicted",
+        "j_ordinary",
+        "j_no_pgid",
+        "j_completed",
+        "j_dead",
+        "no_row",
+    ] {
+        assert!(
+            !text.contains(omitted),
+            "{omitted} was not restored: {text}"
+        );
+    }
+    let identities = registry.owned_identities();
+    assert_eq!(identities.len(), 7, "every surviving path case is owned");
+    let mut admission_groups = admission_groups
+        .drain(..)
+        .map(|(mut child, pgid, start_time, watchdog)| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _sent = tx.send(child.wait());
+            });
+            (pgid, start_time, watchdog, rx)
+        })
+        .collect::<Vec<_>>();
+    for id in LOG_ADMISSION_FAILURE_IDS {
+        let args = serde_json::json!({"action":"stop", "job_id":id});
+        let effects = jobs_tool.effects(args.as_object().unwrap()).unwrap();
+        assert!(
+            effects.declared.effects.is_empty(),
+            "confirmed identity stop is direct for {id}"
+        );
+        let stopped = ran(Arc::clone(&jobs_tool), args.as_object().unwrap().clone());
+        assert!(
+            stopped.error.is_none(),
+            "jobs stop failed for {id}: {}",
+            fakes::text_of(&stopped)
+        );
+        let (pgid, _, watchdog, reaped) = admission_groups.remove(0);
+        assert!(
+            fakes::group_empties(pgid, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+            "jobs stop did not reach {id}'s process group"
+        );
+        let _status = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&reaped)
+            .expect("reap stopped admission-failure process")
+            .expect("wait admission-failure process");
+        watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    }
+    assert!(
+        fakes::group_alive(valid_pgid),
+        "restore never signals survivors"
+    );
+    assert!(
+        fakes::group_alive(contradicted_pgid),
+        "contradicted rows are dropped without signal"
+    );
+    assert!(
+        fakes::group_alive(ended_pgid),
+        "completed rows are dropped without signal"
+    );
+    assert!(
+        fakes::group_alive(unreadable_pgid),
+        "unreadable identity is retained without signalling"
+    );
+    assert!(
+        fakes::group_alive(no_row_pgid),
+        "a live process with no durable start row is not restored or signalled"
+    );
+
+    for pgid in [
+        valid_pgid,
+        contradicted_pgid,
+        ended_pgid,
+        unreadable_pgid,
+        no_row_pgid,
+    ] {
+        assert!(fakes::kill_group(pgid, "KILL").unwrap());
+    }
+    let _valid_status = valid_child.wait().expect("reap valid process");
+    let _contradicted_status = contradicted_child
+        .wait()
+        .expect("reap contradicted process");
+    let _ended_status = ended_child.wait().expect("reap ended process");
+    let _unreadable_status = unreadable_child.wait().expect("reap unreadable process");
+    valid_watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    contradicted_watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    ended_watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    unreadable_watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let _no_row_status = no_row_child.wait().expect("reap no-row process");
+    no_row_watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]

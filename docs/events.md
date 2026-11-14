@@ -1631,8 +1631,9 @@ What the reader can tell about work that was in flight, from the log alone:
 | `shell_command_started`, no `shell_command` | the session ended before the run's end was written: the process died, or the run outlived the shutdown's last drain; Fiber never re-runs it, and nothing from it joins the next turn's input |
 | `tool_call_started`, no `tool_call_completed` | uncertain; Fiber never re-runs it, and the model is told its outcome is unknown, unless a `fiber_exited` with `suspended_on` names an `interaction_requested` with `resumes: true` that call raised: the call was waiting on the person, and resuming runs it again, with no second `tool_call_started`, so it raises the request again |
 | `tool_call_completed` | ran, with its outcome |
-| `job_started`, no `job_completed`, no keeper answers | the job's keeper died, or the session had none; on open Fiber writes `job_completed` with `status: failed` and `error.code: orphaned`, except for a Fiber delegate whose own log's latest run holds `fiber_exited`, which is settled from it |
-| `job_started`, no `job_completed`, the keeper answers | the job is still running under the keeper; the resumed session takes it back (`docs/tools.md`, "The keeper") |
+| non-detached `job_started`, no `job_completed`, no keeper answers | the job's keeper died, or the session had none; on open Fiber writes `job_completed` with `status: failed` and `error.code: orphaned`, except for a Fiber delegate whose own log's latest run holds `fiber_exited`, which is settled from it |
+| non-detached `job_started`, no `job_completed`, the keeper answers | the job is still running under the keeper; the resumed session takes it back (`docs/tools.md`, "The keeper") |
+| detached `job_started`, no later `job_completed` | Fiber restores a live process group with a recorded process-group ID before exposing tools. A contradicted identity, missing ID or dead group is dropped silently; a missing or unreadable leader identity stays listed and requires review to stop. Detached jobs are not orphan-completed, and their in-memory end writes no synthetic `job_completed` or completion notice (`docs/tools.md`, "Background jobs") |
 | `job_completed` written while the session was gone | the keeper wrote it; the model is sent it with the next turn |
 | `turn_started`, no `turn_completed` | the turn was cut short; render what was logged and say so, unless a `fiber_exited` with `suspended_on` follows, in which case the turn resumes with the request raised again |
 | `fiber_started`, no `fiber_exited`, `rewound` or `moved` after it | that process died rather than exited |
@@ -1640,11 +1641,12 @@ What the reader can tell about work that was in flight, from the log alone:
 | `compaction_started`, no `compaction_completed` | the process died during a compaction; the compaction did not take effect, and the model's context is what it was before it |
 
 A resume takes the log back from the keeper before it opens the log
-(`docs/tools.md`, "The keeper"), so a job the keeper ran is either completed in
-the log or still running. On open, Fiber writes `orphaned` only for a job no
-keeper accounts for, and does not touch any process: with no keeper, Fiber
-cannot know whether the job finished or still runs, and the status is not
-`cancelled`.
+(`docs/tools.md`, "The keeper"), so a non-detached job the keeper ran is either
+completed in the log or still running. On open, Fiber writes `orphaned` only
+for a non-detached job no keeper accounts for, and does not touch any process:
+with no keeper, Fiber cannot know whether the job finished or still runs, and
+the status is not `cancelled`. Detached rows are selected separately by their
+`kind` and re-probed; Fiber never writes an orphan completion for them.
 
 Fiber re-runs no call a crash left without a result, even one that only reads.
 The turn it belonged to ended with the crash, so a re-run would answer the
