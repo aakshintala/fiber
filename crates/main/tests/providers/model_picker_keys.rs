@@ -674,13 +674,13 @@ fn open_catalogue_and_quit(setup: &Setup, debug_diagnostics: bool) {
     run.write(b"\x0c");
     run.wait_screen("the open picker", |screen| shows(screen, "Type to search"));
     let answered = |screen: &Grid| shows(screen, "m1") && !shows(screen, "Reading the model lists");
-    if debug_diagnostics {
-        run.wait_screen_reporting("the answered catalogue", answered, || {
+    run.wait_screen_reporting("the answered catalogue", answered, || {
+        if debug_diagnostics {
             super::model_picker_name::tui_stage_diagnostics(setup)
-        });
-    } else {
-        run.wait_screen("the answered catalogue", answered);
-    }
+        } else {
+            String::new()
+        }
+    });
     run.write(b"\x1b[27u");
     run.wait_screen("home again", |screen| {
         !shows(screen, "Type to search") && shows(screen, "[cat/m1]")

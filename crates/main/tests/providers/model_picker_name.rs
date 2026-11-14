@@ -19,11 +19,10 @@ use serde_json::json;
 use support::Setup;
 use support::pty::{Grid, Run};
 
-/// The installed provider file and any cached list, so a catalogue stall
-/// says whether the picker was waiting on models that are already on disk.
-/// A missing file and a cache read error are reported as themselves.
+/// Reads `models_read_done`, `models_applied` and `models_ask_started` lines
+/// from `logs/tui-*` files and reports absent codes and log I/O errors.
 pub(super) fn tui_stage_diagnostics(setup: &Setup) -> String {
-    let codes = ["models_read_done", "models_applied", "models_ask_started"];
+    const STAGE_CODES: [&str; 3] = ["models_read_done", "models_applied", "models_ask_started"];
     let logs = setup.home().join("logs");
     let mut found = Vec::new();
     let mut errors = Vec::new();
@@ -44,7 +43,7 @@ pub(super) fn tui_stage_diagnostics(setup: &Setup) -> String {
                 match std::fs::read_to_string(entry.path()) {
                     Ok(text) => {
                         for line in text.lines() {
-                            if codes
+                            if STAGE_CODES
                                 .iter()
                                 .any(|code| line.contains(&format!("\"code\":\"{code}\"")))
                             {
@@ -58,7 +57,7 @@ pub(super) fn tui_stage_diagnostics(setup: &Setup) -> String {
         }
         Err(error) => errors.push(format!("{}: {error}", logs.display())),
     }
-    let absent: Vec<_> = codes
+    let absent: Vec<_> = STAGE_CODES
         .iter()
         .filter(|code| {
             !found
@@ -96,10 +95,10 @@ fn tui_stage_diagnostics_reports_present_missing_and_unreadable_logs() {
     std::fs::write(logs.join("tui-one"), r#"{"code":"models_read_done"}"#).unwrap();
     let partial = tui_stage_diagnostics(&setup);
     assert!(partial.contains("models_read_done"), "{partial}");
-    assert!(
-        partial.contains("absent codes: [\"models_applied\", \"models_ask_started\"]"),
-        "{partial}"
-    );
+    let absent_report = partial.split("; absent codes: ").nth(1).unwrap();
+    for code in ["models_applied", "models_ask_started"] {
+        assert!(absent_report.contains(code), "{partial}");
+    }
 
     std::fs::remove_dir_all(&logs).unwrap();
     let missing = tui_stage_diagnostics(&setup);
