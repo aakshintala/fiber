@@ -965,7 +965,7 @@ impl Settings {
                 Act::Stay
             }
             Mode::Choices { names, list, .. } => {
-                if *key == Key::Enter {
+                if *key == Key::Enter || *key == Key::Char(' ') {
                     let name = names.get(list.selected()).cloned();
                     return name.map_or(Act::Stay, |name| self.choose(&name, ctx));
                 }
