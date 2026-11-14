@@ -307,7 +307,6 @@ struct RestoredSupervisor {
 impl RestoredSupervisor {
     #[cfg(debug_assertions)]
     fn group_alive(&self, event: RestoredLivenessEvent) -> bool {
-        #[cfg(debug_assertions)]
         if let Some(hook) = &self.restored.liveness
             && hook.observed.send(event).is_ok()
             && let Ok(answer) = hook.answers.recv()
