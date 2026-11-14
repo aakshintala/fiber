@@ -176,3 +176,5 @@ xtask/src/select/plan.rs:295-296	fiber-4809	plan	2026-11-14T06:45:03Z	roundhouse
 xtask/src/select/plan_tests.rs:297-298	fiber-4809	plan	2026-11-14T06:45:03Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4809-budget-breach-exempt	
 xtask/tests/cli.rs:354-355	fiber-4809	plan	2026-11-14T06:45:03Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4809-budget-breach-exempt	
 xtask/tests/cli.rs:517-518	fiber-4809	plan	2026-11-14T06:45:03Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4809-budget-breach-exempt	
+crates/tui/src/snapshots/tui__settings_view__tests__settings_models_screen_rows.snap	fiber-4583	plan	2026-11-14T06:46:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4583-settings-rows	
+crates/tui/src/snapshots/tui__settings_view__tests__settings_permissions_screen_rows.snap	fiber-4583	plan	2026-11-14T06:46:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4583-settings-rows	
