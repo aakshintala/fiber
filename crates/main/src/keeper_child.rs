@@ -255,6 +255,9 @@ struct Candidate {
     stream: UnixStream,
 }
 
+/// The predecessor closes the lifeline before the kernel releases its flock.
+pub(crate) const TAKEOVER_LOCK_WAIT: Duration = Duration::from_secs(5);
+
 /// Test-only pause and notification points, each with the race it forces.
 #[cfg(test)]
 #[derive(Default)]
@@ -262,6 +265,8 @@ struct Hooks {
     /// Runs just before a recovery opens the log, so a test decides which
     /// of two recoveries reaches the lock first (the lock-loss race).
     before_open: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Reports the takeover caller immediately before it opens the log.
+    takeover_waiter_thread: Option<Box<dyn Fn(std::thread::ThreadId) + Send + Sync>>,
     /// Runs once a recovery holds the log and accepts candidates.
     held: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs after a takeover opens the log and before it appends its start
@@ -387,6 +392,10 @@ impl Runtime {
                     #[cfg(test)]
                     if let Some(pause) = &self.hooks.before_open {
                         pause();
+                    }
+                    #[cfg(test)]
+                    if let Some(report) = &self.hooks.takeover_waiter_thread {
+                        report(std::thread::current().id());
                     }
                     match Log::open_as(
                         sessions,

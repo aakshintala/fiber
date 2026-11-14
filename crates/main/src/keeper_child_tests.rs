@@ -942,6 +942,48 @@ fn keeper_no_job_crash_spawns_no_watcher() {
 }
 
 #[test]
+fn keeper_waits_for_dying_session_lock() {
+    let id = SessionId("s_5123456789abcdef".into());
+    let clock = fakes::clock::FakeClock::new();
+    let (thread_tx, thread_rx) = mpsc::channel();
+    let (held, held_rx) = ready_signal();
+    let hooks = super::Hooks {
+        held: Some(held),
+        takeover_waiter_thread: Some(Box::new(move |thread| {
+            let _ = thread_tx.send(thread);
+        })),
+        ..super::Hooks::default()
+    };
+    let (mut keeper, _runtime) = serve_keeper_with(
+        "keeper-takeover-lock-wait",
+        id.clone(),
+        clock.clone(),
+        hooks,
+        None,
+    );
+    let pgid = start_shell(&keeper, "job", "sleep 60");
+    let _reaper = Reaper(pgid);
+    adopt_call(&keeper, "job", "j_job");
+    let predecessor = log::Log::open_as(&keeper.sessions, id, clock.clone(), "predecessor")
+        .expect("predecessor holds session lock");
+    let start = clock.now();
+    crash(&mut keeper);
+    let thread =
+        Deadline::after(Duration::from_secs(10)).recv_or_fail(&thread_rx, "takeover waiter thread");
+    assert!(
+        clock.await_thread_parked(
+            thread,
+            Some(start + super::TAKEOVER_LOCK_WAIT),
+            Deadline::after(Duration::from_secs(10)),
+        ),
+        "keeper waits on the takeover lock deadline"
+    );
+    drop(predecessor);
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "takeover to bind");
+    assert!(keeper.result.try_recv().is_err(), "keeper remains bound");
+}
+
+#[test]
 fn takeover_start_marker_failure_carries_on_and_poisons() {
     // RULING-4628-8's test as unblocked by RULING-4628-9: fail the
     // start-marker append for real at the open fd, then check the keeper
