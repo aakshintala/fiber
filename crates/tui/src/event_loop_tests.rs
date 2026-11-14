@@ -351,6 +351,7 @@ impl<B: Backend> Loop<B> {
             pointer: crate::mouse::Pointer::default(),
             hover: true,
             var: Box::new(|_| None),
+            editor_setting: None,
             programs: super::Programs::default(),
             title: crate::osc::Title::default(),
             shape: crate::osc::Shape::default(),
@@ -1961,7 +1962,7 @@ fn a_clean_file_editor_return_without_a_line_rereads_the_config_view() {
         None
     );
     assert_eq!(lp.app.notices.newest(), None);
-    assert_eq!(seam.reads().len(), before + 2);
+    assert_eq!(seam.reads().len(), before + 1);
     crate::term::restore();
 }
 
@@ -2126,17 +2127,6 @@ fn a_remote_changed_file_return_stores_the_copy_through_the_close_path() {
     asked
         .read_line(&mut line)
         .unwrap_or_else(|err| panic!("the client settings read: {err}"));
-    let settings: serde_json::Value = serde_json::from_str(&line).unwrap();
-    assert_eq!(settings["command"], "configure");
-    let accepted = serde_json::json!({"kind":"command_accepted","ts":1,"schema_version":1,
-        "payload":{"command_id":settings["id"],"result":{"rows":[]}}});
-    assert!(router.route(&crate::link::Line::Hub(
-        serde_json::from_value(accepted).unwrap()
-    )));
-    line.clear();
-    asked
-        .read_line(&mut line)
-        .unwrap_or_else(|err| panic!("the workspace write: {err}"));
     let written: serde_json::Value = serde_json::from_str(&line).unwrap();
     assert_eq!(written["command"], "write_workspace_file");
     assert_eq!(

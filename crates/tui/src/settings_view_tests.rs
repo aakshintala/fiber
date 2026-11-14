@@ -13,9 +13,9 @@ use ratatui::style::Modifier;
 
 use super::{
     Act, Applies, Ctx, Item, Request, SCREEN_ROWS, Screen, ScreenRow, Settings, applies,
-    applies_text, as_typed, editors_on_path, layers, next_number_value, next_text_value,
-    number_list, number_slider, number_text, refresh_millis, shown_value, slider_bar, slider_step,
-    text_list,
+    applies_text, as_typed, editor_default, editors_on_path, layers, next_number_value,
+    next_text_value, number_list, number_slider, number_text, refresh_millis, shown_value,
+    slider_bar, slider_step, text_list,
 };
 use crate::ThemeSetting;
 use crate::configure::{Layer, SettingControl, SettingRow, Shown, WriteScope};
@@ -2896,15 +2896,28 @@ fn hub_picker_default_on_an_unset_key_closes_without_a_write() {
 }
 
 #[test]
+fn editor_default_details_follow_visual_then_editor_and_none() {
+    assert_eq!(
+        editor_default(Some("vim"), Some("nvim")),
+        "Default ($VISUAL: vim)"
+    );
+    assert_eq!(
+        editor_default(None, Some("nvim")),
+        "Default ($EDITOR: nvim)"
+    );
+    assert_eq!(editor_default(None, None), "Default (none set)");
+}
+
+#[test]
 fn editor_picker_uses_path_order_and_saves_wait_for_gui_editors() {
     let dir = fakes::TempDir::new("editor-path");
-    for name in ["code", "nvim"] {
-        std::fs::write(dir.path().join(name), "").unwrap();
-    }
-    assert_eq!(
-        editors_on_path(Some(dir.path().as_os_str())),
-        ["nvim", "code"]
-    );
+    use std::os::unix::fs::PermissionsExt;
+    let nvim = dir.path().join("nvim");
+    std::fs::write(&nvim, "").unwrap();
+    let code = dir.path().join("code");
+    std::fs::write(&code, "").unwrap();
+    std::fs::set_permissions(code, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(editors_on_path(Some(dir.path().as_os_str())), ["code"]);
 
     let fake = Fake::new(row_on(
         "tui.editor",
@@ -2927,6 +2940,14 @@ fn editor_picker_uses_path_order_and_saves_wait_for_gui_editors() {
         ],
         Some("code --wait".to_owned()),
         &ctx(&fake),
+    );
+    let super::Mode::Choices { list, .. } = &settings.mode else {
+        panic!("editor choices did not open");
+    };
+    assert_eq!(
+        list.selected(),
+        2,
+        "saved command did not select its program"
     );
     settings.choose("code", &ctx(&fake));
     assert_eq!(
@@ -2964,6 +2985,22 @@ fn editor_picker_uses_path_order_and_saves_wait_for_gui_editors() {
     cancel.choose("Other…", &ctx(&fake));
     one(&mut cancel, &fake, Key::Esc);
     assert_eq!(writes(&fake).len(), 2, "cancel wrote a value");
+
+    let mut empty = at(&fake, "tui.editor");
+    empty.open_dynamic_choices(
+        "tui.editor".to_owned(),
+        Layer::Global,
+        vec!["Default".to_owned(), "Other…".to_owned()],
+        None,
+        &ctx(&fake),
+    );
+    empty.choose("Other…", &ctx(&fake));
+    one(&mut empty, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake).last(),
+        Some(&w(Layer::Global, "tui.editor", "\"\"")),
+        "empty Other… input must save as unset"
+    );
 }
 
 #[test]

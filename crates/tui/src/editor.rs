@@ -19,9 +19,6 @@ use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM};
 /// The notice when neither variable names an editor.
 pub(crate) const NO_EDITOR: &str = "No editor set. Choose one in /settings: Editor.";
 
-/// The notice when neither variable names an editor for a file.
-pub(crate) const NO_EDITOR_FILE: &str = "Set $VISUAL or $EDITOR to open the file.";
-
 /// How many names [`TempFile::create`] tries before giving up.
 const ATTEMPTS: usize = 16;
 

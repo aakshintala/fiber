@@ -1832,9 +1832,16 @@ impl Settings {
         ctx: &Ctx<'_>,
     ) {
         let mut list = List::gutter();
+        let selected = if key == EDITOR {
+            current
+                .as_deref()
+                .and_then(|value| value.split_whitespace().next())
+        } else {
+            current.as_deref()
+        };
         let at = names
             .iter()
-            .position(|name| Some(name) == current.as_ref())
+            .position(|name| Some(name.as_str()) == selected)
             .unwrap_or(0);
         list.select(at, names.len(), self.shown(ctx));
         self.mode = Mode::Choices {
@@ -1927,9 +1934,15 @@ fn editors_on_path(path: Option<&std::ffi::OsStr>) -> Vec<String> {
     EDITORS
         .into_iter()
         .filter(|name| {
-            directories
-                .iter()
-                .any(|directory| directory.join(name).is_file())
+            directories.iter().any(|directory| {
+                let path = directory.join(name);
+                std::fs::metadata(path).is_ok_and(|metadata| {
+                    metadata.is_file() && {
+                        use std::os::unix::fs::PermissionsExt;
+                        metadata.permissions().mode() & 0o111 != 0
+                    }
+                })
+            })
         })
         .map(str::to_owned)
         .collect()
@@ -2175,7 +2188,14 @@ impl Settings {
                 rows: names
                     .iter()
                     .map(|name| {
-                        let mark = if Some(name) == current.as_ref() {
+                        let selected = if key == EDITOR {
+                            current
+                                .as_deref()
+                                .and_then(|value| value.split_whitespace().next())
+                        } else {
+                            current.as_deref()
+                        };
+                        let mark = if Some(name.as_str()) == selected {
                             "  (current)"
                         } else {
                             ""
@@ -3010,6 +3030,14 @@ fn refresh_text(text: &str) -> String {
     }
 }
 
+fn editor_default(visual: Option<&str>, editor: Option<&str>) -> String {
+    match (visual, editor) {
+        (Some(value), _) => format!("Default ($VISUAL: {value})"),
+        (None, Some(value)) => format!("Default ($EDITOR: {value})"),
+        (None, None) => "Default (none set)".to_owned(),
+    }
+}
+
 /// A row's value as the tab says it, and the layer tag after it when the
 /// value is set anywhere but global.
 fn shown_value(row: &SettingRow) -> (String, Option<String>) {
@@ -3041,7 +3069,16 @@ fn shown_value(row: &SettingRow) -> (String, Option<String>) {
         }
         (SettingControl::Model, Shown::Unset) => "Default ›".to_owned(),
         (SettingControl::Model, Shown::Value(text)) => format!("{} ›", as_typed(text)),
-        (SettingControl::Text, Shown::Unset) if row.key == EDITOR => "Default ›".to_owned(),
+        (SettingControl::Text, Shown::Unset) if row.key == EDITOR => editor_default(
+            std::env::var("VISUAL")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .as_deref(),
+            std::env::var("EDITOR")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .as_deref(),
+        ),
         (SettingControl::Text, Shown::Value(text)) if row.key == EDITOR => {
             format!("{} ›", as_typed(text))
         }
