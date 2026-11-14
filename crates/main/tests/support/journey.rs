@@ -360,6 +360,51 @@ pub(crate) fn install_picker_provider(setup: &Setup, server: &ProviderServer) {
     );
 }
 
+/// Installs provider `fake` with generated model `known` and a Lua
+/// `models()` list that also offers an otherwise unknown `vendor-only`.
+/// The provider endpoint is the fake server, and models.dev is disabled.
+pub(crate) fn install_vendor_picker_provider(setup: &Setup, server: &ProviderServer) {
+    let source = setup.root.path().join("src");
+    write_json(
+        &source.join("extension.json"),
+        &json!({"name":"fake", "version":"v0.0.0", "fiber":"0.0.0", "api":1,
+                "providers":{"fake":[format!("{}/v1", server.url())]}}),
+    );
+    write_json(
+        &source.join("providers/fake.json"),
+        &json!({"name":"fake", "credential":{"env":"FIBER_TEST_FAKE_KEY"},
+                "models":[{"id":"known", "protocol":"openai-responses",
+                           "base_url":format!("{}/v1", server.url()), "context_window":100000}]}),
+    );
+    fs::write(
+        source.join("providers/fake.lua"),
+        format!(
+            r#"fiber.provider("fake", {{
+  models = {{ timeout = 5000, run = function() return {{
+    {{ id = "known", protocol = "openai-responses", base_url = "{}/v1", context_window = 100000 }},
+    {{ id = "vendor-only", protocol = "openai-responses", base_url = "{}/v1" }},
+  }} end }}
+}})"#,
+            server.url(),
+            server.url(),
+        ),
+    )
+    .unwrap();
+    let request = extensions::Request::Path(source);
+    super::install_with_retry(
+        &setup.home(),
+        setup.deadline.start_wait(),
+        &request,
+        "0.0.0",
+        None,
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model":"fake/known", "model_lists":{"models_dev":false},
+                "hub":{"idle_exit_ms":200}, "tui":tui_off()}),
+    );
+}
+
 /// Installs a provider `fake` with model `m` on `openai-responses` at the
 /// fake server, `model_extra` merged into the model, and writes
 /// `config.json` once: `fake/m` as the model, the hub idling out a second

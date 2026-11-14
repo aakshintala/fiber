@@ -571,7 +571,12 @@ impl State {
         {
             match handle.join() {
                 Ok(Ok(models)) => {
-                    notices.extend(providers.set_models(&name, models));
+                    notices.extend(providers.set_models_with_catalog(
+                        &self.sources.home,
+                        config::models_dev_enabled(config),
+                        &name,
+                        models,
+                    ));
                 }
                 Ok(Err(error)) => {
                     if let Some(old) = before.get(&name) {

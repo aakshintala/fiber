@@ -532,6 +532,10 @@ fn decode_entry(value: &Value) -> Option<ModelEntry> {
         default_level: optional!(value, "default_level")?,
         configured: optional!(value, "configured")?,
         roles: read!(value, "roles")?,
+        is_new: value
+            .get("is_new")
+            .map(Value::as_bool)
+            .unwrap_or(Some(false))?,
         price: match optional!(value, "price")? {
             None => None,
             Some(price) => Some(decode_price(&price)?),

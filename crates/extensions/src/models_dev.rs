@@ -157,34 +157,106 @@ pub fn spawn_if_due(
 }
 
 /// Merge the cached catalog into rows before provider admission validates them.
-pub(crate) fn merge_admission(
+pub fn merge_admission(
     home: &Path,
     extension_dir: &Path,
     provider: &str,
     models: Vec<ModelData>,
     enabled: bool,
 ) -> Vec<ModelData> {
-    if !enabled {
-        return models;
-    }
-    let Some(catalog) = config::read_models_dev(home)
-        .ok()
-        .flatten()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-    else {
-        return models;
-    };
+    let catalog = load_catalog(home, enabled);
     let path = extension_dir
         .join("providers")
         .join(format!("{provider}.json"));
-    let Some(meta) = fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .and_then(|file| meta_of(&file))
-    else {
-        return models;
+    let Ok(bytes) = fs::read(path) else {
+        return cautious(models);
     };
-    merge(models, &meta, &catalog)
+    let Ok(file) = serde_json::from_slice::<Value>(&bytes) else {
+        return cautious(models);
+    };
+    let meta = meta_of(&file).unwrap_or_default();
+    let generated = generated_models(&file);
+    enrich(models, &generated, &meta, &catalog)
+}
+
+fn generated_models(file: &Value) -> Vec<ModelData> {
+    file.get("models")
+        .cloned()
+        .and_then(|models| serde_json::from_value(models).ok())
+        .unwrap_or_default()
+}
+
+fn load_catalog(home: &Path, enabled: bool) -> Value {
+    if !enabled {
+        return Value::Object(Default::default());
+    }
+    config::read_models_dev(home)
+        .ok()
+        .flatten()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .unwrap_or_else(|| Value::Object(Default::default()))
+}
+
+fn cautious(models: Vec<ModelData>) -> Vec<ModelData> {
+    models.into_iter().map(cautious_model).collect()
+}
+
+fn cautious_model(mut model: ModelData) -> ModelData {
+    model.is_new = true;
+    model.input = vec!["text".to_owned()];
+    model.context_window = Some(128_000);
+    model.max_output_tokens = Some(8_192);
+    model.cost = None;
+    model.thinking_levels.clear();
+    model.thinking_default = None;
+    model
+}
+
+fn enrich(
+    models: Vec<ModelData>,
+    generated: &[ModelData],
+    meta: &CatalogMeta,
+    catalog: &Value,
+) -> Vec<ModelData> {
+    models
+        .into_iter()
+        .map(|mut model| {
+            let table = generated.iter().find(|known| known.id == model.id);
+            let (source, id) = resolve(&model.id, meta);
+            let fetched = catalog.get(&source).and_then(|value| value.get(&id));
+            if table.is_none() && fetched.is_none() {
+                return cautious_model(model);
+            }
+            model.is_new = false;
+            if let Some(table) = table {
+                if model.name.is_none() {
+                    model.name.clone_from(&table.name);
+                }
+                if model.context_window.is_none_or(|value| value == 0) {
+                    model.context_window = table.context_window;
+                }
+                if model.max_output_tokens.is_none_or(|value| value == 0) {
+                    model.max_output_tokens = table.max_output_tokens;
+                }
+                if model.input.is_empty() {
+                    model.input.clone_from(&table.input);
+                }
+                if model.cost.is_none() {
+                    model.cost.clone_from(&table.cost);
+                }
+                if model.thinking_levels.is_empty() {
+                    model.thinking_levels.clone_from(&table.thinking_levels);
+                    model.thinking_default = table.thinking_default;
+                }
+            }
+            if fetched.is_some()
+                && let Some(merged) = merge(vec![model.clone()], meta, catalog).into_iter().next()
+            {
+                model = merged;
+            }
+            model
+        })
+        .collect()
 }
 
 /// Catalog overlays and deprecated references from the installed providers.
@@ -264,10 +336,11 @@ pub fn apply(
     let names: Vec<String> = providers.names().map(str::to_owned).collect();
     let mut applied = Applied::default();
     for name in names {
-        let Ok(dir) = provider_dir(home, providers, &name) else {
-            continue;
-        };
-        let Ok(bytes) = fs::read(dir) else {
+        let base = providers
+            .provider_source_dir(&name)
+            .unwrap_or_else(|| home.join("providers").join(&name));
+        let path = base.join("providers").join(format!("{name}.json"));
+        let Ok(bytes) = fs::read(path) else {
             continue;
         };
         let Ok(file) = serde_json::from_slice::<Value>(&bytes) else {
@@ -276,6 +349,7 @@ pub fn apply(
         let Some(meta) = meta_of(&file) else {
             continue;
         };
+        let generated = generated_models(&file);
         let mut data = providers.data(&name);
         if fresh {
             for model in &data.models {
@@ -291,23 +365,12 @@ pub fn apply(
                 }
             }
         }
-        data.models = merge(data.models, &meta, &catalog);
+        data.models = enrich(data.models, &generated, &meta, &catalog);
         applied
             .notices
             .extend(providers.set_models(&name, data.models));
     }
     applied
-}
-
-fn provider_dir(
-    home: &Path,
-    providers: &Providers,
-    provider: &str,
-) -> Result<PathBuf, std::io::Error> {
-    let base = providers
-        .provider_source_dir(provider)
-        .unwrap_or_else(|| home.join("providers").join(provider));
-    Ok(base.join("providers").join(format!("{provider}.json")))
 }
 
 /// Merge fetched fields into each generated row while retaining pins and Fiber-only fields.
@@ -380,13 +443,15 @@ fn resolve(id: &str, meta: &CatalogMeta) -> (String, String) {
     if let Some(source) = meta.source.as_ref() {
         return (source.clone(), id.to_owned());
     }
+    if let Some(source) = meta.source_aliases.get(id)
+        && let Some(prefix) = meta.strip_prefix.as_deref()
+    {
+        return (
+            source.clone(),
+            id.strip_prefix(prefix).unwrap_or(id).to_owned(),
+        );
+    }
     if let Some(source) = meta.source_aliases.get(id) {
-        if let Some(prefix) = meta.strip_prefix.as_deref() {
-            return (
-                source.clone(),
-                id.strip_prefix(prefix).unwrap_or(id).to_owned(),
-            );
-        }
         if meta.split_source {
             return (
                 source.clone(),

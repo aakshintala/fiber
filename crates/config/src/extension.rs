@@ -383,6 +383,9 @@ pub enum Login {
 /// extension declares").
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ModelData {
+    /// Whether Fiber found no metadata source for this vendor-listed model.
+    #[serde(skip)]
+    pub is_new: bool,
     /// The model's id, as the vendor spells it.
     pub id: String,
     /// Its display name, such as `Claude Opus 5.5`; absent when the

@@ -94,6 +94,26 @@ fn a_written_list_is_read_back_from_its_file() {
 }
 
 #[test]
+fn model_cache_does_not_trust_a_provider_novelty_marker() {
+    let setup = Setup::new();
+    let home = setup.home();
+    write_model_cache(
+        &home,
+        "acme",
+        &json!([{
+            "id": "vendor-only",
+            "protocol": "openai-responses",
+            "base_url": "http://x/v1",
+            "context_window": 128000,
+            "is_new": true
+        }]),
+    )
+    .unwrap();
+    let models = read_model_cache(&home, "acme").unwrap().unwrap();
+    assert!(!models[0].is_new);
+}
+
+#[test]
 fn a_copy_that_is_not_a_model_list_is_no_copy() {
     let setup = Setup::new();
     let home = setup.home();

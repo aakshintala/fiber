@@ -2391,6 +2391,7 @@ fn wheel_over_the_model_picker_above_an_item_moves_the_picker() {
                     default_level: None,
                     configured: None,
                     roles: Vec::new(),
+                    is_new: false,
                     name: None,
                     price: None,
                 }

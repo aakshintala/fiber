@@ -204,6 +204,9 @@ fn model_first_row(model: &ModelRow, focused: bool, priced: bool) -> Row {
     if model.scoped {
         spans.push(Span::styled(" · scoped".to_owned(), dim));
     }
+    if model.is_new {
+        spans.push(Span::styled(" · new".to_owned(), dim));
+    }
     if priced && let Some(price) = &model.price {
         spans.push(Span::styled(format!(" {price}"), dim));
     }
