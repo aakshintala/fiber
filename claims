@@ -481,3 +481,8 @@ docs/invocation.md:1331-1331	fiber-4636	plan	2026-11-14T09:34:13Z	roundhouse-701
 docs/testing/screens.md:17-17	fiber-4636	plan	2026-11-14T09:34:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4636-new-vendor-models	
 docs/testing/screens.md:20-20	fiber-4636	plan	2026-11-14T09:34:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4636-new-vendor-models	
 docs/testing/screens.md:24-24	fiber-4636	plan	2026-11-14T09:34:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4636-new-vendor-models	
+crates/loop/tests/fixtures/reviewer_eval/README.md	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
+crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
+crates/loop/tests/fixtures/reviewer_eval/extract.sh	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
+crates/loop/tests/reviewer_eval.rs	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
+crates/loop/tests/support/reviewer_eval.rs	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
