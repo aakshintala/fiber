@@ -4,6 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::*;
+use contract::clock::Clock;
 use contract::events::{
     CacheLifetime, Clients, Empty, Event, EventKind, ExtensionsLoaded, FiberStarted,
     LoadedExtension, Notice, PreambleBuilt, PreambleReason, SentTool, SessionState, SessionStatus,
@@ -22,6 +23,61 @@ fn check_holder(work: impl FnOnce() + Send + 'static) {
         done.send(()).unwrap();
     });
     Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&result, "holder query");
+}
+
+#[test]
+fn takeover_open_waits_for_the_predecessor_and_sets_its_holder_label() {
+    let sessions = fakes::TempDir::new("log-takeover-open-wait");
+    let id = SessionId("s_takeover".into());
+    let clock = fakes::clock::FakeClock::new();
+    let predecessor = Log::create(sessions.path(), id.clone(), clock.clone()).unwrap();
+    let dir = predecessor.dir().to_path_buf();
+    let until = clock.origin() + Duration::from_secs(10);
+    let sessions_path = sessions.path().to_path_buf();
+    let worker_clock: Arc<dyn Clock> = clock.clone();
+    let (waiter_tx, waiter_rx) = mpsc::channel();
+    let (result_tx, result_rx) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        waiter_tx.send(thread::current().id()).unwrap();
+        let result = Log::open_as_takeover(&sessions_path, id, worker_clock, "keeper 4242", until);
+        result_tx.send(result).unwrap();
+    });
+
+    let waiter =
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&waiter_rx, "takeover open waiter");
+    assert!(clock.await_thread_parked(waiter, Some(until), Deadline::after(MUST_SUCCEED_WITHIN),));
+    drop(predecessor);
+
+    let takeover = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&result_rx, "takeover open")
+        .expect("takeover open succeeds")
+        .expect("the lock is acquired before its deadline");
+    worker.join().unwrap();
+    assert_eq!(lock_label(&dir).as_deref(), Some("keeper 4242"));
+    drop(takeover);
+}
+
+#[test]
+fn takeover_open_does_not_try_a_lock_after_its_deadline() {
+    let sessions = fakes::TempDir::new("log-takeover-open-expired");
+    let id = SessionId("s_takeover".into());
+    let clock = fakes::clock::FakeClock::new();
+    let log = Log::create(sessions.path(), id.clone(), clock.clone()).unwrap();
+    let dir = log.dir().to_path_buf();
+    drop(log);
+
+    let takeover = Log::open_as_takeover(
+        sessions.path(),
+        id.clone(),
+        clock.clone(),
+        "keeper 4242",
+        clock.origin(),
+    )
+    .unwrap();
+    assert!(takeover.is_none());
+    let reopened = Log::open_as(sessions.path(), id, clock, "session").unwrap();
+    assert_eq!(lock_label(&dir).as_deref(), Some("session"));
+    drop(reopened);
 }
 
 #[test]

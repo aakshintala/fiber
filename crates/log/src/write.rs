@@ -145,11 +145,42 @@ impl Log {
         holder: &str,
     ) -> Result<Self, Error> {
         let dir = session_path(sessions, &id);
+        if !dir.join(EVENTS).is_file() {
+            return Err(Error::NotFound(dir));
+        }
+        let lock = lock(&dir, &id, clock.as_ref(), holder)?;
+        Self::open_locked(dir, id, clock, lock)
+    }
+
+    /// Opens an existing session for keeper crash takeover, waiting for its
+    /// predecessor's lock only until `until`. This is the only caller's
+    /// blocking open; the caller must exit on `None` so the worker ends.
+    pub fn open_as_takeover(
+        sessions: &Path,
+        id: SessionId,
+        clock: Arc<dyn Clock>,
+        holder: &str,
+        until: std::time::Instant,
+    ) -> Result<Option<Self>, Error> {
+        let dir = session_path(sessions, &id);
         let path = dir.join(EVENTS);
         if !path.is_file() {
             return Err(Error::NotFound(dir));
         }
-        let lock = lock(&dir, &id, clock.as_ref(), holder)?;
+        let Some(file) = crate::scan::lock_file_until(&dir, clock.as_ref(), until)? else {
+            return Ok(None);
+        };
+        write_lock_label(&file, &dir.join(crate::LOCK), holder)?;
+        Self::open_locked(dir, id, clock, Lock(file)).map(Some)
+    }
+
+    fn open_locked(
+        dir: PathBuf,
+        id: SessionId,
+        clock: Arc<dyn Clock>,
+        lock: Lock,
+    ) -> Result<Self, Error> {
+        let path = dir.join(EVENTS);
         let events = OpenOptions::new()
             .read(true)
             .append(true)
@@ -1057,15 +1088,20 @@ impl Drop for Lock {
     }
 }
 
+fn write_lock_label(file: &File, path: &Path, label: &str) -> Result<(), Error> {
+    file.set_len(0).map_err(io_at(path))?;
+    let mut file = file;
+    file.write_all(format!("{label}\n").as_bytes())
+        .map_err(io_at(path))
+}
+
 /// Takes the session's lock and writes the holder's label into it, or names
 /// who holds it.
 fn lock(dir: &Path, id: &SessionId, clock: &dyn Clock, label: &str) -> Result<Lock, Error> {
     let path = dir.join(LOCK);
     match crate::scan::try_lock_file(dir)? {
-        Some(mut file) => {
-            file.set_len(0).map_err(io_at(&path))?;
-            file.write_all(format!("{label}\n").as_bytes())
-                .map_err(io_at(&path))?;
+        Some(file) => {
+            write_lock_label(&file, &path, label)?;
             Ok(Lock(file))
         }
         None => Err(Error::Held {

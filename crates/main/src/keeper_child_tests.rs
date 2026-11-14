@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use contract::clock::Clock;
 use contract::events::EventKind;
 use contract::keeper::{FromKeeper, HostStdin, Spawn, Stream, ToKeeper};
 use contract::{JobId, SessionId};
@@ -22,6 +23,195 @@ fn runtime(
         done,
         super::Hooks::default(),
     )
+}
+
+#[test]
+fn accept_error_keeps_acceptor_alive() {
+    use std::os::unix::net::UnixListener;
+    use std::sync::Mutex;
+
+    let home = fakes::TempDir::new("keeper-accept-error");
+    let socket = home.path().join("keeper.sock");
+    let listener = UnixListener::bind(&socket).expect("listener");
+    let id = SessionId("s_0123456789abcdef".into());
+    let (control, _peer) = UnixStream::pair().expect("control");
+    let (done, _) = mpsc::channel();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let injected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let once = Arc::clone(&injected);
+    let accept_error = Box::new(move || {
+        if once.swap(true, Ordering::SeqCst) {
+            return None;
+        }
+        ready_tx.send(()).ok()?;
+        release_rx.lock().ok()?.recv().ok()?;
+        Some(std::io::ErrorKind::ConnectionAborted)
+    });
+    let clock = fakes::clock::FakeClock::new();
+    let runtime = super::Runtime::new(
+        home.path().to_path_buf(),
+        id.clone(),
+        clock.clone(),
+        control,
+        done,
+        super::Hooks {
+            accept_error: Some(accept_error),
+            ..super::Hooks::default()
+        },
+    );
+    runtime.listen(socket.clone(), listener);
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&ready_rx, "injected accept pause");
+    let mut peer = connect_to(&socket);
+    say(&mut peer, &ToKeeper::Identify(id));
+    release_tx.send(()).expect("release accept error");
+    clock
+        .advance_when_parked_in(Duration::from_millis(10), Duration::from_secs(10))
+        .expect("accept backoff parks before clock advances");
+    let identity = hear(&peer, "identity after accept error");
+    let listening = super::lock(&runtime.listening);
+    listening
+        .as_ref()
+        .expect("listener state")
+        .stop
+        .store(true, Ordering::Release);
+    drop(listening);
+    let _wake = UnixStream::connect(&socket);
+    assert!(
+        matches!(&identity, Some(FromKeeper::Identity { .. })),
+        "expected Identity after accept error, heard {}",
+        describe(&identity)
+    );
+}
+
+#[test]
+fn accept_error_backoff_doubles_caps_and_resets_after_accept() {
+    use std::os::unix::net::UnixListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let home = fakes::TempDir::new("keeper-backoff-progression");
+    let socket = home.path().join("keeper.sock");
+    let listener = UnixListener::bind(&socket).expect("listener");
+    let clock = fakes::clock::FakeClock::new();
+    let count = Arc::new(AtomicUsize::new(0));
+    let inject_count = Arc::clone(&count);
+    let hook = Box::new(move || {
+        let n = inject_count.fetch_add(1, Ordering::SeqCst);
+        (n < 9 || n == 10).then_some(std::io::ErrorKind::ConnectionAborted)
+    });
+    let (control, _peer) = UnixStream::pair().expect("control");
+    let (done, _) = mpsc::channel();
+    let runtime = super::Runtime::new(
+        home.path().to_path_buf(),
+        SessionId("s_0123456789abcdef".into()),
+        clock.clone(),
+        control,
+        done,
+        super::Hooks {
+            accept_error: Some(hook),
+            ..super::Hooks::default()
+        },
+    );
+    runtime.listen(socket.clone(), listener);
+    let mut expected = Duration::from_millis(10);
+    let mut acceptor = None;
+    for _ in 0..9 {
+        let until = clock.now() + expected;
+        let parked = clock
+            .mark_parked(until, Deadline::after(Duration::from_secs(10)))
+            .expect("acceptor parks at backoff");
+        let threads = parked.threads();
+        assert_eq!(threads.len(), 1, "only the acceptor parks at its backoff");
+        let thread = threads[0];
+        if let Some(acceptor) = acceptor {
+            assert_eq!(thread, acceptor, "the same acceptor handles every backoff");
+        } else {
+            acceptor = Some(thread);
+        }
+        clock.advance_when_parked(
+            Some(until),
+            Some(thread),
+            expected,
+            &Deadline::after(Duration::from_secs(10)),
+        );
+        expected = expected.saturating_mul(2).min(super::ACCEPT_BACKOFF_MAX);
+    }
+    // Nine backoffs include 10, 20, 40, 80, 160, 320, 640, 1000, 1000 ms.
+    assert_eq!(clock.now(), clock.origin() + Duration::from_millis(3270));
+    let writer = UnixStream::connect(&socket).expect("connect after injected errors");
+    let _ = writer;
+    let acceptor = acceptor.expect("backoff parks identify the acceptor thread");
+    let reset_at = clock.now() + Duration::from_millis(10);
+    let parked = clock
+        .mark_parked(reset_at, Deadline::after(Duration::from_secs(10)))
+        .expect("successful accept resets delay to 10 ms");
+    assert!(
+        parked.threads().contains(&acceptor),
+        "the acceptor parks at the reset backoff"
+    );
+    // The candidate also waits on this fake clock, but at its own 5 s read
+    // deadline. Advance only the acceptor's 10 ms backoff.
+    clock.advance_when_parked(
+        Some(reset_at),
+        Some(acceptor),
+        Duration::from_millis(10),
+        &Deadline::after(Duration::from_secs(10)),
+    );
+    let listening = super::lock(&runtime.listening);
+    listening
+        .as_ref()
+        .expect("listener")
+        .stop
+        .store(true, Ordering::Release);
+    drop(listening);
+    let _wake = UnixStream::connect(&socket);
+}
+
+#[test]
+fn candidate_spawn_failure_drops_stream_and_acceptor_handles_next_connection() {
+    use std::os::unix::net::UnixListener;
+    use std::sync::atomic::AtomicBool;
+
+    let home = fakes::TempDir::new("keeper-candidate-spawn-failure");
+    let socket = home.path().join("keeper.sock");
+    let listener = UnixListener::bind(&socket).expect("listener");
+    let failed = Arc::new(AtomicBool::new(false));
+    let inject = Arc::clone(&failed);
+    let (control, _peer) = UnixStream::pair().expect("control");
+    let (done, _) = mpsc::channel();
+    let runtime = super::Runtime::new(
+        home.path().to_path_buf(),
+        SessionId("s_0123456789abcdef".into()),
+        fakes::clock::FakeClock::new(),
+        control,
+        done,
+        super::Hooks {
+            candidate_spawn_error: Some(Box::new(move || !inject.swap(true, Ordering::SeqCst))),
+            ..super::Hooks::default()
+        },
+    );
+    runtime.listen(socket.clone(), listener);
+    let dropped = UnixStream::connect(&socket).expect("first connection");
+    dropped
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("timeout");
+    let mut eof = Vec::new();
+    let mut reader = dropped;
+    reader
+        .read_to_end(&mut eof)
+        .expect("failed candidate is dropped");
+    assert!(eof.is_empty());
+
+    let mut peer = connect_to(&socket);
+    say(
+        &mut peer,
+        &ToKeeper::Identify(SessionId("s_0123456789abcdef".into())),
+    );
+    assert!(matches!(
+        hear(&peer, "subsequent candidate identity"),
+        Some(FromKeeper::Identity { .. })
+    ));
 }
 
 #[test]
@@ -750,6 +940,115 @@ fn keeper_no_job_crash_spawns_no_watcher() {
 }
 
 #[test]
+fn keeper_waits_for_dying_session_lock() {
+    let id = SessionId("s_5123456789abcdef".into());
+    let clock = fakes::clock::FakeClock::new();
+    let (thread_tx, thread_rx) = mpsc::channel();
+    let (held, held_rx) = ready_signal();
+    let hooks = super::Hooks {
+        held: Some(held),
+        takeover_waiter_thread: Some(Box::new(move |thread| match thread_tx.send(thread) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        })),
+        ..super::Hooks::default()
+    };
+    let (mut keeper, _runtime) = serve_keeper_with(
+        "keeper-takeover-lock-wait",
+        id.clone(),
+        clock.clone(),
+        hooks,
+        None,
+    );
+    let pgid = start_shell(&keeper, "job", "sleep 60");
+    let _reaper = Reaper(pgid);
+    adopt_call(&keeper, "job", "j_job");
+    let predecessor = log::Log::open_as(&keeper.sessions, id, clock.clone(), "predecessor")
+        .expect("predecessor holds session lock");
+    let start = clock.now();
+    crash(&mut keeper);
+    let thread =
+        Deadline::after(Duration::from_secs(10)).recv_or_fail(&thread_rx, "takeover waiter thread");
+    assert!(
+        clock.await_thread_parked(
+            thread,
+            Some(start + super::TAKEOVER_LOCK_WAIT),
+            Deadline::after(Duration::from_secs(10)),
+        ),
+        "keeper waits on the takeover lock deadline"
+    );
+    drop(predecessor);
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "takeover to bind");
+    assert!(
+        Deadline::after(Duration::from_millis(10))
+            .recv(&keeper.result)
+            .is_err(),
+        "keeper remains bound"
+    );
+}
+
+#[test]
+fn keeper_lock_wait_deadline_exits_without_binding() {
+    let id = SessionId("s_6123456789abcdef".into());
+    let clock = fakes::clock::FakeClock::new();
+    let (waiter_tx, waiter_rx) = mpsc::channel();
+    let hooks = super::Hooks {
+        takeover_waiter_thread: Some(Box::new(move |thread| match waiter_tx.send(thread) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        })),
+        ..super::Hooks::default()
+    };
+    let (mut keeper, _) = serve_keeper_with(
+        "keeper-takeover-lock-deadline",
+        id.clone(),
+        clock.clone(),
+        hooks,
+        None,
+    );
+    let pgid = start_shell(&keeper, "job", "sleep 60");
+    let _reaper = Reaper(pgid);
+    adopt_call(&keeper, "job", "j_job");
+    let predecessor = log::Log::open_as(&keeper.sessions, id, clock.clone(), "predecessor")
+        .expect("predecessor holds the session lock");
+    let start = clock.now();
+    crash(&mut keeper);
+    let waiter =
+        Deadline::after(Duration::from_secs(10)).recv_or_fail(&waiter_rx, "takeover waiter thread");
+    let until = start + super::TAKEOVER_LOCK_WAIT;
+    assert!(clock.await_thread_parked(
+        waiter,
+        Some(until),
+        Deadline::after(Duration::from_secs(10)),
+    ));
+    let socket = crashed_socket(&keeper);
+    assert!(
+        Deadline::after(Duration::from_millis(10))
+            .recv(&keeper.result)
+            .is_err(),
+        "the keeper waits before the deadline"
+    );
+    assert!(
+        !socket.exists(),
+        "the keeper has not bound while the lock is held"
+    );
+
+    clock.advance_when_parked(
+        Some(until),
+        Some(waiter),
+        super::TAKEOVER_LOCK_WAIT,
+        &Deadline::after(Duration::from_secs(10)),
+    );
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&keeper.result, "keeper lock-lost exit")
+        .expect("keeper exits cleanly");
+    assert!(
+        !socket.exists(),
+        "deadline lock loss does not bind the socket"
+    );
+    assert_eq!(lock_holder(&keeper).as_deref(), Some("predecessor"));
+    drop(predecessor);
+}
+
+#[test]
 fn takeover_start_marker_failure_carries_on_and_poisons() {
     // RULING-4628-8's test as unblocked by RULING-4628-9: fail the
     // start-marker append for real at the open fd, then check the keeper
@@ -931,7 +1230,11 @@ fn socket_of(keeper: &Keeper) -> std::path::PathBuf {
 }
 
 fn connect(keeper: &Keeper) -> Peer {
-    let writer = UnixStream::connect(socket_of(keeper)).expect("connect to the keeper");
+    connect_to(&socket_of(keeper))
+}
+
+fn connect_to(path: &std::path::Path) -> Peer {
+    let writer = UnixStream::connect(path).expect("connect to the keeper");
     let reader = writer.try_clone().expect("reader");
     let (send, frames) = mpsc::channel();
     std::thread::spawn(move || {
@@ -1761,6 +2064,7 @@ fn lock_race(old_wins: bool) {
     let deadline = || Deadline::after(Duration::from_secs(10));
     let (old_held, old_held_rx) = ready_signal();
     let (old_before, old_gate) = barrier();
+    let (old_waiter_tx, old_waiter_rx) = mpsc::channel();
     let (mut old, _) = serve_keeper_with(
         "keeper-lock-race",
         id.clone(),
@@ -1768,6 +2072,11 @@ fn lock_race(old_wins: bool) {
         super::Hooks {
             held: Some(old_held),
             before_open: Some(old_before),
+            takeover_waiter_thread: Some(Box::new(move |thread| {
+                match old_waiter_tx.send(thread) {
+                    Ok(()) | Err(mpsc::SendError(_)) => {}
+                }
+            })),
             ..super::Hooks::default()
         },
         None,
@@ -1777,6 +2086,7 @@ fn lock_race(old_wins: bool) {
     adopt_call(&old, "old", "j_old");
     crash(&mut old);
     deadline().recv_or_fail(&old_held_rx, "the old keeper to hold the log");
+    deadline().recv_or_fail(&old_waiter_rx, "the first old takeover waiter");
     let mut peer = connect(&old);
     identify(&mut peer, &id);
     assert_eq!(handover(&mut peer).len(), 1);
@@ -1785,6 +2095,7 @@ fn lock_race(old_wins: bool) {
     let session = log::Log::open(&old.sessions, id.clone(), clock.clone()).expect("session lock");
     let (fresh_held, fresh_held_rx) = ready_signal();
     let (fresh_before, fresh_gate) = barrier();
+    let (fresh_waiter_tx, fresh_waiter_rx) = mpsc::channel();
     let (mut fresh, _) = serve_keeper_with(
         "keeper-lock-race",
         id.clone(),
@@ -1792,6 +2103,11 @@ fn lock_race(old_wins: bool) {
         super::Hooks {
             held: Some(fresh_held),
             before_open: Some(fresh_before),
+            takeover_waiter_thread: Some(Box::new(move |thread| {
+                match fresh_waiter_tx.send(thread) {
+                    Ok(()) | Err(mpsc::SendError(_)) => {}
+                }
+            })),
             ..super::Hooks::default()
         },
         Some(&old),
@@ -1802,6 +2118,8 @@ fn lock_race(old_wins: bool) {
     old_gate.armed.store(true, Ordering::Release);
     fresh_gate.armed.store(true, Ordering::Release);
     // The session dies: both keepers see their connection end.
+    let old_start = clock.now();
+    let fresh_start = clock.now();
     hang_up(peer);
     crash(&mut fresh);
     deadline().recv_or_fail(&old_gate.arrived, "the old keeper to reach the lock");
@@ -1816,6 +2134,19 @@ fn lock_race(old_wins: bool) {
     winner_gate.go.send(()).expect("release the winner");
     deadline().recv_or_fail(winner_held, "the winner to hold the log");
     loser_gate.go.send(()).expect("release the loser");
+    let (waiter_rx, start) = if old_wins {
+        (&fresh_waiter_rx, fresh_start)
+    } else {
+        (&old_waiter_rx, old_start)
+    };
+    let waiter = deadline().recv_or_fail(waiter_rx, "the losing takeover waiter");
+    let until = start + super::TAKEOVER_LOCK_WAIT;
+    clock.advance_when_parked(
+        Some(until),
+        Some(waiter),
+        super::TAKEOVER_LOCK_WAIT,
+        &deadline(),
+    );
     deadline()
         .recv_or_fail(&loser.result, "the loser to exit")
         .expect("the loser exits cleanly");

@@ -129,6 +129,10 @@ struct Candidate {
     stream: UnixStream,
 }
 
+/// The predecessor closes the lifeline before the kernel releases its flock.
+pub(crate) const TAKEOVER_LOCK_WAIT: Duration = Duration::from_secs(5);
+pub(super) const ACCEPT_BACKOFF_MAX: Duration = Duration::from_secs(1);
+
 /// Test-only pause and notification points, each with the race it forces.
 #[cfg(test)]
 #[derive(Default)]
@@ -136,6 +140,8 @@ struct Hooks {
     /// Runs just before a recovery opens the log, so a test decides which
     /// of two recoveries reaches the lock first (the lock-loss race).
     before_open: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Reports the takeover caller immediately before it opens the log.
+    takeover_waiter_thread: Option<Box<dyn Fn(std::thread::ThreadId) + Send + Sync>>,
     /// Runs once a recovery holds the log and accepts candidates.
     held: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs after a takeover opens the log and before it appends its start
@@ -156,6 +162,8 @@ struct Hooks {
     before_switch: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs as a bound watcher ends, with its generation.
     watcher_done: Option<Box<dyn Fn(u64) + Send + Sync>>,
+    accept_error: Option<Box<dyn Fn() -> Option<io::ErrorKind> + Send + Sync>>,
+    candidate_spawn_error: Option<Box<dyn Fn() -> bool + Send + Sync>>,
 }
 
 struct Runtime {
@@ -258,13 +266,18 @@ impl Runtime {
                     if let Some(pause) = &self.hooks.before_open {
                         pause();
                     }
-                    match Log::open_as(
+                    #[cfg(test)]
+                    if let Some(report) = &self.hooks.takeover_waiter_thread {
+                        report(std::thread::current().id());
+                    }
+                    match Log::open_as_takeover(
                         sessions,
                         self.id.clone(),
                         Arc::clone(&self.clock),
                         &format!("keeper {}", std::process::id()),
+                        self.clock.now() + TAKEOVER_LOCK_WAIT,
                     ) {
-                        Ok(held) => {
+                        Ok(Some(held)) => {
                             #[cfg(test)]
                             if let Some(hook) = &self.hooks.before_start_append {
                                 hook(&held);
@@ -289,8 +302,9 @@ impl Runtime {
                             if let Some(pause) = &self.hooks.before_bind {
                                 pause();
                             }
-                            let (socket, listener) = doors::bind(&self.home, &dir)
-                                .map_err(|error| io::Error::other(error.to_string()))?;
+                            let bound = doors::bind(&self.home, &dir);
+                            let (socket, listener) =
+                                bound.map_err(|error| io::Error::other(error.to_string()))?;
                             *log = Some(HeldLog {
                                 socket: socket.clone(),
                                 log: held,
@@ -310,7 +324,7 @@ impl Runtime {
                                 held();
                             }
                         }
-                        Err(log::Error::Held { .. }) => {
+                        Ok(None) | Err(log::Error::Held { .. }) => {
                             self.discard();
                             let steps = lock(&self.supervisor).lock_lost();
                             return self.apply(log, steps);
@@ -756,14 +770,62 @@ impl Runtime {
         });
         let runtime = Arc::clone(self);
         thread::spawn(move || {
-            for accepted in listener.incoming() {
+            let backoff = Arc::new(support::clock::Parker::new());
+            let waker: Arc<dyn Wake> = backoff.clone();
+            runtime.clock.subscribe(Arc::downgrade(&waker));
+            let mut delay = Duration::from_millis(10);
+            let mut incoming = listener.incoming();
+            loop {
                 if stop.load(Ordering::Acquire) {
                     break;
                 }
-                let Ok(stream) = accepted else { break };
+                #[cfg(test)]
+                let accepted = runtime
+                    .hooks
+                    .accept_error
+                    .as_ref()
+                    .and_then(|hook| hook())
+                    .map_or_else(
+                        || {
+                            incoming
+                                .next()
+                                .unwrap_or_else(|| Err(io::Error::other("listener ended")))
+                        },
+                        |kind| Err(io::Error::from(kind)),
+                    );
+                #[cfg(not(test))]
+                let accepted = incoming
+                    .next()
+                    .unwrap_or_else(|| Err(io::Error::other("listener ended")));
+                let Ok(stream) = accepted else {
+                    if stop.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let seen = backoff.generation();
+                    let until = runtime.clock.now() + delay;
+                    backoff.park(&*runtime.clock, Some(until), seen);
+                    delay = delay.saturating_mul(2).min(ACCEPT_BACKOFF_MAX);
+                    continue;
+                };
+                delay = Duration::from_millis(10);
                 // One thread per candidate: a stalled one holds up nothing.
+                #[cfg(test)]
+                if runtime
+                    .hooks
+                    .candidate_spawn_error
+                    .as_ref()
+                    .is_some_and(|inject| inject())
+                {
+                    drop(stream);
+                    continue;
+                }
                 let runtime = Arc::clone(&runtime);
-                thread::spawn(move || runtime.candidate(stream));
+                let Ok(_candidate) = thread::Builder::new()
+                    .name("keeper-candidate".into())
+                    .spawn(move || runtime.candidate(stream))
+                else {
+                    continue;
+                };
             }
         });
     }
@@ -1029,21 +1091,24 @@ impl Runtime {
                     if lock(&self.supervisor).adopt(&id, job_id.clone())
                         && let Some(process) = lock(&self.processes).get(&id)
                     {
-                        lock(&process.state).adoption = Some(Adoption {
-                            output: output_path,
-                            errors: errors_path,
-                            lines,
-                        });
+                        {
+                            let mut state = lock(&process.state);
+                            state.adoption = Some(Adoption {
+                                output: output_path,
+                                errors: errors_path,
+                                lines,
+                            });
+                        }
                     }
                 }
-                ToKeeper::Confirmed(id) => {
-                    self.decide(|sup| sup.confirmed(&id))?;
-                }
+                ToKeeper::Confirmed(id) => self.decide(|sup| sup.confirmed(&id))?,
                 ToKeeper::Shutdown(true) => {
                     self.discard();
                     self.decide(Supervisor::shutdown_requested)?;
                 }
-                ToKeeper::Shutdown(false) => return Err(io::Error::other("shutdown must be true")),
+                ToKeeper::Shutdown(false) => {
+                    return Err(io::Error::other("shutdown must be true"));
+                }
                 // Only a candidate on the keeper's socket may negotiate; the
                 // session's own control connection never does.
                 ToKeeper::Identify(_) | ToKeeper::Handover(_) | ToKeeper::Adopted(_) => {

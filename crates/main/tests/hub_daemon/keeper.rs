@@ -377,7 +377,10 @@ pub(super) fn wait_for_refuse_only_socket(
                 kill_marker.as_deref(),
             ),
         );
-        panic!("waited until the deadline for keeper refuse-only socket to accept; {diagnostic}");
+        panic!(
+            "waited until the deadline for keeper refuse-only socket to accept; socket path {}; {diagnostic}",
+            path.display()
+        );
     }
 }
 
