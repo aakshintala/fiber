@@ -99,6 +99,41 @@ impl Setup {
         fakes::write_record(&dir);
     }
 
+    /// Places a provider whose models use the `workspace` placeholder.
+    /// Its credential is stored only when `credentialed` is true.
+    fn place_templated_fake(&self, models: Value, credentialed: bool) {
+        let dir = self.home().join("extensions").join("fake");
+        fs::create_dir_all(dir.join("providers")).unwrap();
+        fs::write(
+            dir.join("extension.json"),
+            json!({"name": "fake", "version": "v1.0.0", "fiber": "0.1.0", "api": 1,
+                   "providers": {"fake": ["https://{workspace}/v1"]}})
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("providers").join("fake.json"),
+            json!({"name": "fake", "placeholders": {"workspace": {}}, "models": models})
+                .to_string(),
+        )
+        .unwrap();
+        fakes::write_record(&dir);
+        if credentialed {
+            self.store("fake", "default", "key");
+        }
+    }
+
+    fn templated_models(ids: &[&str]) -> Value {
+        Value::Array(
+            ids.iter()
+                .map(|id| {
+                    json!({"id": id, "protocol": "openai-responses",
+                                "base_url": "https://{workspace}/v1", "context_window": 1000})
+                })
+                .collect(),
+        )
+    }
+
     /// The ready report's provider: the default key in the environment,
     /// `work` stored.
     fn place_ready_provider(&self) {
@@ -407,6 +442,72 @@ fn an_extension_for_another_api_is_a_stderr_notice() {
         only.contains("was written for extension API 999"),
         "{only:?}"
     );
+}
+
+#[test]
+fn doctor_groups_missing_host_models_for_a_credentialed_provider() {
+    let setup = Setup::new();
+    setup.place_templated_fake(Setup::templated_models(&["one", "two"]), true);
+    setup.write_config(&json!({"model": "fake/one"}));
+
+    let (_, _, err) = setup.report(&env_of(&[]));
+    assert_eq!(err.lines().count(), 1, "{err:?}");
+    assert!(
+        err.contains("`fake`: 2 models need the setting `workspace`"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn doctor_suppresses_missing_host_for_an_uncredentialed_provider() {
+    let setup = Setup::new();
+    setup.place_templated_fake(Setup::templated_models(&["one"]), false);
+    setup.write_config(&json!({"model": "fake/one"}));
+
+    let (_, _, err) = setup.report(&env_of(&[]));
+    assert!(!err.contains("model_unconfigured"), "{err:?}");
+    assert!(!err.contains("setting `workspace`"), "{err:?}");
+}
+
+#[test]
+fn doctor_keeps_invalid_host_notice_per_model_for_a_credentialed_provider() {
+    let setup = Setup::new();
+    setup.place_templated_fake(Setup::templated_models(&["one", "two"]), true);
+    setup.write_config(&json!({"model": "fake/one"}));
+    fs::create_dir_all(setup.home().join("config")).unwrap();
+    fs::write(
+        setup.home().join("config/fake.json"),
+        r#"{"workspace":"not a host"}"#,
+    )
+    .unwrap();
+
+    let (_, _, err) = setup.report(&env_of(&[]));
+    assert_eq!(err.lines().count(), 2, "{err:?}");
+    assert!(
+        err.contains("The model `fake/one` needs the setting `workspace`"),
+        "{err:?}"
+    );
+    assert!(
+        err.contains("The model `fake/two` needs the setting `workspace`"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn doctor_suppresses_invalid_host_for_an_uncredentialed_provider() {
+    let setup = Setup::new();
+    setup.place_templated_fake(Setup::templated_models(&["one"]), false);
+    setup.write_config(&json!({"model": "fake/one"}));
+    fs::create_dir_all(setup.home().join("config")).unwrap();
+    fs::write(
+        setup.home().join("config/fake.json"),
+        r#"{"workspace":"not a host"}"#,
+    )
+    .unwrap();
+
+    let (_, _, err) = setup.report(&env_of(&[]));
+    assert!(!err.contains("model_unconfigured"), "{err:?}");
+    assert!(!err.contains("setting `workspace`"), "{err:?}");
 }
 
 #[test]
