@@ -530,3 +530,9 @@ docs/invocation.md	fiber-4827	plan	2026-11-14T22:13:03Z	Amoghs-MacBook-Pro:/User
 docs/testing.md	fiber-4827	plan	2026-11-14T22:13:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 docs/testing/mutants.md	fiber-4827	plan	2026-11-14T22:13:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 docs/workflow.md	fiber-4827	plan	2026-11-14T22:13:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/log/src/search_timing_tests.rs	fiber-4685	plan	2026-11-14T22:08:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/log/src/delete_tests.rs	fiber-4685	plan	2026-11-14T22:08:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/log/src/dependents_tests.rs	fiber-4685	plan	2026-11-14T22:08:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/log/src/name_tests.rs	fiber-4685	plan	2026-11-14T22:08:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/log/src/scan_tests.rs	fiber-4685	plan	2026-11-14T22:08:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/log/src/search/workers_tests.rs	fiber-4685	plan	2026-11-14T22:08:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
