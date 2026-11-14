@@ -481,3 +481,7 @@ docs/testing/running.md	fiber-4829	plan	2026-11-14T21:15:04Z	roundhouse-7010-plu
 docs/tools.md	fiber-4829	plan	2026-11-14T21:15:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/performance.md	fiber-4829	plan	2026-11-14T21:15:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/workflow.md	fiber-4829	plan	2026-11-14T21:15:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tools/src/shell/keeper_lock_tests.rs	fiber-4842	plan	2026-11-14T21:28:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/shell/command.rs	fiber-4842	plan	2026-11-14T21:28:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/shell/sandbox/protected.rs	fiber-4842	plan	2026-11-14T21:28:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/shell/sandbox/protected/baseline.rs	fiber-4842	plan	2026-11-14T21:28:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
