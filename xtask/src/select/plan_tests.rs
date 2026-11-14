@@ -317,8 +317,11 @@ fn budget_breach_section_exempts_only_complete_unfenced_bug_prs() {
             "pull_request",
             false,
             true,
-            false,
-            0,
+            MutantPlanInput {
+                labels: Vec::new(),
+                count: 0,
+                reuse: None,
+            },
         );
         let selected = plan_with_budget_breach_body(selected, true, body);
         assert_eq!(selected.jobs["bug_red"], !exempt, "{name}");
@@ -330,8 +333,11 @@ fn budget_breach_section_exempts_only_complete_unfenced_bug_prs() {
         "pull_request",
         false,
         false,
-        false,
-        0,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 0,
+            reuse: None,
+        },
     );
     assert!(!plan_with_budget_breach_body(non_bug, false, complete).jobs["bug_red"]);
 }
@@ -378,8 +384,11 @@ fn budget_breach_fences_require_matching_marker_and_sufficient_width() {
             "pull_request",
             false,
             true,
-            false,
-            0,
+            MutantPlanInput {
+                labels: Vec::new(),
+                count: 0,
+                reuse: None,
+            },
         );
         let result = plan_with_budget_breach_body(selected, true, body);
         assert_eq!(result.jobs["bug_red"], !exempt, "{name}");
@@ -395,8 +404,11 @@ fn budget_breach_suppression_does_not_change_mutant_or_reuse_selection() {
         "pull_request",
         false,
         true,
-        true,
-        40,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 40,
+            reuse: None,
+        },
     );
     let suppressed = plan_with_budget_breach_body(ordinary.clone(), true, body);
     assert_eq!(suppressed.jobs["bug_red"], false);

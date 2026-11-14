@@ -551,10 +551,17 @@ fn plan_reports_budget_breach_exemption_and_preserves_mutant_selection() {
         "Budget breach exemption: bug-red legs skipped; reviewers judge Base/Head measurements.\n"
     );
 
-    let (code, ordinary) = xtask(&dir, &args[..args.len() - 2], &[], "");
+    std::fs::write(&summary, "").unwrap();
+    let (code, ordinary) = xtask(
+        &dir,
+        &args[..args.len() - 2],
+        &[("GITHUB_STEP_SUMMARY", summary_path)],
+        "",
+    );
     assert_eq!(code, 0, "{ordinary}");
     assert!(!ordinary.contains("budget_breach="), "{ordinary}");
     assert!(ordinary.contains("jobs={\"bug_red\":true"), "{ordinary}");
+    assert_eq!(std::fs::read_to_string(&summary).unwrap(), "");
 
     std::fs::write(&summary, "").unwrap();
     let mut non_bug = args.to_vec();
