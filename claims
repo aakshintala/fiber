@@ -31,16 +31,11 @@ crates/tui/src/app/snapshots/tui__app__rewind__tests__rewind_refused_80x24.snap	
 crates/main/src/keeper.rs:272-273	fiber-4351	plan	2026-11-14T08:20:23Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
 crates/main/src/keeper_restore.rs:330-331	fiber-4351	plan	2026-11-14T08:20:23Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
 docs/workflow.md	fiber-4816	plan	2026-11-14T09:28:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tools/src/shell/sandbox/protected.rs	fiber-3894	plan	2026-11-14T09:34:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tools/src/shell/command.rs	fiber-3894	plan	2026-11-14T09:34:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/tools.md	fiber-3894	plan	2026-11-14T09:34:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/code-quality.md	fiber-3894	plan	2026-11-14T09:34:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/tests/fixtures/reviewer_eval/README.md	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
 crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
 crates/loop/tests/fixtures/reviewer_eval/extract.sh	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
 crates/loop/tests/reviewer_eval.rs	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
 crates/loop/tests/support/reviewer_eval.rs	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
-crates/tools/src/shell/keeper_lock_tests.rs	fiber-3894	plan	2026-11-14T09:39:19Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/log/src/scan.rs:7-8	fiber-4351	plan	2026-11-14T09:38:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
 crates/log/src/scan.rs:11-12	fiber-4351	plan	2026-11-14T09:38:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
 crates/log/src/scan.rs:488-490	fiber-4351	plan	2026-11-14T09:38:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
@@ -174,7 +169,6 @@ docs/workflow.md	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/ho
 docs/code-quality.md	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/dependencies.md	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/performance.md	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tools/src/shell/sandbox/protected.rs,crates/tools/src/shell/command.rs,crates/tools/src/shell/keeper_lock_tests.rs,docs/tools.md,docs/code-quality.md	fiber-3894	grant	2026-11-14T10:21:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/keeper/3894-confined-lock-crash	
 docs/tui.md	fiber-688	plan	2026-11-14T10:27:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/layout.rs	fiber-688	plan	2026-11-14T10:27:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/layout_tests.rs	fiber-688	plan	2026-11-14T10:27:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
