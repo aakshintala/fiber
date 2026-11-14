@@ -1,9 +1,9 @@
 //! Tests for the seam types: the input key and the renderer handle.
 
 use super::{
-    AnswerDisposition, CallState, Failure, Handle, Input, LedgerResult, LedgerRow, Prompt,
-    PromptImage, RawSpan, Renderer, ReplyText, RowError, ThinkingLine, TurnCallResult, TurnCard,
-    TurnCardState, TurnEnded, TurnGroupState,
+    AnswerDisposition, CallState, Failure, Handle, Input, LayoutDecision, LayoutInput,
+    LedgerResult, LedgerRow, Prompt, PromptImage, RawRect, RawSpan, Renderer, ReplyText, RowError,
+    ThinkingLine, TurnCallResult, TurnCard, TurnCardState, TurnEnded, TurnGroupState,
 };
 use super::{Decision, Ext, FailureKind, SessionCtx, SlotSelection};
 use contract::events::FileChange;
@@ -853,6 +853,14 @@ pub(crate) struct SlotRenderer {
     pub(crate) builtins: RefCell<Vec<u16>>,
     /// What it answers.
     pub(crate) script: RefCell<SlotScript>,
+    /// The home inputs it saw, when that slot is invoked.
+    pub(crate) home_inputs: RefCell<Vec<serde_json::Value>>,
+    /// The layout inputs it saw.
+    pub(crate) layout_inputs: RefCell<Vec<LayoutInput>>,
+    /// The map the layout slot returns.
+    pub(crate) layout: RefCell<Option<Vec<(String, RawRect)>>>,
+    /// Whether the layout slot returns the built-in map.
+    pub(crate) layout_builtin: Cell<bool>,
 }
 
 impl SlotRenderer {
@@ -863,6 +871,10 @@ impl SlotRenderer {
             calls: RefCell::new(Vec::new()),
             builtins: RefCell::new(Vec::new()),
             script: RefCell::new(script),
+            home_inputs: RefCell::new(Vec::new()),
+            layout_inputs: RefCell::new(Vec::new()),
+            layout: RefCell::new(None),
+            layout_builtin: Cell::new(false),
         }
     }
 }
@@ -884,6 +896,11 @@ impl Renderer for SlotRenderer {
         width: u16,
         builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
     ) -> Decision {
+        if slot == "home"
+            && let Input::Home(home) = input
+        {
+            self.home_inputs.borrow_mut().push(home.value.clone());
+        }
         decide(self.name(), || -> Result<Vec<Vec<RawSpan>>, Failure> {
             self.calls.borrow_mut().push((
                 ctx.session_id.clone().map(|id| id.0),
@@ -906,6 +923,23 @@ impl Renderer for SlotRenderer {
                 }
             }
         })
+    }
+
+    fn render_layout(
+        &self,
+        _ctx: &SessionCtx,
+        input: &LayoutInput,
+        builtin: &dyn Fn(&LayoutInput) -> Vec<(String, RawRect)>,
+    ) -> LayoutDecision {
+        self.layout_inputs.borrow_mut().push(input.clone());
+        LayoutDecision::Draw {
+            extension: self.name().into(),
+            regions: if self.layout_builtin.get() {
+                builtin(input)
+            } else {
+                self.layout.borrow().clone().unwrap_or_default()
+            },
+        }
     }
 }
 

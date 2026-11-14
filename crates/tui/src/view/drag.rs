@@ -18,7 +18,7 @@ const ACTIVE_TINT: Style = Style::new().bg(Role::Rule.color());
 /// the pill naming the live share and columns while a drag runs. The tint
 /// sets the background only, so the grip's `⋮` stays.
 pub(super) fn draw(app: &App, buf: &mut Buffer, pointer: Option<(u16, u16)>) {
-    let Some(layout) = app.chrome().layout() else {
+    let Some(layout) = app.chrome().drawn_layout() else {
         return;
     };
     let dragged = app.dragging().map(|(edge, _)| edge);

@@ -3,6 +3,8 @@
 use super::super::{cursor, render, text};
 use super::picker::{TypedRow, typed_body};
 use crate::app::{App, Effect, QUIT_HINT};
+use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+use crate::ext::{FailureKind, Renderer};
 use crate::home::{Launch, ListLine, Spot};
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -13,6 +15,7 @@ use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 #[test]
 fn remote_home_draws_an_unset_dim_chip_and_non_escaping_footer() {
@@ -118,6 +121,133 @@ fn screen(app: &App, width: u16, height: u16) -> String {
 fn home_only(app: &App, area: Rect, buf: &mut Buffer) -> Vec<crate::mouse::Target> {
     let screen = app.home_screen().expect("home draws");
     super::render(app, &screen, area, buf, None).0
+}
+
+#[test]
+fn home_slot_replaces_list_lines_and_preserves_targets_and_focus() {
+    let mut app = focus_home();
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::Up, now);
+    app.on_key(Key::Up, now);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut before = Buffer::empty(area);
+    let before_targets = home_only(&app, area, &mut before);
+    let focused = app.focused().expect("first list row focused");
+    assert!(before_targets.iter().any(|target| target.id == focused));
+
+    let line_count = super::home_lines(&app.home_screen().expect("home screen"), area.width).len();
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["home"],
+        SlotScript::Replace(vec![vec![raw("extension home list")]; line_count]),
+    ));
+    app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+    let mut after = Buffer::empty(area);
+    let after_targets = home_only(&app, area, &mut after);
+
+    assert_eq!(after_targets, before_targets);
+    assert!(text(&after).contains("extension home list"));
+    let focused_row = after_targets
+        .iter()
+        .find(|target| target.id == focused)
+        .unwrap();
+    assert_eq!(
+        after[(focused_row.rect.x, focused_row.rect.y)].bg,
+        crate::theme::Role::Selection.color()
+    );
+    let input = &renderer.home_inputs.borrow()[0];
+    assert_eq!(input["flat"], false);
+    assert!(input.get("logo").is_none());
+    assert!(
+        input["list"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|line| line.get("since").is_none())
+    );
+}
+
+#[test]
+fn home_slot_replacement_keeps_scrolled_lines_aligned_with_targets() {
+    let mut app = home_with_live_rows(80, 24, 12);
+    let area = Rect::new(0, 0, 80, 24);
+    let screen = app.home_screen().expect("home screen");
+    let lines = super::home_lines(&screen, area.width);
+    let rows = super::list_rows(&screen);
+    assert_eq!(lines.len(), rows.len());
+
+    let (window, max_scroll) = super::list_window(&app, &screen, area);
+    assert!(max_scroll > 1, "fixture must scroll the list");
+    let start = 2.min(max_scroll);
+    app.set_home_list_scroll(start);
+
+    let mut before = Buffer::empty(area);
+    let before_targets = home_only(&app, area, &mut before);
+    assert_eq!(app.home_list_scroll(), start);
+
+    let replacement = lines
+        .iter()
+        .enumerate()
+        .map(|(index, _)| vec![raw(&format!("extension row {index:02}"))])
+        .collect();
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["home"],
+        SlotScript::Replace(replacement),
+    ));
+    app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+    let mut after = Buffer::empty(area);
+    let after_targets = home_only(&app, area, &mut after);
+
+    assert_eq!(after_targets, before_targets);
+    let drawn = text(&after);
+    let visible = usize::from(window.height).min(lines.len().saturating_sub(start));
+    for offset in 0..visible {
+        let index = start + offset;
+        let y = window.y + u16::try_from(offset).unwrap();
+        let line = drawn.lines().nth(usize::from(y)).unwrap();
+        assert!(
+            line.contains(&format!("extension row {index:02}")),
+            "line {index} should draw at its built-in row {y}:\n{drawn}"
+        );
+        if let Some(spot) = rows[index].spot {
+            let id = crate::mouse::TargetId::Home(spot);
+            assert!(
+                before_targets
+                    .iter()
+                    .any(|target| target.id == id && target.rect.y == y),
+                "built-in target {id:?} should occupy replacement row {index} at {y}"
+            );
+            assert!(
+                after_targets
+                    .iter()
+                    .any(|target| target.id == id && target.rect.y == y),
+                "replacement should preserve target {id:?} on row {index} at {y}"
+            );
+        }
+    }
+}
+
+#[test]
+fn home_slot_failure_and_empty_output_keep_the_builtin_list() {
+    for script in [
+        SlotScript::Fail {
+            kind: FailureKind::HookFailed,
+            message: "home failed".into(),
+        },
+        SlotScript::Replace(Vec::new()),
+    ] {
+        let mut app = home_with_live_rows(80, 24, 1);
+        let area = Rect::new(0, 0, 80, 24);
+        let renderer = Rc::new(SlotRenderer::filling(&["home"], script));
+        app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+        let mut buf = Buffer::empty(area);
+        home_only(&app, area, &mut buf);
+        let drawn = text(&buf);
+        assert!(drawn.contains("session"), "built-in row remains:\n{drawn}");
+        assert!(
+            !drawn.contains("extension home list"),
+            "no partial replacement:\n{drawn}"
+        );
+    }
 }
 
 /// Home with `count` live sessions in one project.

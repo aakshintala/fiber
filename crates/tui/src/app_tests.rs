@@ -1547,33 +1547,33 @@ fn the_input_box_grows_to_a_third_of_the_screen() {
     let mut app = app();
     app.set_size(60, 12);
     app.attach(contract::SessionId(S_A.to_owned()));
-    assert_eq!(app.input_height(), 1);
+    assert_eq!(app.input_height_at(app.column_width()), 1);
     assert_eq!(app.conversation_height(), 7);
     for _ in 0..2 {
         app.on_edit(Edit::ShiftEnter);
     }
-    assert_eq!(app.input_height(), 3);
+    assert_eq!(app.input_height_at(app.column_width()), 3);
     assert_eq!(app.conversation_height(), 5);
     for _ in 0..5 {
         app.on_edit(Edit::ShiftEnter);
     }
     // 12 / 3 rows at most.
-    assert_eq!(app.input_height(), 4);
+    assert_eq!(app.input_height_at(app.column_width()), 4);
     assert_eq!(app.conversation_height(), 4);
     app.set_size(60, 14);
-    assert_eq!(app.input_height(), 4);
+    assert_eq!(app.input_height_at(app.column_width()), 4);
     app.set_size(60, 15);
-    assert_eq!(app.input_height(), 5);
+    assert_eq!(app.input_height_at(app.column_width()), 5);
     // A screen under 3 rows still shows one.
     app.set_size(60, 2);
-    assert_eq!(app.input_height(), 1);
+    assert_eq!(app.input_height_at(app.column_width()), 1);
     // Wrapped rows count.
     let mut app = self::app();
     app.set_size(10, 12);
     for _ in 0..9 {
         app.on_key(Key::Char('x'), now);
     }
-    assert_eq!(app.input_height(), 2);
+    assert_eq!(app.input_height_at(app.column_width()), 2);
 }
 
 #[test]

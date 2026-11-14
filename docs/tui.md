@@ -3585,21 +3585,29 @@ needs 40×10" floor stays the terminal's.
 | `flat` | Whether the screen reader drops every style |
 | `regions` | Only the names shown this frame, from `rail`, `conversation`, `working_line`, `steering_queue`, `input_box` and `panel` |
 
-**`home`** draws Home. It receives only the source values the built-in renderer
-reads; its output keeps the existing line shape and targets. It does not receive
-logo protocol state or elapsed strings. Optional keys are absent when they do
-not apply, never `null`.
+**`home`** replaces Home's session-list lines. `builtin(input, width)` returns
+the built-in list lines, or the two empty-state lines. An empty result or a
+failure keeps the built-in list. The terminal keeps the logo, chips, blockers,
+input box, picker, question, footer, target positions and focus behavior. Return
+the same number of lines as `builtin(input, width)`, in the same order. The
+terminal uses the built-in scroll offset, so each replacement line stays
+aligned with its existing target.
+
+The input table includes only the source values the built-in renderer reads.
+It omits logo protocol state and the live row's `since` source field. Changes to
+`since` still refresh cached built-in lines. Those rendered lines may include
+the elapsed text. Optional keys are absent when they do not apply, never `null`.
 
 | Field | What it holds |
 |---|---|
 | `version` | Fiber's version, shown beside the four-row logo |
 | `glyph` | The glyph before the name in the one-row logo |
 | `header` | `counts` (state role and text pairs) and optional `spend` |
-| `chips` | Each chip's `text`, `dim`, `session_mark`, and existing click `spot` when present |
+| `chips` | Each chip's `text`, `dim`, `session_mark`, and optional `spot` (`workspace`, `worktree`, `model` or `thinking`) |
 | `list` | The rows drawn by Home: `head` fields `start`, `name`, `live`, `spend`, `waiting`; `live` fields `key`, `number`, `glyph`, `name`, `word`, `tone`, `stop`, `id`, `turns`, `branch`, `spend`, `context`, `wait`; `exited_head` `count`; `exited` fields `key`, `stop`, `glyph`, `name`, `id`, `turns`, `spend`, `age`; `more` fields `key`, `count`; and `archived_head` fields `key`, `count` |
 | `empty` | Whether there are no live, crashed, exited or archived sessions |
 | `blockers`, `blocker_keys` | The blocker lines and matching booleans for credential-fix targets |
-| `picker` | When open, `escapes`, `recents`, `focus`, and optional `typed` with `text`, `completions` and `missing` |
+| `picker` | When open, `escapes`, `recents`, optional `focus`, and optional `typed` with `text`, `completions` and `missing` |
 | `foot` | The key hint, as text and style spans |
 | `question` | The optional question text, with `question_import` and `question_scroll` |
 | `placeholder` | Whether the input box shows its placeholder |

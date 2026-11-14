@@ -28,8 +28,10 @@ pub(crate) struct Chrome {
     panel_hidden: bool,
     /// ⌥R hid the rail: it stays hidden until shown.
     rail_hidden: bool,
-    /// The session screen's regions; `None` on home or below the floor.
+    /// The session screen's built-in split; `None` on home or below the floor.
     layout: Option<Layout>,
+    /// The shared six-region placement for the latest settled frame.
+    placement: Option<crate::view::Placement>,
     /// The floor line, while the screen is below the floor.
     floor: Option<String>,
 }
@@ -79,19 +81,32 @@ impl Chrome {
             .is_some_and(|layout| layout.rail.is_none() && layout.panel.is_some())
     }
 
-    /// Lays a `width` by `height` screen out, returning whether the
-    /// regions moved. The rail is wanted unless the person hid it; a
-    /// rail the width sheds leaves its grip.
-    fn lay_out(&mut self, width: u16, height: u16, home: HomeState) -> bool {
-        let before = self.layout;
+    /// Lays a `width` by `height` screen out. The rail is wanted unless
+    /// the person hid it; a rail the width sheds leaves its grip.
+    fn lay_out(&mut self, width: u16, height: u16, home: HomeState) {
         self.floor = layout::floor_line(width, height);
         self.layout = Self::layout_for(width, height, home, self.rail_hidden, self.panel_hidden);
-        self.layout != before
+        self.placement = None;
     }
 
-    /// The session screen's regions.
+    /// The session screen's built-in split, before vertical placement.
     pub(crate) fn layout(&self) -> Option<Layout> {
         self.layout
+    }
+
+    /// The split with the latest placed rail, panel and conversation
+    /// geometry, retaining the terminal's grip and narrow decisions.
+    pub(crate) fn drawn_layout(&self) -> Option<Layout> {
+        let layout = self.layout?;
+        Some(
+            self.placement
+                .map_or(layout, |placement| placement.chrome(Some(layout))),
+        )
+    }
+
+    /// Stores the shared placement for drawing and hit-testing.
+    fn place(&mut self, placement: Option<crate::view::Placement>) {
+        self.placement = placement;
     }
 
     /// The one line a screen below the floor shows in place of
@@ -104,7 +119,8 @@ impl Chrome {
     /// layout. The conversation's rows wrap one column narrower, leaving
     /// the last column to the scroll bar.
     pub(crate) fn column_width(&self, screen: u16) -> u16 {
-        self.layout.map_or(screen, |layout| layout.column.width)
+        self.drawn_layout()
+            .map_or(screen, |layout| layout.column.width)
     }
 
     /// The gutter the conversation's rows keep on their left: one blank
@@ -120,9 +136,10 @@ impl Chrome {
 
     /// Where the panel and the rail are drawn.
     pub(crate) fn regions(&self) -> Regions {
+        let layout = self.drawn_layout();
         Regions {
-            panel: self.layout.and_then(|layout| layout.panel),
-            rail: self.layout.and_then(|layout| layout.rail),
+            panel: layout.and_then(|layout| layout.panel),
+            rail: layout.and_then(|layout| layout.rail),
         }
     }
 }
@@ -211,6 +228,7 @@ impl App {
     /// frame. Where the panel and the rail are is recorded when they
     /// move.
     pub(super) fn relayout(&mut self) {
+        let regions_before = self.chrome.regions();
         let home = HomeState {
             shares: Shares {
                 rail: self.home.launch.rail_share,
@@ -218,9 +236,11 @@ impl App {
             },
             on_home: self.on_home(),
         };
-        let moved = self
-            .chrome
+        self.chrome
             .lay_out(self.screen.width(), self.screen.height(), home);
+        let area = ratatui::layout::Rect::new(0, 0, self.screen.width(), self.screen.height());
+        let placement = crate::view::placement(self, area);
+        self.chrome.place(placement);
         let width = crate::view::scroll_bar::text_width(
             self.column_width().saturating_sub(self.chrome.gutter()),
         );
@@ -239,8 +259,9 @@ impl App {
             }
         }
         self.rewrap_call_view();
-        if moved {
-            self.set_regions(self.chrome.regions());
+        let regions = self.chrome.regions();
+        if regions != regions_before {
+            self.set_regions(regions);
         }
         self.sync_rail();
     }
