@@ -19,6 +19,7 @@ mod completion;
 mod configure;
 mod continue_session;
 mod delegates;
+mod dynamic_complete;
 mod hub_command;
 mod keeper;
 mod keeper_child;
@@ -131,6 +132,7 @@ fn main() -> ExitCode {
     reason = "prints the usage sentence (docs/code-quality.md, \"Lints\")"
 )]
 fn run() -> i32 {
+    dynamic_complete::complete();
     // A `dhat-heap` build profiles the whole run: the guard lives until
     // `run` returns, so the profile covers every dispatch arm and the
     // `dhat-heap.json` lands in the working directory at orderly exit.
