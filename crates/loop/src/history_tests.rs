@@ -3275,6 +3275,7 @@ fn person_input_turn_snapshot_keeps_staged_request() {
         previous_workspace: None,
         parent_ledger: crate::usage::Ledger::default(),
         asks: crate::reviewer::PendingAsks::default(),
+        staged: HashMap::new(),
         running: crate::compaction::Carry::default(),
         starts: HashMap::new(),
         orphans: crate::jobs::Orphans::default(),

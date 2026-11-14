@@ -10,7 +10,7 @@ use contract::events::EventKind;
 use contract::events::{
     CallStatus, Control, DecidedBy, Decision, Event, ModelSettings, Outcome, SkillLoad,
 };
-use contract::{Envelope, JobId, Seq, SessionId, TurnId};
+use contract::{Envelope, JobId, RequestId, Seq, SessionId, TurnId};
 use log::{Log, Segment};
 use serde_json::Value;
 
@@ -110,6 +110,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         // ledger does for the own segment. Never written anywhere.
         parent_ledger: crate::usage::Ledger::default(),
         asks: PendingAsks::default(),
+        staged: HashMap::new(),
         // The jobs running and the session log's path as of the line read.
         running: Carry::default(),
         // Each turn's latest `turn_started` since the last completed
@@ -211,6 +212,11 @@ struct Pass {
     // The eliciting requests a person's answer resolves, staged by
     // request id for the fold's own reviewed list.
     asks: PendingAsks,
+    // Every review escalation id the chain holds, with whether the own
+    // segment counted it: a parent raise only records its id, and the own
+    // segment counts each id once, at its raise or at the settlement that
+    // answers it with no re-raise.
+    staged: HashMap<RequestId, bool>,
     running: Carry,
     starts: HashMap<TurnId, ((usize, u64), Carry)>,
     orphans: crate::jobs::Orphans,
@@ -229,6 +235,29 @@ fn file_seen(details: &Option<Value>) -> Option<(PathBuf, u64)> {
     Some((PathBuf::from(path), hash))
 }
 
+/// The id of a review escalation a `permission_requested` line carries,
+/// read from the raw payload: step `review` with an escalation cause in
+/// `consecutive_blocks | session_blocks | reviewer_failed`. A line that
+/// does not read as one contributes nothing, as with the exit seed's raw
+/// read.
+fn review_escalation_id(payload: &serde_json::Map<String, Value>) -> Option<RequestId> {
+    let id = payload.get("request_id").and_then(Value::as_str)?;
+    if payload.get("step").and_then(Value::as_str) != Some("review") {
+        return None;
+    }
+    let cause = payload
+        .get("escalation")
+        .and_then(|escalation| escalation.get("cause"))
+        .and_then(Value::as_str)?;
+    if !matches!(
+        cause,
+        "consecutive_blocks" | "session_blocks" | "reviewer_failed"
+    ) {
+        return None;
+    }
+    Some(RequestId(id.to_owned()))
+}
+
 /// Folds one line of segment `pass.index` into `resumed`: the workspace
 /// from the own segment's `session_started`, the model, the credential
 /// label and the thinking, the session-wide state, and the compaction
@@ -236,6 +265,24 @@ fn file_seen(details: &Option<Value>) -> Option<(PathBuf, u64)> {
 /// segment.
 fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<(), Error> {
     let kind = line.kind();
+    // A review escalation counts at its raise, once per id, in log order:
+    // every staged id is exactly one live-counted block, whether a person
+    // answered it, a cancel ended it or nothing settled it yet. A
+    // parent-segment raise only records its id; an own-segment raise of an
+    // uncounted id counts it.
+    if line.is_durable()
+        && kind == EventKind::PermissionRequested
+        && let Some(id) = review_escalation_id(&line.payload)
+    {
+        if pass.own_segment {
+            if !pass.staged.get(&id).is_some_and(|counted| *counted) {
+                resumed.session_blocks += 1;
+                pass.staged.insert(id, true);
+            }
+        } else {
+            pass.staged.entry(id).or_insert(false);
+        }
+    }
     // The requests an earlier process left open are read from the raw
     // payload: a line outside the compaction window never has to parse for the
     // exit to report them. Interaction lines seed the exit the same way,
@@ -429,11 +476,11 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
             resumed.grants.push(grant.clone());
         }
         // A model's block, a reviewer failure and a denial with no
-        // reviewer set up each count, as they do live. The
-        // spending-budget denial is `decided_by: budget` and does not.
-        // debt: undercounts session blocks whose escalation a person
-        // answered or a cancel ended; fixed when the log records blocks.
+        // reviewer set up each count, as they do live: the reviewer's own
+        // block line carries no request. The spending-budget denial is
+        // `decided_by: budget` and does not.
         if pass.own_segment
+            && resolved.request_id.is_none()
             && resolved.decision == Decision::Deny
             && matches!(
                 resolved.decided_by,
@@ -441,6 +488,19 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
             )
         {
             resumed.session_blocks += 1;
+        }
+        // A settlement answering a staged-but-uncounted escalation counts
+        // the block its raise recorded but never wrote here: a hook or
+        // credential deny settling a parent escalation with no
+        // own-segment re-raise. A counted id already counted at its raise;
+        // an unknown id never incremented live.
+        if pass.own_segment
+            && let Some(id) = &resolved.request_id
+            && let Some(counted) = pass.staged.get_mut(id)
+            && !*counted
+        {
+            resumed.session_blocks += 1;
+            *counted = true;
         }
     } else if let Event::OpeningMessage(message) = &event {
         // Only the own log's openings seed the running path: a parent
