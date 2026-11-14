@@ -500,3 +500,10 @@ xtask/src/main.rs	fiber-4830	plan	2026-11-14T22:05:05Z	Amoghs-MacBook-Pro:/Users
 docs/ci.md	fiber-4830	plan	2026-11-14T22:05:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/select.rs	fiber-4830	plan	2026-11-14T22:05:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/select_tests.rs	fiber-4830	plan	2026-11-14T22:05:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/doors/src/lib.rs	fiber-4827	plan	2026-11-14T22:09:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/doors/src/attach.rs	fiber-4827	plan	2026-11-14T22:09:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/doors/src/session_tests.rs	fiber-4827	plan	2026-11-14T22:09:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/lib.rs	fiber-4827	plan	2026-11-14T22:09:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/resume.rs	fiber-4827	plan	2026-11-14T22:09:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/resume_tests.rs	fiber-4827	plan	2026-11-14T22:09:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/session_command.rs	fiber-4827	plan	2026-11-14T22:09:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
