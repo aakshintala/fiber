@@ -649,10 +649,9 @@ impl Runner {
             &self.on_usage,
         );
         let socket = lock(&fold).socket.clone();
-        let status = ended.as_ref().map_or_else(
-            || std::process::ExitStatus::from_raw(0),
-            |exit| host_status(exit),
-        );
+        let status = ended
+            .as_ref()
+            .map_or_else(|| std::process::ExitStatus::from_raw(0), host_status);
         let (mut completed, mut finished) = if disconnected {
             let (completed, finished) = outcome(
                 Some(Termination::HostLost),

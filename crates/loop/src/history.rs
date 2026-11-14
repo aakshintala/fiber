@@ -318,22 +318,19 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
     resumed.known_hosts.fold(&event);
     pass.orphans.fold(&event);
     if pass.own_segment {
-        match &event {
-            Event::JobStarted(started) => {
-                pass.delegate_sessions.remove(&started.job_id);
-                resumed
-                    .delegate_starts
-                    .retain(|(job_id, _)| job_id != &started.job_id);
-                resumed.delegate_finished.remove(&started.job_id);
-                resumed.completed_jobs.remove(&started.job_id);
-            }
-            Event::JobCompleted(completed) => {
-                resumed.completed_jobs.insert(completed.job_id.clone());
-            }
-            Event::DelegateFinished(finished) => {
-                resumed.delegate_finished.insert(finished.job_id.clone());
-            }
-            _ => {}
+        if let Event::JobStarted(started) = &event {
+            pass.delegate_sessions.remove(&started.job_id);
+            resumed
+                .delegate_starts
+                .retain(|(job_id, _)| job_id != &started.job_id);
+            resumed.delegate_finished.remove(&started.job_id);
+            resumed.completed_jobs.remove(&started.job_id);
+        }
+        if let Event::JobCompleted(completed) = &event {
+            resumed.completed_jobs.insert(completed.job_id.clone());
+        }
+        if let Event::DelegateFinished(finished) = &event {
+            resumed.delegate_finished.insert(finished.job_id.clone());
         }
     }
     resumed.offers.fold(&event);
