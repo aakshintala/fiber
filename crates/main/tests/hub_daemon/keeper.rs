@@ -335,17 +335,6 @@ fn keeper_state_at_expiry(
     format!("{sample}\n{case}{window}\n{tail}")
 }
 
-fn keeper_trace(setup: &Setup) -> String {
-    let path = setup.home().join("keeper-4351-trace.log");
-    match read_bounded_tail(&path) {
-        Ok(bytes) => format!(
-            "keeper stderr and exit status (bounded tail):\n{}",
-            String::from_utf8_lossy(&bytes)
-        ),
-        Err(error) => format!("keeper stderr and exit status: unavailable ({error})"),
-    }
-}
-
 fn timeout_diagnostic(last_error: Option<String>, path: &PathBuf, keeper_state: &str) -> String {
     let connect_error = last_error.unwrap_or_else(|| "no connect error was observed".to_owned());
     let socket_state = match fs::metadata(path) {
@@ -389,9 +378,8 @@ pub(super) fn wait_for_refuse_only_socket(
             ),
         );
         panic!(
-            "waited until the deadline for keeper refuse-only socket to accept; socket path {} (creator unknown); {diagnostic}\n{}",
-            path.display(),
-            keeper_trace(setup)
+            "waited until the deadline for keeper refuse-only socket to accept; socket path {} (creator unknown); {diagnostic}",
+            path.display()
         );
     }
 }
