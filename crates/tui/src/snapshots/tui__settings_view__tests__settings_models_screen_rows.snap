@@ -7,7 +7,7 @@ Changes save automatically
 
  Appearance   Notifications   Models   Permissions   Sessions   Advanced
 
-› Default model       a/b ›
+  Default model       a/b ›
 
   Live model details  [x] On
 
@@ -15,14 +15,14 @@ Changes save automatically
 
   Thinking level      Default
 
-  Scoped models       Open /scoped-models ›
+› Scoped models       Open /scoped-models ›
 
   Credentials         Open /credential ›
 
 
 
 
-
-About model.
-model · set in global · Applies to new sessions.
+Choose which models the picker shows by default.
+/scoped-models · opens its own screen
+All models
 ←→ tab · / search · Enter change · Tab layer · Delete reset

@@ -2750,6 +2750,16 @@ fn choice_at(settings: &Settings) -> usize {
 }
 
 #[test]
+fn backend_and_hub_values_advertise_their_dynamic_picker() {
+    for key in ["web_search.backend", "hub.default"] {
+        let row = controlled(key, value("\"alpha\""), "global", ANY, SettingControl::Text);
+        assert_eq!(shown_value(&row).0, "alpha ›", "{key}");
+        let unset = controlled(key, Shown::Unset, "default", ANY, SettingControl::Text);
+        assert_eq!(shown_value(&unset).0, "Default ›", "{key}");
+    }
+}
+
+#[test]
 fn search_backend_picker_shows_default_then_installed_names_and_saves_or_cancels() {
     let mut fake = Fake::new(row_on(
         "web_search.backend",
@@ -3252,7 +3262,8 @@ fn screen_row_details_show_scoped_model_and_disabled_skill_counts() {
 #[test]
 fn models_tab_with_screen_rows() {
     let fake = Fake::new(rows());
-    let settings = tab(&fake, SettingsTab::Models);
+    let mut settings = tab(&fake, SettingsTab::Models);
+    settings.focus = Some(super::Focus::Screen(Screen::ScopedModels));
     insta::assert_snapshot!(
         "settings_models_screen_rows",
         drawn(&settings, None, 80, 24)
@@ -3262,7 +3273,8 @@ fn models_tab_with_screen_rows() {
 #[test]
 fn permissions_tab_with_screen_rows() {
     let fake = Fake::new(rows());
-    let settings = tab(&fake, SettingsTab::Permissions);
+    let mut settings = tab(&fake, SettingsTab::Permissions);
+    settings.focus = Some(super::Focus::Screen(Screen::ReviewerNotes));
     insta::assert_snapshot!(
         "settings_permissions_screen_rows",
         drawn(&settings, None, 80, 24)

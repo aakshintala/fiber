@@ -925,7 +925,7 @@ impl Settings {
                         .rows
                         .iter()
                         .find(|setting| setting.key == "scoped_models")
-                        .and_then(|setting| setting_count(setting));
+                        .and_then(setting_count);
                     lines.push(
                         count.map_or_else(|| "All models".to_owned(), |n| format!("{n} models")),
                     );
@@ -934,7 +934,7 @@ impl Settings {
                         .rows
                         .iter()
                         .find(|setting| setting.key == "skills.disabled")
-                        .and_then(|setting| setting_count(setting))
+                        .and_then(setting_count)
                         .unwrap_or_default();
                     lines.push(format!("{count} off"));
                 }

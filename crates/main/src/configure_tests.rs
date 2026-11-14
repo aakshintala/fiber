@@ -699,6 +699,29 @@ fn hubs_returns_sorted_configured_names_through_the_seam() {
 }
 
 #[test]
+fn search_backends_returns_sorted_installed_names_through_the_seam() {
+    use tui::Configure;
+    let dirs = Dirs::new();
+    let extension = dirs.home().join("extensions/searches");
+    crate::test_support::install_extension(
+        &dirs.home(),
+        "extensions/searches",
+        serde_json::json!({"name":"searches","version":"v1.0.0","fiber":"0.1.0","api":extensions::API}),
+        &[],
+    );
+    write(
+        &extension.join("init.lua"),
+        r#"fiber.search_backend("zebra", { timeout = 1000, run = function() return {} end })
+fiber.search_backend("apple", { timeout = 1000, run = function() return {} end })"#,
+    );
+    let seam = Seam::new(dirs.home());
+    assert_eq!(
+        seam.search_backends(&dirs.workspace("one")).unwrap(),
+        ["apple", "zebra"]
+    );
+}
+
+#[test]
 fn reviewer_notes_reads_each_layers_own_context_with_its_version() {
     use tui::Configure;
     let dirs = Dirs::new();
