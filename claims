@@ -518,3 +518,4 @@ crates/extensions/src/process/context/native.rs	fiber-4696	plan	2026-11-14T22:11
 crates/extensions/src/process_tests.rs	fiber-4696	plan	2026-11-14T22:11:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/extensions/tests/process_activation.rs	fiber-4696	plan	2026-11-14T22:11:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/jobs/src/delegate/message/mod.rs	fiber-4696	plan	2026-11-14T22:11:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/contract/src/codes_tests.rs	fiber-4696	grant	2026-11-14T22:13:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4696-host-refused-origin	
