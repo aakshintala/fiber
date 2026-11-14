@@ -900,9 +900,8 @@ fn keeper_waits_for_dying_session_lock() {
     let (held, held_rx) = ready_signal();
     let hooks = super::Hooks {
         held: Some(held),
-        takeover_waiter_thread: Some(Box::new(move |thread| {
-            // The hook is best-effort after the test drops its receiver.
-            let _sent = thread_tx.send(thread);
+        before_open: Some(Box::new(move || {
+            let _sent = thread_tx.send(std::thread::current().id());
         })),
         ..super::Hooks::default()
     };
@@ -944,9 +943,8 @@ fn keeper_lock_wait_deadline_exits_without_binding() {
     let clock = fakes::clock::FakeClock::new();
     let (waiter_tx, waiter_rx) = mpsc::channel();
     let hooks = super::Hooks {
-        takeover_waiter_thread: Some(Box::new(move |thread| {
-            // The hook is best-effort after the test drops its receiver.
-            let _sent = waiter_tx.send(thread);
+        before_open: Some(Box::new(move || {
+            let _sent = waiter_tx.send(std::thread::current().id());
         })),
         ..super::Hooks::default()
     };
@@ -2018,10 +2016,9 @@ fn lock_race(old_wins: bool) {
         clock.clone(),
         super::Hooks {
             held: Some(old_held),
-            before_open: Some(old_before),
-            takeover_waiter_thread: Some(Box::new(move |thread| {
-                // The hook is best-effort after the test drops its receiver.
-                let _sent = old_waiter_tx.send(thread);
+            before_open: Some(Box::new(move || {
+                let _sent = old_waiter_tx.send(std::thread::current().id());
+                old_before();
             })),
             ..super::Hooks::default()
         },
@@ -2048,10 +2045,9 @@ fn lock_race(old_wins: bool) {
         clock.clone(),
         super::Hooks {
             held: Some(fresh_held),
-            before_open: Some(fresh_before),
-            takeover_waiter_thread: Some(Box::new(move |thread| {
-                // The hook is best-effort after the test drops its receiver.
-                let _sent = fresh_waiter_tx.send(thread);
+            before_open: Some(Box::new(move || {
+                let _sent = fresh_waiter_tx.send(std::thread::current().id());
+                fresh_before();
             })),
             ..super::Hooks::default()
         },

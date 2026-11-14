@@ -153,9 +153,10 @@ impl Log {
         Self::open_locked(dir, id, clock, lock)
     }
 
-    /// Opens an existing session for keeper crash takeover, waiting for its
-    /// predecessor's lock only until `until`. This is the only caller's
-    /// blocking open; the caller must exit on `None` so the worker ends.
+    /// Opens an existing session only for keeper crash takeover, waiting for
+    /// its predecessor's lock only until `until`. `Runtime::apply` is the sole
+    /// caller; ordinary `open_as` remains immediate. Callers must exit on
+    /// `None` so the worker ends.
     pub fn open_as_takeover(
         sessions: &Path,
         id: SessionId,

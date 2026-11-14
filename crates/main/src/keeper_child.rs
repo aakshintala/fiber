@@ -130,6 +130,7 @@ struct Candidate {
 }
 
 /// The predecessor closes the lifeline before the kernel releases its flock.
+/// The five-second limit is not a measured value.
 pub(crate) const TAKEOVER_LOCK_WAIT: Duration = Duration::from_secs(5);
 pub(super) const ACCEPT_BACKOFF_MAX: Duration = Duration::from_secs(1);
 
@@ -140,8 +141,6 @@ struct Hooks {
     /// Runs just before a recovery opens the log, so a test decides which
     /// of two recoveries reaches the lock first (the lock-loss race).
     before_open: Option<Box<dyn Fn() + Send + Sync>>,
-    /// Reports the takeover caller immediately before it opens the log.
-    takeover_waiter_thread: Option<Box<dyn Fn(std::thread::ThreadId) + Send + Sync>>,
     /// Injects an accept error, when set, to test the acceptor's backoff.
     accept_error: Option<Box<dyn Fn() -> Option<io::ErrorKind> + Send + Sync>>,
     /// Runs once a recovery holds the log and accepts candidates.
@@ -265,10 +264,6 @@ impl Runtime {
                     #[cfg(test)]
                     if let Some(pause) = &self.hooks.before_open {
                         pause();
-                    }
-                    #[cfg(test)]
-                    if let Some(report) = &self.hooks.takeover_waiter_thread {
-                        report(std::thread::current().id());
                     }
                     match Log::open_as_takeover(
                         sessions,
@@ -779,23 +774,17 @@ impl Runtime {
                     break;
                 }
                 #[cfg(test)]
-                let accepted = runtime
-                    .hooks
-                    .accept_error
-                    .as_ref()
-                    .and_then(|hook| hook())
-                    .map_or_else(
-                        || {
-                            incoming
-                                .next()
-                                .unwrap_or_else(|| Err(io::Error::other("listener ended")))
-                        },
-                        |kind| Err(io::Error::from(kind)),
-                    );
+                let injected = runtime.hooks.accept_error.as_ref().and_then(|hook| hook());
                 #[cfg(not(test))]
-                let accepted = incoming
-                    .next()
-                    .unwrap_or_else(|| Err(io::Error::other("listener ended")));
+                let injected: Option<io::ErrorKind> = None;
+                let accepted = injected.map_or_else(
+                    || {
+                        incoming
+                            .next()
+                            .unwrap_or_else(|| Err(io::Error::other("listener ended")))
+                    },
+                    |kind| Err(io::Error::from(kind)),
+                );
                 let Ok(stream) = accepted else {
                     if stop.load(Ordering::Acquire) {
                         break;
