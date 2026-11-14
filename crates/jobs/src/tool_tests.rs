@@ -2063,8 +2063,77 @@ fn detached_stop_waits_for_the_supervisor_after_the_grace_period() {
             .success(),
         "SIGKILL stopped the child after the grace period"
     );
-    assert!(group_empties(pgid, Deadline::after(MUST_SUCCEED_WITHIN)));
+    assert!(
+        detached_group_settled(pgid, Deadline::after(MUST_SUCCEED_WITHIN)),
+        "the stopped group settled: SIGKILL went to the whole group and the leader was reaped, so no member still runs"
+    );
     watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
+}
+
+/// Waits up to `deadline` on the wall clock for the stopped detached group
+/// to settle: no member still runs. The kernel probe retires a group only on
+/// `ESRCH`, so a member that is already dead still reads alive until init
+/// reaps it — the orphaned `sleep` grandchild after the leader's reap — and
+/// on macOS the probe itself can lag the reap (`crates/support/src/group.rs`,
+/// `alive`). The stop contract the test owns is SIGKILL to the whole group
+/// plus the leader's reap, both asserted above, so what the test waits on is
+/// the member listing: a group with no listed members, or whose listed
+/// members are all zombies, is settled. A listed member that still runs
+/// keeps the wait going, so a grandchild the SIGKILL missed still fails the
+/// test. Lists with `ps -e` (`ps -g` is not portable: Linux selects sessions
+/// where macOS selects groups).
+fn detached_group_settled(pgid: u32, deadline: Deadline) -> bool {
+    let want = pgid.to_string();
+    loop {
+        let settled = Command::new("ps")
+            .args(["-e", "-o", "pgid=,stat=,comm="])
+            .output()
+            .is_ok_and(|out| {
+                out.status.success()
+                    && !detached_group_runs(&String::from_utf8_lossy(&out.stdout), &want)
+            });
+        if settled {
+            return true;
+        }
+        if deadline.left().is_zero() {
+            return false;
+        }
+        thread::yield_now();
+    }
+}
+
+/// Whether the `ps -e -o pgid=,stat=,comm=` listing `text` names a member of
+/// group `want` that still runs: a listed zombie is dead, awaiting init's
+/// reap, and reads settled. A member listed without a state column reads as
+/// running, so an unexpected `ps` shape never settles the wait early.
+fn detached_group_runs(text: &str, want: &str) -> bool {
+    for line in text.lines() {
+        let mut columns = line.split_whitespace();
+        if columns.next() != Some(want) {
+            continue;
+        }
+        match columns.next() {
+            Some(state) if state.starts_with('Z') => {}
+            _ => return true,
+        }
+    }
+    false
+}
+
+#[test]
+fn detached_group_runs_reads_only_running_members_of_the_group() {
+    // A zombie grandchild is settled: dead, awaiting init's reap.
+    assert!(!detached_group_runs("1234 Z sleep\n", "1234"));
+    assert!(!detached_group_runs("1234 Z+ sleep\n", "1234"));
+    // No members listed at all is settled.
+    assert!(!detached_group_runs("", "1234"));
+    assert!(!detached_group_runs("5678 S sleep\n", "1234"));
+    // A member that still runs keeps the wait going.
+    assert!(detached_group_runs("1234 S sleep\n", "1234"));
+    assert!(detached_group_runs("1234 R sleep\n", "1234"));
+    assert!(detached_group_runs("1234 Ss sh\n1234 Z sleep\n", "1234"));
+    // An unexpected shape never settles early.
+    assert!(detached_group_runs("1234\n", "1234"));
 }
 
 #[test]
