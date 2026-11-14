@@ -470,3 +470,4 @@ crates/tools/src/shell/detached.rs:370-370	fiber-4816	plan	2026-11-14T16:05:22Z	
 crates/tools/src/shell/detached.rs:376-377	fiber-4816	plan	2026-11-14T16:05:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4816-release-cfg	
 crates/tools/src/shell/detached.rs:395-397	fiber-4816	plan	2026-11-14T16:05:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4816-release-cfg	
 crates/tools/src/shell/detached_tests.rs:29-30	fiber-4816	plan	2026-11-14T16:05:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4816-release-cfg	
+crates/tools/src/shell/command.rs	fiber-4042	plan	2026-11-14T16:36:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
