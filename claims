@@ -329,3 +329,4 @@ docs/dependencies.md	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1
 docs/performance.md	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/providers/model_picker_keys.rs	fiber-3961	plan	2026-11-14T10:03:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/model_picker_name.rs	fiber-3961	plan	2026-11-14T10:03:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/shell/sandbox/protected.rs,crates/tools/src/shell/command.rs,crates/tools/src/shell/keeper_lock_tests.rs,docs/tools.md,docs/code-quality.md	fiber-3894	grant	2026-11-14T10:21:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/keeper/3894-confined-lock-crash	
