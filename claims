@@ -30,7 +30,6 @@ crates/tui/src/app/snapshots/tui__app__rewind__tests__rewind_opened_80x24.snap	f
 crates/tui/src/app/snapshots/tui__app__rewind__tests__rewind_refused_80x24.snap	fiber-4675	plan	2026-11-14T02:49:14Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/src/keeper.rs:272-273	fiber-4351	plan	2026-11-14T08:20:23Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
 crates/main/src/keeper_restore.rs:330-331	fiber-4351	plan	2026-11-14T08:20:23Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4351-keeper-race	
-docs/workflow.md	fiber-4816	plan	2026-11-14T09:28:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/loop/tests/fixtures/reviewer_eval/README.md	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
 crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
 crates/loop/tests/fixtures/reviewer_eval/extract.sh	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
@@ -343,14 +342,6 @@ crates/tui/src/snapshots/tui__settings_view__tests__settings_editing.snap:2-3	fi
 crates/tui/src/snapshots/tui__settings_view__tests__settings_editing.snap:16-16	fiber-4591	plan	2026-11-14T15:41:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4591-editor-setting	
 crates/tui/src/snapshots/tui__settings_view__tests__settings_editing.snap:26-27	fiber-4591	plan	2026-11-14T15:41:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4591-editor-setting	
 xtask/src/rules.rs	fiber-4685	plan	2026-11-14T15:57:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tools/src/shell/detached.rs:234-234	fiber-4816	plan	2026-11-14T16:05:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4816-release-cfg	
-crates/tools/src/shell/detached.rs:306-307	fiber-4816	plan	2026-11-14T16:05:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4816-release-cfg	
-crates/tools/src/shell/detached.rs:308-309	fiber-4816	plan	2026-11-14T16:05:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4816-release-cfg	
-crates/tools/src/shell/detached.rs:315-316	fiber-4816	plan	2026-11-14T16:05:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4816-release-cfg	
-crates/tools/src/shell/detached.rs:370-370	fiber-4816	plan	2026-11-14T16:05:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4816-release-cfg	
-crates/tools/src/shell/detached.rs:376-377	fiber-4816	plan	2026-11-14T16:05:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4816-release-cfg	
-crates/tools/src/shell/detached.rs:395-397	fiber-4816	plan	2026-11-14T16:05:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4816-release-cfg	
-crates/tools/src/shell/detached_tests.rs:29-30	fiber-4816	plan	2026-11-14T16:05:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4816-release-cfg	
 crates/tools/src/shell/command.rs	fiber-4042	plan	2026-11-14T16:36:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/contract/src/events/context.rs	fiber-4670	plan	2026-11-14T17:00:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/contract/src/events_tests.rs	fiber-4670	plan	2026-11-14T17:00:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
