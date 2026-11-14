@@ -134,8 +134,17 @@ pub fn attach(
                 printing = true;
             }
             OutputKind::TurnCompleted if printing => {
-                emit(out, &raw)?;
-                return Ok(exit_code(&envelope));
+                let code = exit_code(&envelope);
+                if let Err(source) = emit(out, &raw) {
+                    if code != 0 {
+                        return Ok(code);
+                    }
+                    match crate::stdout_write_exit_code(&source) {
+                        0 => return Ok(0),
+                        _ => return Err(SessionError::StdoutFailed { source }),
+                    }
+                }
+                return Ok(code);
             }
             OutputKind::FiberExited if printing => return Err(ended(id)),
             OutputKind::TurnStarted
@@ -144,7 +153,7 @@ pub fn attach(
             | OutputKind::Other => {}
         }
         if printing {
-            emit(out, &raw)?;
+            emit(out, &raw).map_err(|source| SessionError::StdoutFailed { source })?;
         }
     }
 }
@@ -440,8 +449,8 @@ fn exit_code(envelope: &Envelope) -> i32 {
 }
 
 /// Prints one line of the turn.
-fn emit(out: &mut dyn Write, raw: &[u8]) -> Result<(), SessionError> {
-    support::framing::write_line(out, raw).map_err(|source| SessionError::StdoutFailed { source })
+fn emit(out: &mut dyn Write, raw: &[u8]) -> io::Result<()> {
+    support::framing::write_line(out, raw)
 }
 
 /// Any command's rejection code and message, read from the answer line's
@@ -496,4 +505,34 @@ pub(crate) fn check_version(id: &SessionId, line: &Value) -> Result<(), SessionE
 /// `fiber_exited` arrived before this turn completed.
 fn ended(id: &SessionId) -> SessionError {
     SessionError::SessionEnded { id: id.clone() }
+}
+
+#[cfg(test)]
+mod stdout_tests {
+    use std::io::{self, Write};
+
+    struct FailedWriter(io::ErrorKind);
+
+    impl Write for FailedWriter {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from(self.0))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn emit_uses_shared_stdout_error_decision() {
+        for (kind, code) in [
+            (io::ErrorKind::BrokenPipe, 0),
+            (io::ErrorKind::StorageFull, 1),
+        ] {
+            let error = super::emit(&mut FailedWriter(kind), b"line")
+                .expect_err("the writer failure is retained");
+            assert_eq!(error.kind(), kind);
+            assert_eq!(crate::stdout_write_exit_code(&error), code);
+        }
+    }
 }

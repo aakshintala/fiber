@@ -296,7 +296,7 @@ pub(crate) fn applies(key: &str) -> Applies {
         Applies::TerminalStart
     } else if key == "hub.default" || key.starts_with("hubs.") {
         Applies::NextConnection
-    } else if key.starts_with("hub.") {
+    } else if key == "session.keep_exited" || key.starts_with("hub.") {
         Applies::HubStart
     } else if key == "diagnostics.level" {
         Applies::ProcessStart
@@ -2368,6 +2368,7 @@ const REVIEWER_SESSION_VALUES: &[f64] = &[5.0, 10.0, 20.0, 50.0, 100.0];
 const INITIAL_DELAY_VALUES: &[f64] = &[500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0];
 const MAX_DELAY_VALUES: &[f64] = &[10_000.0, 30_000.0, 60_000.0, 120_000.0, 300_000.0];
 const SESSION_IDLE_VALUES: &[f64] = &[300_000.0, 900_000.0, 1_800_000.0, 3_600_000.0, 7_200_000.0];
+const KEEP_EXITED_VALUES: &[f64] = &[0.0, 5.0, 10.0, 20.0, 50.0];
 const REFRESH_AFTER_VALUES: &[&str] = &["1h", "6h", "12h", "24h", "3d", "7d"];
 
 #[derive(Clone, Copy)]
@@ -2393,6 +2394,7 @@ enum NumberFormat {
     Blocks,
     Milliseconds,
     RefreshDuration,
+    KeptSessions,
 }
 
 #[derive(Clone, Copy)]
@@ -2505,6 +2507,12 @@ const NUMERIC_SPECS: &[NumericSpec] = &[
         default: Some("1800000"),
         kind: NumericKind::NumberList(SESSION_IDLE_VALUES),
         format: NumberFormat::Milliseconds,
+    },
+    NumericSpec {
+        key: "session.keep_exited",
+        default: Some("10"),
+        kind: NumericKind::NumberList(KEEP_EXITED_VALUES),
+        format: NumberFormat::KeptSessions,
     },
     NumericSpec {
         key: "model_lists.refresh_after",
@@ -2729,6 +2737,12 @@ fn number_text(key: &str, text: &str) -> String {
         ),
         NumberFormat::Milliseconds => listed(n, number_list(key).unwrap_or(&[]), ms_text(n)),
         NumberFormat::RefreshDuration => refresh_text(text),
+        NumberFormat::KeptSessions if n == 0.0 => "Keep all".to_owned(),
+        NumberFormat::KeptSessions => listed(
+            n,
+            number_list(key).unwrap_or(&[]),
+            counted(n, "session", "sessions"),
+        ),
     }
 }
 

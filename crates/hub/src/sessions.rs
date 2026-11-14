@@ -12,8 +12,10 @@ use contract::diag::{Op, Timing};
 use contract::events::SessionStatus;
 use serde_json::{Map, Value, json};
 
-use crate::connection::Refused;
-use crate::feed::{Feed, invalid};
+use crate::connection::{Hub, Refused};
+#[cfg(test)]
+use crate::feed::Feed;
+use crate::feed::invalid;
 use crate::recent;
 
 /// Answers `sessions`: the live snapshot is copied first, then
@@ -22,8 +24,7 @@ use crate::recent;
 /// attempt, from entry through the snapshot and row reads: an invalid
 /// argument is an entered attempt, not an unlisted one.
 pub(crate) fn answer(
-    feed: &Feed,
-    home: &Path,
+    hub: &Hub,
     args: &Map<String, Value>,
     clock: &dyn Clock,
     timing: Option<&Timing>,
@@ -33,13 +34,25 @@ pub(crate) fn answer(
     let started = timing.map(|_| clock.now());
     let _timer = timing.and_then(|timing| timing(Op::SessionsList, None, started));
     let (project, active, archived) = session_args(args)?;
-    feed.settled();
-    Ok(Some(list_with_active(
-        feed.live(),
-        home,
-        project,
-        active,
-        archived,
+    hub.feed.settled();
+    let live = hub.feed.live();
+    let running: BTreeSet<String> = live.iter().map(|(id, _)| id.clone()).collect();
+    let raw_rows = recent::read_all(&hub.home);
+    let mut snapshot = recent::newest_first(raw_rows.clone());
+    let candidates =
+        recent::archive_candidates(&snapshot, project, hub.keep_exited, &running, |workspace| {
+            std::fs::metadata(workspace).map(|_| ())
+        });
+    for candidate in snapshot.clone() {
+        if candidates.contains(&candidate.session_id) {
+            crate::archive::try_archive_into_snapshot(hub, &candidate, &mut snapshot);
+        }
+    }
+    // `listed_from_rows` accepts file order and applies `newest_first` itself.
+    // Keep the archive snapshot newest-first, then restore file order here.
+    let rows = recent::listed_from_rows(&hub.home, snapshot.into_iter().rev().collect(), project);
+    Ok(Some(list_from_rows(
+        live, rows, &hub.home, project, active, archived,
     )))
 }
 
@@ -81,6 +94,7 @@ pub(crate) fn list(
 /// archived rows are listed and there are no live entries; without it,
 /// archived rows are left out. Stale rows for running sessions are
 /// suppressed in both, so every session is listed once.
+#[cfg(test)]
 fn list_with_active(
     live: Vec<(String, SessionStatus)>,
     home: &Path,
@@ -88,8 +102,26 @@ fn list_with_active(
     active: bool,
     archived: bool,
 ) -> Value {
+    list_from_rows(
+        live,
+        recent::listed(home, project),
+        home,
+        project,
+        active,
+        archived,
+    )
+}
+
+fn list_from_rows(
+    live: Vec<(String, SessionStatus)>,
+    rows: Vec<recent::RecentRow>,
+    home: &Path,
+    project: Option<&str>,
+    active: bool,
+    archived: bool,
+) -> Value {
     let running: BTreeSet<String> = live.iter().map(|(id, _)| id.clone()).collect();
-    let exited_rows: Vec<recent::RecentRow> = recent::listed(home, project)
+    let exited_rows: Vec<recent::RecentRow> = rows
         .into_iter()
         .filter(|row| !running.contains(&row.session_id.0))
         .filter(|row| row.archived == archived)

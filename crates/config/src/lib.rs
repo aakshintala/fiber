@@ -475,6 +475,14 @@ impl Config {
         self.get(key, model).and_then(|(value, _)| value.as_u64())
     }
 
+    /// How many exited sessions each project keeps before the hub archives
+    /// older ones (`session.keep_exited`, `docs/configuration.md`).
+    pub fn keep_exited(&self) -> usize {
+        self.count("session.keep_exited", None)
+            .and_then(|count| usize::try_from(count).ok())
+            .unwrap_or(10)
+    }
+
     /// The effective value of `key` as a flag: `None` for a missing key
     /// without a default, or a value of another JSON type.
     pub fn flag(&self, key: &str, model: Option<&str>) -> Option<bool> {

@@ -86,6 +86,15 @@ pub fn exit_code(failure: &Failure) -> i32 {
     }
 }
 
+/// The exit code for a failed standard-output write: only a broken pipe is quiet.
+pub fn stdout_write_exit_code(error: &io::Error) -> i32 {
+    if error.kind() == io::ErrorKind::BrokenPipe {
+        0
+    } else {
+        1
+    }
+}
+
 /// `fiber ask`'s prompt (`docs/invocation.md`, "Getting a prompt in").
 ///
 /// The source is the arguments alone. Stdin is read only when `dash` is set,
@@ -143,3 +152,18 @@ pub fn exit_before_session(failure: Failure, out: &mut dyn Write, err: &mut dyn 
 }
 
 pub use support::mint;
+
+#[cfg(test)]
+mod stdout_write_tests {
+    #[test]
+    fn stdout_write_exit_code_quiets_only_broken_pipe() {
+        assert_eq!(
+            super::stdout_write_exit_code(&std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+            0
+        );
+        assert_eq!(
+            super::stdout_write_exit_code(&std::io::Error::other("full disk")),
+            1
+        );
+    }
+}

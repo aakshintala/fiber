@@ -131,7 +131,8 @@ impl Vm {
             LuaOptions::new().catch_rust_panics(false),
         )
         .map_err(lua_error)?;
-        lua.set_memory_limit(*memory_cap).map_err(lua_error)?;
+        crate::host::install_memory_cap(&lua, *memory_cap, crate::host::MEMORY_CAP_ERROR_KEY)
+            .map_err(lua_error)?;
         let loading = Rc::new(RefCell::new(Some(ENTRY.to_owned())));
         let (commands, providers, hooks, watchers, problems, violations, failures) =
             setup::install(
