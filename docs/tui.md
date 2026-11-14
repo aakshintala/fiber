@@ -3563,6 +3563,8 @@ five-file cut does, and the replacement inherits the cap.
 | `lines` | The widget's lines |
 | `open` | Whether the person opened the widget |
 
+**Not built yet: see #688.**
+
 `layout` places regions and never draws them. It receives the terminal width
 and height in cells, `flat`, and `regions`: the names shown this frame, drawn
 from `rail`, `conversation`, `working_line`, `steering_queue`, `input_box` and
@@ -3604,8 +3606,6 @@ not apply, never `null`.
 | `question` | The optional question text, with `question_import` and `question_scroll` |
 | `placeholder` | Whether the input box shows its placeholder |
 | `flat` | Whether the screen reader drops every style |
-
-
 
 **Not built yet (extension-owned views and overlays): see #4833.**
 
