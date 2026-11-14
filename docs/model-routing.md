@@ -758,7 +758,7 @@ left-out models whose `provider/model` contains the text, and no notice
 prints when none does. In the model picker the count instead holds the
 left-out models whose provider, id or display name matches each
 space-separated query word in order, and shows no row when none does
-(`docs/tui.md`, "Swapped views"). The terminal's model picker raises no notice for a placeholder with no value, and counts the left-out models under their provider instead (`docs/tui.md`, "The model picker"). Every other surface keeps the notice per model, naming the model: `fiber doctor`, a session that chooses it, and `fiber config set model`. The model can still be named ("Naming a model"): a
+(`docs/tui.md`, "Swapped views"). The terminal's model picker raises no notice for a placeholder with no value, and counts the left-out models under their provider instead (`docs/tui.md`, "The model picker"). `fiber doctor` filters out providers without credential presence before filling placeholders. For a credentialed provider, it prints one grouped notice per missing-host provider and setting, naming both and counting the models left out; a value that is not a host remains a per-model notice. An uncredentialed provider produces neither kind of notice. Sessions and `fiber config set model` keep their per-model notice behavior. The model can still be named ("Naming a model"): a
 session that chooses it exits with `model_unconfigured`, and
 `fiber config set model` accepts it with that notice
 (`docs/configuration.md`, "When Fiber writes"). The notice names three
