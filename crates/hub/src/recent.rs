@@ -72,9 +72,25 @@ impl RecentRow {
         self.status.as_ref().is_some_and(is_delegate)
     }
 
-    /// Whether the session's directory is still there.
+    /// The logged directory that still records this row's workspace, with
+    /// its physical project key. A stale legacy key is normalized from the
+    /// located session; a duplicate id from another workspace fails closed.
+    fn located_dir(&self, home: &Path) -> Option<(String, PathBuf)> {
+        let (key, dir) = log::find_logged_session_matching(home, &self.session_id, &|started| {
+            started.workspace.as_deref() == Some(self.workspace.as_str())
+        })?;
+        if key != self.project {
+            let project_dir = dir.parent()?.parent()?;
+            if !log::legacy_marker_matches(project_dir, &self.project) {
+                return None;
+            }
+        }
+        Some((key, dir))
+    }
+
+    /// Whether the session's logged directory still records this row's workspace.
     pub(crate) fn dir_exists(&self, home: &Path) -> bool {
-        log::dir_exists(&log::session_dir(home, &self.project, &self.session_id))
+        self.located_dir(home).is_some()
     }
 }
 
@@ -167,9 +183,13 @@ pub(crate) fn listed_from_rows(
 ) -> Vec<RecentRow> {
     newest_first(rows)
         .into_iter()
-        .filter(|row| project.is_none_or(|key| row.project == key))
         .filter(|row| !row.delegate())
-        .filter(|row| row.dir_exists(home))
+        .filter_map(|mut row| {
+            let (physical_key, _) = row.located_dir(home)?;
+            row.project = physical_key;
+            Some(row)
+        })
+        .filter(|row| project.is_none_or(|key| row.project == key))
         .collect()
 }
 
@@ -286,7 +306,11 @@ pub(crate) fn seeds(home: &Path) -> Vec<RecentRow> {
         .filter(|row| !row.delegate())
         .filter(|row| !row.archived)
         .filter(|row| row.how == Left::Crashed || row.waiting())
-        .filter(|row| row.dir_exists(home))
+        .filter_map(|mut row| {
+            let (physical_key, _) = row.located_dir(home)?;
+            row.project = physical_key;
+            Some(row)
+        })
         .collect()
 }
 

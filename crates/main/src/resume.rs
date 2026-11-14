@@ -271,13 +271,22 @@ pub(crate) fn ask_resume(
         Err(e) => return ask_failed(e),
     };
     let project = worktree::project(&workspace);
-    let sessions = log::sessions_dir(&home, &project);
-    // One memo serves the lookup and the launch-project check below, so
-    // every session in one workspace runs the identity once.
+    let candidates = log::candidate_sessions_dirs(&home, &project);
+    // One memo serves the lookup and launch-project check below, so every
+    // session in one workspace runs the identity once.
     let in_project = crate::open::in_project(&project, &worktree::project);
-    let id = match log::resolve(&sessions, &resuming.selector, &in_project) {
+    let id = match log::resolve_in(&candidates, &resuming.selector, &in_project) {
         Ok(id) => id,
-        Err(e) => return ask_failed(failed(e.code(), e)),
+        Err(error) => return ask_failed(failed(error.code(), error)),
+    };
+    let Some(sessions) = candidates.into_iter().find(|sessions| {
+        let dir = log::SessionDir::new(sessions, &id);
+        dir.path().is_dir() && in_launch_project(dir.path(), &in_project)
+    }) else {
+        return ask_failed(failed(
+            ErrorCode::SessionNotFound,
+            format!("No session matches `{}`.", resuming.selector),
+        ));
     };
     // The recorded worktree may be gone: the lookup above reads the
     // recorded repository, but a resume runs in the recorded workspace, so
@@ -352,7 +361,12 @@ fn in_launch_project(dir: &Path, in_project: &dyn Fn(&str) -> bool) -> bool {
     let Ok(Some(Event::SessionStarted(started))) = Event::from_envelope(&line) else {
         return false;
     };
-    in_project(&started.workspace)
+    let identity = started
+        .worktree
+        .as_ref()
+        .and_then(|worktree| worktree.repository.as_deref())
+        .unwrap_or(started.workspace.as_str());
+    in_project(identity)
 }
 
 fn resume_refused(
@@ -403,7 +417,28 @@ pub(crate) fn session_resume(
         Ok(directories) => directories,
         Err(e) => return ask_failed(e),
     };
-    let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
+    let project = worktree::project(&workspace);
+    let candidates = log::candidate_sessions_dirs(&home, &project);
+    let in_project = crate::open::in_project(&project, &worktree::project);
+    let sessions = candidates.into_iter().find(|sessions| {
+        let dir = log::SessionDir::new(sessions, &id);
+        dir.path().is_dir() && in_launch_project(dir.path(), &in_project)
+    });
+    let sessions = sessions.or_else(|| {
+        if workspace.exists() {
+            return None;
+        }
+        log::find_logged_session_matching(&home, &id, &|started| {
+            started.workspace.as_deref() == Some(workspace.to_string_lossy().as_ref())
+        })
+        .and_then(|(_, dir)| dir.parent().map(Path::to_path_buf))
+    });
+    let Some(sessions) = sessions else {
+        return ask_failed(failed(
+            ErrorCode::SessionNotFound,
+            format!("No session `{}`.", id.0),
+        ));
+    };
     log::crash::attach(&id);
     // The hub attaches to a live session by its socket, so any holder but
     // the session's own keeper fails instead of attaching.

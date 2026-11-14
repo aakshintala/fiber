@@ -97,8 +97,10 @@ different keys. Fiber lazily migrates the running identity's plain
 a `layout` file at Fiber home records version `2`, and a missing file means
 version 1. Migration leaves a pre-existing mixed legacy directory wholly with
 the first identity that claims it, because its files have no recorded identity.
-Distinct keys keep future project data separate. `session_started` records the
-exact workspace and, when Fiber made one, the
+Distinct keys keep future project data separate. Session selectors and history
+lookup retain legacy reachability only through derived candidate directories
+and recorded workspace/repository checks; they do not scan other projects.
+`session_started` records the exact workspace and, when Fiber made one, the
 worktree's repository. The log stays the truth ([ADR
 0001](adr/0001-session-log-is-the-only-state-of-record.md)). A startup that
 fails before its first session, such as a `config_invalid` or `io_failed`

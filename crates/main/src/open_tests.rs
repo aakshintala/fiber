@@ -10,8 +10,8 @@ use std::thread;
 use std::time::Duration;
 
 use super::{
-    hub_entries, in_project, listed_latest, notice_lines, route, select_latest, target_in,
-    tty_refusal,
+    hub_entries, in_project, listed_latest, notice_lines, resolve_project_sessions, route,
+    select_latest, select_latest_project, target_in, tty_refusal,
 };
 use contract::SessionId;
 
@@ -50,6 +50,32 @@ fn select_latest_returns_the_session_with_the_newest_last_line() {
     logged(&sessions, "s_new", 100, 300);
 
     assert_eq!(select_latest(&sessions, &|_| true).unwrap().0, "s_new");
+}
+
+#[test]
+fn latest_and_selector_search_both_derived_project_directories() {
+    let home = fakes::TempDir::new("fiber-open-candidates");
+    let project = Path::new("/w");
+    let candidates = log::candidate_sessions_dirs(home.path(), project);
+    std::fs::create_dir_all(&candidates[0]).unwrap();
+    std::fs::create_dir_all(&candidates[1]).unwrap();
+    logged(&candidates[0], "s_legacy", 100, 200);
+    logged(&candidates[1], "s_hashed", 100, 300);
+    let identity = |_: &Path| project.to_path_buf();
+    let in_project = in_project(project, &identity);
+
+    assert_eq!(
+        select_latest_project(home.path(), project, &in_project)
+            .unwrap()
+            .0,
+        "s_hashed"
+    );
+    assert_eq!(
+        resolve_project_sessions(home.path(), project, "s_legacy", &in_project)
+            .unwrap()
+            .0,
+        "s_legacy"
+    );
 }
 
 #[test]

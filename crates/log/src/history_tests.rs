@@ -9,6 +9,7 @@
 )]
 
 use std::fs;
+use std::path::Path;
 
 use contract::Seq;
 use contract::events::EventKind;
@@ -1081,27 +1082,38 @@ fn a_cross_project_cycle_is_a_pointer() {
     // A in `-work-new` names B in `-work-old`, and B names A back: the
     // walk stops on the repeat instead of climbing forever.
     let home = fakes::TempDir::new("log-history-cross-cycle");
+    let with_workspace = |line: String, workspace: &str| {
+        let mut event: Value = serde_json::from_str(line.trim()).unwrap();
+        event["payload"]["workspace"] = json!(workspace);
+        format!("{}\n", event)
+    };
     let a = project_dir(&home, "-work-new", "s_aaaaaaaaaaaaaaaa");
     session_log(
         &a,
-        started_in(
-            "s_aaaaaaaaaaaaaaaa",
-            0,
-            "s_bbbbbbbbbbbbbbbb",
-            0,
-            Some("-work-old"),
+        with_workspace(
+            started_in(
+                "s_aaaaaaaaaaaaaaaa",
+                0,
+                "s_bbbbbbbbbbbbbbbb",
+                0,
+                Some("-work-old"),
+            ),
+            "/work/new",
         )
         .as_bytes(),
     );
     let b = project_dir(&home, "-work-old", "s_bbbbbbbbbbbbbbbb");
     session_log(
         &b,
-        started_in(
-            "s_bbbbbbbbbbbbbbbb",
-            0,
-            "s_aaaaaaaaaaaaaaaa",
-            0,
-            Some("-work-new"),
+        with_workspace(
+            started_in(
+                "s_bbbbbbbbbbbbbbbb",
+                0,
+                "s_aaaaaaaaaaaaaaaa",
+                0,
+                Some("-work-new"),
+            ),
+            "/work/old",
         )
         .as_bytes(),
     );
@@ -1204,6 +1216,78 @@ fn history_with_a_first_line_that_is_not_an_event_is_a_pointer() {
     };
     assert_eq!(path, dir.join(EVENTS));
     assert_eq!(reason, "the log's first line is not an event");
+}
+
+#[test]
+fn legacy_parent_pointer_follows_the_marker_validated_moved_directory() {
+    let home = fakes::TempDir::new("log-history-moved-legacy-parent");
+    let legacy = "-w";
+    let identity = Path::new("/w");
+    let hashed = crate::project_key(identity);
+    let parent = project_dir(&home, legacy, "s_parent");
+    write_lines(
+        parent.parent().unwrap(),
+        "s_parent",
+        &[
+            started("s_parent", 0, None),
+            plain("s_parent", 1, "turn_started"),
+            plain("s_parent", 2, "turn_completed"),
+        ],
+    );
+    let child = project_dir(&home, "-child", "s_child");
+    session_log(
+        &child,
+        started_in("s_child", 0, "s_parent", 1, Some(legacy)).as_bytes(),
+    );
+    let source_project = parent.parent().unwrap().parent().unwrap();
+    let target_project = home.path().join("projects").join(&hashed);
+    fs::write(source_project.join("legacy-key"), legacy.as_bytes()).unwrap();
+    fs::rename(source_project, &target_project).unwrap();
+
+    let chain = history(&child).unwrap();
+    assert_eq!(ids(&chain), ["s_parent", "s_child"]);
+    assert_eq!(tos(&chain), [Some(1), None]);
+    assert_eq!(chain[0].dir, target_project.join("sessions/s_parent"));
+}
+
+#[test]
+fn legacy_parent_pointer_fails_closed_without_a_matching_marker() {
+    let home = fakes::TempDir::new("log-history-missing-marker");
+    let identity = Path::new("/w");
+    let hashed = crate::project_key(identity);
+    let parent = project_dir(&home, &hashed, "s_parent");
+    session_log(&parent, started("s_parent", 0, None).as_bytes());
+    let child = project_dir(&home, "-child", "s_child");
+    session_log(
+        &child,
+        started_in("s_child", 0, "s_parent", 0, Some("-w")).as_bytes(),
+    );
+    assert!(matches!(history(&child), Err(Error::NotFound(_))));
+
+    fs::write(
+        parent
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("legacy-key"),
+        b"wrong",
+    )
+    .unwrap();
+    assert!(matches!(history(&child), Err(Error::NotFound(_))));
+}
+
+#[test]
+fn legacy_parent_pointer_refuses_a_different_project_slug() {
+    let home = fakes::TempDir::new("log-history-cross-project");
+    let parent = project_dir(&home, "-other", "s_parent");
+    session_log(&parent, started("s_parent", 0, None).as_bytes());
+    let child = project_dir(&home, "-child", "s_child");
+    session_log(
+        &child,
+        started_in("s_child", 0, "s_parent", 0, Some("-other")).as_bytes(),
+    );
+    assert!(matches!(history(&child), Err(Error::NotFound(_))));
 }
 
 /// One long row, about 70 characters. The row is fixed so building tens of

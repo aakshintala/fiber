@@ -531,6 +531,41 @@ fn select_session_rejects_an_explicit_delegate_id() {
 }
 
 #[test]
+fn select_session_finds_a_session_after_legacy_directory_migration() {
+    let home = Home::new();
+    let workspace = home.0.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let identity = fs::canonicalize(&workspace).unwrap();
+    let legacy = support::project_key::legacy_project_slug(&identity);
+    let dir = log::session_dir(home.0.path(), &legacy, &SessionId(SESSION.to_owned()));
+    fs::create_dir_all(&dir).unwrap();
+    let started = serde_json::json!({
+        "kind": "session_started", "session_id": SESSION, "seq": 0, "ts": 1,
+        "schema_version": 1,
+        "payload": {"workspace": identity, "variables": {"path": "", "names": [], "source": "inherited"}}
+    });
+    fs::write(dir.join("events.jsonl"), format!("{started}\n")).unwrap();
+    let source = dir.parent().unwrap().parent().unwrap();
+    let target = home
+        .0
+        .path()
+        .join("projects")
+        .join(log::project_key(&identity));
+    fs::write(source.join("legacy-key"), legacy.as_bytes()).unwrap();
+    fs::rename(source, target).unwrap();
+
+    assert_eq!(
+        select_session(
+            home.0.path(),
+            &workspace,
+            Some(SessionId(SESSION.to_owned()))
+        )
+        .unwrap(),
+        Some(SessionId(SESSION.to_owned()))
+    );
+}
+
+#[test]
 fn select_session_without_an_id_uses_the_newest_session_in_the_workspace_project() {
     let home = Home::new();
     let workspace = home.0.path().join("workspace");

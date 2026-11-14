@@ -44,21 +44,22 @@ pub(crate) fn session_continues(
     // result; there is no worktree isolation to outlive here.
     let reads = Arc::new(crate::switch::Reads::default());
     let _cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
-    let (home, current) = match crate::startup::startup() {
+    let (home, _) = match crate::startup::startup() {
         Ok(directories) => directories,
         Err(e) => return ask_failed(e),
     };
-    // The sessions dir comes from the entered directory, as every entry
-    // does; the identity compare below uses the passed-in original
-    // spelling, before `set_current_dir` normalized slashes and symlinks
-    // away.
-    let sessions = log::sessions_dir(&home, &worktree::project(&current));
-    let recorded = match resolve(
-        &new,
-        &old,
-        &log::SessionDir::new(&sessions, &old),
-        workspace,
-    ) {
+    // The old session may live under either its hashed project directory
+    // or its unmoved legacy slug. Select only a candidate derived from the
+    // requested workspace, then validate the recorded worktree below.
+    let expected_project = worktree::project(workspace);
+    let Some(old_dir) = log::candidate_sessions_dirs(&home, &expected_project)
+        .into_iter()
+        .map(|sessions| log::SessionDir::new(&sessions, &old))
+        .find(|dir| recorded_project_matches(dir.path(), &expected_project, workspace))
+    else {
+        return ask_failed(not_found(&old));
+    };
+    let recorded = match resolve(&new, &old, &old_dir, workspace) {
         Ok(recorded) => recorded,
         Err(e) => return ask_failed(e),
     };
@@ -100,6 +101,22 @@ pub(crate) fn session_continues(
         Ok(code) => code,
         Err(failure) => super::session_command::report(signals, failure),
     }
+}
+
+/// Whether `dir` records a worktree whose repository resolves to the expected
+/// project and whose worktree path is the requested workspace.
+fn recorded_project_matches(dir: &Path, expected_project: &Path, workspace: &Path) -> bool {
+    let Ok(started) = log::started_first(dir) else {
+        return false;
+    };
+    let Ok(Some(recorded)) = started.worktree_record() else {
+        return false;
+    };
+    Path::new(&recorded.path) == workspace
+        && recorded
+            .repository
+            .as_deref()
+            .is_some_and(|repository| worktree::project(Path::new(repository)) == expected_project)
 }
 
 /// Checks the `continues` session `old` names in `old_dir` for the new

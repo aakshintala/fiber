@@ -176,6 +176,73 @@ pub fn find_logged_session(home: &Path, id: &SessionId) -> Option<(String, PathB
     walk(home, id, true)
 }
 
+/// Finds a logged session named by `id` whose first line passes `matches`,
+/// checking every project in key order. A log-less directory cannot mask a
+/// logged session, and the caller validates the recorded identity.
+pub fn find_logged_session_matching(
+    home: &Path,
+    id: &SessionId,
+    matches: &dyn Fn(&crate::SessionStarted) -> bool,
+) -> Option<(String, PathBuf)> {
+    if !valid_id(id) {
+        return None;
+    }
+    let mut projects: Vec<(String, PathBuf)> = std::fs::read_dir(home.join("projects"))
+        .ok()?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            Some((
+                entry.file_name().to_string_lossy().into_owned(),
+                entry.path(),
+            ))
+        })
+        .collect();
+    projects.sort_by(|a, b| a.0.cmp(&b.0));
+    projects.into_iter().find_map(|(key, project)| {
+        let dir = project.join("sessions").join(&id.0);
+        if !dir.join(EVENTS).is_file() {
+            return None;
+        }
+        let started = crate::started_first(&dir).ok()?;
+        matches(&started).then_some((key, dir))
+    })
+}
+
+/// Finds a logged session named by `id` in the identity's derived legacy or
+/// hashed directories, accepting only a first line whose recorded workspace
+/// or worktree repository passes `in_project`. No other project is scanned.
+pub fn find_logged_session_in(
+    home: &Path,
+    identity: &Path,
+    id: &SessionId,
+    in_project: &dyn Fn(&str) -> bool,
+) -> Option<(String, PathBuf)> {
+    if !valid_id(id) {
+        return None;
+    }
+    for sessions in crate::candidate_sessions_dirs(home, identity) {
+        let dir = sessions.join(&id.0);
+        if !dir.join(EVENTS).is_file() {
+            continue;
+        }
+        let Ok(started) = crate::started_first(&dir) else {
+            continue;
+        };
+        let recorded = started
+            .repository
+            .as_deref()
+            .or(started.workspace.as_deref());
+        if recorded.is_some_and(in_project) {
+            let key = sessions
+                .parent()
+                .and_then(Path::file_name)
+                .map(|key| key.to_string_lossy().into_owned())?;
+            return Some((key, dir));
+        }
+    }
+    None
+}
+
 /// The `kind` of one JSON log line. `None` when it does not parse or
 /// holds no string `kind`.
 pub fn kind_of(line: &[u8]) -> Option<String> {

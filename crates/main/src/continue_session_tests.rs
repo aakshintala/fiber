@@ -18,7 +18,7 @@ use std::time::Duration;
 use contract::SessionId;
 use serde_json::{Value, json};
 
-use super::resolve;
+use super::{recorded_project_matches, resolve};
 
 const OLD: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -72,6 +72,31 @@ fn new() -> SessionId {
 fn session_dir(old_dir: &Path) -> log::SessionDir {
     let sessions = old_dir.parent().unwrap();
     log::SessionDir::new(sessions, &old())
+}
+
+#[test]
+fn recorded_project_match_accepts_the_migrated_hashed_candidate() {
+    let home = fakes::TempDir::new("main-continues-migrated");
+    let workspace = home.path().join("wt");
+    std::fs::create_dir(&workspace).unwrap();
+    let identity = std::fs::canonicalize(&workspace).unwrap();
+    let candidates = log::candidate_sessions_dirs(home.path(), &identity);
+    let dir = candidates[1].join(OLD);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("events.jsonl"),
+        started(
+            &identity,
+            Some(json!({
+                "path": identity.to_string_lossy(),
+                "branch": "fiber/x",
+                "repository": identity.to_string_lossy(),
+            })),
+        ),
+    )
+    .unwrap();
+
+    assert!(recorded_project_matches(&dir, &identity, &identity));
 }
 
 #[test]

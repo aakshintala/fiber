@@ -61,6 +61,15 @@ pub fn history(dir: &Path) -> Result<Vec<Segment>, Error> {
                 reason: "the forked_from chain repeats a session".to_owned(),
             });
         }
+        let identity_started = crate::started_first(&at).map_err(|_| Error::Pointer {
+            path: at.join(EVENTS),
+            reason: "the log's first line does not record its workspace".to_owned(),
+        })?;
+        let recorded_identity = identity_started
+            .repository
+            .as_deref()
+            .or(identity_started.workspace.as_deref())
+            .map(Path::new);
         let forked = first_fork(&at)?;
         segments.push(Segment {
             session_id: SessionId(id),
@@ -98,34 +107,53 @@ pub fn history(dir: &Path) -> Result<Vec<Segment>, Error> {
             // (`docs/state.md`, "Projects"). Every step climbs stored
             // directories only: no git, no environment.
             Some(key) => {
-                // The session directory, its `sessions/`, its project key
-                // and `projects/`: the next ancestor is the home. The
-                // projects layer is required by name, so a flat layout
-                // cannot climb into system directories.
-                let mut up = at.ancestors();
-                up.next();
-                let home = match (up.next(), up.next(), up.next(), up.next()) {
-                    (Some(_), Some(_), Some(projects), Some(home))
-                        if projects.file_name().and_then(|name| name.to_str())
-                            == Some("projects") =>
-                    {
-                        home
-                    }
-                    _ => {
-                        return Err(Error::Pointer {
-                            path: at.join(EVENTS),
-                            reason: "the session directory is not under projects".to_owned(),
-                        });
-                    }
+                let Some(identity) = recorded_identity else {
+                    return Err(Error::NotFound(at.clone()));
                 };
-                match crate::sessions_dir_for_key(home, &key) {
-                    Some(sessions) => sessions.join(&parent.0),
-                    None => {
-                        return Err(Error::Pointer {
-                            path: at.join(EVENTS),
-                            reason: "the recorded parent project is not one path component"
-                                .to_owned(),
-                        });
+                let legacy = support::project_key::legacy_project_slug(identity);
+                let hashed_key = support::project_key::project_key(identity);
+                let points_to_hashed_key = key.rsplit_once('-').is_some_and(|(_, suffix)| {
+                    suffix.len() == 16
+                        && suffix
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                });
+                if key != legacy && !points_to_hashed_key {
+                    return Err(Error::NotFound(at.clone()));
+                }
+                let Some(sessions) = at.parent() else {
+                    return Err(Error::NotFound(at.clone()));
+                };
+                let Some(projects) = sessions.parent().and_then(Path::parent) else {
+                    return Err(Error::NotFound(at.clone()));
+                };
+                if projects.file_name().and_then(|name| name.to_str()) != Some("projects") {
+                    return Err(Error::NotFound(at.clone()));
+                }
+                let home = projects
+                    .parent()
+                    .ok_or_else(|| Error::NotFound(at.clone()))?;
+                if points_to_hashed_key {
+                    let hashed_parent = projects.join(key).join("sessions").join(&parent.0);
+                    if hashed_parent.is_dir() {
+                        hashed_parent
+                    } else {
+                        return Err(Error::NotFound(home.to_path_buf()));
+                    }
+                } else {
+                    let legacy_parent = projects.join(&legacy).join("sessions").join(&parent.0);
+                    if legacy_parent.is_dir() {
+                        legacy_parent
+                    } else {
+                        let hashed_project = projects.join(&hashed_key);
+                        let hashed_parent = hashed_project.join("sessions").join(&parent.0);
+                        if crate::legacy_marker_matches(&hashed_project, &legacy)
+                            && hashed_parent.is_dir()
+                        {
+                            hashed_parent
+                        } else {
+                            return Err(Error::NotFound(home.to_path_buf()));
+                        }
                     }
                 }
             }

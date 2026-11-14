@@ -35,6 +35,10 @@ use crate::{ask_failed, failed};
 /// returns whatever the result; there is no worktree isolation to outlive
 /// here.
 struct Context {
+    /// Fiber home.
+    home: PathBuf,
+    /// The launch identity.
+    identity: PathBuf,
     /// The sessions dir: `<home>/<project>/sessions`.
     sessions: PathBuf,
     /// One reads for the process.
@@ -52,8 +56,11 @@ fn context() -> Result<Context, i32> {
         Ok(directories) => directories,
         Err(e) => return Err(ask_failed(e)),
     };
-    let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
+    let identity = worktree::project(&workspace);
+    let sessions = log::sessions_dir(&home, &identity);
     Ok(Context {
+        home,
+        identity,
         sessions,
         reads,
         _cancel: cancel,
@@ -88,8 +95,9 @@ pub(crate) fn session_forked(
         Ok(context) => context,
         Err(code) => return code,
     };
-    let sessions = context.sessions;
-    let from_dir = log::SessionDir::new(&sessions, &from.session_id);
+    let sessions = context.sessions.clone();
+    let from_dir = located_session(&context, &from.session_id)
+        .unwrap_or_else(|| log::SessionDir::new(&sessions, &from.session_id));
     // A missing session is `session_not_found`; any other failure to
     // read its directory (permissions, a broken link) is `io_failed`
     // and names the path (`docs/errors.md`).
@@ -149,7 +157,8 @@ pub(crate) fn session_forked(
     // Installed once the child will run, so a failing fork still
     // reports its error instead of dying on a closed stdin.
     signals.lifeline(Box::new(std::io::stdin()));
-    let parent_dir = log::SessionDir::new(&sessions, &parent.session_id);
+    let parent_dir = located_session(&context, &parent.session_id)
+        .unwrap_or_else(|| log::SessionDir::new(&sessions, &parent.session_id));
     let parent_workspace = match log::started_first(parent_dir.path()) {
         Ok(started) => match started.workspace {
             Some(workspace) => workspace,
@@ -208,6 +217,23 @@ pub(crate) fn session_forked(
 /// The directory holding `point`'s session: the history segment when the
 /// old log's chain names it (a rewind to a point in another project, after
 /// a workspace move), else the session beside the old one, as before.
+fn located_session(context: &Context, id: &SessionId) -> Option<log::SessionDir> {
+    let project = &context.identity;
+    let accepted = |recorded: &str| worktree::project(Path::new(recorded)) == *project;
+    log::candidate_sessions_dirs(&context.home, project)
+        .into_iter()
+        .map(|sessions| log::SessionDir::new(&sessions, id))
+        .find(|dir| {
+            log::started_first(dir.path()).is_ok_and(|started| {
+                started
+                    .repository
+                    .as_deref()
+                    .or(started.workspace.as_deref())
+                    .is_some_and(&accepted)
+            })
+        })
+}
+
 fn point_dir(old: &Path, sessions: &Path, point: &Point) -> PathBuf {
     if let Ok(chain) = log::history(old)
         && let Some(segment) = chain
@@ -226,6 +252,10 @@ fn point_dir(old: &Path, sessions: &Path, point: &Point) -> PathBuf {
 /// recorded workspace, which may have moved or vanished since the session
 /// ran. A directory outside that layout is `log_corrupt`, before any
 /// session line is written, as a fork's missing parent workspace is.
+#[cfg(test)]
+#[path = "rewind_tests.rs"]
+mod tests;
+
 fn ancestor_key(dir: &Path) -> Result<String, i32> {
     let invalid = || {
         ask_failed(failed(
@@ -270,7 +300,8 @@ pub(crate) fn session_rewound(
         Err(code) => return code,
     };
     let sessions = &context.sessions;
-    let old_dir = log::SessionDir::new(sessions, &old);
+    let old_dir =
+        located_session(&context, &old).unwrap_or_else(|| log::SessionDir::new(sessions, &old));
     if !log::dir_exists(old_dir.path()) {
         return ask_failed(failed(
             ErrorCode::SessionNotFound,
@@ -428,7 +459,8 @@ fn session_moved(
     };
     // The fold reads the old session where it lives: a corrupt old log
     // fails here, before any session line is written.
-    let old_dir = log::SessionDir::new(&context.sessions, &old);
+    let old_dir = located_session(&context, &old)
+        .unwrap_or_else(|| log::SessionDir::new(&context.sessions, &old));
     if let Err(e) = r#loop::forked(old_dir.path(), moved.seq) {
         return ask_failed(failed(e.code(), e));
     }

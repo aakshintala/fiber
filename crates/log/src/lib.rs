@@ -58,10 +58,11 @@ pub use media::read_media;
 pub use name::session_name;
 pub use name::session_parent;
 pub use read::{
-    Injector, Lines, Scan, Watcher, complete_len_of, find_logged_session, find_session,
-    is_archived, kind_of, last_kind, lines, lines_from, read, tail_lines,
+    Injector, Lines, Scan, Watcher, complete_len_of, find_logged_session, find_logged_session_in,
+    find_logged_session_matching, find_session, is_archived, kind_of, last_kind, lines, lines_from,
+    read, tail_lines,
 };
-pub use resolve::{most_recent, opening_ts, resolve};
+pub use resolve::{most_recent, most_recent_in, opening_ts, resolve, resolve_in};
 pub use scan::{
     FirstLineError, Hold, MalformedWorktree, SessionLock, SessionStarted, Started, last_line_where,
     last_ts, remaining, session_bytes, started_first, started_sessions, started_sessions_in,
@@ -178,6 +179,23 @@ pub fn sessions_dir(home: &Path, project: &Path) -> PathBuf {
         .join("sessions")
 }
 
+/// The current hashed and unmoved legacy session directories derived from an identity.
+pub fn candidate_sessions_dirs(home: &Path, identity: &Path) -> [PathBuf; 2] {
+    [
+        home.join("projects")
+            .join(support::project_key::legacy_project_slug(identity))
+            .join("sessions"),
+        sessions_dir(home, identity),
+    ]
+}
+
+/// Whether a hashed project directory carries the exact legacy slug marker.
+pub fn legacy_marker_matches(project_dir: &Path, legacy_slug: &str) -> bool {
+    let marker = project_dir.join("legacy-key");
+    std::fs::symlink_metadata(&marker).is_ok_and(|meta| meta.file_type().is_file())
+        && std::fs::read(marker).is_ok_and(|bytes| bytes == legacy_slug.as_bytes())
+}
+
 /// Where the sessions of the project named by `key` live in Fiber home:
 /// `projects/<key>/sessions`. `None` when `key` is not one normal path
 /// component, so a path never leaves `projects/`. Callers holding only a
@@ -190,7 +208,7 @@ pub fn sessions_dir_for_key(home: &Path, key: &str) -> Option<PathBuf> {
     if !matches!(parts.next(), Some(std::path::Component::Normal(_))) || parts.next().is_some() {
         return None;
     }
-    Some(sessions_dir(home, Path::new(key)))
+    Some(home.join("projects").join(key).join("sessions"))
 }
 
 /// What can go wrong opening, writing or reading a session.

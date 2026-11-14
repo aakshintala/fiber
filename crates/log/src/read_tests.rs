@@ -495,6 +495,28 @@ fn pending_is_true_when_lagged() {
 }
 
 #[test]
+fn find_logged_session_in_uses_derived_directories_and_workspace_filter() {
+    let home = fakes::TempDir::new("log-find-logged-in");
+    let identity = std::path::Path::new("/a-b");
+    let id = SessionId("s_1".into());
+    let candidates = crate::candidate_sessions_dirs(home.path(), identity);
+    let legacy = candidates[0].join(&id.0);
+    std::fs::create_dir_all(&legacy).unwrap();
+    let hashed = candidates[1].join(&id.0);
+    std::fs::create_dir_all(&hashed).unwrap();
+    std::fs::write(
+        hashed.join("events.jsonl"),
+        b"{\"kind\":\"session_started\",\"payload\":{\"workspace\":\"/workspace\"}}\n",
+    )
+    .unwrap();
+    let found = find_logged_session_in(home.path(), identity, &id, &|workspace| {
+        workspace == "/workspace"
+    });
+    assert_eq!(found, Some((crate::project_key(identity), hashed,)));
+    assert!(find_logged_session_in(home.path(), identity, &id, &|_| false).is_none());
+}
+
+#[test]
 fn pending_is_true_when_closed() {
     let state = State {
         end: End::Closed,

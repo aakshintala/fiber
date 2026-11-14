@@ -148,19 +148,23 @@ pub(crate) fn select_scoped(
         super::Scope::Project(workspace) => Some(worktree::resolve_project(workspace)),
         super::Scope::HubWide => None,
     };
-    let sessions_dir = project
+    let sessions_dirs = project
         .as_ref()
-        .map(|resolved| log::sessions_dir(home, &resolved.path));
+        .map(|resolved| log::candidate_sessions_dirs(home, &resolved.path))
+        .unwrap_or_default();
     let mut memo: HashMap<String, bool> = HashMap::new();
     let now_ms = wall_ms(now);
     let mut candidates: Vec<Candidate> = Vec::new();
     let mut unreadable: Vec<String> = Vec::new();
     let mut in_scope = |_id: &str, dir: &Path, workspace: &Option<String>| -> bool {
-        let (Some(resolved), Some(sessions_dir)) = (project.as_ref(), sessions_dir.as_ref()) else {
+        let Some(resolved) = project.as_ref() else {
             return true;
         };
         if resolved.in_repository {
-            if dir.parent() != Some(sessions_dir.as_path()) {
+            if !sessions_dirs
+                .iter()
+                .any(|sessions| dir.parent() == Some(sessions.as_path()))
+            {
                 return false;
             }
             let Some(work) = workspace else {

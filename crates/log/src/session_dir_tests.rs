@@ -68,6 +68,25 @@ fn project_key_keeps_colliding_paths_in_distinct_session_dirs() {
 }
 
 #[test]
+fn candidate_sessions_dirs_are_only_the_identity_legacy_and_hashed_paths() {
+    let home = fakes::TempDir::new("log-session-dir-candidates");
+    let identity = std::path::Path::new("/a/b");
+    let candidates = candidate_sessions_dirs(home.path(), identity);
+    assert_eq!(candidates[0], home.path().join("projects/-a-b/sessions"));
+    assert_eq!(candidates[1], sessions_dir(home.path(), identity));
+}
+
+#[test]
+fn legacy_marker_requires_a_plain_file_with_exact_slug_bytes() {
+    let home = fakes::TempDir::new("log-legacy-marker");
+    let dir = home.path().join("project");
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("legacy-key"), b"-a-b").unwrap();
+    assert!(legacy_marker_matches(&dir, "-a-b"));
+    assert!(!legacy_marker_matches(&dir, "-a-b-other"));
+}
+
+#[test]
 fn sessions_dir_for_key_refuses_a_key_that_leaves_projects() {
     let home = fakes::TempDir::new("log-sessions-dir-key-bad");
     for key in ["", ".", "..", "a/b", "/abs", "a/../b"] {
