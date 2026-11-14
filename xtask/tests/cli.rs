@@ -351,8 +351,8 @@ fn select_fails_without_a_base() {
     assert!(out.starts_with("xtask: git merge-base"), "{out}");
 }
 
-/// `docs/ci.md`, "On every pull request that changes code": 40 mutants
-/// produce three shards.
+/// `docs/ci.md`, "On every pull request that changes code": CI plans one
+/// shard per 15 mutants, rounded up, so 40 mutants produce three shards.
 #[test]
 fn plan_prints_the_jobs_and_shards() {
     let dir = workspace();
@@ -583,6 +583,14 @@ fn plan_reports_budget_breach_exemption_and_preserves_mutant_selection() {
         unset_summary.contains("budget_breach=true\n"),
         "{unset_summary}"
     );
+
+    let mut push = args.to_vec();
+    push[8] = "push";
+    let (code, push_out) = xtask(&dir, &push, &[("GITHUB_STEP_SUMMARY", summary_path)], "");
+    assert_eq!(code, 0, "{push_out}");
+    assert!(!push_out.contains("budget_breach="), "{push_out}");
+    assert!(!push_out.contains("jobs={\"bug_red\":true"), "{push_out}");
+    assert_eq!(std::fs::read_to_string(&summary).unwrap(), "");
 }
 
 #[test]
