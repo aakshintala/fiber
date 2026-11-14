@@ -55,6 +55,19 @@ fn sessions_dir_for_key_matches_sessions_dir_for_a_real_project_key() {
 }
 
 #[test]
+fn project_key_keeps_colliding_paths_in_distinct_session_dirs() {
+    let home = fakes::TempDir::new("log-project-key-collision");
+    let hyphen = std::path::Path::new("/a-b");
+    let slash = std::path::Path::new("/a/b");
+
+    assert_ne!(project_key(hyphen), project_key(slash));
+    assert_ne!(
+        sessions_dir(home.path(), hyphen),
+        sessions_dir(home.path(), slash)
+    );
+}
+
+#[test]
 fn sessions_dir_for_key_refuses_a_key_that_leaves_projects() {
     let home = fakes::TempDir::new("log-sessions-dir-key-bad");
     for key in ["", ".", "..", "a/b", "/abs", "a/../b"] {
