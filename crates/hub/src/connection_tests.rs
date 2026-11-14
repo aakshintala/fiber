@@ -4102,6 +4102,13 @@ mod session_refusal_tests {
             .collect()
     }
 
+    fn keeper_argv() -> Vec<Vec<u8>> {
+        ["/path/to/fiber", "keeper"]
+            .iter()
+            .map(|word| word.as_bytes().to_vec())
+            .collect()
+    }
+
     /// The exact refusal sentences (`docs/permissions.md`, "Sessions on the
     /// sockets"): no caller session id is ever named.
     fn approval_refusal(target: &str) -> String {
@@ -4347,6 +4354,21 @@ mod session_refusal_tests {
         assert_eq!(line["payload"]["command_id"], "c_1");
         let message = line["payload"]["message"].as_str().unwrap();
         assert_eq!(message, approval_refusal(OWNED), "{message}");
+    }
+
+    #[test]
+    fn keeper_ancestor_triggers_refusal_one_for_an_approval_reply() {
+        let mut rig = Rig::new(plain_target());
+        let (_peer, _tx) = rig.push_entry(OWNED, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay(
+            "c_keeper_reply",
+            OWNED,
+            reply_with("c_keeper_reply", approval_args("r_1")),
+            &session_caller(&[CALLER_HOST]),
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["payload"]["code"], "from_session");
+        assert_eq!(line["payload"]["message"], approval_refusal(OWNED));
     }
 
     #[test]
@@ -4627,6 +4649,49 @@ mod session_refusal_tests {
             message,
             session_command_refusal("steer", OTHER),
             "{message}"
+        );
+    }
+
+    #[test]
+    fn steer_sharing_a_keeper_ancestor_with_the_target_is_refused() {
+        let script = Script {
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (TARGET, SHARED_HOST),
+                (SHARED_HOST, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (TARGET, support::peer::EffectiveUid(1000)),
+                (SHARED_HOST, support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [
+                (SHARED_HOST, keeper_argv()),
+                (TARGET, vec![b"/sbin/init".to_vec()]),
+                (support::peer::Pid(1), vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let mut rig = Rig::new(script);
+        let (_peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay(
+            "c_keeper_steer",
+            OTHER,
+            steer("c_keeper_steer"),
+            &session_caller(&[SHARED_HOST]),
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["payload"]["code"], "from_session");
+        assert_eq!(
+            line["payload"]["message"],
+            session_command_refusal("steer", OTHER)
         );
     }
 
