@@ -1432,12 +1432,28 @@ impl SessionExtensions {
                 return;
             }
         };
+        let package = match dir.canonicalize() {
+            Ok(package) => package,
+            Err(source) => {
+                Self::process_failed(
+                    session,
+                    &name,
+                    &(
+                        contract::ErrorCode::IoFailed,
+                        format!("{}: {source}", dir.display()),
+                    ),
+                    required,
+                );
+                return;
+            }
+        };
         let context = crate::process::context::ProcessContext {
             run: crate::process::context::ProcessRun::Session {
                 session_id: start.session_id.clone(),
                 reason,
             },
             workspace: start.workspace.clone(),
+            package,
             data_dirs,
             state: folded,
             extension: name.clone(),

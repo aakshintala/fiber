@@ -1891,6 +1891,10 @@ impl Harness {
         let context = ProcessContext {
             run,
             workspace: dir.path().to_path_buf(),
+            package: dir
+                .path()
+                .canonicalize()
+                .expect("canonical package directory"),
             data_dirs: contract::events::ExtensionDataDirs {
                 machine: dir.path().join("machine").display().to_string(),
                 project: dir.path().join("project").display().to_string(),
@@ -3940,6 +3944,7 @@ fn process_http_records_the_calling_extension() {
     let context = super::process::context::ProcessContext {
         run: super::process::context::ProcessRun::Call,
         workspace: std::path::PathBuf::from("/work"),
+        package: std::path::PathBuf::from("/"),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: "/m".to_owned(),
             project: "/p".to_owned(),
@@ -4022,6 +4027,7 @@ fn process_http_in_a_provider_callback_keeps_the_provider_purpose() {
     let context = super::process::context::ProcessContext {
         run: super::process::context::ProcessRun::Call,
         workspace: std::path::PathBuf::from("/work"),
+        package: std::path::PathBuf::from("/"),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: "/m".to_owned(),
             project: "/p".to_owned(),
@@ -4109,6 +4115,7 @@ fn process_http_in_a_sign_callback_stays_silent() {
     let context = super::process::context::ProcessContext {
         run: super::process::context::ProcessRun::Call,
         workspace: std::path::PathBuf::from("/work"),
+        package: std::path::PathBuf::from("/"),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: "/m".to_owned(),
             project: "/p".to_owned(),
@@ -4167,6 +4174,7 @@ fn process_http_without_a_sink_stays_silent() {
     let context = super::process::context::ProcessContext {
         run: super::process::context::ProcessRun::Call,
         workspace: std::path::PathBuf::from("/work"),
+        package: std::path::PathBuf::from("/"),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: "/m".to_owned(),
             project: "/p".to_owned(),
@@ -4223,6 +4231,7 @@ fn process_http_scripted_requests_stay_silent() {
     let context = super::process::context::ProcessContext {
         run: super::process::context::ProcessRun::Call,
         workspace: std::path::PathBuf::from("/work"),
+        package: std::path::PathBuf::from("/"),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: "/m".to_owned(),
             project: "/p".to_owned(),
@@ -4272,6 +4281,7 @@ fn process_http_never_sent_records_nothing() {
     let context = super::process::context::ProcessContext {
         run: super::process::context::ProcessRun::Call,
         workspace: std::path::PathBuf::from("/work"),
+        package: std::path::PathBuf::from("/"),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: "/m".to_owned(),
             project: "/p".to_owned(),
@@ -4379,6 +4389,7 @@ fn process_tool_runner_threading() {
     let context = ProcessContext {
         run: ProcessRun::Call,
         workspace: std::path::PathBuf::from("/work"),
+        package: std::path::PathBuf::from("/"),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: "/m".to_owned(),
             project: "/p".to_owned(),
@@ -4477,6 +4488,7 @@ fn process_admission_parity() {
     let context = ProcessContext {
         run: ProcessRun::Call,
         workspace: std::path::PathBuf::from("/work"),
+        package: std::path::PathBuf::from("/"),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: "/m".to_owned(),
             project: "/p".to_owned(),
@@ -6492,6 +6504,116 @@ fn sessionless_lines_carry_no_session_id() {
     assert_eq!(stale["stale"]["payload"]["code"], json!("stale_request"));
 }
 
+/// Process host exec resolves against the canonical package, not its
+/// absolute working directory, and reports traversal as an extension failure.
+#[test]
+fn process_host_exec_resolves_inside_package_and_refuses_traversal() {
+    use super::process::context::{HostOperation, ProcessContext, ProcessRun};
+    use super::process::requests::HostCallHandle;
+    use crate::host::admission::CallbackContext;
+    use std::os::unix::fs::PermissionsExt;
+
+    let package = fakes::TempDir::new("fiber-process-exec-package");
+    let sibling = fakes::TempDir::new("fiber-process-exec-cwd");
+    let bin = package.path().join("bin");
+    std::fs::create_dir(&bin).expect("package bin directory");
+    let executable = bin.join("tool");
+    std::fs::write(&executable, "#!/bin/sh\nprintf package-program\n")
+        .expect("write helper executable");
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
+        .expect("make helper executable");
+    std::fs::write(
+        package.path().join("extension.json"),
+        json!({"name":"fiber.test/proc", "version":"v1.2.3", "fiber":"0.1.0", "api":1}).to_string(),
+    )
+    .expect("write manifest");
+
+    let recorded = FakeServices::new();
+    let captured = Arc::new(Mutex::new(None));
+    let capture = Arc::clone(&captured);
+    let plan = json!([{"read": {}}, {"send": {"id":"ready", "command":"ready"}}, {"read": {}}])
+        .to_string();
+    let owner = Harness::start_with_services_on_manifest(
+        &plan,
+        &[],
+        serde_json::Map::new(),
+        None,
+        package,
+        ProcessRun::Call,
+        move |store, clock, runtime| {
+            let services = production_services(store, clock, runtime);
+            *support::lock(&capture) = Some(Arc::clone(&services));
+            services
+        },
+        recorded,
+    );
+    owner.pump();
+    let services = support::lock(&captured)
+        .clone()
+        .expect("production services are installed");
+    let context = ProcessContext {
+        run: ProcessRun::Call,
+        workspace: sibling.path().to_path_buf(),
+        package: owner.workspace().canonicalize().expect("canonical package"),
+        data_dirs: contract::events::ExtensionDataDirs {
+            machine: "m".to_owned(),
+            project: "p".to_owned(),
+        },
+        state: serde_json::Map::new(),
+        extension: "fiber.test/proc".to_owned(),
+        home: sibling.path().to_path_buf(),
+    };
+    let callback = CallbackContext::entry("fiber.test/proc");
+    let invoke = |program: String| {
+        let services = Arc::clone(&services);
+        let context = context.clone();
+        let callback = callback.clone();
+        let cwd = sibling.path().to_path_buf();
+        let (send, receive) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let result = services.perform(
+                &context,
+                &callback,
+                HostOperation::Exec {
+                    program,
+                    args: Vec::new(),
+                    cwd,
+                    env: Default::default(),
+                    input: None,
+                },
+                &HostCallHandle::detached(),
+                &support::cancel::Token::new(),
+            );
+            let _ = send.send(result);
+        });
+        (thread, receive)
+    };
+    let (run, receive) = invoke("bin/tool".to_owned());
+    let result = fakes::Deadline::after(WITHIN)
+        .recv_or_fail(&receive, "host.exec package-relative run")
+        .expect("host.exec succeeds");
+    run.join().expect("host.exec thread joins");
+    let output = result.expect("the package program executes");
+    assert_eq!(output["stdout"], json!("cGFja2FnZS1wcm9ncmFt"));
+
+    let escaped = "../outside".to_owned();
+    let (run, receive) = invoke(escaped.clone());
+    let result =
+        fakes::Deadline::after(WITHIN).recv_or_fail(&receive, "host.exec traversal refusal");
+    run.join().expect("refusal thread joins");
+    let Err((code, message)) = result else {
+        panic!("a traversal program is refused");
+    };
+    assert_eq!(code, ErrorCode::ExtensionFailed);
+    assert_eq!(
+        message,
+        format!(
+            "host.exec: {escaped} leaves the extension directory {}",
+            context.package.display()
+        )
+    );
+}
+
 /// The sessionless set names exactly the Call-case calls: reads,
 /// compute and refresh run, while writes, locks and the driver stay out.
 /// The refusal names the call, as `invalid_arguments`.
@@ -6937,6 +7059,10 @@ fn set_reason_moves_only_a_session_run() {
             reason: SessionReason::New,
         },
         workspace: dir.path().to_path_buf(),
+        package: dir
+            .path()
+            .canonicalize()
+            .expect("canonical package directory"),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: "m".to_owned(),
             project: "p".to_owned(),
@@ -7022,6 +7148,7 @@ fn process_delegate_services(
     let context = super::process::context::ProcessContext {
         run: super::process::context::ProcessRun::Call,
         workspace: std::path::PathBuf::from("/work"),
+        package: std::path::PathBuf::from("/"),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: "/m".to_owned(),
             project: "/p".to_owned(),
@@ -7285,6 +7412,7 @@ fn process_model_usage_attribution() {
     let context = ProcessContext {
         run: ProcessRun::Call,
         workspace: std::path::PathBuf::from("/work"),
+        package: std::path::PathBuf::from("/"),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: "/m".to_owned(),
             project: "/p".to_owned(),

@@ -248,6 +248,10 @@ fn process_context(dir: &fakes::TempDir) -> super::process::context::ProcessCont
             reason: contract::events::SessionReason::New,
         },
         workspace: dir.path().to_path_buf(),
+        package: dir
+            .path()
+            .canonicalize()
+            .expect("canonical package directory"),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: dir.path().join("machine").display().to_string(),
             project: dir.path().join("project").display().to_string(),
@@ -464,6 +468,47 @@ fn load_session(
         super::package::ProcessProviderMode::Session(test_session(dir, clock)),
         Some(test_host(dir)),
     )
+}
+
+/// A traversal-and-reentry manifest program is refused before an executable
+/// target can start, and the failure names the escaped program.
+#[test]
+fn load_process_refuses_manifest_program_that_leaves_the_package() {
+    let root = fakes::TempDir::new("fiber-process-package-escape");
+    let dir = root.path().join("pkg");
+    std::fs::create_dir(&dir).expect("package directory");
+    let (fixture, args) = fakes::ProcessFixture::command(
+        "peer",
+        Some(&json!([{"read": {}}, {"send": {"id":"ready", "command":"ready"}}])),
+    );
+    std::fs::copy(fixture, dir.join("program")).expect("copy the process fixture into package");
+    std::fs::write(
+        dir.join("extension.json"),
+        json!({
+            "name": "fiber.test/proc",
+            "version": "v1.2.3",
+            "fiber": "0.1.0",
+            "api": 1,
+            "process": {"program": "../pkg/program", "args": args, "exit_timeout_ms": 1000},
+        })
+        .to_string(),
+    )
+    .expect("write manifest");
+
+    let outcome = Package::load_process_provider_with(
+        PackageOptions {
+            dir: dir.clone(),
+            clock: fakes::clock::FakeClock::new(),
+        },
+        super::package::ProcessProviderMode::Sessionless,
+        None,
+    );
+    let Err((code, message)) = outcome else {
+        panic!("an escaping manifest program is refused");
+    };
+    assert_eq!(code, contract::ErrorCode::ExtensionFailed);
+    assert!(message.contains("../pkg/program"), "{message}");
+    assert!(message.contains(&dir.display().to_string()), "{message}");
 }
 
 /// A missing program fails the package load, required or not: the

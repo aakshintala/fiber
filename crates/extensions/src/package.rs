@@ -308,7 +308,13 @@ impl Package {
         mode: ProcessProviderMode,
         host: Option<ProcessProviderHost>,
     ) -> Result<StartedProcessProvider, (contract::ErrorCode, String)> {
-        let manifest = config::read_manifest(&options.dir).map_err(|source| {
+        let canonical_dir = options.dir.canonicalize().map_err(|source| {
+            (
+                contract::ErrorCode::IoFailed,
+                format!("{}: {source}", options.dir.display()),
+            )
+        })?;
+        let manifest = config::read_manifest(&canonical_dir).map_err(|source| {
             (
                 contract::ErrorCode::IoFailed,
                 format!(
@@ -371,7 +377,7 @@ impl Package {
                 // runs under the CLI, never under the package.
                 let (home, workspace) = match host.as_ref() {
                     Some(host) => (host.home.clone(), host.cwd.clone()),
-                    None => Self::cli_context(&options.dir),
+                    None => Self::cli_context(&canonical_dir),
                 };
                 let project = Self::sessionless_project(&manifest.name, &workspace)?;
                 let state = super::host::state::StateRegistry::standalone().store(&manifest.name);
@@ -386,6 +392,7 @@ impl Package {
                 let context = super::process::context::ProcessContext {
                     run: super::process::context::ProcessRun::Call,
                     workspace,
+                    package: canonical_dir.clone(),
                     data_dirs,
                     state: serde_json::Map::new(),
                     extension: manifest.name.clone(),
@@ -426,7 +433,7 @@ impl Package {
         });
         let loaded = Self::load_with_runtime(
             PackageOptions {
-                dir: options.dir.clone(),
+                dir: canonical_dir.clone(),
                 clock: Arc::clone(&options.clock),
             },
             runtime.clone(),
