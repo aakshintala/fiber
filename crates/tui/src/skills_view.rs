@@ -290,7 +290,16 @@ impl Skills {
                 self.focus.focus = SwitchScope::Everywhere;
             }
             Edit::Right => self.row_focused = true,
-            _ => {}
+            Edit::ShiftEnter
+            | Edit::CtrlJ
+            | Edit::WordLeft
+            | Edit::WordRight
+            | Edit::DeleteWord
+            | Edit::DeleteToLineStart
+            | Edit::LineStart
+            | Edit::LineEnd
+            | Edit::Delete
+            | Edit::Paste(_) => {}
         }
     }
 
