@@ -13,12 +13,7 @@ fn lua_in(home: PathBuf, secrets: &[&str]) -> Lua {
 /// Lua with the host setup installed under `memory_cap`.
 fn lua_in_with_memory_cap(home: PathBuf, secrets: &[&str], memory_cap: usize) -> Lua {
     let lua = Lua::new();
-    lua.set_memory_limit(memory_cap).unwrap();
-    lua.set_named_registry_value(
-        crate::host::MEMORY_CAP_ERROR_KEY,
-        lua.create_string(crate::host::MEMORY_CAP_ERROR).unwrap(),
-    )
-    .unwrap();
+    crate::host::install_memory_cap(&lua, memory_cap, crate::host::MEMORY_CAP_ERROR_KEY).unwrap();
     let hub = crate::lua::Hub::new(fakes::clock::FakeClock::new());
     let failures = failure::install(&lua).unwrap();
     install(

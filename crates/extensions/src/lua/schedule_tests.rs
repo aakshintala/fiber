@@ -2693,7 +2693,7 @@ fn scheduler_resumes_oversized_tool_as_error_and_incomplete_tool_as_value() {
         (
             CallStatus::Completed,
             "x".repeat(CAP * 2),
-            "error:Lua memory cap exceeded".to_owned(),
+            format!("error:{}", crate::host::MEMORY_CAP_ERROR),
         ),
         (
             CallStatus::Denied,

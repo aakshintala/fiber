@@ -898,13 +898,24 @@ pub(crate) fn duration_ms(elapsed: Duration) -> u64 {
     elapsed.as_millis().try_into().unwrap_or(u64::MAX)
 }
 
+pub(crate) const MEMORY_CAP_ERROR_KEY: &str = "fiber.memory_cap_error";
+pub(crate) const MEMORY_CAP_ERROR: &str = "Lua memory cap exceeded";
+
+/// Sets the VM's memory cap and registers the error string used if an
+/// oversized tool outcome cannot be converted into Lua values.
+pub(crate) fn install_memory_cap(
+    lua: &Lua,
+    memory_cap: usize,
+    error_key: &str,
+) -> mlua::Result<()> {
+    lua.set_memory_limit(memory_cap)?;
+    lua.set_named_registry_value(error_key, lua.create_string(MEMORY_CAP_ERROR)?)
+}
+
 /// The values `coroutine.yield` returns to the host call that yielded: its
 /// result, or nil, the failure's code and its message, or nil and the
 /// message of an error in the calling code. `clock` is what a held
 /// credential's expiry is judged by.
-pub(crate) const MEMORY_CAP_ERROR_KEY: &str = "fiber.memory_cap_error";
-pub(crate) const MEMORY_CAP_ERROR: &str = "Lua memory cap exceeded";
-
 pub(crate) fn resume_values(
     lua: &Lua,
     clock: &Arc<dyn Clock>,
