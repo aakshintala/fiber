@@ -4051,3 +4051,36 @@ fn a_models_non_list_return_redacts_the_key() {
         notices[0].message
     );
 }
+
+#[test]
+fn vendor_row_is_cautious_when_declared_provider_data_is_missing() {
+    let setup = Setup::new();
+    let mut package_manifest = manifest("vendor-only");
+    package_manifest["providers"] = json!({"fake": ["http://127.0.0.1:1/v1"]});
+    let extension_dir = setup.source("vendor-only", &package_manifest, &[]);
+    assert!(!extension_dir.join("providers/fake.json").exists());
+
+    let vendor_row = serde_json::from_value(json!({
+        "id": "vendor-only",
+        "protocol": "openai-responses",
+        "base_url": "http://127.0.0.1:1/v1"
+    }))
+    .unwrap();
+    let admitted = extensions::models_dev::merge_admission(
+        &setup.home(),
+        &extension_dir,
+        "fake",
+        vec![vendor_row],
+        false,
+    );
+
+    assert_eq!(admitted.len(), 1, "the vendor-listed row is retained");
+    let model = &admitted[0];
+    assert!(model.is_new);
+    assert_eq!(model.input, ["text"]);
+    assert!(model.thinking_levels.is_empty());
+    assert!(model.thinking_default.is_none());
+    assert_eq!(model.context_window, Some(128_000));
+    assert_eq!(model.max_output_tokens, Some(8_192));
+    assert!(model.cost.is_none());
+}
