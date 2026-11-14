@@ -148,7 +148,7 @@ pub(crate) fn session_forked(
     // open and never writes to it (`docs/delegates.md`, "Lifetime").
     // Installed once the child will run, so a failing fork still
     // reports its error instead of dying on a closed stdin.
-    signals.lifeline(Box::new(std::io::stdin()));
+    signals.lifeline(Box::new(std::io::stdin()), crate::keeper::lifeline_writer());
     let parent_dir = log::SessionDir::new(&sessions, &parent.session_id);
     let parent_workspace = match log::started_first(parent_dir.path()) {
         Ok(started) => match started.workspace {

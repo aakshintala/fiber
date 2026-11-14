@@ -269,12 +269,15 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
     // commands are never refused here.
     if let Some(attribution) = conn.attribution.as_ref() {
         let read = read_for(&conn.gate);
-        if let Some(refused) = session_command_refusal(
+        let handover_peers = conn.gate.handover_peers();
+        if let Some(refused) = session_command_refusal_inner(
             attribution,
             &line.command,
             &conn.gate.session_id,
             support::peer::Pid(std::process::id()),
             read.as_ref(),
+            conn.gate.lifeline_query.get(),
+            &handover_peers,
         ) {
             reject(conn, Some(id), refused.code, &refused.message);
             return;
@@ -1181,12 +1184,25 @@ fn is_approval_reply(command: &Command) -> bool {
 /// is this session's current kernel parent with a readable ancestry. A `message`
 /// is a session message, never a person's words, so it is never refused.
 /// An unreadable target pid, parent, or walk fails closed.
+#[cfg(test)]
 pub(crate) fn session_command_refusal(
     attribution: &Attribution,
     command: &Command,
     target: &contract::SessionId,
     target_pid: support::peer::Pid,
     read: &dyn support::peer::ProcessRead,
+) -> Option<Refused> {
+    session_command_refusal_inner(attribution, command, target, target_pid, read, None, &[])
+}
+
+fn session_command_refusal_inner(
+    attribution: &Attribution,
+    command: &Command,
+    target: &contract::SessionId,
+    target_pid: support::peer::Pid,
+    read: &dyn support::peer::ProcessRead,
+    lifeline: Option<&crate::signals::LifelineQuery>,
+    handover_peers: &[support::peer::Pid],
 ) -> Option<Refused> {
     let caller_matches: &[support::peer::Pid] = match attribution {
         Attribution::Local {
@@ -1277,6 +1293,27 @@ pub(crate) fn session_command_refusal(
     // it, whatever the peer's arguments say, but never on an unreadable
     // target ancestry.
     if target_walk.parent_pid == attribution.peer_pid() {
+        return None;
+    }
+    // A caller below a keeper retained by this session is not the person
+    // who resumed it, even when the keeper is no longer an ancestor of the
+    // resumed session process.
+    if caller_matches
+        .iter()
+        .any(|pid| handover_peers.contains(pid))
+    {
+        return Some(Refused {
+            code: ErrorCode::FromSession,
+            message: from_session_message(attribution, refusal()),
+        });
+    }
+    // The keeper-parent exception is granted only when the query answered
+    // from this process's live lifeline and the same keeper parents both
+    // this command and the target session.
+    if let (Some(query), Some(parent)) = (lifeline, target_walk.parent_pid)
+        && caller_matches.contains(&parent)
+        && query.query() == Some(parent.0)
+    {
         return None;
     }
     match attribution {

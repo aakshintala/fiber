@@ -25,6 +25,41 @@ fn runtime(
 }
 
 #[test]
+fn lifeline_query_answers_only_while_the_active_control_is_live() {
+    let temp = fakes::TempDir::new("keeper-lifeline-query");
+    let (control_peer, control) = UnixStream::pair().expect("control pair");
+    let (done, _ending) = mpsc::channel();
+    let runtime = runtime(temp.path(), control, done);
+    let (keeper_lifeline, mut delegate_lifeline) = UnixStream::pair().expect("lifeline pair");
+    runtime.watch_lifeline(keeper_lifeline);
+
+    delegate_lifeline
+        .write_all(contract::keeper::LIFELINE_QUERY)
+        .expect("query write");
+    let mut reply = [0; contract::keeper::LIFELINE_REPLY_LEN];
+    delegate_lifeline
+        .read_exact(&mut reply)
+        .expect("live reply");
+    assert_eq!(reply[0], b'P');
+    assert_eq!(
+        u32::from_le_bytes(reply[1..].try_into().expect("pid bytes")),
+        std::process::id()
+    );
+
+    {
+        let _control_peer = &control_peer;
+        runtime.control_active.store(false, Ordering::Release);
+    }
+    delegate_lifeline
+        .write_all(contract::keeper::LIFELINE_QUERY)
+        .expect("second query write");
+    delegate_lifeline
+        .read_exact(&mut reply)
+        .expect("dead reply");
+    assert_eq!(reply, [b'N', 0, 0, 0, 0]);
+}
+
+#[test]
 fn socket_pair_stdin_reaches_the_child_and_keeps_the_peer_in_the_spawn_result() {
     let spec = Spawn {
         id: "delegate".into(),
