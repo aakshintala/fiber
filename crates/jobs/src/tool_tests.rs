@@ -2065,59 +2065,61 @@ fn detached_stop_waits_for_the_supervisor_after_the_grace_period() {
     );
     assert!(
         detached_group_settled(pgid, Deadline::after(MUST_SUCCEED_WITHIN)),
-        "the stopped group settled: SIGKILL went to the whole group and the leader was reaped, so no member still runs"
+        "no non-zombie member of the stopped group still runs"
     );
     watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
-/// Waits up to `deadline` on the wall clock for the stopped detached group
-/// to settle: no member still runs. The kernel probe retires a group only on
-/// `ESRCH`, so a member that is already dead still reads alive until init
-/// reaps it — the orphaned `sleep` grandchild after the leader's reap — and
-/// on macOS the probe itself can lag the reap (`crates/support/src/group.rs`,
-/// `alive`). The stop contract the test owns is SIGKILL to the whole group
-/// plus the leader's reap, both asserted above, so what the test waits on is
-/// the member listing: a group with no listed members, or whose listed
-/// members are all zombies, is settled. A listed member that still runs
-/// keeps the wait going, so a grandchild the SIGKILL missed still fails the
-/// test. Lists with `ps -e` (`ps -g` is not portable: Linux selects sessions
-/// where macOS selects groups).
+/// Waits up to `deadline` for the named fact that no non-zombie member of the stopped group still runs; it does not wait for quiet.
+/// Settles on the `ps` member listing (see RULING-4817-S1): no listed members, or only zombies.
 fn detached_group_settled(pgid: u32, deadline: Deadline) -> bool {
     let want = pgid.to_string();
+    let (_hold, hold) = mpsc::channel::<()>();
     loop {
-        let settled = Command::new("ps")
-            .args(["-e", "-o", "pgid=,stat=,comm="])
-            .output()
-            .is_ok_and(|out| {
-                out.status.success()
-                    && !detached_group_runs(&String::from_utf8_lossy(&out.stdout), &want)
-            });
-        if settled {
+        let (listed, listing) = mpsc::channel();
+        thread::spawn(move || {
+            let output = Command::new("ps")
+                .args(["-e", "-o", "pgid=,stat=,comm="])
+                .output();
+            match listed.send(output) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        if let Some(true) = listing_settled(deadline.recv(&listing), &want) {
             return true;
         }
         if deadline.left().is_zero() {
             return false;
         }
-        thread::yield_now();
+        match Deadline::after(fakes::POLL).recv(&hold) {
+            Ok(()) | Err(_) => {}
+        }
     }
 }
 
-/// Whether the `ps -e -o pgid=,stat=,comm=` listing `text` names a member of
-/// group `want` that still runs: a listed zombie is dead, awaiting init's
-/// reap, and reads settled. A member listed without a state column reads as
-/// running, so an unexpected `ps` shape never settles the wait early.
-fn detached_group_runs(text: &str, want: &str) -> bool {
-    for line in text.lines() {
-        let mut columns = line.split_whitespace();
-        if columns.next() != Some(want) {
-            continue;
+/// Reads one `ps` answer for `want`: `Some` settled on an answer, `None` when the
+/// receive missed its deadline, so a hung `ps` keeps the wait going instead of settling it.
+fn listing_settled(
+    received: Result<std::io::Result<std::process::Output>, mpsc::RecvTimeoutError>,
+    want: &str,
+) -> Option<bool> {
+    match received {
+        Ok(output) => {
+            let output = output.expect("ps lists the processes");
+            Some(
+                output.status.success()
+                    && !detached_group_runs(&String::from_utf8_lossy(&output.stdout), want),
+            )
         }
-        match columns.next() {
-            Some(state) if state.starts_with('Z') => {}
-            _ => return true,
-        }
+        Err(_) => None,
     }
-    false
+}
+
+fn detached_group_runs(text: &str, want: &str) -> bool {
+    text.lines().any(|line| {
+        let mut columns = line.split_whitespace();
+        columns.next() == Some(want) && !columns.next().is_some_and(|state| state.starts_with('Z'))
+    })
 }
 
 #[test]
@@ -2134,6 +2136,47 @@ fn detached_group_runs_reads_only_running_members_of_the_group() {
     assert!(detached_group_runs("1234 Ss sh\n1234 Z sleep\n", "1234"));
     // An unexpected shape never settles early.
     assert!(detached_group_runs("1234\n", "1234"));
+}
+
+#[test]
+fn listing_settled_keeps_waiting_when_ps_misses_its_deadline() {
+    assert_eq!(
+        listing_settled(Err(mpsc::RecvTimeoutError::Timeout), "1234"),
+        None
+    );
+}
+
+#[test]
+#[should_panic(expected = "ps lists the processes")]
+fn listing_settled_reports_a_ps_spawn_failure() {
+    let failed: std::io::Result<std::process::Output> = Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "ps missing",
+    ));
+    let _ = listing_settled(Ok(failed), "1234");
+}
+
+#[test]
+fn listing_settled_reads_only_running_members_as_unsettled() {
+    fn answered(
+        stdout: &[u8],
+    ) -> Result<std::io::Result<std::process::Output>, mpsc::RecvTimeoutError> {
+        use std::os::unix::process::ExitStatusExt as _;
+        Ok(Ok(std::process::Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: stdout.to_vec(),
+            stderr: Vec::new(),
+        }))
+    }
+    assert_eq!(
+        listing_settled(answered(b"1234 S sleep\n"), "1234"),
+        Some(false)
+    );
+    assert_eq!(
+        listing_settled(answered(b"1234 Z sleep\n"), "1234"),
+        Some(true)
+    );
+    assert_eq!(listing_settled(answered(b""), "1234"), Some(true));
 }
 
 #[test]
