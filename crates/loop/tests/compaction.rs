@@ -2483,6 +2483,36 @@ fn an_estimate_exactly_at_the_window_is_sent() {
 }
 
 #[test]
+fn an_estimate_exactly_at_the_window_compacts_automatically() {
+    // 999 prompt tokens and a one-token result: 1,000, exactly the window.
+    // The overflow arm takes only a strictly larger estimate
+    // (`docs/compaction.md`, "Overflow"), so the automatic trigger fires
+    // (`docs/compaction.md`, "Automatic") on the same kinds as an
+    // estimate just below the trigger's window would.
+    let mut session = windowed(
+        vec![
+            called(WINDOW - 1),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        settings(),
+        WINDOW,
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, CALL_BODY, STEP, COMPACTED, REPLY, ENDED],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_eq!(
+        of_kind(&lines, "compaction_started")[0].payload["trigger"],
+        "auto"
+    );
+}
+
+#[test]
 fn automatic_compaction_off_skips_the_size_check() {
     let mut session = windowed(
         vec![called(WINDOW), said("Done.", 50)],
