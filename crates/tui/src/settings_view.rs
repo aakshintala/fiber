@@ -1007,6 +1007,10 @@ impl Settings {
             }
             return Act::Open(file.unwrap_or_else(|| ctx.seam.global_file()));
         }
+        if *key == Key::Char(' ') && self.search.is_some() {
+            self.mutate_query(ctx, |query| query.insert(' '));
+            return Act::Stay;
+        }
         if *key == Key::Enter || *key == Key::Char(' ') {
             return self.change(ctx);
         }
@@ -1267,9 +1271,10 @@ impl Settings {
     pub(crate) fn click(&mut self, spot: Spot, ctx: &Ctx<'_>) -> Act {
         if let Some(page) = &self.page {
             if let (Spot::Row(at), None) = (spot, &page.field)
-                && at <= page.entries.len()
+                && at < page.entries.len()
             {
                 self.page_select(at, ctx);
+                self.page_key(&Key::Enter, ctx);
             }
             return Act::Stay;
         }
@@ -1283,7 +1288,7 @@ impl Settings {
             (Spot::Row(at), Mode::Rows) => {
                 self.focus_line(at, ctx);
                 self.said.clear();
-                Act::Stay
+                self.change(ctx)
             }
             (Spot::Row(_), Mode::Field(_)) => Act::Stay,
             // Only the model picker draws cells with targets of their
@@ -1756,7 +1761,7 @@ impl Settings {
         if *key == Key::Esc {
             self.page = None;
             self.said.clear();
-        } else if *key == Key::Enter {
+        } else if *key == Key::Enter || *key == Key::Char(' ') && !page.objects {
             let entry = page.entries.get(at);
             let mut draft = Draft::default();
             draft.set(&entry.map(entry_path).unwrap_or_default());
