@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/settings_view_tests.rs
+expression: "drawn(&settings, None, 80, 24)"
+---
+ Settings  /settings                                                 Esc returns
+Changes save automatically
+
+ Appearance   Notifications   Models   Permissions   Sessions   Advanced
+
+  Reviewer model          Default ›
+
+  Sandbox writable paths  a/b, c/d ›
+
+  Sandbox                 [x] On  repository
+
+› Reviewer notes          Edit with /reviewer-setup ›
+
+  Rules                   Open /rules ›
+
+  Tools                   Open /tools ›
+
+
+
+
+
+Edit with /reviewer-setup ›
+notes
+←→ tab · / search · Enter change · Tab layer · Delete reset
