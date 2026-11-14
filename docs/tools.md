@@ -1126,8 +1126,10 @@ The kinds are `docs/events.md`.
   ("Shell", "Stopping a command"), except a Fiber delegate, which shuts down
   as `docs/delegates.md`, "Lifetime", says. If a descendant that escaped the process
   group still holds the output pipe open past the bound, the job ends
-  `failed` with code `indeterminate`, never `completed`. A stopped job ends
-  `cancelled`.
+  `failed` with code `indeterminate`, never `completed`. A detached process
+  writes to its log file, not a pipe, so it ends `indeterminate` when its
+  process group still answers the liveness check past the bound. A stopped
+  job ends `cancelled`.
 - Jobs run under the session's keeper ("The keeper"), so they outlive a crash
   of their session and a resumed session gets their real results. A shutdown
   stops every job (`docs/invocation.md`, "Shutdown").
