@@ -214,11 +214,6 @@ crates/main/src/configure/remote_tests.rs	fiber-4583	plan	2026-11-13T21:41:17Z	A
 docs/invocation.md	fiber-4583	plan	2026-11-13T21:41:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/hooks.rs	fiber-4583	plan	2026-11-13T22:10:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/hooks_tests.rs	fiber-4583	plan	2026-11-13T22:10:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/src/opening.rs	fiber-4774	plan	2026-11-13T22:32:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/workflow.md	fiber-4774	plan	2026-11-13T22:32:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/testing.md	fiber-4774	plan	2026-11-13T22:32:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/ci.md	fiber-4774	plan	2026-11-13T22:32:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-scripts/check-docs	fiber-4774	plan	2026-11-13T22:32:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/config/src/lib.rs	fiber-4598	plan	2026-11-13T22:41:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4675	plan	2026-11-13T23:11:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screens/journeys.rs	fiber-4675	plan	2026-11-13T23:11:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -306,9 +301,6 @@ crates/main/tests/commands/stdout_errors.rs:51-52	fiber-4786	plan	2026-11-14T00:
 crates/main/tests/commands/stdout_errors.rs:57-58	fiber-4786	plan	2026-11-14T00:48:40Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4786-doors-broken-pipe	
 crates/main/tests/commands/stdout_errors.rs:102-102	fiber-4786	plan	2026-11-14T00:48:40Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4786-doors-broken-pipe	
 docs/invocation.md:334-334	fiber-4786	plan	2026-11-14T00:48:40Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4786-doors-broken-pipe	
-crates/loop/src/skills.rs:150-151	fiber-4774	plan	2026-11-14T01:01:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4774-skills-home-overlap	
-crates/loop/src/skills_tests.rs:1509-1510	fiber-4774	plan	2026-11-14T01:01:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4774-skills-home-overlap	
-docs/system-prompt.md:325-325	fiber-4774	plan	2026-11-14T01:01:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4774-skills-home-overlap	
 crates/cli/src/models_tests.rs	fiber-4636	plan	2026-11-14T01:03:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/cli/src/setup_tests.rs	fiber-4636	plan	2026-11-14T01:03:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/config/src/keys.rs	fiber-4583	grant	2026-11-14T01:08:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4583-settings-rows	
