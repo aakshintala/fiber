@@ -665,8 +665,25 @@ fn build_inner(
                 }));
             }
             Ok(()) => {
+                // The active shared hold crosses keeper death
+                // (`docs/tools.md`, "The keeper"): the child inherits
+                // its own copy, so a recovery probe sees WouldBlock
+                // while the command lives. Hold-first: the take runs
+                // before prepare reads the baseline, so a recovery that
+                // won the race fails the spawn closed below instead of
+                // running unprotected.
+                let inherited = match baseline {
+                    Some(path) => Some(super::sandbox::protected::inherit_active(path).map_err(
+                        |error| {
+                            std::io::Error::other(SandboxApply {
+                                cause: error.to_string(),
+                            })
+                        },
+                    )?),
+                    None => None,
+                };
                 match super::sandbox::prepare(sandbox_settings, sandbox_workspace, baseline) {
-                    Ok(prepared) => Some(prepared),
+                    Ok(prepared) => Some((prepared, inherited)),
                     Err(cause) => {
                         return Err(std::io::Error::other(SandboxApply {
                             cause: cause.to_string(),
@@ -685,7 +702,7 @@ fn build_inner(
     #[cfg(target_os = "linux")]
     let mut sentinel_parent: Option<std::os::unix::net::UnixStream> = None;
     #[cfg(target_os = "linux")]
-    if let Some(prepared) = prepared {
+    if let Some((prepared, inherited)) = prepared {
         let (parent, child) = std::os::unix::net::UnixStream::pair()?;
         set_cloexec(&parent)?;
         set_cloexec(&child)?;
@@ -696,16 +713,25 @@ fn build_inner(
             reason = "installs the prepared Linux policy between fork and exec"
         )]
         // SAFETY: The closure runs between fork and exec, so it only runs
-        // syscalls: Landlock `restrict_self` and seccomp `apply_filter` on a
-        // policy prepared before fork. Success performs no allocation: the
-        // ruleset is consumed through the borrowed policy and the seccomp
-        // program only borrowed, never moved or freed. A failure writes the
-        // raw errno to the sentinel, without formatting or allocation, and
-        // returns it, so spawn aborts and the command never runs unconfined.
+        // syscalls: clearing CLOEXEC on the inherited active hold with
+        // `fcntl`, then Landlock `restrict_self` and seccomp `apply_filter`
+        // on a policy prepared before fork. Success performs no allocation
+        // and takes no lock: the ruleset is consumed through the borrowed
+        // policy and the seccomp program only borrowed, never moved or
+        // freed. A failure writes the raw errno to the sentinel, without
+        // formatting or allocation, and returns it, so spawn aborts and the
+        // command never runs unconfined.
         // See `docs/code-quality.md`, "`unsafe`".
         unsafe {
             use std::os::unix::process::CommandExt as _;
             cmd.pre_exec(move || {
+                if let Some(held) = inherited.as_ref()
+                    && let Err(error) = clear_cloexec(held)
+                {
+                    let code = error.raw_os_error().unwrap_or(libc::EIO);
+                    write_errno(&child, code);
+                    return Err(std::io::Error::from_raw_os_error(code));
+                }
                 if let Err(code) = install(&mut policy) {
                     write_errno(&child, code);
                     return Err(std::io::Error::from_raw_os_error(code));
@@ -903,6 +929,19 @@ fn set_cloexec(stream: &std::os::unix::net::UnixStream) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Clears close-on-exec on the inherited active hold, so the confined
+/// command keeps it across exec while no unrelated spawn inherits it.
+/// Runs between fork and exec, where only syscalls are sound: one `fcntl`
+/// read and one `fcntl` write, preserving every other descriptor flag.
+#[cfg(target_os = "linux")]
+fn clear_cloexec(file: &std::fs::File) -> std::io::Result<()> {
+    use rustix::fd::AsFd as _;
+    let fd = file.as_fd();
+    let flags = rustix::io::fcntl_getfd(fd)?;
+    rustix::io::fcntl_setfd(fd, flags & !rustix::io::FdFlags::CLOEXEC)?;
+    Ok(())
+}
+
 /// Writes the raw errno to the sentinel: one `write` syscall, no
 /// allocation, no formatting. Best effort: the parent reads whatever
 /// arrived before EOF.
@@ -955,6 +994,9 @@ pub(super) fn wait_child(mut child: std::process::Child, shared: &Shared) {
     shared.cv.notify_all();
 }
 
+#[cfg(test)]
+#[path = "keeper_lock_tests.rs"]
+mod keeper_lock_tests;
 #[cfg(test)]
 #[path = "command_tests.rs"]
 mod tests;

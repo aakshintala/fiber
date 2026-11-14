@@ -13,8 +13,11 @@
 //! shared; a call that finds holders takes a shared active lock and reuses
 //! the baseline. The baseline lock is never held across execution; the
 //! active shared lock lasts until the call's final report, including after
-//! adoption. Every active probe is non-blocking, so an ending call waiting
-//! on the baseline lock cannot deadlock a beginning call.
+//! adoption. The spawn builder opens a separate shared hold of the same
+//! lock for the confined child to inherit, so the baseline stays fixed
+//! while any child of a dead keeper still runs. Every active probe is
+//! non-blocking, so an ending call waiting on the baseline lock cannot
+//! deadlock a beginning call.
 //!
 //! The baseline half lives in [`baseline`]: identity, storage, locking and
 //! capture, failing closed when discovery or capture is incomplete. The
@@ -25,6 +28,8 @@ pub(crate) mod baseline;
 mod restore;
 
 use std::collections::HashMap;
+#[cfg(target_os = "linux")]
+use std::fs::OpenOptions;
 use std::fs::{File, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -488,6 +493,46 @@ fn finish_failure(cause: &str) -> Report {
             path: "baseline.json".to_owned(),
             message: cause.to_owned(),
         }],
+    }
+}
+
+/// Opens a separate shared hold of the active lock for a confined child
+/// to inherit across exec (`docs/tools.md`, "The keeper"). The hold is a
+/// new open file description, so dropping the session guard or the
+/// builder's copy never unlocks the child's copy; only the last child's
+/// exit releases it. It takes the shared lock without blocking: the caller
+/// holds the session guard across the spawn, so an unexpected exclusive
+/// holder is a setup error. The descriptor stays close-on-exec in the
+/// parent; the child clears that flag before the policy applies, so no
+/// unrelated spawn inherits it.
+///
+/// debt: a descendant that closes its inherited descriptors and outlives
+/// its group escapes this hold, a sighting of a protected path restored
+/// under a live writer.
+#[cfg(target_os = "linux")]
+pub(crate) fn inherit_active(baseline: &Path) -> io::Result<File> {
+    if baseline
+        .file_name()
+        .is_none_or(|name| name != "baseline.json")
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is not a protected-path baseline", baseline.display()),
+        ));
+    }
+    // Open the existing sibling lock without creating it: a missing state
+    // fails before execution, never as an unprotected spawn.
+    let held = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(baseline.with_file_name("active.lock"))?;
+    match held.try_lock_shared() {
+        Ok(()) => Ok(held),
+        Err(TryLockError::WouldBlock) => Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            format!("the active lock {} is held exclusively", baseline.display()),
+        )),
+        Err(TryLockError::Error(source)) => Err(source),
     }
 }
 

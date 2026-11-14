@@ -1207,9 +1207,7 @@ hub.
   (`docs/events.md`, "Resume").
 - **A confined job keeps its baseline fixed.** The keeper holds the active
   lock for each confined command it runs, from its start to its end
-  (`docs/sandbox.md`, "Protected paths"). It restores nothing: after a crash,
-  the first confined call that finds no active holder restores and reports,
-  as after a dead session.
+  (`docs/sandbox.md`, "Protected paths"). It restores nothing. A keeper that dies leaves the active lock held until the confined command's last process exits, so the first confined call that finds no active holder, and so restores and reports as after a dead session, never runs while that command lives.
 - **The keeper is tiny.** It loads no provider, MCP server or model code,
   and no extension but a harness's. It runs processes, holds their pipes and
   terminals, writes each job's output file, enforces each job's deadline and
