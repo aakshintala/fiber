@@ -2126,7 +2126,7 @@ fn a_remote_changed_file_return_stores_the_copy_through_the_close_path() {
     line.clear();
     asked
         .read_line(&mut line)
-        .unwrap_or_else(|err| panic!("the client settings read: {err}"));
+        .unwrap_or_else(|err| panic!("the workspace write: {err}"));
     let written: serde_json::Value = serde_json::from_str(&line).unwrap();
     assert_eq!(written["command"], "write_workspace_file");
     assert_eq!(

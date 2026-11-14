@@ -250,14 +250,7 @@ impl App {
             .ok()?
             .into_iter()
             .find(|row| row.key == "tui.editor")
-            .and_then(|row| match row.value {
-                crate::configure::Shown::Value(value) => {
-                    Some(crate::settings_view::as_typed(&value))
-                }
-                crate::configure::Shown::Unset
-                | crate::configure::Shown::Union { .. }
-                | crate::configure::Shown::Redacted(_) => None,
-            })
+            .and_then(|row| crate::settings_view::current_text(&row.value))
     }
 
     /// Runs `/theme <name>`: saves the named theme to the global file

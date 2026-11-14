@@ -1852,15 +1852,7 @@ impl Settings {
         ctx: &Ctx<'_>,
     ) {
         let mut list = List::gutter();
-        let selected = if key == EDITOR {
-            current
-                .as_deref()
-                .and_then(|value| value.split_whitespace().next())
-                .and_then(|program| Path::new(program).file_name())
-                .and_then(|name| name.to_str())
-        } else {
-            current.as_deref()
-        };
+        let selected = selected(&key, current.as_deref());
         let at = names
             .iter()
             .position(|name| Some(name.as_str()) == selected)
@@ -1936,9 +1928,20 @@ impl Settings {
     }
 }
 
+fn selected<'a>(key: &str, current: Option<&'a str>) -> Option<&'a str> {
+    if key == EDITOR {
+        current
+            .and_then(|value| value.split_whitespace().next())
+            .and_then(|program| Path::new(program).file_name())
+            .and_then(|name| name.to_str())
+    } else {
+        current
+    }
+}
+
 /// A value's text as a field takes it: a string bare, anything else as
 /// its JSON.
-fn current_text(value: &Shown) -> Option<String> {
+pub(crate) fn current_text(value: &Shown) -> Option<String> {
     match value {
         Shown::Value(text) => Some(as_typed(text)),
         Shown::Unset | Shown::Union { .. } | Shown::Redacted(_) => None,
@@ -2210,14 +2213,7 @@ impl Settings {
                 rows: names
                     .iter()
                     .map(|name| {
-                        let selected = if key == EDITOR {
-                            current
-                                .as_deref()
-                                .and_then(|value| value.split_whitespace().next())
-                        } else {
-                            current.as_deref()
-                        };
-                        let mark = if Some(name.as_str()) == selected {
+                        let mark = if Some(name.as_str()) == selected(key, current.as_deref()) {
                             "  (current)"
                         } else {
                             ""
