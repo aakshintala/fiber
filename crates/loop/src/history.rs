@@ -235,27 +235,39 @@ fn file_seen(details: &Option<Value>) -> Option<(PathBuf, u64)> {
     Some((PathBuf::from(path), hash))
 }
 
+/// A review escalation's cause, parsed from the raw payload's
+/// `escalation.cause` alone. It mirrors `contract::events::Escalation`'s
+/// tag: only the tag is parsed, so a line whose associated data no longer
+/// reads (such as a `reviewer_failed` line with an unreadable `error`)
+/// still counts, as the raw read counts it now. A full `Escalation` parse
+/// would drop those lines.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum EscalationCause {
+    ConsecutiveBlocks,
+    SessionBlocks,
+    ReviewerFailed,
+}
+
 /// The id of a review escalation a `permission_requested` line carries,
 /// read from the raw payload: step `review` with an escalation cause in
 /// `consecutive_blocks | session_blocks | reviewer_failed`. A line that
 /// does not read as one contributes nothing, as with the exit seed's raw
-/// read.
+/// read. `step` stays text: `AskStep` derives `Serialize` only
+/// (`crates/contract/src/events/action.rs`), so no closed enum can read
+/// it here without a contract change.
 fn review_escalation_id(payload: &serde_json::Map<String, Value>) -> Option<RequestId> {
     let id = payload.get("request_id").and_then(Value::as_str)?;
     if payload.get("step").and_then(Value::as_str) != Some("review") {
         return None;
     }
-    let cause = payload
-        .get("escalation")
-        .and_then(|escalation| escalation.get("cause"))
-        .and_then(Value::as_str)?;
-    if !matches!(
-        cause,
-        "consecutive_blocks" | "session_blocks" | "reviewer_failed"
-    ) {
-        return None;
+    let cause: EscalationCause =
+        serde_json::from_value(payload.get("escalation")?.get("cause")?.clone()).ok()?;
+    match cause {
+        EscalationCause::ConsecutiveBlocks
+        | EscalationCause::SessionBlocks
+        | EscalationCause::ReviewerFailed => Some(RequestId(id.to_owned())),
     }
-    Some(RequestId(id.to_owned()))
 }
 
 /// Folds one line of segment `pass.index` into `resumed`: the workspace
@@ -275,9 +287,8 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
         && let Some(id) = review_escalation_id(&line.payload)
     {
         if pass.own_segment {
-            if !pass.staged.get(&id).is_some_and(|counted| *counted) {
+            if pass.staged.insert(id, true) != Some(true) {
                 resumed.session_blocks += 1;
-                pass.staged.insert(id, true);
             }
         } else {
             pass.staged.entry(id).or_insert(false);

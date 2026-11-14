@@ -3328,7 +3328,9 @@ fn person_input_turn_snapshot_keeps_staged_request() {
 #[test]
 fn restored_block_consecutive_raise_counts() {
     // A review escalation counts at its raise, with no settlement yet:
-    // the pending-at-exit and idle-unwound shadows.
+    // the pending-at-exit and idle-unwound shadows. `docs/permissions.md`,
+    // "What happens on a block": 3 consecutive blocks hand the call to a
+    // person as an escalation.
     let folded = fold_own(
         "restored-consecutive",
         &[requested_review("r_1", consecutive_blocks())],
@@ -3338,6 +3340,8 @@ fn restored_block_consecutive_raise_counts() {
 
 #[test]
 fn restored_block_session_raise_counts() {
+    // `docs/permissions.md`, "What happens on a block": 20 in a session
+    // hand the call to a person as an escalation.
     let folded = fold_own(
         "restored-session",
         &[requested_review("r_1", session_blocks_escalation())],
@@ -3348,7 +3352,9 @@ fn restored_block_session_raise_counts() {
 #[test]
 fn restored_block_reviewer_failed_raise_counts() {
     // A failed reviewer counted live before escalating: the later lines'
-    // reviewer object never matters.
+    // reviewer object never matters. `docs/permissions.md`, "What happens
+    // on a block": a reviewer that fails is a block, escalating to a
+    // human.
     let folded = fold_own(
         "restored-failed",
         &[requested_review("r_1", reviewer_failed_escalation())],
@@ -3357,7 +3363,32 @@ fn restored_block_reviewer_failed_raise_counts() {
 }
 
 #[test]
+fn restored_block_reviewer_failed_unreadable_error_counts() {
+    // `docs/permissions.md`, "What happens on a block": a reviewer that
+    // fails is a block. Only the escalation's tag is parsed, so a line
+    // whose `error` no longer reads still counts.
+    let mut raise = envelope(
+        A,
+        1,
+        None,
+        None,
+        &requested_review("r_1", reviewer_failed_escalation()),
+    );
+    raise.payload["escalation"]["error"] = json!("boom");
+    let (_home, sessions) = sessions("restored-failed-raw");
+    write_log(
+        &sessions,
+        A,
+        &[envelope(A, 0, None, None, &started("/w", None)), raise],
+    );
+    let folded = resumed(&sessions.join(A)).unwrap();
+    assert_eq!(folded.session_blocks, 1);
+}
+
+#[test]
 fn restored_block_person_answered_counts() {
+    // `docs/permissions.md`, "What happens on a block": the block that
+    // reaches the count goes to a person instead, and counts.
     let folded = fold_own(
         "restored-answered",
         &[
@@ -3370,6 +3401,9 @@ fn restored_block_person_answered_counts() {
 
 #[test]
 fn restored_block_person_allowed_counts_and_keeps_its_grant() {
+    // `docs/permissions.md`, "What happens on a block": the person's
+    // answer ends the run, and the allow still counts as the block it
+    // answers.
     let folded = fold_own(
         "restored-allowed",
         &[
@@ -3389,6 +3423,8 @@ fn restored_block_person_allowed_counts_and_keeps_its_grant() {
 
 #[test]
 fn restored_block_cancel_ended_counts() {
+    // `docs/permissions.md`, "What happens on a block": the escalation
+    // counts at its raise, whatever ends it.
     let folded = fold_own(
         "restored-cancel",
         &[
@@ -3400,9 +3436,39 @@ fn restored_block_cancel_ended_counts() {
 }
 
 #[test]
+fn restored_block_hook_ended_counts() {
+    // `docs/permissions.md`, "What happens on a block": the escalation
+    // counts at its raise, so the own hook settlement adds nothing.
+    let folded = fold_own(
+        "restored-hook-own",
+        &[
+            requested_review("r_1", consecutive_blocks()),
+            settled("r_1", DecidedBy::Hook),
+        ],
+    );
+    assert_eq!(folded.session_blocks, 1);
+}
+
+#[test]
+fn restored_block_credential_deny_ended_counts() {
+    // `docs/permissions.md`, "What happens on a block": the escalation
+    // counts at its raise, so the own credential-deny settlement adds
+    // nothing.
+    let folded = fold_own(
+        "restored-credential-own",
+        &[
+            requested_review("r_1", consecutive_blocks()),
+            settled("r_1", DecidedBy::CredentialDeny),
+        ],
+    );
+    assert_eq!(folded.session_blocks, 1);
+}
+
+#[test]
 fn restored_block_reraise_counts_once() {
     // The parent raise only records the id; the own re-raise counts it,
-    // and settling the counted id adds nothing.
+    // and settling the counted id adds nothing. `docs/permissions.md`,
+    // "What happens on a block": one escalation, one block.
     let folded = fold_chain(
         "restored-reraise",
         &[requested_review("r_1", consecutive_blocks())],
@@ -3417,6 +3483,8 @@ fn restored_block_reraise_counts_once() {
 #[test]
 fn restored_block_parent_hook_settlement_counts() {
     // A hook settled the parent escalation with no own re-raise.
+    // `docs/permissions.md`, "What happens on a block": the escalation
+    // is the block, so its settlement counts it.
     let folded = fold_chain(
         "restored-hook",
         &[requested_review("r_1", consecutive_blocks())],
@@ -3428,6 +3496,8 @@ fn restored_block_parent_hook_settlement_counts() {
 #[test]
 fn restored_block_parent_credential_deny_settlement_counts() {
     // A credential deny refused the parent escalation with no re-raise.
+    // `docs/permissions.md`, "What happens on a block": the escalation
+    // is the block, so its settlement counts it.
     let folded = fold_chain(
         "restored-credential",
         &[requested_review("r_1", consecutive_blocks())],
@@ -3439,6 +3509,8 @@ fn restored_block_parent_credential_deny_settlement_counts() {
 #[test]
 fn restored_block_standing_ask_settlement_counts_zero() {
     // A standing ask never increments live, so its answer counts nothing.
+    // `docs/permissions.md`, "What happens on a block": only a block
+    // hands the call to a person as an escalation.
     let folded = fold_own(
         "restored-standing",
         &[
@@ -3452,7 +3524,9 @@ fn restored_block_standing_ask_settlement_counts_zero() {
 #[test]
 fn restored_block_parent_standing_raise_settled_own_counts_zero() {
     // A parent standing raise records nothing: the step gate keeps the
-    // own settlement from counting.
+    // own settlement from counting. `docs/permissions.md`, "What happens
+    // on a block": only a block hands the call to a person as an
+    // escalation.
     let folded = fold_chain(
         "restored-parent-standing",
         &[requested_permission("r_1")],
@@ -3463,12 +3537,16 @@ fn restored_block_parent_standing_raise_settled_own_counts_zero() {
 
 #[test]
 fn restored_block_unknown_settlement_counts_zero() {
+    // `docs/permissions.md`, "What happens on a block": an id never
+    // raised never incremented live, so its settlement counts nothing.
     let folded = fold_own("restored-unknown", &[settled("r_9", DecidedBy::Person)]);
     assert_eq!(folded.session_blocks, 0);
 }
 
 #[test]
 fn restored_block_budget_denial_counts_zero() {
+    // `docs/permissions.md`, "What happens on a block": the spending
+    // budget is not a block, so its denial counts nothing.
     let folded = fold_own("restored-budget", &[denied_by(DecidedBy::Budget)]);
     assert_eq!(folded.session_blocks, 0);
 }
@@ -3476,6 +3554,8 @@ fn restored_block_budget_denial_counts_zero() {
 #[test]
 fn restored_block_cancel_without_request_counts_zero() {
     // A cancelled review with no request never incremented live.
+    // `docs/permissions.md`, "What happens on a block": with no
+    // escalation, there is no block to count.
     let folded = fold_own("restored-cancel-none", &[denied_by(DecidedBy::Cancel)]);
     assert_eq!(folded.session_blocks, 0);
 }
@@ -3483,6 +3563,8 @@ fn restored_block_cancel_without_request_counts_zero() {
 #[test]
 fn restored_block_parent_only_escalation_counts_zero() {
     // The old segment's blocks are the old session's.
+    // `docs/permissions.md`, "What happens on a block": 20 in a
+    // session, one session's own.
     let folded = fold_chain(
         "restored-parent-only",
         &[requested_review("r_1", consecutive_blocks())],

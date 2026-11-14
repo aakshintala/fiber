@@ -698,12 +698,15 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
 
 #[test]
 fn restored_block_mix_matches_live_limit() {
-    // 6 rounds of (2 reviewer denies plus 1 person-answered
-    // consecutive-blocks escalation), then 1 reviewer deny plus 1
-    // person-answered session-blocks escalation: 20 live-reachable blocks.
-    // Block 19 leaves consecutive at 1 and session at 19; block 20 reaches
-    // the session limit and escalates as session blocks, so no third
-    // consecutive reviewer deny ever stands.
+    // `docs/permissions.md`, "What happens on a block": 3 consecutive
+    // blocks, or 20 in a session, hand the call to a person as an
+    // escalation, and a reviewer that fails is a block. 6 rounds of (2
+    // reviewer denies plus 1 person-answered consecutive-blocks
+    // escalation), then 1 reviewer deny plus 1 person-answered
+    // session-blocks escalation: 20 live-reachable blocks. Block 19 leaves
+    // consecutive at 1 and session at 19; block 20 reaches the session
+    // limit and escalates as session blocks, so no third consecutive
+    // reviewer deny ever stands.
     let mut history = History::new(vec![
         support::tool_call_reply("Go.", &["exec"]),
         Scripted::text("After."),
@@ -743,6 +746,8 @@ fn restored_block_mix_matches_live_limit() {
     );
     history.write(person_denied("r_esc_19"), Some("a_old"));
     history.freeze();
+    // The pre-resume log holds the 20 counted blocks in write order
+    // (`docs/permissions.md`, "What happens on a block").
     let mut expected = vec![EventKind::SessionStarted];
     for _ in 0..6 {
         expected.extend([
@@ -782,7 +787,7 @@ fn restored_block_mix_matches_live_limit() {
     let outcome = history.run(looped, "two");
 
     // The 21st session block escalates with no person to answer: the turn
-    // fails `blocked`.
+    // fails `blocked` (`docs/permissions.md`, "What happens on a block").
     assert_eq!(outcome, contract::events::TurnOutcome::Failed);
     assert_eq!(
         history.new_kinds(),
