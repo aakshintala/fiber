@@ -305,6 +305,7 @@ struct RestoredSupervisor {
 }
 
 impl RestoredSupervisor {
+    #[cfg(debug_assertions)]
     fn group_alive(&self, event: RestoredLivenessEvent) -> bool {
         #[cfg(debug_assertions)]
         if let Some(hook) = &self.restored.liveness
@@ -392,9 +393,14 @@ fn supervise_restored(supervisor: RestoredSupervisor) {
             }
             drain_deadline = Some(now.checked_add(support::group::DRAIN).unwrap_or(now));
         }
-        if drain_deadline.is_some_and(|deadline| {
+        #[cfg(debug_assertions)]
+        let drain_expired = drain_deadline.is_some_and(|deadline| {
             now >= deadline && supervisor.group_alive(RestoredLivenessEvent::DrainDeadline)
-        }) {
+        });
+        #[cfg(not(debug_assertions))]
+        let drain_expired =
+            drain_deadline.is_some_and(|deadline| now >= deadline && support::group::alive(pgid));
+        if drain_expired {
             supervisor.fail_indeterminate();
             return;
         }
