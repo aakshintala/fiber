@@ -304,7 +304,7 @@ struct RestoredSupervisor {
     clock: Arc<dyn Clock>,
 }
 
-fn drain_expired(
+fn drain_is_expired(
     now: std::time::Instant,
     deadline: std::time::Instant,
     alive: impl FnOnce() -> bool,
@@ -313,21 +313,17 @@ fn drain_expired(
 }
 
 impl RestoredSupervisor {
-    #[cfg(debug_assertions)]
     fn group_alive(&self, event: RestoredLivenessEvent) -> bool {
+        // debt: keep the test hook debug-only until release-profile test builds can exercise it.
+        #[cfg(debug_assertions)]
         if let Some(hook) = &self.restored.liveness
             && hook.observed.send(event).is_ok()
             && let Ok(answer) = hook.answers.recv()
         {
             return answer;
         }
-        support::group::alive(self.restored.pgid)
-    }
-
-    // Dev-profile tests never compile this release-only body.
-    #[cfg_attr(false, mutants::skip)]
-    #[cfg(not(debug_assertions))]
-    fn group_alive(&self) -> bool {
+        #[cfg(not(debug_assertions))]
+        let _ = event;
         support::group::alive(self.restored.pgid)
     }
 }
@@ -382,14 +378,11 @@ fn supervise_restored(supervisor: RestoredSupervisor) {
                 }
             }
         }
-        #[cfg(debug_assertions)]
         let alive = if drain_deadline.is_some() {
             supervisor.group_alive(RestoredLivenessEvent::AfterKillLoopTop)
         } else {
             support::group::alive(pgid)
         };
-        #[cfg(not(debug_assertions))]
-        let alive = support::group::alive(pgid);
         if !alive {
             if cancelled {
                 supervisor.report(Outcome::Failed, Some(ShellError::Indeterminate));
@@ -407,15 +400,11 @@ fn supervise_restored(supervisor: RestoredSupervisor) {
             }
             drain_deadline = Some(now.checked_add(support::group::DRAIN).unwrap_or(now));
         }
-        #[cfg(debug_assertions)]
         let drain_expired = drain_deadline.is_some_and(|deadline| {
-            drain_expired(now, deadline, || {
+            drain_is_expired(now, deadline, || {
                 supervisor.group_alive(RestoredLivenessEvent::DrainDeadline)
             })
         });
-        #[cfg(not(debug_assertions))]
-        let drain_expired = drain_deadline
-            .is_some_and(|deadline| drain_expired(now, deadline, || supervisor.group_alive()));
         if drain_expired {
             supervisor.fail_indeterminate();
             return;
