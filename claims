@@ -389,3 +389,9 @@ docs/invocation.md	fiber-452	plan	2026-11-14T10:54:55Z	Amoghs-MacBook-Pro:/Users
 docs/dependencies.md	fiber-452	plan	2026-11-14T10:54:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/cli/src/models.rs	fiber-452	plan	2026-11-14T10:54:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/cli/src/lib.rs	fiber-452	plan	2026-11-14T10:54:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/dynamic_complete.rs	fiber-452	plan	2026-11-14T11:01:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/src/dynamic_complete_tests.rs	fiber-452	plan	2026-11-14T11:01:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/completion/bash-driver.bash	fiber-452	plan	2026-11-14T11:01:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/completion/fish-driver.fish	fiber-452	plan	2026-11-14T11:01:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/completion/zsh-driver.zsh	fiber-452	plan	2026-11-14T11:01:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/completion/zsh-capture.zsh	fiber-452	plan	2026-11-14T11:01:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
