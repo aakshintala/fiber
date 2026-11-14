@@ -304,8 +304,12 @@ struct RestoredSupervisor {
     clock: Arc<dyn Clock>,
 }
 
-fn drain_expired(now: std::time::Instant, deadline: std::time::Instant, alive: bool) -> bool {
-    now >= deadline && alive
+fn drain_expired(
+    now: std::time::Instant,
+    deadline: std::time::Instant,
+    alive: impl FnOnce() -> bool,
+) -> bool {
+    now >= deadline && alive()
 }
 
 impl RestoredSupervisor {
@@ -403,15 +407,13 @@ fn supervise_restored(supervisor: RestoredSupervisor) {
         }
         #[cfg(debug_assertions)]
         let drain_expired = drain_deadline.is_some_and(|deadline| {
-            drain_expired(
-                now,
-                deadline,
-                supervisor.group_alive(RestoredLivenessEvent::DrainDeadline),
-            )
+            drain_expired(now, deadline, || {
+                supervisor.group_alive(RestoredLivenessEvent::DrainDeadline)
+            })
         });
         #[cfg(not(debug_assertions))]
         let drain_expired = drain_deadline
-            .is_some_and(|deadline| drain_expired(now, deadline, supervisor.group_alive()));
+            .is_some_and(|deadline| drain_expired(now, deadline, || supervisor.group_alive()));
         if drain_expired {
             supervisor.fail_indeterminate();
             return;

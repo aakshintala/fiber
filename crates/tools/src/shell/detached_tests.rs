@@ -31,26 +31,40 @@ const LINGER: &str = "exec sleep 60\n";
 fn restored_drain_expiry_requires_deadline_and_live_group() {
     let clock = FakeClock::new();
     let deadline = clock.now();
+    let called = AtomicBool::new(false);
     assert!(
-        super::drain_expired(deadline, deadline, true),
+        !super::drain_expired(
+            deadline
+                .checked_sub(Duration::from_nanos(1))
+                .expect("fake clock deadline has room before its origin"),
+            deadline,
+            || {
+                called.store(true, Ordering::SeqCst);
+                true
+            },
+        ),
+        "a live group before the deadline has not exceeded the drain"
+    );
+    assert!(
+        !called.load(Ordering::SeqCst),
+        "liveness is not checked before the deadline"
+    );
+    assert!(
+        super::drain_expired(deadline, deadline, || true),
         "the boundary is expired while the group remains alive"
     );
     assert!(
-        !super::drain_expired(deadline, deadline, false),
+        !super::drain_expired(deadline, deadline, || false),
         "a group that is no longer alive has not exceeded the drain"
     );
-    let just_before = deadline
-        .checked_sub(Duration::from_nanos(1))
-        .expect("fake clock deadline has room before its origin");
     assert!(
-        !super::drain_expired(just_before, deadline, true),
-        "a live group before the deadline has not exceeded the drain"
-    );
-    let just_after = deadline
-        .checked_add(Duration::from_nanos(1))
-        .expect("fake clock deadline has room after its origin");
-    assert!(
-        super::drain_expired(just_after, deadline, true),
+        super::drain_expired(
+            deadline
+                .checked_add(Duration::from_nanos(1))
+                .expect("fake clock deadline has room after its origin"),
+            deadline,
+            || true,
+        ),
         "a live group after the deadline has exceeded the drain"
     );
 }
