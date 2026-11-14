@@ -775,10 +775,13 @@ fn selection_clamps_two_past_the_end() {
             repository("d"),
         ],
     );
+    skills.click(Spot::Row(6), &ctx(&fake));
+    assert_eq!(skills.list.selected(), 3);
     let context = Ctx {
         height: 4,
         ..ctx(&fake)
     };
+    skills.click(Spot::Row(0), &context);
     for _ in 0..3 {
         skills.key(&Key::Down, &context);
     }
