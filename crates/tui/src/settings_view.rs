@@ -1791,8 +1791,28 @@ impl Settings {
             quoted(&typed)
         };
         let (layer, key) = (field.layer, field.key.clone());
-        if self.save(ctx, layer, &key, &text) {
+        let saved = if key == EDITOR && typed.trim().is_empty() {
+            let Some(row) = self.rows.iter().find(|row| row.key == key) else {
+                return;
+            };
+            match (layer_named(&row.layer), current_text(&row.value)) {
+                (Some(source), Some(expected)) => {
+                    match ctx.seam.reset(ctx.workspace, source, &key, &expected) {
+                        Ok(_) => true,
+                        Err(error) => {
+                            self.said = vec![error.message];
+                            false
+                        }
+                    }
+                }
+                _ => true,
+            }
+        } else {
+            self.save(ctx, layer, &key, &text)
+        };
+        if saved {
             self.mode = Mode::Rows;
+            self.reread(ctx);
         }
     }
 
@@ -1836,6 +1856,8 @@ impl Settings {
             current
                 .as_deref()
                 .and_then(|value| value.split_whitespace().next())
+                .and_then(|program| Path::new(program).file_name())
+                .and_then(|name| name.to_str())
         } else {
             current.as_deref()
         };

@@ -2929,6 +2929,10 @@ fn editor_picker_uses_path_order_and_saves_wait_for_gui_editors() {
         SettingControl::Text,
     ));
     let mut settings = at(&fake, "tui.editor");
+    assert_eq!(
+        row_of(&screen(&settings), "Editor"),
+        "› Editor code --wait ›"
+    );
     settings.open_dynamic_choices(
         "tui.editor".to_owned(),
         Layer::Global,
@@ -2953,6 +2957,25 @@ fn editor_picker_uses_path_order_and_saves_wait_for_gui_editors() {
     assert_eq!(
         writes(&fake),
         [w(Layer::Global, "tui.editor", "\"code --wait\"")]
+    );
+
+    let mut absolute = at(&fake, "tui.editor");
+    absolute.open_dynamic_choices(
+        "tui.editor".to_owned(),
+        Layer::Global,
+        vec!["Default".to_owned(), "code".to_owned(), "Other…".to_owned()],
+        Some("/usr/local/bin/code --wait".to_owned()),
+        &ctx(&fake),
+    );
+    let super::Mode::Choices { list, .. } = &absolute.mode else {
+        panic!("editor choices did not open");
+    };
+    assert_eq!(list.selected(), 1);
+    absolute.choose("code", &ctx(&fake));
+    assert_eq!(
+        writes(&fake).last(),
+        Some(&w(Layer::Global, "tui.editor", "\"code --wait\"")),
+        "reselecting code must preserve its saved command"
     );
 
     let mut other = at(&fake, "tui.editor");
@@ -2984,22 +3007,49 @@ fn editor_picker_uses_path_order_and_saves_wait_for_gui_editors() {
     );
     cancel.choose("Other…", &ctx(&fake));
     one(&mut cancel, &fake, Key::Esc);
-    assert_eq!(writes(&fake).len(), 2, "cancel wrote a value");
+    assert_eq!(writes(&fake).len(), 3, "cancel wrote a value");
 
-    let mut empty = at(&fake, "tui.editor");
+    let empty_fake = Fake::new(row_on(
+        "tui.editor",
+        "Editor",
+        SettingsTab::Sessions,
+        value("\"code --wait\""),
+        "global",
+        PERSON,
+        SettingControl::Text,
+    ));
+    let mut empty = at(&empty_fake, "tui.editor");
     empty.open_dynamic_choices(
         "tui.editor".to_owned(),
         Layer::Global,
         vec!["Default".to_owned(), "Other…".to_owned()],
         None,
-        &ctx(&fake),
+        &ctx(&empty_fake),
     );
-    empty.choose("Other…", &ctx(&fake));
-    one(&mut empty, &fake, Key::Enter);
+    empty.choose("Other…", &ctx(&empty_fake));
+    let mut unset_rows = rows();
+    let editor_row = on(
+        SettingsTab::Sessions,
+        "Editor",
+        "tui.editor",
+        Shown::Unset,
+        "default",
+        PERSON,
+        SettingControl::Text,
+    );
+    unset_rows.push(editor_row);
+    unset_rows.sort_by(|a, b| a.key.cmp(&b.key));
+    *support::lock(&empty_fake.rows_after) = Some(unset_rows);
+    one(&mut empty, &empty_fake, Key::Enter);
+    assert!(writes(&empty_fake).is_empty(), "empty Other… wrote a value");
     assert_eq!(
-        writes(&fake).last(),
-        Some(&w(Layer::Global, "tui.editor", "\"\"")),
-        "empty Other… input must save as unset"
+        resets(&empty_fake),
+        [w(Layer::Global, "tui.editor", "code --wait")],
+        "empty Other… must reset the override"
+    );
+    assert_eq!(
+        row_of(&screen(&empty), "Editor"),
+        "› Editor Default (none set)"
     );
 }
 
