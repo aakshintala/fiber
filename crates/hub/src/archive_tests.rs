@@ -757,6 +757,26 @@ fn a_late_on_left_neither_appends_nor_reinserts_after_archive() {
 }
 
 #[test]
+fn recent_listing_defers_a_held_lock_without_archiving_it() {
+    let temp = Temp::new();
+    let hub = temp.hub();
+    temp.logged(23, &["fiber_exited"]);
+    temp.exited_row(23);
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(temp.dir_of(23).join("session.lock"))
+        .unwrap();
+    lock.try_lock().unwrap();
+
+    let answer = feed::recent_for_hub(&hub, &args(serde_json::json!({})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(answer["total"], 1);
+    assert_eq!(archived_lines(&temp.log_text(23)).len(), 0);
+}
+
+#[test]
 fn recent_listing_repairs_a_marker_without_an_archived_row() {
     let temp = Temp::new();
     let hub = temp.hub();
@@ -972,6 +992,25 @@ fn recent_cursor_uses_pre_archive_position_in_the_same_answer() {
 }
 
 // `docs/invocation.md`, "Archiving" promises these results.
+#[test]
+fn keep_ten_returns_ten_rows_and_total_after_twelve_exited_sessions() {
+    let temp = Temp::new();
+    let workspace = temp.dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.to_string_lossy().into_owned();
+    let hub = temp.hub_with_keep(10);
+    for n in 1..=12 {
+        temp.logged(n, &["fiber_exited"]);
+        temp.indexed(n, &workspace, None);
+    }
+
+    let answer = feed::recent_for_hub(&hub, &args(serde_json::json!({})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(answer["sessions"].as_array().unwrap().len(), 10);
+    assert_eq!(answer["total"], 10);
+}
+
 #[test]
 fn keep_two_archives_the_three_oldest_top_level_sessions() {
     let temp = Temp::new();

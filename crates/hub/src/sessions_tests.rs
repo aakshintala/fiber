@@ -152,7 +152,18 @@ fn answer_once(
     let (answering, home, args) = (Arc::clone(feed), home.to_path_buf(), self::args(args));
     thread::spawn(move || {
         let hub_clock: Arc<dyn Clock> = FakeClock::new();
-        let mut hub = crate::testkit::hub(&home, Arc::new(FakeStarter::hang(&home)), hub_clock);
+        let mut hub = crate::connection::Hub::new(
+            &home,
+            "0.0.0",
+            Arc::new(FakeStarter::hang(&home)),
+            Arc::clone(&hub_clock),
+            log::diag::Diag::new(
+                &home,
+                log::diag::Process::Hub,
+                log::diag::Level::Info,
+                hub_clock,
+            ),
+        );
         hub.feed = answering;
         tx.send(answer(&hub, &args, clock.as_ref(), timing.as_ref()))
             .unwrap_or(());
@@ -485,7 +496,7 @@ fn untimed_answers_read_no_clock_and_write_no_line() {
     assert_eq!(ids_of(&got), (vec![id(7)], vec![]));
     feed_stop(&feed);
     assert!(
-        !temp.dir.join("logs").join("hub.log").exists(),
+        !temp.dir.join("logs").exists(),
         "no timer means no diagnostic file"
     );
 }
