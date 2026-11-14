@@ -1,5 +1,5 @@
-//! `open_in_editor`, Ctrl+G: the draft, or a paste token, in `$VISUAL` or
-//! `$EDITOR` (`docs/tui.md`, "The input box", "Bindings").
+//! `open_in_editor`, Ctrl+G: the draft or file in `tui.editor`, `$VISUAL` or
+//! `$EDITOR` (`docs/tui.md`, "The editor").
 
 use std::ffi::c_int;
 use std::fs::{self, File, OpenOptions};
@@ -17,7 +17,7 @@ use rustix::process::Signal;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM};
 
 /// The notice when neither variable names an editor.
-pub(crate) const NO_EDITOR: &str = "Set $VISUAL or $EDITOR to edit the draft.";
+pub(crate) const NO_EDITOR: &str = "No editor set. Choose one in /settings: Editor.";
 
 /// The notice when neither variable names an editor for a file.
 pub(crate) const NO_EDITOR_FILE: &str = "Set $VISUAL or $EDITOR to open the file.";
@@ -70,13 +70,20 @@ pub(crate) enum Target {
     Item,
 }
 
-/// The editor command: `$VISUAL` when set and not empty, else `$EDITOR`
-/// when set and not empty, read through `var`.
-pub(crate) fn command(var: impl Fn(&str) -> Option<String>) -> Option<String> {
-    ["VISUAL", "EDITOR"]
-        .into_iter()
-        .filter_map(var)
-        .find(|value| !value.trim().is_empty())
+/// The editor command: the configured value when non-empty, else `$VISUAL`,
+/// then `$EDITOR` when non-empty, read through `var`.
+pub(crate) fn command(
+    configured: Option<String>,
+    var: impl Fn(&str) -> Option<String>,
+) -> Option<String> {
+    configured
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            ["VISUAL", "EDITOR"]
+                .into_iter()
+                .filter_map(var)
+                .find(|value| !value.trim().is_empty())
+        })
 }
 
 /// Runs `command` on a new temporary file holding `text`, in the
