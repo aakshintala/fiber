@@ -986,6 +986,66 @@ fn keeper_waits_for_dying_session_lock() {
 }
 
 #[test]
+fn keeper_lock_wait_deadline_exits_without_binding() {
+    let id = SessionId("s_6123456789abcdef".into());
+    let clock = fakes::clock::FakeClock::new();
+    let (waiter_tx, waiter_rx) = mpsc::channel();
+    let hooks = super::Hooks {
+        takeover_waiter_thread: Some(Box::new(move |thread| match waiter_tx.send(thread) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        })),
+        ..super::Hooks::default()
+    };
+    let (mut keeper, _) = serve_keeper_with(
+        "keeper-takeover-lock-deadline",
+        id.clone(),
+        clock.clone(),
+        hooks,
+        None,
+    );
+    let pgid = start_shell(&keeper, "job", "sleep 60");
+    let _reaper = Reaper(pgid);
+    adopt_call(&keeper, "job", "j_job");
+    let predecessor = log::Log::open_as(&keeper.sessions, id, clock.clone(), "predecessor")
+        .expect("predecessor holds the session lock");
+    let start = clock.now();
+    crash(&mut keeper);
+    let waiter =
+        Deadline::after(Duration::from_secs(10)).recv_or_fail(&waiter_rx, "takeover waiter thread");
+    let until = start + super::TAKEOVER_LOCK_WAIT;
+    assert!(clock.await_thread_parked(
+        waiter,
+        Some(until),
+        Deadline::after(Duration::from_secs(10)),
+    ));
+    let socket = crashed_socket(&keeper);
+    assert!(
+        keeper.result.try_recv().is_err(),
+        "the keeper waits before the deadline"
+    );
+    assert!(
+        !socket.exists(),
+        "the keeper has not bound while the lock is held"
+    );
+
+    clock.advance_when_parked(
+        Some(until),
+        Some(waiter),
+        super::TAKEOVER_LOCK_WAIT,
+        &Deadline::after(Duration::from_secs(10)),
+    );
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&keeper.result, "keeper lock-lost exit")
+        .expect("keeper exits cleanly");
+    assert!(
+        !socket.exists(),
+        "deadline lock loss does not bind the socket"
+    );
+    assert_eq!(lock_holder(&keeper).as_deref(), Some("predecessor"));
+    drop(predecessor);
+}
+
+#[test]
 fn takeover_start_marker_failure_carries_on_and_poisons() {
     // RULING-4628-8's test as unblocked by RULING-4628-9: fail the
     // start-marker append for real at the open fd, then check the keeper
