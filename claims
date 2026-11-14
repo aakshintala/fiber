@@ -432,3 +432,11 @@ docs/permissions.md	fiber-4042	plan	2026-11-14T11:10:35Z	Amoghs-MacBook-Pro:/Use
 docs/delegates.md	fiber-4042	plan	2026-11-14T11:10:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/invocation.md	fiber-4042	plan	2026-11-14T11:10:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tools.md	fiber-4042	plan	2026-11-14T11:10:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/support/src/peer_tests.rs	fiber-4042	plan	2026-11-14T11:19:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tools/src/shell.rs	fiber-4042	plan	2026-11-14T11:19:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/jobs/src/keeper.rs	fiber-4042	plan	2026-11-14T11:19:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/support/mod.rs	fiber-4042	plan	2026-11-14T11:19:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/hub/src/relay.rs	fiber-4042	plan	2026-11-14T11:19:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing.md	fiber-4042	plan	2026-11-14T11:19:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+scripts/check-docs	fiber-4042	plan	2026-11-14T11:19:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/Cargo.toml	fiber-4042	plan	2026-11-14T11:19:20Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
