@@ -335,19 +335,7 @@ fn budget_breach_section_exempts_only_complete_unfenced_bug_prs() {
         assert_eq!(selected.jobs["bug_red"], !exempt, "{name}");
     }
 
-    let non_bug = plan(
-        "crates",
-        &strings(&["log"]),
-        "pull_request",
-        false,
-        false,
-        MutantPlanInput {
-            labels: Vec::new(),
-            count: 0,
-            reuse: None,
-        },
-    );
-    assert!(!plan_with_budget_breach_body(non_bug, false, complete).jobs["bug_red"]);
+    assert!(plan_with_budget_breach_body(bug_pr_plan(0), false, complete).jobs["bug_red"]);
 }
 
 #[test]

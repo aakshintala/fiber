@@ -29,8 +29,10 @@ run on the macOS arm64 runner ("On every pull request that changes code")).
 Each macOS job holds one macOS slot against the 5-slot cap while it runs; no
 Linux-side job changes. The scripts job is selected only for pull requests
 with a path under `scripts/`, never on the backstop. A pull request that fixes
-a break or budget breach may exempt its bug-red legs; see "The merge gate"
-for the required measurements and effect. Draft and ready pull requests select
+a break or budget breach may exempt its bug-red legs only with an unfenced
+`## Budget breach` section; see "The merge gate" for the required measurements
+and effect. CI checks only that the section and both lines are present;
+reviewers judge the measurements. Draft and ready pull requests select
 the same jobs. The Linux arm64 and macOS arm64 test legs, `stress` and
 `release` run on the backstop, which is a push to `main`. A bug pull request
 uses a macOS job (`bug_red_macos`); so does any pull request whose diff
