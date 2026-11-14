@@ -520,3 +520,4 @@ crates/tui/src/app_focus_tests.rs:2004-2004	fiber-4670	plan	2026-11-14T20:21:47Z
 crates/tui/src/app_focus_tests.rs:2006-2006	fiber-4670	plan	2026-11-14T20:21:47Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4670-dropped-writes	
 docs/errors.md:357-357	fiber-4670	plan	2026-11-14T20:21:47Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4670-dropped-writes	
 docs/tools.md:736-736	fiber-4670	plan	2026-11-14T20:21:47Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4670-dropped-writes	
+crates/log/tests/history.rs	fiber-4685	plan	2026-11-14T20:33:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
