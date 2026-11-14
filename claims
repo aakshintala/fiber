@@ -285,3 +285,4 @@ crates/extensions/src/lua/schedule_tests.rs:2651-2652	fiber-4767	plan	2026-11-14
 crates/extensions/src/lua/vm.rs:134-135	fiber-4767	plan	2026-11-14T06:06:59Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4767-host-tool-oversize	
 crates/main/tests/extension_host/extension_codemode.rs:92-93	fiber-4767	plan	2026-11-14T06:06:59Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4767-host-tool-oversize	
 crates/main/tests/extension_host/extension_codemode.rs:1246-1247	fiber-4767	plan	2026-11-14T06:06:59Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4767-host-tool-oversize	
+docs/invocation.md	fiber-4636	plan	2026-11-14T06:13:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
