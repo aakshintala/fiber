@@ -399,3 +399,9 @@ docs/workflow.md	fiber-4636	plan	2026-11-14T01:31:15Z	roundhouse-7010-plus-1:/ho
 docs/dependencies.md	fiber-4636	plan	2026-11-14T01:31:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 GLOSSARY.md	fiber-4636	plan	2026-11-14T01:31:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/config/src/keys_tests.rs	fiber-4583	plan	2026-11-14T01:37:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/jobs/src/registry.rs	fiber-4817	plan	2026-11-14T02:06:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tools/src/shell/detached.rs	fiber-4817	plan	2026-11-14T02:06:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/support/src/group.rs	fiber-4817	plan	2026-11-14T02:06:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/fakes/src/process_group.rs	fiber-4817	plan	2026-11-14T02:06:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/fakes/src/within.rs	fiber-4817	plan	2026-11-14T02:06:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing/running.md	fiber-4817	plan	2026-11-14T02:06:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
