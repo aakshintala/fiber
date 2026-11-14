@@ -956,5 +956,8 @@ pub(super) fn wait_child(mut child: std::process::Child, shared: &Shared) {
 }
 
 #[cfg(test)]
+#[path = "keeper_lock_tests.rs"]
+mod keeper_lock_tests;
+#[cfg(test)]
 #[path = "command_tests.rs"]
 mod tests;
