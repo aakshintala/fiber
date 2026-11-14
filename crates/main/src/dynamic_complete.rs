@@ -9,7 +9,7 @@ use clap::{Arg, ArgAction};
 use clap_complete::env::{Bash, CompleteEnv, EnvCompleter, Fish, Zsh};
 use clap_complete::{ArgValueCompleter, CompletionCandidate};
 
-use crate::completion::{PARSER, Shell, visible_for_dynamic};
+use crate::completion::{PARSER, Shell, visible_inner};
 
 /// Handles an environment-activated completion request before normal parsing.
 pub(crate) fn complete() {
@@ -24,11 +24,11 @@ pub(crate) fn complete() {
 
 /// The visible command grammar that dynamic and static completion share.
 pub(crate) fn command() -> clap::Command {
-    let mut command = visible_for_dynamic(&PARSER);
+    let mut command = visible_inner(&PARSER, true);
     // The engine otherwise treats the hidden `session` word as a root
     // positional and can offer the root `--model` completer after it.
     if let Some(session) = PARSER.find_subcommand("session") {
-        command = command.subcommand(visible_for_dynamic(session).hide(true));
+        command = command.subcommand(visible_inner(session, true).hide(true));
     }
     let workspace = std::env::current_dir().ok();
     attach_completers(command, &[], workspace.as_deref())
@@ -144,15 +144,17 @@ fn extension_candidates(current: &OsStr) -> Vec<CompletionCandidate> {
         return Vec::new();
     };
     extension_candidates_in(current, &home)
+        .into_iter()
+        .map(CompletionCandidate::new)
+        .collect()
 }
 
-fn extension_candidates_in(current: &OsStr, home: &Path) -> Vec<CompletionCandidate> {
+fn extension_candidates_in(current: &OsStr, home: &Path) -> Vec<String> {
     let prefix = current.to_string_lossy();
     extensions::package_names(home)
         .into_iter()
         .map(|(name, _)| name)
         .filter(|name| name.starts_with(prefix.as_ref()))
-        .map(CompletionCandidate::new)
         .collect()
 }
 
@@ -161,9 +163,12 @@ fn model_candidates(current: &OsStr, workspace: &Path) -> Vec<CompletionCandidat
         return Vec::new();
     };
     model_candidates_in(current, &home, workspace)
+        .into_iter()
+        .map(CompletionCandidate::new)
+        .collect()
 }
 
-fn model_candidates_in(current: &OsStr, home: &Path, workspace: &Path) -> Vec<CompletionCandidate> {
+fn model_candidates_in(current: &OsStr, home: &Path, workspace: &Path) -> Vec<String> {
     let Ok((mut providers, config, _)) = cli::providers_and_config(home, workspace) else {
         return Vec::new();
     };
@@ -186,7 +191,7 @@ fn model_candidates_in(current: &OsStr, home: &Path, workspace: &Path) -> Vec<Co
     let prefix = current.to_string_lossy();
     ids.into_iter()
         .filter(|(id, (_, ambiguous))| !ambiguous && id.starts_with(prefix.as_ref()))
-        .map(|(id, _)| CompletionCandidate::new(id))
+        .map(|(id, _)| id)
         .collect()
 }
 

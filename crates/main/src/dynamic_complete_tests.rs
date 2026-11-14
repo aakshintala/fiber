@@ -1,7 +1,13 @@
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
 
-use super::{extension_candidates_in, model_candidates_in, registration, registration_for_exe};
-use crate::completion::Shell;
+use clap::{Arg, ArgAction, Command};
+
+use super::{
+    command, extension_candidates_in, model_candidates_in, registration, registration_for_exe,
+    separate_help_and_version_flags,
+};
+use crate::completion::{Shell, visible};
 
 #[test]
 fn registration_contains_each_supported_shell_and_executable() {
@@ -60,14 +66,14 @@ fn extension_candidates_include_healthy_installs_in_directory_order() {
 
     assert_eq!(
         candidate_values(extension_candidates_in(OsStr::new("example/"), home.path())),
-        ["example/alpha", "example/beta"]
+        set(&["example/alpha", "example/beta"])
     );
     assert_eq!(
         candidate_values(extension_candidates_in(
             OsStr::new("example/b"),
             home.path()
         )),
-        ["example/beta"]
+        set(&["example/beta"])
     );
 }
 
@@ -93,11 +99,12 @@ fn write_extension_record(home: &std::path::Path, dir: &str, name: &str) {
     .unwrap();
 }
 
-fn candidate_values(candidates: Vec<clap_complete::CompletionCandidate>) -> Vec<String> {
-    candidates
-        .into_iter()
-        .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
-        .collect()
+fn candidate_values(candidates: Vec<String>) -> BTreeSet<String> {
+    candidates.into_iter().collect()
+}
+
+fn set(words: &[&str]) -> BTreeSet<String> {
+    words.iter().map(|word| (*word).to_owned()).collect()
 }
 
 #[test]
@@ -152,7 +159,7 @@ fn model_candidates_keep_unique_ids_drop_ambiguous_and_logged_out_ids() {
     );
     assert_eq!(
         candidate_values(model_candidates_in(OsStr::new("model-"), &home, &workspace)),
-        ["model-second", "model-unique"]
+        set(&["model-second", "model-unique"])
     );
     assert!(
         model_candidates_in(OsStr::new("model-shared"), &home, &workspace).is_empty(),
@@ -304,4 +311,155 @@ fn registration_for_exe_rejects_non_utf8_path() {
 
     let executable = OsStr::from_bytes(b"/test/bin/fiber\xff");
     assert!(registration_for_exe(Shell::Bash, executable).is_err());
+}
+
+#[test]
+fn version_short_splitting_ignores_partial_version_matches() {
+    let has_short = |cmd: &Command, id: &str| {
+        cmd.get_arguments()
+            .find(|arg| arg.get_id() == id)
+            .and_then(|arg| arg.get_short())
+    };
+    // An unrelated `-v` short is not the version flag: it keeps its
+    // spelling and gains no version-short sibling.
+    let other = Command::new("fiber").arg(Arg::new("other").short('v').action(ArgAction::SetTrue));
+    let other = separate_help_and_version_flags(other);
+    assert_eq!(has_short(&other, "other"), Some('v'));
+    assert!(has_short(&other, "fiber-completion-version-short").is_none());
+    // A version flag without `-v` gains no version-short spelling.
+    let long_only = Command::new("fiber").arg(
+        Arg::new("version-flag")
+            .long("version")
+            .action(ArgAction::SetTrue),
+    );
+    let long_only = separate_help_and_version_flags(long_only);
+    assert!(has_short(&long_only, "fiber-completion-version-short").is_none());
+    // The real version spelling still splits: the flag loses `-v` and the
+    // sibling carries it.
+    let version = Command::new("fiber").arg(
+        Arg::new("version-flag")
+            .short('v')
+            .long("version")
+            .action(ArgAction::SetTrue),
+    );
+    let version = separate_help_and_version_flags(version);
+    assert_eq!(has_short(&version, "version-flag"), None);
+    assert_eq!(
+        has_short(&version, "fiber-completion-version-short"),
+        Some('v')
+    );
+}
+
+#[test]
+fn model_candidates_keep_an_id_listed_twice_by_its_only_provider() {
+    let root = fakes::TempDir::new("fiber-completion-models-duplicate");
+    let home = root.path().join("home");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    write_provider_data(
+        &home,
+        "dup-extension",
+        "dup",
+        &["model-dup", "model-dup"],
+        true,
+        true,
+    );
+
+    // One provider listing an id twice is not ambiguity: only a second
+    // provider disqualifies the bare id.
+    assert_eq!(
+        candidate_values(model_candidates_in(OsStr::new("model-"), &home, &workspace)),
+        set(&["model-dup"])
+    );
+}
+
+/// The dynamic command carries the visible grammar: the plan's Interfaces
+/// attaches the wrapper to `visible()`'s output, and the two deviations
+/// are the alias split the pinned engine needs and the help/version
+/// respelling its short-flag dedupe needs.
+#[test]
+fn dynamic_command_keeps_visible_grammar_apart_from_documented_respells() {
+    fn spellings(cmd: &clap::Command) -> BTreeSet<(Option<char>, Option<String>)> {
+        cmd.get_arguments()
+            .map(|arg| (arg.get_short(), arg.get_long().map(str::to_owned)))
+            .collect()
+    }
+    fn paths(cmd: &clap::Command, path: &str, out: &mut Vec<String>) {
+        for sub in cmd.get_subcommands() {
+            let named = format!("{path} {}", sub.get_name());
+            out.push(named.clone());
+            paths(sub, &named, out);
+        }
+    }
+    let mut dynamic = command();
+    dynamic.build();
+    let mut shown = visible(&crate::completion::PARSER);
+    shown.build();
+    // The wrapper hides its session copy, which keeps the engine from
+    // offering the root `--model` completer after the `session` word.
+    assert!(dynamic.find_subcommand("session").is_some());
+    assert!(shown.find_subcommand("session").is_none());
+    let mut dynamic_paths = Vec::new();
+    paths(&dynamic, "fiber", &mut dynamic_paths);
+    let mut shown_paths = Vec::new();
+    paths(&shown, "fiber", &mut shown_paths);
+    let shown_set: BTreeSet<_> = shown_paths.iter().cloned().collect();
+    for path in &shown_paths {
+        assert!(dynamic_paths.contains(path), "dynamic lost {path}");
+    }
+    // Extra dynamic paths are only the hidden session copy and visible
+    // aliases split into siblings.
+    for path in &dynamic_paths {
+        if shown_set.contains(path) || path == "fiber session" || path.starts_with("fiber session ")
+        {
+            continue;
+        }
+        let (parent, alias) = path.rsplit_once(' ').unwrap();
+        assert!(
+            shown_aliases_contain(&shown, parent, alias),
+            "dynamic added {path} beyond visible aliases"
+        );
+    }
+    // Shared paths offer the same spellings once the help/version
+    // respelling is mapped back.
+    for path in &shown_paths {
+        let route: Vec<&str> = path.split(' ').skip(1).collect();
+        let mut dynamic_cmd = &dynamic;
+        let mut shown_cmd = &shown;
+        for name in &route {
+            dynamic_cmd = dynamic_cmd.find_subcommand(name).unwrap();
+            shown_cmd = shown_cmd.find_subcommand(name).unwrap();
+        }
+        let mut dynamic_spellings = BTreeSet::new();
+        for (short, long) in spellings(dynamic_cmd) {
+            dynamic_spellings.insert((short, long));
+        }
+        let mut expected = spellings(shown_cmd);
+        // The respelling this wrapper owns: one help/version spelling
+        // becomes two help args and a version-short sibling.
+        if expected.remove(&(Some('h'), Some("help".to_owned()))) {
+            expected.insert((None, Some("help".to_owned())));
+            expected.insert((Some('h'), None));
+        }
+        if expected.remove(&(Some('v'), Some("version".to_owned()))) {
+            expected.insert((None, Some("version".to_owned())));
+            expected.insert((Some('v'), None));
+        }
+        // Untouched help/version spellings (help-only subcommands) stay.
+        assert_eq!(dynamic_spellings, expected, "{path}");
+    }
+}
+
+fn shown_aliases_contain(shown: &clap::Command, parent: &str, alias: &str) -> bool {
+    let route: Vec<&str> = parent.split(' ').skip(1).collect();
+    let mut cmd = shown;
+    for name in route {
+        let Some(next) = cmd.find_subcommand(name) else {
+            return false;
+        };
+        cmd = next;
+    }
+    cmd.get_subcommands().any(|sub| {
+        sub.get_name() == alias || sub.get_visible_aliases().any(|visible| visible == alias)
+    })
 }

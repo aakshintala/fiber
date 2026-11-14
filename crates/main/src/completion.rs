@@ -142,13 +142,10 @@ pub(crate) fn visible(cmd: &'static Command) -> Command {
     visible_inner(cmd, false)
 }
 
-/// Dynamic engine form: each visible subcommand alias is a sibling command,
-/// because the pinned engine de-duplicates aliases that share an id.
-pub(crate) fn visible_for_dynamic(cmd: &'static Command) -> Command {
-    visible_inner(cmd, true)
-}
-
-fn visible_inner(cmd: &'static Command, split_visible_aliases: bool) -> Command {
+/// Dynamic engine form of one command: each visible subcommand alias is a
+/// sibling command, because the pinned engine de-duplicates aliases that
+/// share an id. `command()` in `dynamic_complete.rs` is its only caller.
+pub(crate) fn visible_inner(cmd: &'static Command, split_visible_aliases: bool) -> Command {
     let aliases = if split_visible_aliases {
         Vec::new()
     } else {

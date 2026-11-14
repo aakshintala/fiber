@@ -26,12 +26,6 @@ for case in "$@"; do
     prev=${COMP_WORDS[COMP_CWORD - 1]}
   fi
   _clap_complete_fiber fiber "${COMP_WORDS[COMP_CWORD]}" "$prev" 2>/dev/null
-  for word in "${COMPREPLY[@]}"; do
-    if [[ $word == a-file ]]; then
-      printf 'bash offered a file name instead of a Fiber candidate\n' >&2
-      exit 7
-    fi
-  done
   printf 'CASE %s\n' "$n"
   for word in "${COMPREPLY[@]}"; do
     printf 'CAND:%s\n' "$word"

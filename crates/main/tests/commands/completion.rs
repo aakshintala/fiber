@@ -718,11 +718,14 @@ fn extension_remove_completes_installed_names() {
         setup.root.path(),
     );
     assert_eq!(output.status.code(), Some(0));
+    // The engine promises no order (`docs/invocation.md`, "Commands and
+    // flags"), so the probe compares the candidate set.
     assert_eq!(
         String::from_utf8_lossy(&output.stdout)
             .lines()
-            .collect::<Vec<_>>(),
-        ["example/alpha", "example/beta"]
+            .map(|line| line.to_owned())
+            .collect::<BTreeSet<_>>(),
+        set(&["example/alpha", "example/beta"])
     );
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 }
@@ -840,9 +843,13 @@ fn model_values_complete_only_unique_switched_on_ids_on_visible_args() {
             "3",
         ),
     ] {
+        // The engine promises no order (`docs/invocation.md`, "Commands
+        // and flags"), so each probe compares the candidate set.
         assert_eq!(
-            probe_candidates(&setup, args, index, path),
-            ["model-second", "model-unique"],
+            probe_candidates(&setup, args, index, path)
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            set(&["model-second", "model-unique"]),
             "{path} --model"
         );
     }
@@ -872,6 +879,58 @@ fn model_values_complete_only_unique_switched_on_ids_on_visible_args() {
             "hidden session --model"
         )
         .is_empty()
+    );
+}
+
+#[test]
+fn other_name_values_do_not_complete_installed_extensions() {
+    let setup = Setup::without_provider();
+    let extension = setup.home().join("extensions/installed");
+    fs::create_dir_all(&extension).unwrap();
+    fs::write(
+        extension.join(".fiber.json"),
+        serde_json::json!({
+            "name": "example/installed",
+            "version": "1.0.0",
+            "requested": true,
+            "source": { "path": "/test" }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    // Only `extension remove` completes installed names: the `update` and
+    // `reinstall` name values stay empty even with an install present.
+    for (label, args) in [
+        (
+            "update",
+            &["--", "fiber", "extension", "update", "example/"][..],
+        ),
+        (
+            "reinstall",
+            &["--", "fiber", "extension", "reinstall", "example/"][..],
+        ),
+    ] {
+        assert!(
+            probe_candidates(&setup, args, "3", label).is_empty(),
+            "{label} must not complete installed extensions"
+        );
+    }
+}
+
+#[test]
+fn bash_login_completes_nothing_without_file_names() {
+    let setup = Setup::without_provider();
+    fs::write(setup.root.path().join("a-file"), "").unwrap();
+    // A login value completes neither provider names nor file names.
+    assert!(
+        probe_candidates(
+            &setup,
+            &["--", "fiber", "login", "provider-prefix"],
+            "2",
+            "bash login value"
+        )
+        .is_empty(),
+        "bash offered a file name instead of nothing"
     );
 }
 
