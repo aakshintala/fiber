@@ -849,8 +849,9 @@ varies. A job with too little history gets a generous bound. There are two
 exceptions. The `bug_red` legs are bounded at about twice their slowest recent
 red commit, not their median, because a red commit that changes a signature
 rebuilds every package that depends on it. Run 42403359939's red commit touched
-ten packages: its Linux leg took 10m48s and its macOS leg was cancelled at the
-old 17-minute bound, so both legs get 30 minutes. The other exception
+ten packages, and its Linux leg took 10m48s. Over the week after #4376, the
+slowest macOS leg took 20m43s (run 42907824464). So the Linux leg gets 25
+minutes and the macOS leg 45. The other exception
 is a mutants shard: a shard of `crates/main` mutants, whose tests drive the
 binary, takes about 20 minutes (run 38420177975), so its bound is twice that
 slow group, not twice the median. A shard of up to 15 mutants gets 40 minutes.
