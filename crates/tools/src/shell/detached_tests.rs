@@ -39,9 +39,19 @@ fn restored_drain_expiry_requires_deadline_and_live_group() {
         !super::drain_expired(deadline, deadline, false),
         "a group that is no longer alive has not exceeded the drain"
     );
+    let just_before = deadline
+        .checked_sub(Duration::from_nanos(1))
+        .expect("fake clock deadline has room before its origin");
     assert!(
-        !super::drain_expired(deadline - Duration::from_nanos(1), deadline, true),
+        !super::drain_expired(just_before, deadline, true),
         "a live group before the deadline has not exceeded the drain"
+    );
+    let just_after = deadline
+        .checked_add(Duration::from_nanos(1))
+        .expect("fake clock deadline has room after its origin");
+    assert!(
+        super::drain_expired(just_after, deadline, true),
+        "a live group after the deadline has exceeded the drain"
     );
 }
 
