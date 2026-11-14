@@ -25,7 +25,6 @@ fakes = { package = "fakes-contract", path = "../fakes-contract" }
 # on a real registry.
 jobs = { path = "../jobs" }
 proptest.workspace = true
-serde.workspace = true
 
 # The jigs (`docs/testing.md`, "Jigs").
 [[example]]
