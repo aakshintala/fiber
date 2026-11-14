@@ -421,8 +421,7 @@ On Linux x86_64 alone:
   match an earlier completed run on the same head, and whose every mutants
   shard in that run names the current merge parent in its job name and
   succeeded with the same shard count, reuses the pass instead of starting
-  shards; `cargo xtask mutants-reuse` decides from the current run's pull
-  request number, head, base, and mutant count. Any lookup failure, head or
+  shards; `cargo xtask plan` decides, with the existing reuse matcher, from the current run's pull request number, head, base, and mutant count, and prints the result. Any lookup failure, head or
   pull request mismatch, a shard naming a different base, partial, cancelled,
   or failed shards, count mismatch, or self-match starts the shards. A reused
   run still lists the diff's mutants in the selection
