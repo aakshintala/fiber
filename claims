@@ -395,3 +395,7 @@ crates/tui/src/snapshots/tui__settings_view__tests__settings_permissions_screen_
 docs/invocation.md:1322-1322	fiber-4583	plan	2026-11-14T09:15:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4583-settings-rows	
 crates/tools/src/shell/detached_tests.rs	fiber-4816	plan	2026-11-14T09:28:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/workflow.md	fiber-4816	plan	2026-11-14T09:28:22Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tools/src/shell/sandbox/protected.rs	fiber-3894	plan	2026-11-14T09:34:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/shell/command.rs	fiber-3894	plan	2026-11-14T09:34:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/tools.md	fiber-3894	plan	2026-11-14T09:34:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/code-quality.md	fiber-3894	plan	2026-11-14T09:34:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
