@@ -317,6 +317,8 @@ fn a_three_way_clash_raises_two_notices_naming_the_one_winner() {
 
 #[test]
 fn a_place_reached_twice_is_read_once_and_shadows_nothing() {
+    // `docs/system-prompt.md`, "Skills": the same canonical directory
+    // is read once as Personal, not Repository.
     // The repository's top level is the person's home: `~/.agents/skills`
     // is the repository's `.agents/skills`.
     let tree = Tree::new();
@@ -326,6 +328,9 @@ fn a_place_reached_twice_is_read_once_and_shadows_nothing() {
     let found = discover(&inputs, &tree.top());
     assert_eq!(names(&found), ["same"]);
     assert!(found.notices.is_empty(), "{:?}", messages(&found));
+    assert_eq!(found.skills[0].listed.source, SkillSource::Personal);
+    // `docs/system-prompt.md`, "Skills": the same canonical directory
+    // is read once as Personal, not Repository.
     // Fiber home is `~/.agents`: `skills/` is `~/.agents/skills`.
     let tree = Tree::new();
     skill(&tree.person().join(".agents/skills"), "a", "same", "d");
@@ -334,6 +339,9 @@ fn a_place_reached_twice_is_read_once_and_shadows_nothing() {
     let found = discover(&inputs, &tree.top());
     assert_eq!(names(&found), ["same"]);
     assert!(found.notices.is_empty(), "{:?}", messages(&found));
+    assert_eq!(found.skills[0].listed.source, SkillSource::Personal);
+    // `docs/system-prompt.md`, "Skills": the same canonical directory
+    // is read once as Personal, not Repository.
     // A symlink to an earlier place is the same place too.
     let tree = Tree::new();
     skill(&tree.top().join(".fiber/skills"), "a", "same", "d");
@@ -343,6 +351,7 @@ fn a_place_reached_twice_is_read_once_and_shadows_nothing() {
     let found = tree.discover();
     assert_eq!(names(&found), ["same"]);
     assert!(found.notices.is_empty(), "{:?}", messages(&found));
+    assert_eq!(found.skills[0].listed.source, SkillSource::Personal);
 }
 
 #[test]
@@ -1505,45 +1514,6 @@ fn a_repo_only_skill_does_not_divert() {
     let checked = source_skill(&tree.root.join("source/skills"), "mine", "solo");
     let got = already_read(&tree.home(), Some(&tree.person()), &[checked]);
     assert!(got.is_empty(), "a repo skill is not already read: {got:?}");
-}
-
-#[test]
-fn repository_and_personal_overlap_is_listed_once_as_personal() {
-    // The workspace is the parent of Fiber home, so both places name
-    // Fiber home's skills directory.
-    let tree = Tree::new();
-    let top = tree.top();
-    let home = top.join(".fiber");
-    skill(&home.join("skills"), "same", "fiber-home", "d");
-    let mut inputs = tree.inputs();
-    inputs.home = home;
-    let found = discover(&inputs, &top);
-    assert_eq!(names(&found), ["fiber-home"]);
-    assert_eq!(found.skills[0].listed.source, SkillSource::Personal);
-    assert!(found.notices.is_empty(), "{:?}", messages(&found));
-
-    // The Repository .agents place and personal agents home name the same
-    // canonical directory.
-    let tree = Tree::new();
-    let top = tree.top();
-    skill(&top.join(".agents/skills"), "same", "agents-home", "d");
-    let mut inputs = tree.inputs();
-    inputs.agents_home = Some(top.clone());
-    let found = discover(&inputs, &top);
-    assert_eq!(names(&found), ["agents-home"]);
-    assert_eq!(found.skills[0].listed.source, SkillSource::Personal);
-    assert!(found.notices.is_empty(), "{:?}", messages(&found));
-
-    // Distinct repository and personal places retain repository precedence.
-    let tree = Tree::new();
-    let top = tree.top();
-    skill(&top.join(".fiber/skills"), "a", "same", "repo");
-    skill(&tree.home().join("skills"), "a", "same", "personal");
-    let found = discover(&tree.inputs(), &top);
-    assert_eq!(names(&found), ["same"]);
-    assert_eq!(found.skills[0].listed.description, "repo");
-    assert_eq!(found.skills[0].listed.source, SkillSource::Repository);
-    assert_eq!(found.notices.len(), 1);
 }
 
 #[test]
