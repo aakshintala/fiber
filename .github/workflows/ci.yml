@@ -1373,10 +1373,11 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).bug_red
     runs-on: ubuntu-24.04
-    # Linux leg of run 42403359939 (2026-11-07, a red commit touching ten
-    # packages) took 10m48s; 30 minutes is about twice the slower leg's
-    # need, matching bug_red_macos.
-    timeout-minutes: 30
+    # Slowest Linux leg in the 7 days after #4376 (215 runs, to
+    # 2026-11-14): 10m24s in run 42546310961 (median 4.6 min). Run
+    # 42403359939's ten-package red commit took 10m48s; about twice that
+    # is 25 minutes.
+    timeout-minutes: 25
     outputs:
       status: ${{ steps.red.outputs.status }}
     env:
@@ -1397,10 +1398,10 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).bug_red
     runs-on: macos-26
-    # Run 42403359939 (2026-11-07, a red commit touching ten packages) was
-    # cancelled at 17m22s against the old 17-minute limit; 30 minutes gives
-    # that red commit room to finish.
-    timeout-minutes: 30
+    # Slowest macOS leg in the 7 days after #4376 (214 runs, to
+    # 2026-11-14): 20m43s in run 42907824464 (median 6.7 min); about twice
+    # that is 45 minutes.
+    timeout-minutes: 45
     outputs:
       status: ${{ steps.red.outputs.status }}
     env:
