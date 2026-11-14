@@ -19,15 +19,19 @@ x86_64, `ubuntu-24.04-arm` for Linux arm64, and a macOS arm64 runner. The
 repository is public, so minutes cost nothing. The account is on GitHub Pro,
 which runs at most 40 jobs at once and at most 5 macOS jobs at once, shared
 by every repository on the account. A pull request runs Linux x86_64 jobs
-(`lint` and `test_linux`, plus `bug_red_linux` when an issue its
-body resolves carries the `bug` label) and macOS arm64 jobs
-(`bug_red_macos` on the same bug pull requests, `clippy_macos`
-when its diff touches a file containing `target_os`, and
-`scripts_self_test_macos` when its diff touches `scripts/`; the latter two
+(`lint` and `test_linux`, plus `bug_red_linux` on bug pull requests unless
+their body has a complete `## Budget breach` section) and macOS arm64 jobs
+(`bug_red_macos` on the same bug pull requests unless their body has a
+complete `## Budget breach` section, `clippy_macos` when its diff touches a
+file containing `target_os`, and `scripts_self_test_macos` when its diff
+touches `scripts/`; the latter two
 run on the macOS arm64 runner ("On every pull request that changes code")).
 Each macOS job holds one macOS slot against the 5-slot cap while it runs; no
 Linux-side job changes. The scripts job is selected only for pull requests
-with a path under `scripts/`, never on the backstop. Draft and ready pull requests select
+with a path under `scripts/`, never on the backstop. A bug pull request with a valid `## Budget breach` section stating a break or
+budget breach skips the bug-red legs, with the exemption message in the
+selection summary. CI checks only that the section and both
+lines are present; reviewers judge the measurements. Draft and ready pull requests select
 the same jobs. The Linux arm64 and macOS arm64 test legs, `stress` and
 `release` run on the backstop, which is a push to `main`. A bug pull request
 uses a macOS job (`bug_red_macos`); so does any pull request whose diff
@@ -69,7 +73,11 @@ one of these: the merge verdict is the `CI` check, never the run's
 conclusion.
 The bug-red legs report
 nextest's status to the `bug_red` collector, which is in the verdict's
-`needs`; their raw results are not selection entries. The docs check fails
+`needs`; their raw results are not selection entries. A budget-breach pull
+request may exempt these legs by including an unfenced `## Budget breach`
+section in its body with both `Base:` and `Head:` measurements. Selection
+skips the bug-red legs and collector only for that complete section, and
+writes the exemption message to the selection summary. The docs check fails
 when any other job is missing from `needs`, so a new job, such as a new
 shard, cannot run without gating the merge.
 

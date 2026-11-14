@@ -351,8 +351,8 @@ fn select_fails_without_a_base() {
     assert!(out.starts_with("xtask: git merge-base"), "{out}");
 }
 
-/// `docs/ci.md`, "On every pull request that changes code": 40 mutants
-/// produce three shards.
+/// `docs/ci.md`, "On every pull request that changes code": CI plans one
+/// shard per 15 mutants, rounded up, so 40 mutants produce three shards.
 #[test]
 fn plan_prints_the_jobs_and_shards() {
     let dir = workspace();
@@ -513,6 +513,95 @@ fn plan_reuses_a_matching_pull_request_run_and_prints_its_identity() {
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("mutants=true\n"), "{out}");
     assert!(out.contains("shards=[0,1,2]\n"), "{out}");
+}
+
+#[test]
+fn plan_reports_budget_breach_exemption_and_preserves_mutant_selection() {
+    let dir = workspace();
+    git(&dir, &["checkout", "-q", "-b", "pr"]);
+    dir.write("scripts/test-plan.sh", "#!/bin/sh\n");
+    git(&dir, &["add", "scripts/test-plan.sh"]);
+    git(&dir, &["commit", "-qm", "change script path"]);
+    let summary = dir.path().join("summary.md");
+    std::fs::write(&summary, "").unwrap();
+    let summary_path = summary.to_str().unwrap();
+    let args = [
+        "plan",
+        "--base",
+        "main",
+        "--mode",
+        "crates",
+        "--packages",
+        "a b",
+        "--event",
+        "pull_request",
+        "--draft",
+        "false",
+        "--bug",
+        "true",
+        "--mutant-count",
+        "40",
+        "--pr-body",
+        "## Budget breach\nCause\nBase: 10 bytes\nHead: 12 bytes",
+    ];
+    let (code, out) = xtask(&dir, &args, &[("GITHUB_STEP_SUMMARY", summary_path)], "");
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("budget_breach=true\n"), "{out}");
+    assert!(out.contains("jobs={\"bug_red\":false"), "{out}");
+    assert!(out.contains("\"scripts_self_test_macos\":true"), "{out}");
+    assert!(out.contains("\"mutants\":true"), "{out}");
+    // `docs/ci.md`, "On every pull request that changes code": CI plans one
+    // shard per 15 mutants, rounded up; 40 mutants therefore produce three.
+    assert!(out.contains("shards=[0,1,2]\n"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(&summary).unwrap(),
+        "Budget breach exemption: bug-red legs skipped; reviewers judge Base/Head measurements.\n"
+    );
+
+    std::fs::write(&summary, "").unwrap();
+    let (code, ordinary) = xtask(
+        &dir,
+        &args[..args.len() - 2],
+        &[("GITHUB_STEP_SUMMARY", summary_path)],
+        "",
+    );
+    assert_eq!(code, 0, "{ordinary}");
+    assert!(!ordinary.contains("budget_breach="), "{ordinary}");
+    assert!(ordinary.contains("jobs={\"bug_red\":true"), "{ordinary}");
+    assert_eq!(std::fs::read_to_string(&summary).unwrap(), "");
+
+    std::fs::write(&summary, "").unwrap();
+    let mut non_bug = args.to_vec();
+    non_bug[12] = "false";
+    let (code, non_bug_out) = xtask(&dir, &non_bug, &[("GITHUB_STEP_SUMMARY", summary_path)], "");
+    assert_eq!(code, 0, "{non_bug_out}");
+    assert!(!non_bug_out.contains("budget_breach="), "{non_bug_out}");
+    assert!(
+        non_bug_out.contains("jobs={\"bug_red\":false"),
+        "{non_bug_out}"
+    );
+    assert!(non_bug_out.contains("\"mutants\":true"), "{non_bug_out}");
+    assert!(non_bug_out.contains("shards=[0,1,2]\n"), "{non_bug_out}");
+    assert_eq!(std::fs::read_to_string(&summary).unwrap(), "");
+
+    let (code, unset_summary) = xtask_without(&dir, &args, &[], &["GITHUB_STEP_SUMMARY"], "");
+    assert_eq!(code, 0, "{unset_summary}");
+    assert!(
+        unset_summary.contains("budget_breach=true\n"),
+        "{unset_summary}"
+    );
+
+    let mut push = args.to_vec();
+    push[8] = "push";
+    let (code, push_out) = xtask(&dir, &push, &[("GITHUB_STEP_SUMMARY", summary_path)], "");
+    assert_eq!(code, 0, "{push_out}");
+    assert!(!push_out.contains("budget_breach="), "{push_out}");
+    assert!(
+        push_out.contains("\"scripts_self_test_macos\":false"),
+        "{push_out}"
+    );
+    assert!(!push_out.contains("jobs={\"bug_red\":true"), "{push_out}");
+    assert_eq!(std::fs::read_to_string(&summary).unwrap(), "");
 }
 
 #[test]

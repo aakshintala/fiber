@@ -148,6 +148,7 @@ jobs:
           PACKAGES: ${{ steps.select.outputs.packages }}
           DRAFT: ${{ github.event.pull_request.draft || 'false' }}
           BUG: ${{ steps.ticket.outputs.bug || 'false' }}
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
           BASE: ${{ steps.base.outputs.base }}
           LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
           GH_TOKEN: ${{ github.token }}
@@ -198,7 +199,7 @@ jobs:
             args+=(--head "$HEAD_SHA" --run-id "$CURRENT_RUN_ID" --pr "$PR_NUMBER"
               --runs "$runs_file" --jobs "$jobs_dir")
           fi
-          args+=(--lookup-ok "$lookup_ok")
+          args+=(--lookup-ok "$lookup_ok" --pr-body "$PR_BODY")
           cargo xtask plan "${args[@]}" | tee -a "$GITHUB_OUTPUT"
 
   lint:
