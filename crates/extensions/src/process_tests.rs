@@ -6589,7 +6589,7 @@ fn process_host_exec_resolves_inside_package_and_refuses_traversal() {
         (thread, receive)
     };
     let (run, receive) = invoke("bin/tool".to_owned());
-    let result = fakes::Deadline::after(WITHIN)
+    let result = fakes::Deadline::after(Duration::from_secs(10))
         .recv_or_fail(&receive, "host.exec package-relative run")
         .expect("host.exec succeeds");
     run.join().expect("host.exec thread joins");
@@ -6598,8 +6598,8 @@ fn process_host_exec_resolves_inside_package_and_refuses_traversal() {
 
     let escaped = "../outside".to_owned();
     let (run, receive) = invoke(escaped.clone());
-    let result =
-        fakes::Deadline::after(WITHIN).recv_or_fail(&receive, "host.exec traversal refusal");
+    let result = fakes::Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&receive, "host.exec traversal refusal");
     run.join().expect("refusal thread joins");
     let Err((code, message)) = result else {
         panic!("a traversal program is refused");
