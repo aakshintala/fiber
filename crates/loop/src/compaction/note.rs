@@ -283,7 +283,9 @@ impl Loop {
             .flatten();
         let mut full = if trigger == CompactionTrigger::Overflow {
             let (conversation, notices) = self.moved_results();
-            let _ = notices;
+            for notice in notices {
+                self.append(&Event::Notice(notice), turn, None)?;
+            }
             conversation
         } else {
             self.conversation.clone()
@@ -538,6 +540,19 @@ impl Loop {
                 let artifact = self.log.write_artifact(&name, text.as_bytes());
                 match artifact {
                     Ok((path, _)) => path,
+                    Err(log::Error::Io { source, .. }) => {
+                        let relative = format!("artifacts/{}.txt", action.0);
+                        return (
+                            None,
+                            Some(Notice {
+                                code: ErrorCode::IoFailed,
+                                message: format!(
+                                    "Could not write artifact {relative}: {source}. The result stays in the note request."
+                                ),
+                                extension: None,
+                            }),
+                        );
+                    }
                     Err(_) => return (None, None),
                 }
             }

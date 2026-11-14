@@ -799,8 +799,8 @@ fn automatic_compaction_off_never_compacts() {
 #[test]
 fn a_fresh_context_is_estimated_until_a_reply_measures_it() {
     // A trigger of one token is passed by the fresh conversation estimate, so
-    // the first step compacts before the first model request. The later step
-    // may compact once again, but no step compacts twice.
+    // the first request is the note request. The following request gets the
+    // next scripted reply; this step runs one compaction.
     let mut session = session(
         vec![called(5), Scripted::text("The note."), said("Done.", 5)],
         CompactionSettings {
@@ -811,26 +811,34 @@ fn a_fresh_context_is_estimated_until_a_reply_measures_it() {
 
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_eq!(of_kind(&lines, "compaction_started").len(), 2);
-    assert_eq!(session.requests().len(), 4);
+    assert_eq!(
+        of_kind(&lines, "compaction_started").len(),
+        1,
+        "kinds={:?}, request_count={}",
+        kinds(&lines),
+        session.requests().len()
+    );
+    assert_eq!(session.requests().len(), 2);
 }
 
 #[test]
 fn a_resumed_session_above_the_trigger_compacts_before_its_first_request() {
-    let prompt = "x".repeat(5_000);
+    let long_reply = "x".repeat(5_000);
     let mut session = session(
         vec![
-            said("First reply.", 10),
+            said(&long_reply, 10),
             Scripted::text("The note."),
             Scripted::text("Done."),
         ],
         settings(),
     );
-    let (outcome, _) = run(&mut session, &prompt);
+    let (outcome, _) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let previous_requests = session.requests().len();
 
     session.resume(Vec::new());
+    let looped = session.looped.take().unwrap();
+    session.looped = Some(looped.compaction(settings()));
     session.inbox.send(delivery("again")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
 
@@ -838,7 +846,13 @@ fn a_resumed_session_above_the_trigger_compacts_before_its_first_request() {
     let compaction = lines
         .iter()
         .rposition(|line| line.kind() == EventKind::CompactionStarted)
-        .unwrap();
+        .unwrap_or_else(|| {
+            panic!(
+                "kinds={:?}, request_count={}",
+                kinds(&lines),
+                session.requests().len()
+            )
+        });
     let request = lines
         .iter()
         .enumerate()
@@ -2316,7 +2330,25 @@ fn a_result_whose_artifact_cannot_be_written_stays_in_the_note_request() {
     assert_kinds(
         &lines,
         &[
-            OPENING, STEP, CALL_BODY, STEP, REJECTED, COMPACTED, REPLY, ENDED,
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            REJECTED,
+            &[
+                "compaction_started",
+                "notice",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "assistant_message_delta",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "compaction_completed",
+                "opening_message",
+            ],
+            REPLY,
+            ENDED,
         ],
     );
 
@@ -2324,6 +2356,20 @@ fn a_result_whose_artifact_cannot_be_written_stays_in_the_note_request() {
     assert_eq!(
         of_kind(&lines, "compaction_completed")[0].payload["outcome"],
         "completed"
+    );
+    let notice = &of_kind(&lines, "notice")[0].payload;
+    assert_eq!(notice["code"], "io_failed");
+    assert!(
+        notice["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Could not write artifact artifacts/")
+    );
+    assert!(
+        notice["message"]
+            .as_str()
+            .unwrap()
+            .ends_with(". The result stays in the note request.")
     );
     let requests = session.requests();
     let asked = &requests[2].conversation;
@@ -2453,8 +2499,8 @@ fn automatic_compaction_off_skips_the_size_check() {
 
 #[test]
 fn an_estimate_over_the_window_after_a_compaction_in_the_step_fails_the_turn() {
-    // The window is 1,000, so the automatic trigger is 700: it compacts at
-    // the step's start, and the next request is still estimated over.
+    // The estimate is over the 1,000-token window, so the automatic check
+    // routes the step through overflow compaction before the request.
     let mut session = windowed(
         vec![called(WINDOW), Scripted::text(&"x".repeat(8_000))],
         CompactionSettings {
