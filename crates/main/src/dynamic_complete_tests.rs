@@ -1,3 +1,4 @@
+// debt: the unit registration and candidate tests below repeat tests/commands/completion.rs; the duplication stays until a public-API test kills the same mutants. Upgrade trigger: a mutants run on the cut shows no MISSED.
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 
