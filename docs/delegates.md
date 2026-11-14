@@ -265,11 +265,16 @@ final message, any questions, usage totals and worktree state. Their keys are
   session command ([ADR 0009](adr/0009-each-session-is-one-process.md)). Its
   parent is an ordinary client over its socket and drives it only through the
   driver commands and events, so no delegate has a path a supervisor lacks.
-- A Fiber delegate's stdin is a lifeline. The keeper holds it open and never
-  writes to it. End of file on it means the keeper is gone, however it died,
-  and the delegate shuts down within the bound (`docs/invocation.md`,
-  "Shutdown"). A dropped socket connection is only a client leaving: the
-  parent reconnects and the delegate carries on.
+- A Fiber delegate's stdin is a Unix socketpair lifeline created by the
+  keeper. The keeper holds its peer open and sends no delegate input on it;
+  it answers only the fixed lifeline-peer query, while its current session
+  control connection is live, with that connection's kernel peer pid or
+  `none`. The delegate accepts a pid only from a valid bounded reply and only
+  while `getppid()` still matches. A timed-out or malformed reply grants no
+  parent exception. End of file or a read error means the keeper is gone and
+  takes the existing SIGHUP shutdown path (`docs/invocation.md`, "Shutdown").
+  A dropped socket connection is only a client leaving: the parent reconnects
+  and the delegate carries on.
 - After `fiber_exited`, the runner starts no further watch.
 - A Fiber delegate starts its own MCP servers and process extensions, as
   every session does (`docs/mcp.md`, "Where servers run"). It never raises a
@@ -286,16 +291,19 @@ final message, any questions, usage totals and worktree state. Their keys are
   harness carries on the same way, and the keeper records its end by the
   rule in `docs/tools.md`, "The keeper".
 - A resumed parent connects to each delegate still running, as after a
-  dropped connection. For each delegate that ended while it was gone, it
-  writes the `delegate_finished` from the delegate's own log when it
-  delivers the result, and it reads each delegate's log for the
-  `usage_recorded` lines it is missing.
-- Before marking a delegate job orphaned, the resumed parent reads its
-  session log. When the log's latest run holds `fiber_exited`, the parent
-  settles the job from it: its exit code, its outcome, its final message
-  and, for an isolated delegate, its worktree, as a live finish would.
-  Only a delegate whose log's latest run has no `fiber_exited` is marked
-  orphaned. Shell jobs are unchanged.
+  dropped connection. For each parent-log `delegate_started` without a matching
+  `delegate_finished`, it reads the delegate's own log. If that run ended with
+  `fiber_exited`, the parent writes the `delegate_finished` from that log when
+  it delivers the result, and reads the delegate log for missing
+  `usage_recorded` lines. A second resume sees the finish and writes no
+  duplicate.
+- If the keeper already wrote `job_completed`, the resumed parent writes only
+  the missing `delegate_finished` after it. If the job is still unsettled, the
+  parent settles it from the delegate's exit: its exit code, outcome, final
+  message and, for an isolated delegate, worktree, with `delegate_finished`
+  immediately before `job_completed`. Only a delegate whose latest run has no
+  `fiber_exited` remains orphaned. Shell jobs and unfinished delegate runs are
+  unchanged.
 - A crash of any kind in a delegate, in Rust or in Lua's C code, ends that
   delegate `failed` and nothing else.
 

@@ -144,8 +144,8 @@ pub(crate) fn session_forked(
         },
         None => None,
     };
-    // A delegate's stdin is its lifeline: the parent holds the write end
-    // open and never writes to it (`docs/delegates.md`, "Lifetime").
+    // A delegate's stdin socketpair is its lifeline. The keeper answers the
+    // fixed peer query but sends no delegate input (`docs/delegates.md`, "Lifetime").
     // Installed once the child will run, so a failing fork still
     // reports its error instead of dying on a closed stdin.
     signals.lifeline(Box::new(std::io::stdin()), crate::keeper::lifeline_writer());
