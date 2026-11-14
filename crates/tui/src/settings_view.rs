@@ -193,6 +193,10 @@ pub(crate) enum Request {
 
 /// The key the theme choice edits.
 pub(crate) const THEME: &str = "tui.theme";
+const EDITOR: &str = "tui.editor";
+const EDITORS: [&str; 10] = [
+    "nvim", "vim", "hx", "nano", "micro", "emacs", "code", "cursor", "zed", "subl",
+];
 
 /// The columns between a row's label and its value.
 const GAP: usize = 2;
@@ -547,6 +551,17 @@ impl Settings {
         };
         settings.reread(ctx);
         settings.entry_theme = settings.entry_setting(ctx);
+        settings
+    }
+
+    /// Opens on the named setting row when it exists.
+    pub(crate) fn open_on(ctx: &Ctx<'_>, overrides: Vec<String>, key: &str) -> Self {
+        let mut settings = Self::open(ctx, overrides);
+        if let Some(row) = settings.rows.iter().find(|row| row.key == key) {
+            settings.focus = Some(Focus::Key(key.to_owned()));
+            settings.tab = row.presentation.tab.unwrap_or(SettingsTab::Appearance);
+            settings.place(ctx);
+        }
         settings
     }
 
@@ -1486,6 +1501,13 @@ impl Settings {
                 let next = next_choice(&names, current_text(value).as_deref());
                 self.step(ctx, layer, &row.key, next)
             }
+            (SettingControl::Text, _) if row.key == EDITOR => {
+                let mut choices = vec!["Default".to_owned()];
+                choices.extend(editors_on_path(std::env::var_os("PATH").as_deref()));
+                choices.push("Other…".to_owned());
+                self.open_dynamic_choices(row.key, layer, choices, current_text(&row.value), ctx);
+                Act::Stay
+            }
             (SettingControl::Text, _)
                 if matches!(row.key.as_str(), "web_search.backend" | "hub.default") =>
             {
@@ -1827,6 +1849,24 @@ impl Settings {
     /// Writes theme `name` to the global `tui.theme`, then asks for it to
     /// apply. A failed write applies nothing.
     fn choose(&mut self, name: &str, ctx: &Ctx<'_>) -> Act {
+        if name == "Other…"
+            && let Mode::Choices {
+                key,
+                layer,
+                current,
+                ..
+            } = &self.mode
+        {
+            let mut draft = Draft::default();
+            draft.set(current.as_deref().unwrap_or_default());
+            self.mode = Mode::Field(Field {
+                key: key.clone(),
+                layer: *layer,
+                number: false,
+                draft,
+            });
+            return Act::Stay;
+        }
         let Mode::Choices { key, layer, .. } = &self.mode else {
             return Act::Stay;
         };
@@ -1848,7 +1888,12 @@ impl Settings {
                 _ => true,
             }
         } else {
-            self.save(ctx, layer, &key, &quoted(name))
+            let value = if key == EDITOR && matches!(name, "code" | "cursor" | "zed" | "subl") {
+                format!("{name} --wait")
+            } else {
+                name.to_owned()
+            };
+            self.save(ctx, layer, &key, &quoted(&value))
         };
         if !saved {
             return Act::Stay;
@@ -1869,6 +1914,25 @@ fn current_text(value: &Shown) -> Option<String> {
         Shown::Value(text) => Some(as_typed(text)),
         Shown::Unset | Shown::Union { .. } | Shown::Redacted(_) => None,
     }
+}
+
+/// Supported editors present on the supplied path, in the documented
+/// order. A missing PATH entry contributes no commands.
+fn editors_on_path(path: Option<&std::ffi::OsStr>) -> Vec<String> {
+    let directories: Vec<PathBuf> = path
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .collect();
+    EDITORS
+        .into_iter()
+        .filter(|name| {
+            directories
+                .iter()
+                .any(|directory| directory.join(name).is_file())
+        })
+        .map(str::to_owned)
+        .collect()
 }
 
 /// The choice after `current` in `choices`, wrapping from the last to the
@@ -2977,6 +3041,10 @@ fn shown_value(row: &SettingRow) -> (String, Option<String>) {
         }
         (SettingControl::Model, Shown::Unset) => "Default ›".to_owned(),
         (SettingControl::Model, Shown::Value(text)) => format!("{} ›", as_typed(text)),
+        (SettingControl::Text, Shown::Unset) if row.key == EDITOR => "Default ›".to_owned(),
+        (SettingControl::Text, Shown::Value(text)) if row.key == EDITOR => {
+            format!("{} ›", as_typed(text))
+        }
         (SettingControl::Text, Shown::Unset) if row.key == "web_search.backend" => {
             "Default ›".to_owned()
         }
