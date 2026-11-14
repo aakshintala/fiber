@@ -266,7 +266,7 @@ fn tools_ready(grid: &Grid, project: &str, everywhere: &str, on_everywhere: bool
     else {
         return false;
     };
-    // The row is focused at open, so both switch marks are plain spaces other;
+    // The mark is bold on the focused side and a plain space on the other;
     // the switch follows it.
     let (project_mark, everywhere_mark) = marks(on_everywhere);
     for (at, mark) in [(at_project, project_mark), (at_everywhere, everywhere_mark)] {
@@ -328,7 +328,7 @@ fn the_tools_view_matches_the_doc() {
     assert_eq!(grid.cell(x - 2, y).symbol, "›");
     assert!(!grid.cell(x - 2, y).inverse);
     assert!(is_plain_of_reverse(&grid, y, "notes_save · full · "));
-    assert!(is_plain_of_reverse(&grid, y, "[on] · everywhere [on]"));
+    assert!(is_plain_of_reverse(&grid, y, "›[on] · everywhere [on]"));
     assert_eq!(grid.cell(x - 2, read).symbol, " ", "no gutter on read");
     // Space flips the focused switch, this project's, and the gutter stays.
     run.write(b" ");
