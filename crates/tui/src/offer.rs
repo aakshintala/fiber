@@ -45,6 +45,8 @@ pub(crate) enum Spot {
         item: usize,
         decision: OfferDecision,
     },
+    /// An item's header row.
+    Item(usize),
     /// The Send row.
     Send,
     /// The header's ✕: puts the offer aside.
