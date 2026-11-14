@@ -1,7 +1,62 @@
 use super::*;
 
+use crate::{Config, ProjectKey, Source, Sources};
 use contract::ThinkingLevel;
 use contract::settings::{SettingControl, SettingsTab};
+
+#[test]
+fn keep_exited_is_a_nonnegative_count_defaulting_to_ten() {
+    let root = fakes::TempDir::new("fiber-keep-exited-config");
+    let home = root.path().join("home");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let config = |value: Option<u64>| {
+        let mut config = Config::load(Sources {
+            home: home.clone(),
+            workspace: workspace.clone(),
+            project: ProjectKey::new("-test").unwrap(),
+            overrides: Vec::new(),
+        })
+        .unwrap();
+        if let Some(value) = value {
+            config.layers.push((
+                Source::Global(home.join("config.json")),
+                serde_json::json!({"session": {"keep_exited": value}}),
+            ));
+        }
+        config
+    };
+    assert_eq!(config(None).keep_exited(), 10);
+    assert_eq!(config(Some(0)).keep_exited(), 0);
+    assert_eq!(config(Some(3)).keep_exited(), 3);
+    let key = KEYS
+        .iter()
+        .find(|key| key.path == "session.keep_exited")
+        .expect("the retention key is registered");
+    assert!(matches!(key.kind, Kind::Count));
+    // `docs/configuration.md`, "Keys": the default is 10; zero keeps all.
+    assert_eq!(
+        defaults().pointer("/session/keep_exited"),
+        Some(&serde_json::json!(10))
+    );
+    assert!(key.kind.accepts(&serde_json::json!(0)));
+    for value in [0, 5, 10, 20, 50, u64::MAX] {
+        assert!(
+            key.kind.accepts(&serde_json::json!(value)),
+            "accepts {value}"
+        );
+    }
+    for value in [
+        serde_json::json!(-1),
+        serde_json::json!(1.5),
+        serde_json::json!("10"),
+        serde_json::Value::Null,
+        serde_json::json!(true),
+    ] {
+        assert!(!key.kind.accepts(&value), "rejects {value}");
+    }
+}
 
 #[test]
 fn cache_diagnostics_defaults_to_off() {
@@ -267,6 +322,7 @@ const TABBED: &[(SettingsTab, &[&str])] = &[
             "hub.default",
             "hub.allowed_origins",
             "session.idle_exit_ms",
+            "session.keep_exited",
             "cache.lifetime",
             "cache.warm_idle",
             "cache.warm_cap",
@@ -459,6 +515,7 @@ fn scalar_keys_get_boolean_number_and_text_controls() {
         SettingControl::Number
     );
     assert_eq!(control_of("hub.port"), SettingControl::Number);
+    assert_eq!(control_of("session.keep_exited"), SettingControl::Number);
     assert_eq!(
         control_of("model_lists.refresh_after"),
         SettingControl::Text
