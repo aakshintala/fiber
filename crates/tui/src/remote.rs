@@ -638,8 +638,9 @@ pub(crate) fn client_owned(key: &str) -> bool {
     } else {
         key.split('.').next().unwrap_or_default()
     };
-    matches!(first, "keys" | "tui")
+    matches!(first, "keys" | "tui" | "hubs") || key == "hub.default"
 }
+
 impl Configure for Remote {
     fn blocking_hooks(
         &self,
@@ -679,6 +680,25 @@ impl Configure for Remote {
             Caller::Worker(&cancel),
             decode::install,
         )
+    }
+
+    fn search_backends(&self, workspace: &Path) -> Result<Vec<String>, ConfigureError> {
+        self.call(
+            "search_backends",
+            json!({"workspace":self.workspace(workspace)?}),
+            Caller::Loop,
+            |value| {
+                value
+                    .get("backends")
+                    .and_then(Value::as_array)
+                    .and_then(|items| items.iter().map(Value::as_str).collect::<Option<Vec<_>>>())
+                    .map(|items| items.into_iter().map(str::to_owned).collect())
+            },
+        )
+    }
+
+    fn hubs(&self) -> Result<Vec<String>, ConfigureError> {
+        self.local.hubs()
     }
 
     fn settings(

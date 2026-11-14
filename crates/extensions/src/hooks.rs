@@ -172,6 +172,7 @@ pub struct SessionExtensions {
     /// The search backend Fiber's own `web_search` runs, chosen at load
     /// from what is installed and `web_search.backend`.
     search_backend: Option<Arc<dyn SearchBackend>>,
+    search_backend_names: Vec<String>,
 }
 
 impl Default for SessionExtensions {
@@ -221,6 +222,7 @@ impl Default for SessionExtensions {
             commands: Default::default(),
             tools: Default::default(),
             search_backend: Default::default(),
+            search_backend_names: Vec::new(),
         }
     }
 }
@@ -1148,6 +1150,12 @@ impl SessionExtensions {
         let setting = config
             .get("web_search.backend", None)
             .and_then(|(value, _)| value.as_str().map(str::to_owned));
+        session.search_backend_names = backend_choices
+            .iter()
+            .map(|choice| choice.name.clone())
+            .collect();
+        session.search_backend_names.sort();
+        session.search_backend_names.dedup();
         let (search_backend, mut search_notices) =
             crate::search::choose(backend_choices, setting.as_deref());
         session.notices.append(&mut search_notices);
@@ -1690,6 +1698,12 @@ impl SessionExtensions {
     /// list in `replaces`, is not here.
     pub fn tools(&self) -> Vec<(String, Arc<dyn Tool>)> {
         self.tools.clone()
+    }
+
+    /// Installed search backend names in sorted order, independent of the
+    /// configured selection.
+    pub fn search_backend_names(&self) -> &[String] {
+        &self.search_backend_names
     }
 
     /// The search backend Fiber's own `web_search` runs, chosen at load.

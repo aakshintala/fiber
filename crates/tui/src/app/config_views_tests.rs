@@ -2776,6 +2776,9 @@ fn enter_on_each_screen_row_opens_its_screen_and_writes_no_key() {
     for screen_ in Screen::ALL {
         let seam = Arc::new(Fake::new(Vec::new()));
         let mut app = connected(seam.clone());
+        if screen_ == Screen::ReviewerNotes {
+            app.completion.extensions = vec!["reviewer-setup".to_owned()];
+        }
         app.open_config_view(ConfigView::Settings);
         let tab = screen_.row().and_then(|row| row.metadata.tab).unwrap();
         // The screen rows of a tab follow its keys, in table order; the
@@ -2790,7 +2793,9 @@ fn enter_on_each_screen_row_opens_its_screen_and_writes_no_key() {
         // What each row asks of the app: a command to the session, or a
         // screen the app opens itself.
         let asked = match screen_ {
-            Screen::Credentials => Some("credentials"),
+            Screen::ScopedModels => None,
+            Screen::ReviewerNotes => Some("command"),
+            Screen::Credentials => None,
             Screen::Tools => Some("tools"),
             Screen::Skills => Some("skills"),
             Screen::Mcp => Some("mcp_servers"),
@@ -2801,8 +2806,17 @@ fn enter_on_each_screen_row_opens_its_screen_and_writes_no_key() {
                 let sent = sent(effect);
                 assert_eq!(sent.len(), 1, "{command}");
                 assert_eq!(sent[0]["command"], asked, "{command}");
+                if screen_ == Screen::ReviewerNotes {
+                    assert_eq!(sent[0]["args"]["name"], "reviewer-setup", "{command}");
+                }
             }
             None if screen_ == Screen::Keys => assert!(app.keys_screen_open(), "{command}"),
+            None if screen_ == Screen::ScopedModels => {
+                assert!(app.model_picker_open(), "{command}")
+            }
+            None if screen_ == Screen::Credentials => {
+                assert!(app.credential_view_open(), "{command}")
+            }
             None => {
                 let frame = app.config_view_screen().expect("a view is open");
                 assert_ne!(frame.title, "Settings", "{command}");
@@ -2810,6 +2824,143 @@ fn enter_on_each_screen_row_opens_its_screen_and_writes_no_key() {
         }
         assert!(seam.writes().is_empty(), "{command}");
     }
+}
+
+fn home_with_model(seam: Arc<Fake>) -> App {
+    let mut app = home(seam);
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        model: Some("test/model".to_owned()),
+        ..Default::default()
+    });
+    app.on_line(crate::link::Line::Hub(contract::HubLine {
+        kind: HubEventKind::HubHello,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app
+}
+
+fn start_config_screen_command(command: &str) -> (App, String) {
+    let seam = Arc::new(Fake::new(Vec::new()));
+    let mut app = home_with_model(seam);
+    app.open_config_view(ConfigView::Settings);
+    let (tab, down) = if command == "reviewer-setup" {
+        (SettingsTab::Permissions, 0)
+    } else {
+        (SettingsTab::Models, 1)
+    };
+    let effect = enter_row(&mut app, tab, down);
+    let Effect::SendTracked(sent) = effect else {
+        panic!("home settings row starts a session: {effect:?}");
+    };
+    assert_eq!(sent.len(), 1);
+    let start_line: serde_json::Value = serde_json::from_str(&sent[0].line).unwrap();
+    assert_eq!(start_line["args"]["workspace"], "/w");
+    let start_id = sent[0].id.0.clone();
+    (app, start_id)
+}
+
+fn accept_home_start(app: &mut App, start_id: &str) -> Vec<String> {
+    app.on_line(crate::link::Line::Hub(contract::HubLine {
+        kind: HubEventKind::CommandAccepted,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::from_value(serde_json::json!({
+            "command_id": start_id,
+            "result": {"session_id": SESSION}
+        }))
+        .unwrap(),
+    }))
+}
+
+fn commands_answer(app: &mut App, command: &str) -> Vec<String> {
+    let id = app
+        .completion
+        .commands_id
+        .clone()
+        .expect("commands request");
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({
+            "command_id": id,
+            "result": {"commands": if command == "reviewer-setup" { vec![serde_json::json!({
+                "name": command,
+                "description": "Runs the command.",
+                "tag": "skill",
+                "extension": true
+            })] } else { Vec::<serde_json::Value>::new() }}
+        }),
+    ))
+}
+
+#[test]
+fn home_reviewer_and_credentials_start_then_run_the_command_after_the_command_table() {
+    for (name, expected) in [
+        ("reviewer-setup", "reviewer-setup"),
+        ("credential", "credential"),
+    ] {
+        let (mut app, start_id) = start_config_screen_command(name);
+        let started = accept_home_start(&mut app, &start_id);
+        assert_eq!(
+            started.len(),
+            2,
+            "start sends subscribe and commands, not a prompt"
+        );
+        assert_eq!(
+            app.session().map(|session| session.0.as_str()),
+            Some(SESSION)
+        );
+        let followup = commands_answer(&mut app, name);
+        if expected == "reviewer-setup" {
+            let sent = followup
+                .iter()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .collect::<Vec<_>>();
+            let command = sent
+                .iter()
+                .find(|line| line["command"] == "command")
+                .unwrap();
+            assert_eq!(command["args"]["name"], expected);
+        } else {
+            assert!(
+                followup
+                    .iter()
+                    .all(|line| !line.contains("\"command\":\"prompt\"")),
+                "home start sent a prompt instead of opening Credentials: {followup:?}"
+            );
+            assert!(app.credential_view_open());
+        }
+    }
+}
+
+#[test]
+fn failed_home_start_keeps_the_existing_notice_and_drops_the_queued_screen_command() {
+    let (mut app, start_id) = start_config_screen_command("reviewer-setup");
+    app.on_line(crate::link::Line::Hub(contract::HubLine {
+        kind: HubEventKind::CommandRejected,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::from_value(serde_json::json!({
+            "command_id": start_id,
+            "code": "invalid_arguments",
+            "message": "start failed"
+        }))
+        .unwrap(),
+    }));
+    assert!(app.session().is_none());
+    assert!(matches!(app.phase, super::super::Phase::Starting));
+    assert!(!app.has_after_start_command());
+    assert!(
+        screen(&app)
+            .iter()
+            .any(|line| line.contains("start failed"))
+    );
 }
 
 #[test]

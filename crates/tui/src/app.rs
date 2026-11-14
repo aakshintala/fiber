@@ -1982,11 +1982,14 @@ impl App {
     /// started session is the attached one.
     fn started(&mut self, session: SessionId, draft: Draft) -> Vec<String> {
         self.attach(session.clone());
-        vec![
+        let mut lines = vec![
             self.subscribe(&session, SubscribeLevel::Full),
             self.ask_commands(&session),
-            self.first_prompt(&session, draft),
-        ]
+        ];
+        if !self.has_after_start_command() {
+            lines.push(self.first_prompt(&session, draft));
+        }
+        lines
     }
 
     /// A transcript-visible shell run in flight, and whether it sends:
@@ -2187,6 +2190,7 @@ impl App {
         }
         if kind == Kind::Start {
             self.phase = Phase::Starting;
+            self.clear_after_start_command();
         }
         if kind == Kind::Reply {
             self.queue.restore(id);
@@ -2595,6 +2599,11 @@ impl App {
                     }
                     if waiting == Some(&Waiting::Commands) {
                         self.commands_answered(&accepted);
+                        if self.completion.commands_id.is_none()
+                            && let Effect::Send(lines) = self.run_after_start_command()
+                        {
+                            send.extend(lines);
+                        }
                         // Only a `commands` result clears the wait: any
                         // other result keeps the id, and the tag with it.
                         if self.completion.commands_id.as_deref()
