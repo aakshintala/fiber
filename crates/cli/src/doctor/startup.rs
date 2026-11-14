@@ -149,19 +149,16 @@ pub(crate) fn startup(
     };
     // Resolver state keeps its per-model removals for blocker checks. The
     // report uses only the credential-filtered presentation fill above.
-    match enabled.fill_placeholders(&config, env) {
-        Ok(_) => {}
-        Err(error) => {
-            let blocker = extension_blocker(&error);
-            return Startup {
-                lines: vec![blocker.line.clone()],
-                blocker: Some(blocker),
-                secrets: Vec::new(),
-                notices,
-                model_notices: Vec::new(),
-                unconfigured: Vec::new(),
-            };
-        }
+    if let Err(error) = enabled.fill_placeholders(&config, env) {
+        let blocker = extension_blocker(&error);
+        return Startup {
+            lines: vec![blocker.line.clone()],
+            blocker: Some(blocker),
+            secrets: Vec::new(),
+            notices,
+            model_notices: Vec::new(),
+            unconfigured: Vec::new(),
+        };
     }
     if let Some((serde_json::Value::String(typed), _)) = config.get("model", None) {
         enabled.add_scripted(&typed);

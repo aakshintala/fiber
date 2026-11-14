@@ -74,11 +74,7 @@ fn run(inputs: &Inputs<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Result<
         inputs.env,
         inputs.has_userinfo,
     );
-    for notice in checked
-        .notices
-        .iter()
-        .filter(|notice| notice.code != contract::ErrorCode::ModelUnconfigured)
-    {
+    for notice in &checked.notices {
         // A notice lost to a closed stderr changes nothing.
         drop(writeln!(err, "fiber: {}", clean(&notice.message)));
     }

@@ -123,6 +123,15 @@ impl Setup {
         }
     }
 
+    fn place_invalid_host(&self) {
+        fs::create_dir_all(self.home().join("config")).unwrap();
+        fs::write(
+            self.home().join("config/fake.json"),
+            r#"{"workspace":"not a host"}"#,
+        )
+        .unwrap();
+    }
+
     fn templated_models(ids: &[&str]) -> Value {
         Value::Array(
             ids.iter()
@@ -451,6 +460,7 @@ fn doctor_groups_missing_host_models_for_a_credentialed_provider() {
     setup.write_config(&json!({"model": "fake/one"}));
 
     let (_, _, err) = setup.report(&env_of(&[]));
+    // `docs/model-routing.md`, “A per-account host”: one grouped line per provider and setting.
     assert_eq!(err.lines().count(), 1, "{err:?}");
     assert!(
         err.contains("`fake`: 2 models need the setting `workspace`"),
@@ -479,7 +489,8 @@ fn doctor_suppresses_missing_host_for_an_uncredentialed_provider() {
     setup.place_templated_fake(Setup::templated_models(&["one"]), false);
     setup.write_config(&json!({"model": "fake/one"}));
 
-    let (_, _, err) = setup.report(&env_of(&[]));
+    let (_, out, err) = setup.report(&env_of(&[]));
+    assert!(out.contains(&format!("fiber {VERSION}")), "{out:?}");
     assert!(!err.contains("model_unconfigured"), "{err:?}");
     assert!(!err.contains("setting `workspace`"), "{err:?}");
 }
@@ -489,14 +500,10 @@ fn doctor_keeps_invalid_host_notice_per_model_for_a_credentialed_provider() {
     let setup = Setup::new();
     setup.place_templated_fake(Setup::templated_models(&["one", "two"]), true);
     setup.write_config(&json!({"model": "fake/one"}));
-    fs::create_dir_all(setup.home().join("config")).unwrap();
-    fs::write(
-        setup.home().join("config/fake.json"),
-        r#"{"workspace":"not a host"}"#,
-    )
-    .unwrap();
+    setup.place_invalid_host();
 
     let (_, _, err) = setup.report(&env_of(&[]));
+    // `docs/model-routing.md`, “A per-account host”: invalid values remain per-model notices.
     assert_eq!(err.lines().count(), 2, "{err:?}");
     assert!(
         err.contains("The model `fake/one` needs the setting `workspace`"),
@@ -513,14 +520,10 @@ fn doctor_suppresses_invalid_host_for_an_uncredentialed_provider() {
     let setup = Setup::new();
     setup.place_templated_fake(Setup::templated_models(&["one"]), false);
     setup.write_config(&json!({"model": "fake/one"}));
-    fs::create_dir_all(setup.home().join("config")).unwrap();
-    fs::write(
-        setup.home().join("config/fake.json"),
-        r#"{"workspace":"not a host"}"#,
-    )
-    .unwrap();
+    setup.place_invalid_host();
 
-    let (_, _, err) = setup.report(&env_of(&[]));
+    let (_, out, err) = setup.report(&env_of(&[]));
+    assert!(out.contains(&format!("fiber {VERSION}")), "{out:?}");
     assert!(!err.contains("model_unconfigured"), "{err:?}");
     assert!(!err.contains("setting `workspace`"), "{err:?}");
 }
