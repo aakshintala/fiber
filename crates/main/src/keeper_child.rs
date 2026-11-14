@@ -1,7 +1,7 @@
 //! The keeper process (`docs/tools.md`, "The keeper"). No providers or hooks.
 
 use std::collections::{BTreeMap, HashSet};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::ExitStatusExt as _;
@@ -19,131 +19,6 @@ use contract::keeper::{Exit, FromKeeper, KeptJob, Spawn, Stream, ToKeeper};
 use jobs::keeper::{Step, Supervisor};
 use log::Log;
 use rustix::process::Signal;
-
-fn trace_lock_holders(path: &std::path::Path, processes: &BTreeMap<String, Arc<Process>>) {
-    use std::os::unix::fs::MetadataExt as _;
-
-    let Ok(metadata) = fs::metadata(path) else {
-        eprintln!("FIBER4351_TRACE proc_lock_scan path={path:?} metadata=unavailable");
-        return;
-    };
-    let device = metadata.dev();
-    let inode = metadata.ino();
-    let Ok(locks) = fs::read_to_string("/proc/locks") else {
-        eprintln!("FIBER4351_TRACE proc_locks unavailable");
-        return;
-    };
-    let major = ((device >> 8) & 0xfff) | ((device >> 32) & !0xfff);
-    let minor = (device & 0xff) | ((device >> 12) & !0xff);
-    let lock_device = format!("{major:02x}:{minor:02x}:{inode}");
-    let matching_locks: Vec<_> = locks
-        .lines()
-        .filter(|line| line.split_whitespace().nth(5) == Some(lock_device.as_str()))
-        .collect();
-    eprintln!(
-        "FIBER4351_TRACE keeper_pid={} ppid={}",
-        std::process::id(),
-        fs::read_to_string(format!("/proc/{}/stat", std::process::id()))
-            .ok()
-            .and_then(|stat| stat.rsplit_once(')').map(|(_, rest)| rest
-                .split_whitespace()
-                .nth(1)
-                .unwrap_or("unknown")
-                .to_owned()))
-            .unwrap_or_else(|| "unknown".to_owned())
-    );
-    let runtime_groups: Vec<_> = processes
-        .iter()
-        .map(|(id, process)| {
-            (
-                id.as_str(),
-                process.pgid,
-                lock(&process.state)
-                    .diagnostic_job_id
-                    .clone()
-                    .unwrap_or_else(|| "unknown".to_owned()),
-            )
-        })
-        .collect();
-    eprintln!(
-        "FIBER4351_TRACE proc_lock_scan path={path:?} device={lock_device} matching_locks={matching_locks:?} runtime_process_groups={runtime_groups:?} (runtime-derived, not Supervisor fields)"
-    );
-    let Ok(entries) = fs::read_dir("/proc") else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| name.parse::<u32>().ok())
-        else {
-            continue;
-        };
-        let fd_dir = entry.path().join("fd");
-        let Ok(fds) = fs::read_dir(fd_dir) else {
-            continue;
-        };
-        for fd in fds.flatten() {
-            let Ok(fd_metadata) = fs::metadata(fd.path()) else {
-                continue;
-            };
-            if fd_metadata.dev() != device || fd_metadata.ino() != inode {
-                continue;
-            }
-            let stat_path = entry.path().join("stat");
-            let stat = fs::read_to_string(stat_path).ok();
-            let (ppid, pgrp, start) = stat
-                .as_deref()
-                .and_then(|s| {
-                    s.rsplit_once(')').map(|(_, rest)| {
-                        let fields: Vec<_> = rest.split_whitespace().collect();
-                        (
-                            fields.get(1).copied().unwrap_or("unknown"),
-                            fields.get(2).copied().unwrap_or("unknown"),
-                            fields.get(19).copied().unwrap_or("unknown"),
-                        )
-                    })
-                })
-                .unwrap_or(("unknown", "unknown", "unknown"));
-            let cmdline = fs::read(entry.path().join("cmdline"))
-                .ok()
-                .map(|bytes| String::from_utf8_lossy(&bytes).replace('\0', " "))
-                .unwrap_or_else(|| "unavailable".into());
-            let runtime_role = pgrp
-                .parse::<u32>()
-                .ok()
-                .and_then(|group| runtime_groups.iter().find(|(_, pgid, _)| *pgid == group));
-            let role = if pid == std::process::id() {
-                "this_keeper".to_owned()
-            } else if let Some((id, _, job_id)) = runtime_role {
-                format!("{id} job_id={job_id}")
-            } else if cmdline.contains("keeper") && cmdline.contains("--id") {
-                "earlier_keeper".to_owned()
-            } else if cmdline.contains("hub") && !cmdline.contains("hub_daemon") {
-                "hub".to_owned()
-            } else if cmdline.contains("hub_daemon") && cmdline.contains("keeper") {
-                "test_process".to_owned()
-            } else {
-                "unknown".to_owned()
-            };
-            let fdnum = fd.file_name().to_string_lossy().into_owned();
-            let info =
-                fs::read_to_string(entry.path().join("fdinfo").join(&fdnum)).unwrap_or_default();
-            let flags = info
-                .lines()
-                .find(|line| line.starts_with("flags:"))
-                .unwrap_or("flags: unavailable");
-            eprintln!(
-                "FIBER4351_TRACE lock_fd pid={pid} ppid={ppid} pgrp={pgrp} starttime={start} cmdline={cmdline:?} role={role} fd={fdnum} {flags:?} O_CLOEXEC={} proc_locks={:?}",
-                flags
-                    .split_once(':')
-                    .and_then(|(_, value)| u32::from_str_radix(value.trim(), 8).ok())
-                    .is_some_and(|value| value & 0o2000000 != 0),
-                matching_locks
-            );
-        }
-    }
-}
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
@@ -215,7 +90,6 @@ struct State {
     ended: bool,
     readers: usize,
     seq: u64,
-    diagnostic_job_id: Option<String>,
 }
 struct Process {
     pgid: u32,
@@ -382,9 +256,7 @@ impl Runtime {
                 }
                 Step::HoldLog => {
                     let Some((_, dir)) = log::find_session(&self.home, &self.id) else {
-                        eprintln!("FIBER4351_TRACE HoldLog find_session=None");
                         let steps = lock(&self.supervisor).lock_lost();
-                        eprintln!("FIBER4351_TRACE lock_lost steps={steps:?}");
                         return self.apply(log, steps);
                     };
                     let sessions = dir
@@ -430,28 +302,7 @@ impl Runtime {
                             if let Some(pause) = &self.hooks.before_bind {
                                 pause();
                             }
-                            eprintln!(
-                                "FIBER4351_TRACE keeper_socket_creator_pid={} ppid={} socket_bind=doors::bind session_dir={}",
-                                std::process::id(),
-                                fs::read_to_string(format!("/proc/{}/stat", std::process::id()))
-                                    .ok()
-                                    .and_then(|stat| stat.rsplit_once(')').map(|(_, rest)| rest
-                                        .split_whitespace()
-                                        .nth(1)
-                                        .unwrap_or("unknown")
-                                        .to_owned()))
-                                    .unwrap_or_else(|| "unknown".to_owned()),
-                                dir.display()
-                            );
-                            eprintln!("FIBER4351_TRACE before socket bind");
                             let bound = doors::bind(&self.home, &dir);
-                            eprintln!(
-                                "FIBER4351_TRACE after socket bind: {}",
-                                match &bound {
-                                    Ok((socket, _)) => format!("ok {}", socket.display()),
-                                    Err(error) => format!("error {error}"),
-                                }
-                            );
                             let (socket, listener) =
                                 bound.map_err(|error| io::Error::other(error.to_string()))?;
                             *log = Some(HeldLog {
@@ -478,21 +329,12 @@ impl Runtime {
                             let steps = lock(&self.supervisor).lock_lost();
                             return self.apply(log, steps);
                         }
-                        Err(error @ log::Error::Held { .. }) => {
-                            eprintln!("FIBER4351_TRACE Log::open_as Err={error:?}");
-                            trace_lock_holders(&dir.join("session.lock"), &lock(&self.processes));
+                        Err(log::Error::Held { .. }) => {
                             self.discard();
                             let steps = lock(&self.supervisor).lock_lost();
-                            eprintln!("FIBER4351_TRACE lock_lost steps={steps:?}");
                             return self.apply(log, steps);
                         }
-                        Err(error) => {
-                            let returned = io::Error::other(error.to_string());
-                            eprintln!(
-                                "FIBER4351_TRACE Log::open_as Err={error}; returned Err={returned}"
-                            );
-                            return Err(returned);
-                        }
+                        Err(error) => return Err(io::Error::other(error.to_string())),
                     }
                 }
                 Step::WriteJobCompleted {
@@ -554,7 +396,6 @@ impl Runtime {
                             Ok(()) | Err(_) => {}
                         }
                     }
-                    eprintln!("FIBER4351_TRACE done Ok source=apply Step::Exit");
                     match self.done.send(Ok(())) {
                         Ok(()) | Err(_) => {}
                     }
@@ -637,7 +478,6 @@ impl Runtime {
                 ended: false,
                 readers: if streams.errors.is_some() { 2 } else { 1 },
                 seq: 0,
-                diagnostic_job_id: None,
             }),
             cv: Condvar::new(),
         });
@@ -920,31 +760,7 @@ impl Runtime {
 
     fn takeover(self: &Arc<Self>) -> io::Result<()> {
         let crash_at = self.clock.now();
-        self.decide(|supervisor| {
-            let steps = supervisor.lifeline_eof();
-            let processes = lock(&self.processes);
-            let running: Vec<_> = processes
-                .iter()
-                .map(|(id, process)| {
-                    let state = lock(&process.state);
-                    let status = if state.ended {
-                        "ended"
-                    } else if state.stopping.is_some() {
-                        "stopping"
-                    } else {
-                        "running"
-                    };
-                    let adoption = if state.adoption.is_some() {
-                        "adopted"
-                    } else {
-                        "not-adopted"
-                    };
-                    (id.clone(), status, adoption)
-                })
-                .collect();
-            eprintln!("FIBER4351_TRACE lifeline_eof steps={steps:?} Runtime.processes={running:?}");
-            steps
-        })?;
+        self.decide(Supervisor::lifeline_eof)?;
         // The crash left jobs behind: watch the bound from the crash instant.
         self.watch_bound(crash_at);
         Ok(())
@@ -959,7 +775,6 @@ impl Runtime {
         });
         let runtime = Arc::clone(self);
         thread::spawn(move || {
-            eprintln!("FIBER4351_TRACE before listen");
             let backoff = Arc::new(support::clock::Parker::new());
             let waker: Arc<dyn Wake> = backoff.clone();
             runtime.clock.subscribe(Arc::downgrade(&waker));
@@ -998,7 +813,6 @@ impl Runtime {
                     continue;
                 };
                 delay = Duration::from_millis(10);
-                eprintln!("FIBER4351_TRACE first accepted connection");
                 // One thread per candidate: a stalled one holds up nothing.
                 #[cfg(test)]
                 if runtime
@@ -1254,18 +1068,13 @@ impl Runtime {
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
             let request: ToKeeper = serde_json::from_str(&line)?;
             match request {
-                ToKeeper::Start(spec) => {
-                    eprintln!("FIBER4351_TRACE control Start id={}", spec.id);
-                    self.start(spec)?;
-                }
+                ToKeeper::Start(spec) => self.start(spec)?,
                 ToKeeper::Stop(id) => {
-                    eprintln!("FIBER4351_TRACE control Stop id={id}");
                     if let Some(process) = lock(&self.processes).get(&id) {
                         self.stop(process);
                     }
                 }
                 ToKeeper::Write { id, text } => {
-                    eprintln!("FIBER4351_TRACE control Write id={id}");
                     if let Some(process) = lock(&self.processes).get(&id)
                         && let Some(input) = &process.input
                     {
@@ -1283,14 +1092,12 @@ impl Runtime {
                     errors_path,
                     lines,
                 } => {
-                    eprintln!("FIBER4351_TRACE control Adopt id={id} job_id={job_id:?}");
                     let _log = lock(&self.log);
                     if lock(&self.supervisor).adopt(&id, job_id.clone())
                         && let Some(process) = lock(&self.processes).get(&id)
                     {
                         {
                             let mut state = lock(&process.state);
-                            state.diagnostic_job_id = Some(job_id.0.clone());
                             state.adoption = Some(Adoption {
                                 output: output_path,
                                 errors: errors_path,
@@ -1299,31 +1106,23 @@ impl Runtime {
                         }
                     }
                 }
-                ToKeeper::Confirmed(id) => {
-                    eprintln!("FIBER4351_TRACE control Confirmed id={id}");
-                    self.decide(|sup| sup.confirmed(&id))?;
-                }
+                ToKeeper::Confirmed(id) => self.decide(|sup| sup.confirmed(&id))?,
                 ToKeeper::Shutdown(true) => {
-                    eprintln!("FIBER4351_TRACE control Shutdown true");
                     self.discard();
                     self.decide(Supervisor::shutdown_requested)?;
                 }
                 ToKeeper::Shutdown(false) => {
-                    eprintln!("FIBER4351_TRACE control Shutdown false");
                     return Err(io::Error::other("shutdown must be true"));
                 }
                 // Only a candidate on the keeper's socket may negotiate; the
                 // session's own control connection never does.
                 ToKeeper::Identify(_) => {
-                    eprintln!("FIBER4351_TRACE control Identify");
                     return Err(io::Error::other("handshake frame on the session's control"));
                 }
                 ToKeeper::Handover(_) => {
-                    eprintln!("FIBER4351_TRACE control Handover");
                     return Err(io::Error::other("handshake frame on the session's control"));
                 }
                 ToKeeper::Adopted(_) => {
-                    eprintln!("FIBER4351_TRACE control Adopted");
                     return Err(io::Error::other("handshake frame on the session's control"));
                 }
             }
@@ -1388,14 +1187,9 @@ fn drive(
         .join()
         .map_err(|_| io::Error::other("keeper control reader panicked"))??;
     runtime.takeover()?;
-    let received = result
+    result
         .recv()
-        .map_err(|_| io::Error::other("keeper ending lost"))?;
-    eprintln!(
-        "FIBER4351_TRACE drive result={:?}",
-        received.as_ref().map(|()| ())
-    );
-    received
+        .map_err(|_| io::Error::other("keeper ending lost"))?
 }
 
 fn write_frame(writer: &mut impl Write, line: &FromKeeper) -> io::Result<()> {
@@ -1404,54 +1198,19 @@ fn write_frame(writer: &mut impl Write, line: &FromKeeper) -> io::Result<()> {
     writer.write_all(&bytes)
 }
 
-fn trace_exit_status(status: i32) {
-    if let Some(path) = std::env::var_os("FIBER4351_TRACE_FILE") {
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-            let _ = writeln!(file, "FIBER4351_TRACE keeper exit status: {status}");
-        }
-    }
-}
-
 pub(crate) fn run(id: String, clock: Arc<dyn Clock>) -> i32 {
-    std::panic::set_hook(Box::new(|info| {
-        let reason = info
-            .payload()
-            .downcast_ref::<&str>()
-            .copied()
-            .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
-            .unwrap_or("non-string panic payload");
-        eprintln!("FIBER4351_TRACE panic: {reason}");
-        trace_exit_status(101);
-    }));
     let home = match config::fiber_home(std::env::var_os("FIBER_HOME"), std::env::var_os("HOME")) {
         Ok(home) => home,
-        Err(error) => {
-            eprintln!("FIBER4351_TRACE configuration/home failure: {error}");
-            trace_exit_status(1);
-            return 1;
-        }
+        Err(_) => return 1,
     };
     let control = match rustix::io::dup(std::io::stdout()) {
         Ok(fd) => UnixStream::from(fd),
-        Err(error) => {
-            eprintln!("FIBER4351_TRACE stdout dup failure: {error}");
-            trace_exit_status(1);
-            return 1;
-        }
+        Err(_) => return 1,
     };
-    eprintln!("FIBER4351_TRACE entering serve");
-    let status = match serve(home, SessionId(id), clock, std::io::stdin().lock(), control) {
-        Ok(()) => {
-            eprintln!("FIBER4351_TRACE successful return");
-            0
-        }
-        Err(error) => {
-            eprintln!("FIBER4351_TRACE error return: {error}");
-            1
-        }
-    };
-    trace_exit_status(status);
-    status
+    match serve(home, SessionId(id), clock, std::io::stdin().lock(), control) {
+        Ok(()) => 0,
+        Err(_) => 1,
+    }
 }
 
 #[cfg(test)]

@@ -617,10 +617,7 @@ fn resumed_session(
         fiber_path: fiber_path.clone(),
         reads: Arc::clone(&reads),
     };
-    eprintln!("FIBER4351_TRACE resume coordinator entering assemble_session");
-    let result = crate::session_command::assemble_session(parts, inputs, signals, process);
-    eprintln!("FIBER4351_TRACE resume coordinator returned from assemble_session");
-    result
+    crate::session_command::assemble_session(parts, inputs, signals, process)
 }
 
 /// The first line's `session_started` worktree, when it records one. Any

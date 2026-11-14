@@ -623,33 +623,17 @@ fn crash_after(
     if let Some(bound_ms) = bound_ms {
         ask.env("FIBER_KEEPER_BOUND_MS", bound_ms);
     }
-    ask.env(
-        "FIBER4351_TRACE_FILE",
-        setup.home().join("keeper-4351-trace.log"),
-    );
     let (mut child, session_watchdog) = spawn_watched(&mut ask);
     let group = child.id();
     let guard = KillGroup(group);
     let lines = stdout(&mut child);
     let started = event(&lines, "job_started", setup.deadline);
     event(&lines, "tool_call_started", setup.deadline);
-    // The resumed `ask` process owns session opening; `doors::session::open_in`
-    // binds from that running process. The child id is recorded while it is live.
-    eprintln!(
-        "FIBER4351_TRACE test crash_after socket_creator_pid={} evidence=ask_resume_process_opened_session",
-        child.id()
-    );
     let job_group = fixture.ready.wait(setup.deadline.start_wait())[0];
     let output =
         session_dir(setup, &fixture.id).join(started["payload"]["output_path"].as_str().unwrap());
     settle(&output);
     let kill_marker = kill_marker_file(setup, &fixture.id);
-    eprintln!(
-        "FIBER4351_TRACE test crash_after resumed_fiber_pid={} process_group_leader={} socket_creator_pid={}",
-        child.id(),
-        group,
-        child.id()
-    );
     fakes::kill_group(group, "KILL").unwrap();
     assert!(!reap(child, setup.deadline).success());
     assert!(fakes::group_empties(group, setup.deadline.start_wait()));
@@ -918,23 +902,7 @@ fn a_resume_takes_a_running_job_from_its_keeper_and_writes_its_ending() {
         setup.deadline.start_wait(),
         move || log::lock_label(&holder).as_deref() == Some(pid.as_str()),
     );
-    eprintln!(
-        "FIBER4351_TRACE {} test release job={}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_micros(),
-        crashed.job
-    );
     release(&fixture.gate, setup.deadline);
-    eprintln!(
-        "FIBER4351_TRACE {} test waiting-job-completed job={}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_micros(),
-        crashed.job
-    );
     serving.until("the restored job's ending", |line| {
         line["kind"] == "job_completed"
     });

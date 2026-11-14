@@ -24,14 +24,6 @@ use tools::{AdoptedRun, AdoptedSink};
 
 use crate::keeper::{Adopted, Attached, Handover, Host};
 
-fn trace_4351(message: std::fmt::Arguments<'_>) {
-    let micros = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_micros();
-    eprintln!("FIBER4351_TRACE {micros} {message}");
-}
-
 /// What the session decided about the handover, once it has: runners that
 /// find the connection closed before then wait for it. A connection ends
 /// with no exit when the keeper is lost, and also when this session gave the
@@ -115,17 +107,12 @@ impl Restored {
         let mut sinks = Vec::with_capacity(self.runners.len());
         let threads = std::mem::take(&mut self.runners)
             .into_iter()
-            .zip(self.ids.iter().cloned())
-            .map(|(runner, id)| {
+            .map(|runner| {
                 sinks.push(runner.sink());
                 let verdict = Arc::clone(&verdict);
                 thread::spawn(move || {
-                    trace_4351(format_args!("runner activate job={}", id.0));
                     if let Some(end) = runner.run() {
-                        trace_4351(format_args!("runner lost connection job={}", id.0));
                         verdict.lost(end);
-                    } else {
-                        trace_4351(format_args!("runner ended job={}", id.0));
                     }
                 })
             })
@@ -313,11 +300,6 @@ pub(crate) fn restore(
     };
     for (started, adopted) in checked {
         let Adopted { job, events, owner } = adopted;
-        trace_4351(format_args!(
-            "restore job={} keeper_alive={}",
-            job.job_id.0,
-            owner.alive_4351()
-        ));
         // Opened before the registry records anything, so a file that
         // cannot be held leaves the job unrecorded.
         let errors = job
@@ -346,17 +328,10 @@ pub(crate) fn restore(
         let opened = registry
             .restore(started, stop(), input, job.lines)
             .map_err(|failure| io::Error::other(failure.to_string()))?;
-        let job_id = job.job_id.clone();
-        trace_4351(format_args!(
-            "restore completion callback-installed job={}",
-            job_id.0
-        ));
         let mut opened = opened;
         let original_end = opened.end;
         opened.end = End(Box::new(move |completion| {
-            trace_4351(format_args!("restore callback-fired job={}", job_id.0));
             (original_end.0)(completion);
-            trace_4351(format_args!("restore callback-returned job={}", job_id.0));
         }));
         restored.ids.push(job.job_id.clone());
         // The runner owns the execution from here: the registry's opened

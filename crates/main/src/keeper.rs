@@ -270,16 +270,7 @@ impl Host {
                     .env("FIBER_HOME", &home)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::from(std::os::fd::OwnedFd::from(child_end)));
-                if let Some(trace_path) = std::env::var_os("FIBER4351_TRACE_FILE") {
-                    command.stderr(Stdio::from(
-                        std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(trace_path)?,
-                    ));
-                } else {
-                    command.stderr(Stdio::null());
-                }
+                command.stderr(Stdio::null());
                 support::group::detach(&mut command, false);
                 let mut child = command.spawn()?;
                 let Some(lifeline) = child.stdin.take() else {
@@ -352,15 +343,6 @@ impl Host {
     /// never the slot a new command starts in: its call identifiers are the
     /// old keeper's own and may repeat the new keeper's.
     pub(crate) fn attach_handover(self: &Arc<Self>, handover: Handover) -> io::Result<Attached> {
-        trace_4351(format_args!(
-            "attach peer={} alive=true running={:?}",
-            handover.pid.0,
-            handover
-                .running
-                .iter()
-                .map(|job| job.job_id.0.as_str())
-                .collect::<Vec<_>>()
-        ));
         let Handover {
             stream,
             reader,
@@ -653,28 +635,6 @@ impl Client {
         }
     }
     fn reply(&self, reply: FromKeeper) -> io::Result<()> {
-        let job_id = |id: &str| {
-            lock(&self.adopted)
-                .iter()
-                .find_map(|(job, call)| (call == id).then_some(job.0.as_str()))
-                .map(str::to_owned)
-                .unwrap_or_else(|| id.to_owned())
-        };
-        match &reply {
-            FromKeeper::Output { id, .. } => {
-                trace_4351(format_args!("frame output job_id={}", job_id(id)))
-            }
-            FromKeeper::Exit { id, exit } => trace_4351(format_args!(
-                "frame exit job_id={} code={:?} signal={:?}",
-                job_id(id),
-                exit.code,
-                exit.signal
-            )),
-            FromKeeper::AdoptDone(done) => {
-                trace_4351(format_args!("AdoptDone received value={done}"))
-            }
-            _ => {}
-        }
         match reply {
             FromKeeper::Started { id, pgid } => self.retire(&id, Ok(Started { pgid })),
             FromKeeper::Failed { id, error: failure } => self.retire(&id, Err(error(&id, failure))),
@@ -759,10 +719,6 @@ fn send_to(stream: &UnixStream, request: &ToKeeper) -> io::Result<()> {
     stream.write_all(&bytes)
 }
 
-fn trace_4351(message: std::fmt::Arguments<'_>) {
-    eprintln!("FIBER4351_TRACE {message}");
-}
-
 fn refused(reason: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, reason.to_owned())
 }
@@ -845,10 +801,6 @@ pub(crate) fn handover_over(stream: UnixStream, running: Vec<KeptJob>) -> io::Re
 pub(crate) struct Owner(Arc<Client>);
 
 impl Owner {
-    pub(crate) fn alive_4351(&self) -> bool {
-        !self.0.dead.load(Ordering::Acquire)
-    }
-
     /// Asks the owning keeper to stop the job's process.
     pub(crate) fn stop(&self, id: &str) -> bool {
         !self.0.dead.load(Ordering::Acquire) && self.0.send(&ToKeeper::Stop(id.to_owned())).is_ok()
