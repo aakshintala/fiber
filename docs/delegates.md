@@ -266,12 +266,12 @@ final message, any questions, usage totals and worktree state. Their keys are
   parent is an ordinary client over its socket and drives it only through the
   driver commands and events, so no delegate has a path a supervisor lacks.
 - A Fiber delegate's stdin is a Unix socketpair lifeline created by the
-  keeper. The keeper holds its peer open and sends no delegate input on it;
-  it answers only the fixed lifeline-peer query, while its current session
-  control connection is live, with that connection's kernel peer pid or
-  `none`. The delegate accepts a pid only from a valid bounded reply and only
-  while `getppid()` still matches. A timed-out or malformed reply grants no
-  parent exception. End of file or a read error means the keeper is gone and
+  keeper. The keeper holds its peer open and sends no delegate input on it.
+  It answers only the fixed lifeline query, and only while its session-control
+  connection is live; the reply carries the keeper's pid or `none`. The
+  delegate accepts the pid only from a valid bounded reply and only while
+  `getppid()` still matches. A timed-out or malformed reply grants no parent
+  exception. End of file or a read error means the keeper is gone and
   takes the existing SIGHUP shutdown path (`docs/invocation.md`, "Shutdown").
   A dropped socket connection is only a client leaving: the parent reconnects
   and the delegate carries on.

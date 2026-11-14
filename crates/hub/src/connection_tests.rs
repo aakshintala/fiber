@@ -4838,6 +4838,46 @@ mod session_refusal_tests {
     }
 
     #[test]
+    fn session_parent_reaches_a_delegate_through_its_keeper() {
+        let script = Script {
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (TARGET, SHARED_HOST),
+                (SHARED_HOST, PEER),
+                (PEER, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (TARGET, support::peer::EffectiveUid(1000)),
+                (SHARED_HOST, support::peer::EffectiveUid(1000)),
+                (PEER, support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [
+                (SHARED_HOST, keeper_argv()),
+                (PEER, host_argv()),
+                (support::peer::Pid(1), vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let mut rig = Rig::new(script);
+        let (peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OTHER, steer("c_1"), &session_caller(&[CALLER_HOST]));
+        let mut forwarded = String::new();
+        std::io::BufReader::new(peer)
+            .read_line(&mut forwarded)
+            .unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "steer");
+    }
+
+    #[test]
     fn exact_parent_and_target_ancestry_share_one_parent_read() {
         let parent_reads = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
         let script = Script {

@@ -1307,11 +1307,13 @@ fn session_command_refusal_inner(
             message: from_session_message(attribution, refusal()),
         });
     }
-    // The keeper-parent exception is granted only when the query answered
-    // from this process's live lifeline and the same keeper parents both
-    // this command and the target session.
+    // The keeper-parent exception is for the session process that owns the
+    // target's live keeper, not a shell below that keeper. Keepers also count
+    // as session processes for refusal ancestry, so skip the target's direct
+    // parent when finding its owning session process.
     if let (Some(query), Some(parent)) = (lifeline, target_walk.parent_pid)
-        && caller_matches.contains(&parent)
+        && let Some(session) = target_walk.matched_pids.iter().find(|pid| **pid != parent)
+        && attribution.peer_pid() == Some(*session)
         && query.query() == Some(parent.0)
     {
         return None;

@@ -1375,27 +1375,32 @@ mod refusal_tests {
         }
     }
 
-    /// The target's walk with a session host above it: the target shares a
-    /// session process with a caller below that host.
+    /// A target whose direct parent is its keeper, itself a child of the
+    /// session process that owns it.
     fn keeper_parent_target(parent: support::peer::Pid) -> Script {
         Script {
             current: support::peer::EffectiveUid(1000),
             parents: [
                 (TARGET_PID, parent),
-                (parent, support::peer::Pid(1)),
+                (parent, PEER),
+                (PEER, support::peer::Pid(1)),
                 (support::peer::Pid(1), support::peer::Pid(0)),
             ]
             .into_iter()
             .collect(),
             euids: [
                 (parent, support::peer::EffectiveUid(1000)),
+                (PEER, support::peer::EffectiveUid(1000)),
                 (support::peer::Pid(1), support::peer::EffectiveUid(0)),
             ]
             .into_iter()
             .collect(),
-            argvs: [(parent, vec![b"/path/fiber".to_vec(), b"keeper".to_vec()])]
-                .into_iter()
-                .collect(),
+            argvs: [
+                (parent, vec![b"/path/fiber".to_vec(), b"keeper".to_vec()]),
+                (PEER, session_argv(OWNED)),
+            ]
+            .into_iter()
+            .collect(),
         }
     }
 
@@ -1553,7 +1558,7 @@ mod refusal_tests {
         let query = LifelineQuery::scripted_for_test(valid);
         assert!(
             session_command_refusal_inner(
-                &local(PEER, &[parent]),
+                &local(PEER, &[HOST]),
                 &steer(),
                 &other_id(),
                 TARGET_PID,
@@ -1562,14 +1567,24 @@ mod refusal_tests {
                 &[],
             )
             .is_none(),
-            "the verified current keeper parent is allowed"
+            "the owning session process is allowed through its live keeper"
         );
+        let shell = session_command_refusal_inner(
+            &local(HOST, &[PEER, parent]),
+            &steer(),
+            &other_id(),
+            TARGET_PID,
+            &script,
+            Some(&LifelineQuery::scripted_for_test(valid)),
+            &[],
+        );
+        assert!(shell.is_some(), "a shell under the keeper stays refused");
 
         valid[1..].copy_from_slice(&parent.0.saturating_add(1).to_le_bytes());
         let changed = LifelineQuery::scripted_for_test(valid);
         assert!(
             session_command_refusal_inner(
-                &local(PEER, &[parent]),
+                &local(PEER, &[PEER]),
                 &steer(),
                 &other_id(),
                 TARGET_PID,

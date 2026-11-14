@@ -836,19 +836,19 @@ behavior; it is not refused just because the caller is session-owned.
 
 A `message` is a session message, logged with its sender, not a person's words, so none of these refusals covers it.
 
-The second refusal exempts the delegate's own client. It does not apply
-when the connecting process is the target session's parent process, as the
-kernel reports it. A Fiber delegate is a child of its parent's keeper, so the
-delegate uses its stdin socketpair lifeline to ask that keeper for the live
-session-control peer pid. The keeper answers only while its current handover
-connection is live, using that connection's kernel peer credential; it sends
-no cached pid. The delegate accepts the parent exception only when the reply
-is valid and its current `getppid()` still matches. A missing, malformed or
+The second refusal exempts the session process that owns a delegate's keeper,
+not a shell running below that keeper. The hub and session identify that
+process by its exact peer pid: the nearest session process above the target's
+keeper. The target's direct kernel parent keeps its existing exception. A
+Fiber delegate is a child of its parent's keeper, so its stdin socketpair
+lifeline can query that keeper's pid. The keeper answers only while its
+session-control connection is live; the delegate accepts the reply only when
+it is valid and its current `getppid()` still matches. A missing, malformed or
 timed-out reply fails closed; EOF or a read error keeps the existing SIGHUP
-shutdown path (`docs/delegates.md`, "Lifetime"). This is how the parent's
-`delegate_message` can reach its delegate without giving the shell a steering
-exception. A resumed session also checks retained handover keepers when
-refusing its own socket, using the live peer set on every check.
+shutdown path (`docs/delegates.md`, "Lifetime"). This lets the owning
+session's `delegate_message` reach its delegate without giving a shell a
+steering exception. A resumed session also checks retained handover keepers
+when refusing its own socket, using the live peer set on every check.
 
 Sessions started through the hub's `start`, including those the delegate CLI
 starts, stay allowed when they are unrelated to the caller's process tree.
