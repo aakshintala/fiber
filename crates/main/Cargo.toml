@@ -15,7 +15,7 @@ dhat-heap = ["dep:dhat"]
 [dependencies]
 base64.workspace = true
 clap.workspace = true
-clap_complete.workspace = true
+clap_complete = { workspace = true, features = ["unstable-dynamic"] }
 cli = { path = "../cli" }
 config = { path = "../config" }
 contract = { path = "../contract" }

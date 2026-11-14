@@ -1,6 +1,6 @@
 //! `fiber completion <shell>` (`docs/invocation.md`, "Commands and flags"): a
-//! completion script generated from the parser's own definitions. It
-//! completes the visible commands and flags, and no values.
+//! script registered against the parser's visible commands and flags. The
+//! dynamic path adds installed extension names and cached model ids.
 
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -31,11 +31,24 @@ impl Shell {
 }
 
 /// The parser, built once so the copy's names borrow `'static` text.
-static PARSER: LazyLock<Command> = LazyLock::new(crate::cli::command);
+pub(crate) static PARSER: LazyLock<Command> = LazyLock::new(crate::cli::command);
 
-/// The whole script for one shell. It reads no file, environment variable
-/// or configuration, so the same shell always gives the same bytes.
+/// The whole script for one shell. Dynamic registration embeds this
+/// executable's path; an unusable path keeps the static script as fallback.
 pub(crate) fn script(shell: Shell) -> String {
+    script_with_registration(shell, crate::dynamic_complete::registration(shell))
+}
+
+fn script_with_registration(shell: Shell, registration: Result<Vec<u8>, String>) -> String {
+    match registration {
+        Ok(script) => String::from_utf8_lossy(&script).into_owned(),
+        Err(_) => static_script(shell),
+    }
+}
+
+/// The compile-time command and flag script, retained as a fallback for
+/// shells whose dynamic registration cannot embed this executable.
+pub(crate) fn static_script(shell: Shell) -> String {
     let mut cmd = visible(&PARSER);
     let mut out = Vec::new();
     let generator = match shell {
@@ -125,12 +138,27 @@ pub(crate) fn print(shell: Shell) -> i32 {
 /// The grammar a generator reads, without what a person never types:
 /// hidden subcommands and hidden arguments are dropped at every level.
 /// A value-taking argument offers no values, not even file names.
-fn visible(cmd: &'static Command) -> Command {
+pub(crate) fn visible(cmd: &'static Command) -> Command {
+    visible_inner(cmd, false)
+}
+
+/// Dynamic engine form: each visible subcommand alias is a sibling command,
+/// because the pinned engine de-duplicates aliases that share an id.
+pub(crate) fn visible_for_dynamic(cmd: &'static Command) -> Command {
+    visible_inner(cmd, true)
+}
+
+fn visible_inner(cmd: &'static Command, split_visible_aliases: bool) -> Command {
+    let aliases = if split_visible_aliases {
+        Vec::new()
+    } else {
+        cmd.get_visible_aliases().collect()
+    };
     let mut copy = Command::new(cmd.get_name())
         .disable_help_subcommand(true)
         .disable_help_flag(cmd.is_disable_help_flag_set())
         .disable_version_flag(cmd.is_disable_version_flag_set())
-        .visible_aliases(cmd.get_visible_aliases());
+        .visible_aliases(aliases);
     if let Some(about) = cmd.get_about() {
         copy = copy.about(about.clone());
     }
@@ -156,11 +184,18 @@ fn visible(cmd: &'static Command) -> Command {
                 arg.clone()
             }
         });
-    copy.args(args).subcommands(
-        cmd.get_subcommands()
-            .filter(|sub| !sub.is_hide_set())
-            .map(visible),
-    )
+    let mut subcommands = Vec::new();
+    for subcommand in cmd.get_subcommands().filter(|sub| !sub.is_hide_set()) {
+        if split_visible_aliases {
+            subcommands.extend(
+                subcommand
+                    .get_visible_aliases()
+                    .map(|alias| visible_inner(subcommand, true).name(alias)),
+            );
+        }
+        subcommands.push(visible_inner(subcommand, split_visible_aliases));
+    }
+    copy.args(args).subcommands(subcommands)
 }
 
 #[cfg(test)]

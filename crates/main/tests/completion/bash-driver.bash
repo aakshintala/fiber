@@ -1,8 +1,7 @@
 # Usage: bash --norc --noprofile bash-driver.bash <script> <case>...
-# Sources the generated script, then completes each case the way bash
-# does on a Tab: the words go in COMP_WORDS, the last one is the word being
-# completed, and `_fiber` is called with the command, that word and the
-# one before it. A case ending in a space completes an empty word.
+# Sources the generated registration, then completes each case the way bash
+# does on a Tab: the registered function receives the command, current word
+# and previous word. A case ending in a space completes an empty word.
 # Prints `SOURCE-STDERR` and what sourcing wrote on stderr, `COMPLETE` and
 # `complete -p fiber`, then per case `CASE <n>`, one `CAND:<word>` line per
 # candidate, and `CASE-END`.
@@ -26,7 +25,13 @@ for case in "$@"; do
   if [[ $COMP_CWORD -gt 0 ]]; then
     prev=${COMP_WORDS[COMP_CWORD - 1]}
   fi
-  _fiber fiber "${COMP_WORDS[COMP_CWORD]}" "$prev" 2>/dev/null
+  _clap_complete_fiber fiber "${COMP_WORDS[COMP_CWORD]}" "$prev" 2>/dev/null
+  for word in "${COMPREPLY[@]}"; do
+    if [[ $word == a-file ]]; then
+      printf 'bash offered a file name instead of a Fiber candidate\n' >&2
+      exit 7
+    fi
+  done
   printf 'CASE %s\n' "$n"
   for word in "${COMPREPLY[@]}"; do
     printf 'CAND:%s\n' "$word"
