@@ -827,6 +827,18 @@ fn a_switch_click_selects_focuses_and_flips() {
 }
 
 #[test]
+fn space_and_row_click_open_the_selected_skill_text() {
+    let fake = text_fake("Test first.");
+    let mut by_space = opened(&fake, &[repository("tdd")]);
+    by_space.key(&Key::Char(' '), &ctx(&fake));
+    assert_eq!(by_space.frame(80, 22).title, "Skill tdd");
+
+    let mut by_click = opened(&fake, &[repository("tdd")]);
+    by_click.click(Spot::Row(0), &ctx(&fake));
+    assert_eq!(by_click.frame(80, 22).title, "Skill tdd");
+}
+
+#[test]
 fn a_switch_rereads_and_says_next_turn_start() {
     let fake = fake_with(off(&[], &[]));
     let mut skills = opened(&fake, &[repository("tdd")]);
