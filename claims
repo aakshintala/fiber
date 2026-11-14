@@ -487,3 +487,8 @@ crates/tui/src/snapshots/tui__skills_view__tests__skills_80x24.snap:28-28	fiber-
 crates/tui/src/view/offer_tests.rs:247-248	fiber-4675	plan	2026-11-14T09:39:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-enter	
 docs/tui.md:1298-1299	fiber-4675	plan	2026-11-14T09:39:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-enter	
 docs/tui.md:1313-1313	fiber-4675	plan	2026-11-14T09:39:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-enter	
+crates/cli/src/doctor.rs	fiber-4701	plan	2026-11-14T09:49:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/cli/src/doctor/startup.rs	fiber-4701	plan	2026-11-14T09:49:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/cli/src/doctor/doctor_tests.rs	fiber-4701	plan	2026-11-14T09:49:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/model-routing.md	fiber-4701	plan	2026-11-14T09:49:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/errors.md	fiber-4701	plan	2026-11-14T09:49:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
