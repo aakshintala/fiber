@@ -95,15 +95,6 @@ pub fn stdout_write_outcome(error: io::Error) -> Result<(), SessionError> {
     }
 }
 
-/// The exit code for a failed standard-output write: only a broken pipe is quiet.
-pub fn stdout_write_exit_code(error: &io::Error) -> i32 {
-    if error.kind() == io::ErrorKind::BrokenPipe {
-        0
-    } else {
-        1
-    }
-}
-
 /// `fiber ask`'s prompt (`docs/invocation.md`, "Getting a prompt in").
 ///
 /// The source is the arguments alone. Stdin is read only when `dash` is set,
@@ -165,18 +156,6 @@ pub use support::mint;
 #[cfg(test)]
 mod stdout_write_tests {
     #[test]
-    fn stdout_write_exit_code_quiets_only_broken_pipe() {
-        assert_eq!(
-            super::stdout_write_exit_code(&std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
-            0
-        );
-        assert_eq!(
-            super::stdout_write_exit_code(&std::io::Error::other("full disk")),
-            1
-        );
-    }
-
-    #[test]
     fn stdout_write_outcome_quiets_broken_pipe() {
         assert!(
             super::stdout_write_outcome(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
@@ -188,12 +167,10 @@ mod stdout_write_tests {
     fn stdout_write_outcome_retains_other_error() {
         let error = super::stdout_write_outcome(std::io::Error::other("full disk"))
             .expect_err("a failed output write stays an error");
-        match error {
-            super::SessionError::StdoutFailed { source } => {
-                assert_eq!(source.kind(), std::io::ErrorKind::Other);
-                assert_eq!(source.to_string(), "full disk");
-            }
-            other => panic!("unexpected error: {other}"),
-        }
+        let super::SessionError::StdoutFailed { source } = error else {
+            panic!("unexpected session error");
+        };
+        assert_eq!(source.kind(), std::io::ErrorKind::Other);
+        assert_eq!(source.to_string(), "full disk");
     }
 }
