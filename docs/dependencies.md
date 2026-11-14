@@ -143,7 +143,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | mlua | the extension runtime, Lua 5.4 vendored | 912 | 704 | ~0 | 23 | 785 |
 | tree-sitter, tree-sitter-bash | the shell tool's command recogniser: it parses a command and allows only listed node kinds, so anything else fails closed to `executes` | 1,324 | 1,412 | ~0 | 10 | 1,746 |
 | clap | the command line | 452 | 448 | ~0 | 17 | 782 |
-| clap_complete | the dynamic shell completion registered by `fiber completion`; Fiber pins `=4.6.11` and enables `unstable-dynamic` (`docs/invocation.md`, "Commands and flags") | 796 | 1,020 | 1,136 | 18 | 967 |
+| clap_complete | the dynamic shell completion registered by `fiber completion`; Fiber pins `=4.6.11` and enables `unstable-dynamic` (`docs/invocation.md`, "Commands and flags") | 1,064 | 1,080 | 1,248 | 20 | 968 |
 | thiserror | error types in library crates | ~0 | ~0 | ~0 | 6 | 325 |
 | signal-hook | SIGTERM, SIGINT and SIGHUP | ~0 | ~0 | ~0 | 4 | 352 |
 | ring | SHA-256, for PKCE, extension binary checksums, the content hash a repository's approvals pin, and an MCP tool's cut-short name; HMAC-SHA256, for `host.hmac_sha256`; credential fingerprints in the fake provider server; the hub's websocket handshake (SHA-1) and device-token hashes; the hub client's websocket handshake (SHA-1); secure random pairing codes and device tokens | ~0 | ~0 | ~0 | 8 | 341 |
@@ -160,7 +160,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | qrcode | the terminal QR code for `hub pair`; default features off | 160 | 256 | 336 | 1 | 360 |
 | landlock | the shell tool's Linux Landlock policy: read/write grants at spawn, ABI floor 2 | 152 | 128 | n/a | 10 | 391 |
 | seccompiler | the shell tool's Linux seccomp filter denying sockets and `io_uring_setup` | 160 | 116 | n/a | 2 | 399 |
-| all of the above together | | 9,048 | 7,892 | 5,297 | 155 | 8,290 |
+| all of the above together | | 9,072 | 8,124 | 5,249 | 157 | 8,346 |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 67,825 | 32 | 5,234 |
 | lopdf | the image child: counting a PDF's pages and cutting a page range (`docs/tools.md`, "read") | 908 | 704 | 336 | 66 | 1,320 |
 | dhat | heap profiles behind the opt-in `dhat-heap` build; never in a shipped build | not measured | not measured | not measured | not measured | not measured |
@@ -216,18 +216,20 @@ Notes:
   on macOS on October 7, 2026, with rustc 1.99.0, where its stripped binary is
   397 KiB against the empty program's 315 KiB. The together row was measured
   before flate2 was listed.
-- The clap_complete figures are the default-feature script-generation
-  workload: it generates the bash, zsh and fish scripts for a command shaped
-  like the clap row's. It includes clap: on macOS it is 1,040 KiB over the
-  clap row from the same run, and its binary 179 KiB larger. Fiber now enables
-  `unstable-dynamic` for per-Tab completion, but the probe does not enable that
-  feature, so these figures do not measure the dynamic engine or its binary
-  size. Only `fiber completion` generates a script; a session never does. The
-  clap_complete and together rows were measured on macOS on October 7, 2026,
-  with rustc 1.99.0. In that run the together binary with clap_complete peaked
-  within noise of the one without it (peak footprints of 6,048 and 6,064 KiB
-  against 5,760 and 6,128 KiB in two rounds), because its peak is the busiest
-  other workload.
+- The clap_complete figures are the static-generation workload with
+  `unstable-dynamic` enabled: it generates the bash, zsh and fish scripts
+  for a command shaped like the clap row's. It includes clap: on macOS it is
+  1,168 KiB over the clap row from the same run, and its binary 179 KiB
+  larger. The workload never runs the dynamic engine: only
+  `fiber completion` generates a script, and only a Tab request runs the
+  engine, so a session never executes this code and the figure is the linked
+  cost. The clap_complete and together rows were measured in
+  [probe run 43608603531](https://github.com/aakshintala/fiber/actions/runs/43608603531)
+  ([Linux x86_64](https://github.com/aakshintala/fiber/actions/runs/43608603531/artifacts/14119488730),
+  [Linux arm64](https://github.com/aakshintala/fiber/actions/runs/43608603531/artifacts/14118579081),
+  [macOS arm64](https://github.com/aakshintala/fiber/actions/runs/43608603531/artifacts/14119735751)),
+  rustc 1.99.1. The together row was re-measured in the same run with the
+  feature on, so its other crates' figures moved with the run.
 - jiff is built with default features off and only `std`, `tz-system` and `tzdb-zoneinfo`: it reads `/etc/localtime`, `TZ` and the system's zoneinfo database, and bundles no database. `time`, already in the tree through ratatui-widgets, is not used: its local-offset lookup does not work in a multithreaded process. jiff's figure is reading the system zone and formatting 1,000 times of day. The jiff and together rows were measured on October 8, 2026, on the runners above (run 37809842530); the together row was measured again with jiff linked, so its other crates' figures moved with the run.
 - landlock's figure is building the ABI-2 ruleset shaped like the shell tool's prepare() and applying it in a re-executed child; seccompiler's is compiling the socket-denying filter shaped like the shell tool's compile step and applying it in a re-executed child. The landlock, seccompiler and together rows were measured in [probe run 40499728352](https://github.com/aakshintala/fiber/actions/runs/40499728352) ([Linux x86_64](https://github.com/aakshintala/fiber/actions/runs/40499728352/artifacts/12732239406), [Linux arm64](https://github.com/aakshintala/fiber/actions/runs/40499728352/artifacts/12733290160), [macOS arm64](https://github.com/aakshintala/fiber/actions/runs/40499728352/artifacts/12732254451)), rustc 1.99.1. On macOS arm64 both rows report they do not build on Darwin arm64, recorded as n/a. The together row was re-measured in the same run with both crates linked on Linux, so its other crates' figures moved with the run.
 - `web_fetch` converts a page with html5ever's tokenizer feeding Fiber's own
