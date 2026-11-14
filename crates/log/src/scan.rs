@@ -5,10 +5,14 @@
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, mpsc};
+use std::thread;
+use std::time::Instant;
 
 use contract::shapes::Worktree;
 use contract::{Envelope, Seq, SessionId};
 use serde_json::Value;
+use support::clock::{Clock, Parker, Wake};
 
 use crate::{EVENTS, Error, LOCK, io_at};
 
@@ -503,6 +507,66 @@ pub(crate) fn try_lock_file(dir: &Path) -> Result<Option<File>, Error> {
         Ok(()) => Ok(Some(file)),
         Err(TryLockError::WouldBlock) => Ok(None),
         Err(TryLockError::Error(source)) => Err(Error::Io { path, source }),
+    }
+}
+
+/// Takes the session lock with a blocking kernel wait, bounded by `until`.
+/// The worker may outlive the caller when the deadline wins; takeover callers
+/// must exit on `None` so the process ends that worker.
+pub(crate) fn lock_file_until(
+    dir: &Path,
+    clock: &dyn Clock,
+    until: Instant,
+) -> Result<Option<File>, Error> {
+    if clock.now() >= until {
+        return Ok(None);
+    }
+    let path = dir.join(LOCK);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|source| Error::Io {
+            path: path.clone(),
+            source,
+        })?;
+    let (send, receive) = mpsc::channel();
+    let parker = Arc::new(Parker::new());
+    let worker_parker = Arc::clone(&parker);
+    thread::Builder::new()
+        .name("session-lock-takeover".into())
+        .spawn(move || {
+            let result = file.lock().map(|()| file);
+            if let Err(mpsc::SendError(late)) = send.send(result) {
+                // The waiter passed its deadline and left; dropping the late
+                // handle releases the lock it may have taken.
+                drop(late);
+            }
+            worker_parker.bump();
+        })
+        .map_err(|source| Error::Io {
+            path: path.clone(),
+            source,
+        })?;
+
+    let wake: Arc<dyn Wake> = parker.clone();
+    clock.subscribe(Arc::downgrade(&wake));
+    loop {
+        let seen = parker.generation();
+        if let Ok(result) = receive.try_recv() {
+            if clock.now() >= until {
+                return Ok(None);
+            }
+            return result
+                .map(Some)
+                .map_err(|source| Error::Io { path, source });
+        }
+        if clock.now() >= until {
+            return Ok(None);
+        }
+        parker.park(clock, Some(until), seen);
     }
 }
 

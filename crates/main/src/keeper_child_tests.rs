@@ -136,7 +136,7 @@ fn accept_error_backoff_doubles_caps_and_resets_after_accept() {
             expected,
             &Deadline::after(Duration::from_secs(10)),
         );
-        expected = expected.saturating_mul(2).min(Duration::from_secs(1));
+        expected = expected.saturating_mul(2).min(super::ACCEPT_BACKOFF_MAX);
     }
     // Nine backoffs include 10, 20, 40, 80, 160, 320, 640, 1000, 1000 ms.
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(3270));
@@ -203,7 +203,9 @@ fn candidate_spawn_failure_drops_stream_and_acceptor_handles_next_connection() {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(reader);
         let frame = crate::keeper::read_reply(&mut reader).ok().flatten();
-        let _ = send.send(frame);
+        if let Err(mpsc::SendError(late)) = send.send(frame) {
+            drop(late);
+        }
     });
     let mut peer = Peer { writer, frames };
     say(
@@ -949,8 +951,8 @@ fn keeper_waits_for_dying_session_lock() {
     let (held, held_rx) = ready_signal();
     let hooks = super::Hooks {
         held: Some(held),
-        takeover_waiter_thread: Some(Box::new(move |thread| {
-            let _ = thread_tx.send(thread);
+        takeover_waiter_thread: Some(Box::new(move |thread| match thread_tx.send(thread) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
         })),
         ..super::Hooks::default()
     };
@@ -1995,6 +1997,7 @@ fn lock_race(old_wins: bool) {
     let deadline = || Deadline::after(Duration::from_secs(10));
     let (old_held, old_held_rx) = ready_signal();
     let (old_before, old_gate) = barrier();
+    let (old_waiter_tx, old_waiter_rx) = mpsc::channel();
     let (mut old, _) = serve_keeper_with(
         "keeper-lock-race",
         id.clone(),
@@ -2002,6 +2005,11 @@ fn lock_race(old_wins: bool) {
         super::Hooks {
             held: Some(old_held),
             before_open: Some(old_before),
+            takeover_waiter_thread: Some(Box::new(move |thread| {
+                match old_waiter_tx.send(thread) {
+                    Ok(()) | Err(mpsc::SendError(_)) => {}
+                }
+            })),
             ..super::Hooks::default()
         },
         None,
@@ -2011,6 +2019,7 @@ fn lock_race(old_wins: bool) {
     adopt_call(&old, "old", "j_old");
     crash(&mut old);
     deadline().recv_or_fail(&old_held_rx, "the old keeper to hold the log");
+    deadline().recv_or_fail(&old_waiter_rx, "the first old takeover waiter");
     let mut peer = connect(&old);
     identify(&mut peer, &id);
     assert_eq!(handover(&mut peer).len(), 1);
@@ -2019,6 +2028,7 @@ fn lock_race(old_wins: bool) {
     let session = log::Log::open(&old.sessions, id.clone(), clock.clone()).expect("session lock");
     let (fresh_held, fresh_held_rx) = ready_signal();
     let (fresh_before, fresh_gate) = barrier();
+    let (fresh_waiter_tx, fresh_waiter_rx) = mpsc::channel();
     let (mut fresh, _) = serve_keeper_with(
         "keeper-lock-race",
         id.clone(),
@@ -2026,6 +2036,11 @@ fn lock_race(old_wins: bool) {
         super::Hooks {
             held: Some(fresh_held),
             before_open: Some(fresh_before),
+            takeover_waiter_thread: Some(Box::new(move |thread| {
+                match fresh_waiter_tx.send(thread) {
+                    Ok(()) | Err(mpsc::SendError(_)) => {}
+                }
+            })),
             ..super::Hooks::default()
         },
         Some(&old),
@@ -2036,6 +2051,8 @@ fn lock_race(old_wins: bool) {
     old_gate.armed.store(true, Ordering::Release);
     fresh_gate.armed.store(true, Ordering::Release);
     // The session dies: both keepers see their connection end.
+    let old_start = clock.now();
+    let fresh_start = clock.now();
     hang_up(peer);
     crash(&mut fresh);
     deadline().recv_or_fail(&old_gate.arrived, "the old keeper to reach the lock");
@@ -2050,6 +2067,19 @@ fn lock_race(old_wins: bool) {
     winner_gate.go.send(()).expect("release the winner");
     deadline().recv_or_fail(winner_held, "the winner to hold the log");
     loser_gate.go.send(()).expect("release the loser");
+    let (waiter_rx, start) = if old_wins {
+        (&fresh_waiter_rx, fresh_start)
+    } else {
+        (&old_waiter_rx, old_start)
+    };
+    let waiter = deadline().recv_or_fail(waiter_rx, "the losing takeover waiter");
+    let until = start + super::TAKEOVER_LOCK_WAIT;
+    clock.advance_when_parked(
+        Some(until),
+        Some(waiter),
+        super::TAKEOVER_LOCK_WAIT,
+        &deadline(),
+    );
     deadline()
         .recv_or_fail(&loser.result, "the loser to exit")
         .expect("the loser exits cleanly");

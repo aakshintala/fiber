@@ -257,6 +257,7 @@ struct Candidate {
 
 /// The predecessor closes the lifeline before the kernel releases its flock.
 pub(crate) const TAKEOVER_LOCK_WAIT: Duration = Duration::from_secs(5);
+pub(super) const ACCEPT_BACKOFF_MAX: Duration = Duration::from_secs(1);
 
 /// Test-only pause and notification points, each with the race it forces.
 #[cfg(test)]
@@ -397,13 +398,14 @@ impl Runtime {
                     if let Some(report) = &self.hooks.takeover_waiter_thread {
                         report(std::thread::current().id());
                     }
-                    match Log::open_as(
+                    match Log::open_as_takeover(
                         sessions,
                         self.id.clone(),
                         Arc::clone(&self.clock),
                         &format!("keeper {}", std::process::id()),
+                        self.clock.now() + TAKEOVER_LOCK_WAIT,
                     ) {
-                        Ok(held) => {
+                        Ok(Some(held)) => {
                             #[cfg(test)]
                             if let Some(hook) = &self.hooks.before_start_append {
                                 hook(&held);
@@ -470,6 +472,11 @@ impl Runtime {
                             if let Some(held) = &self.hooks.held {
                                 held();
                             }
+                        }
+                        Ok(None) => {
+                            self.discard();
+                            let steps = lock(&self.supervisor).lock_lost();
+                            return self.apply(log, steps);
                         }
                         Err(error @ log::Error::Held { .. }) => {
                             eprintln!("FIBER4351_TRACE Log::open_as Err={error:?}");
@@ -987,7 +994,7 @@ impl Runtime {
                     let seen = backoff.generation();
                     let until = runtime.clock.now() + delay;
                     backoff.park(&*runtime.clock, Some(until), seen);
-                    delay = delay.saturating_mul(2).min(Duration::from_secs(1));
+                    delay = delay.saturating_mul(2).min(ACCEPT_BACKOFF_MAX);
                     continue;
                 };
                 delay = Duration::from_millis(10);
