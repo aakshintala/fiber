@@ -1709,13 +1709,17 @@ fn an_image_over_50_megapixels_fails_unsupported_file_with_the_pixel_count() {
     assert!(result["content"].is_string());
 }
 
-/// Configuration with a compaction trigger of five tokens: any reply's prompt
-/// passes it.
-fn tiny_trigger(setup: &Setup) {
+/// A 1,000-token trigger, above the fresh estimate and below the scripted
+/// reply's 1,203-token measured context.
+fn compaction_trigger(setup: &Setup) {
     write(
         &setup.home().join("config.json"),
-        &json!({"model": "fake/m", "compaction": {"tokens": 5}}),
+        &json!({"model": "fake/m", "compaction": {"tokens": 1000}}),
     );
+}
+
+fn above_trigger_stream(events: &[Value]) -> Response {
+    fakes::wire::stream_with_usage(events, json!({"input_tokens": 1200, "output_tokens": 3}))
 }
 
 /// A turn whose first reply reads a file, then compacts on the five-token
@@ -1762,7 +1766,7 @@ fn compaction_configuration_reaches_a_new_session() {
     let setup = Setup::new_with_started_deadline();
     fs::write(setup.workspace().join("note.txt"), "alpha line\n").unwrap();
     let server = ProviderServer::start([
-        stream(&[function_call(
+        above_trigger_stream(&[function_call(
             "call_read",
             "read",
             &json!({"path": "note.txt"}),
@@ -1772,7 +1776,7 @@ fn compaction_configuration_reaches_a_new_session() {
     ])
     .unwrap();
     setup.provider_with_defaults(&server);
-    tiny_trigger(&setup);
+    compaction_trigger(&setup);
 
     let run = setup.tools_run(&["ask", "read the note"]);
 
@@ -1793,7 +1797,7 @@ fn compaction_configuration_reaches_a_new_session() {
     );
     assert_eq!(
         of_kind(&run, "preamble_built")[0]["payload"]["trigger_at"],
-        5
+        1000
     );
     assert_eq!(of_kind(&run, "compaction_started").len(), 1);
     assert_eq!(
@@ -1809,7 +1813,7 @@ fn compaction_configuration_reaches_a_resumed_session() {
     fs::write(setup.workspace().join("note.txt"), "alpha line\n").unwrap();
     let server = ProviderServer::start([
         hello(),
-        stream(&[function_call(
+        above_trigger_stream(&[function_call(
             "call_read",
             "read",
             &json!({"path": "note.txt"}),
@@ -1819,7 +1823,7 @@ fn compaction_configuration_reaches_a_resumed_session() {
     ])
     .unwrap();
     setup.provider_with_defaults(&server);
-    tiny_trigger(&setup);
+    compaction_trigger(&setup);
     let first = setup.tools_run(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     // One reply, and no second step: nothing compacted yet.
@@ -1858,7 +1862,7 @@ fn compaction_configuration_reaches_a_resumed_session() {
     );
     assert_eq!(
         of_kind(&second, "preamble_built")[0]["payload"]["trigger_at"],
-        5
+        1000
     );
     assert_eq!(of_kind(&second, "compaction_started").len(), 1);
     assert_eq!(server.requests().len(), 4);
