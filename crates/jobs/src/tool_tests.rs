@@ -2063,8 +2063,122 @@ fn detached_stop_waits_for_the_supervisor_after_the_grace_period() {
             .success(),
         "SIGKILL stopped the child after the grace period"
     );
-    assert!(group_empties(pgid, Deadline::after(MUST_SUCCEED_WITHIN)));
+    assert!(
+        detached_group_settled(pgid, Deadline::after(MUST_SUCCEED_WITHIN)),
+        "no non-zombie member of the stopped group still runs"
+    );
     watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
+}
+
+/// Waits up to `deadline` for the named fact that no non-zombie member of the stopped group still runs; it does not wait for quiet.
+/// Settles on the `ps` member listing (see RULING-4817-S1): no listed members, or only zombies.
+fn detached_group_settled(pgid: u32, deadline: Deadline) -> bool {
+    let want = pgid.to_string();
+    let (_hold, hold) = mpsc::channel::<()>();
+    loop {
+        let (listed, listing) = mpsc::channel();
+        thread::spawn(move || {
+            let output = Command::new("ps")
+                .args(["-e", "-o", "pgid=,stat=,comm="])
+                .output();
+            match listed.send(output) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        if let Some(true) = listing_settled(deadline.recv(&listing), &want) {
+            return true;
+        }
+        if deadline.left().is_zero() {
+            return false;
+        }
+        // Mirrors fakes::POLL: the same 10 ms probe interval, spelled as a literal
+        // so budget-bounds can read the bound below 60 s.
+        match Deadline::after(Duration::from_millis(10)).recv(&hold) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+}
+
+/// Reads one `ps` answer for `want`: `Some` settled on an answer, `None` when the
+/// receive missed its deadline, so a hung `ps` keeps the wait going instead of settling it.
+fn listing_settled(
+    received: Result<std::io::Result<std::process::Output>, mpsc::RecvTimeoutError>,
+    want: &str,
+) -> Option<bool> {
+    match received {
+        Ok(output) => {
+            let output = output.expect("ps lists the processes");
+            Some(
+                output.status.success()
+                    && !detached_group_runs(&String::from_utf8_lossy(&output.stdout), want),
+            )
+        }
+        Err(_) => None,
+    }
+}
+
+fn detached_group_runs(text: &str, want: &str) -> bool {
+    text.lines().any(|line| {
+        let mut columns = line.split_whitespace();
+        columns.next() == Some(want) && !columns.next().is_some_and(|state| state.starts_with('Z'))
+    })
+}
+
+#[test]
+fn detached_group_runs_reads_only_running_members_of_the_group() {
+    // A zombie grandchild is settled: dead, awaiting init's reap.
+    assert!(!detached_group_runs("1234 Z sleep\n", "1234"));
+    assert!(!detached_group_runs("1234 Z+ sleep\n", "1234"));
+    // No members listed at all is settled.
+    assert!(!detached_group_runs("", "1234"));
+    assert!(!detached_group_runs("5678 S sleep\n", "1234"));
+    // A member that still runs keeps the wait going.
+    assert!(detached_group_runs("1234 S sleep\n", "1234"));
+    assert!(detached_group_runs("1234 R sleep\n", "1234"));
+    assert!(detached_group_runs("1234 Ss sh\n1234 Z sleep\n", "1234"));
+    // An unexpected shape never settles early.
+    assert!(detached_group_runs("1234\n", "1234"));
+}
+
+#[test]
+fn listing_settled_keeps_waiting_when_ps_misses_its_deadline() {
+    assert_eq!(
+        listing_settled(Err(mpsc::RecvTimeoutError::Timeout), "1234"),
+        None
+    );
+}
+
+#[test]
+#[should_panic(expected = "ps lists the processes")]
+fn listing_settled_reports_a_ps_spawn_failure() {
+    let failed: std::io::Result<std::process::Output> = Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "ps missing",
+    ));
+    let _ = listing_settled(Ok(failed), "1234");
+}
+
+#[test]
+fn listing_settled_reads_only_running_members_as_unsettled() {
+    fn answered(
+        stdout: &[u8],
+    ) -> Result<std::io::Result<std::process::Output>, mpsc::RecvTimeoutError> {
+        use std::os::unix::process::ExitStatusExt as _;
+        Ok(Ok(std::process::Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: stdout.to_vec(),
+            stderr: Vec::new(),
+        }))
+    }
+    assert_eq!(
+        listing_settled(answered(b"1234 S sleep\n"), "1234"),
+        Some(false)
+    );
+    assert_eq!(
+        listing_settled(answered(b"1234 Z sleep\n"), "1234"),
+        Some(true)
+    );
+    assert_eq!(listing_settled(answered(b""), "1234"), Some(true));
 }
 
 #[test]
