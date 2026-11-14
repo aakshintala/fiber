@@ -55,10 +55,13 @@ impl contract::keeper::CommandHost for IdleHost {
                 match stdout.read(&mut bytes) {
                     Ok(0) | Err(_) => break,
                     Ok(count) => {
+                        let Some(output) = bytes.get(..count) else {
+                            break;
+                        };
                         if out_events
                             .send(contract::keeper::HostEvent::Output {
                                 stream: contract::keeper::Stream::Out,
-                                bytes: bytes[..count].to_vec(),
+                                bytes: output.to_vec(),
                             })
                             .is_err()
                         {
@@ -70,7 +73,9 @@ impl contract::keeper::CommandHost for IdleHost {
         });
         std::thread::spawn(move || {
             if let Ok(status) = child.wait() {
-                let _ = reader.join();
+                if reader.join().is_err() {
+                    return;
+                }
                 let _sent =
                     events.send(contract::keeper::HostEvent::Exit(contract::keeper::Exit {
                         code: status.code(),
