@@ -227,6 +227,10 @@ impl Fixture {
         DelegateSpawn {
             resolve: resolve(),
             wiring: crate::DelegateWiring {
+                host: crate::delegate::test_rig::test_host(
+                    Arc::new(std::sync::Mutex::new(Vec::new())),
+                    Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                ),
                 create: crate::support::no_creation(),
                 finish: crate::support::clean_finish(),
                 depth: 0,

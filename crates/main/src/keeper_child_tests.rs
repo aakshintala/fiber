@@ -25,6 +25,39 @@ fn runtime(
 }
 
 #[test]
+fn socket_pair_stdin_reaches_the_child_and_keeps_the_peer_in_the_spawn_result() {
+    let spec = Spawn {
+        id: "delegate".into(),
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), "read value; printf '%s' \"$value\"".into()],
+        cwd: std::env::temp_dir(),
+        env: Vec::new(),
+        stdin: HostStdin::SocketPair,
+        timeout_ms: None,
+        output_cap: 1024,
+        sandbox: None,
+    };
+    let (mut child, listing, mut streams) = tools::keeper_spawn(&spec).expect("spawn delegate");
+    let mut lifeline = streams
+        .lifeline
+        .take()
+        .expect("keeper owns socketpair peer");
+    lifeline
+        .write_all(b"ready\n")
+        .expect("write through lifeline");
+    drop(lifeline);
+    let mut output = String::new();
+    streams
+        .read
+        .read_to_string(&mut output)
+        .expect("read child output");
+    let status = child.wait().expect("wait for child");
+    assert!(status.success());
+    assert_eq!(output, "ready");
+    support::group::live().unlist(listing);
+}
+
+#[test]
 fn dropping_a_keeper_log_unlinks_its_socket_and_releases_its_lock() {
     let home = fakes::TempDir::new("keeper-socket-release");
     let sessions = home.path().join("projects/p/sessions");

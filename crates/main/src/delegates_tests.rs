@@ -2386,6 +2386,93 @@ fn child_guard(rig: &ServiceRig) -> fakes::Watchdog {
     fakes::Watchdog::group(pid)
 }
 
+struct TestCommandHost(Mutex<std::collections::HashMap<String, u32>>);
+
+impl contract::keeper::CommandHost for TestCommandHost {
+    fn start(
+        &self,
+        spec: contract::keeper::Spawn,
+        events: std::sync::mpsc::SyncSender<contract::keeper::HostEvent>,
+    ) -> Result<contract::keeper::Started, contract::keeper::HostError> {
+        use std::io::Read as _;
+        use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
+        let id = spec.id.clone();
+        let mut command = std::process::Command::new(spec.program);
+        command.args(spec.args).current_dir(spec.cwd).envs(spec.env);
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped());
+        command.process_group(0);
+        let mut child = command
+            .spawn()
+            .map_err(|error| contract::keeper::HostError {
+                id: id.clone(),
+                io: error.to_string(),
+            })?;
+        let pgid = child.id();
+        self.0.lock().unwrap().insert(id, pgid);
+        let mut stdout = child.stdout.take().expect("stdout was piped");
+        let out_events = events.clone();
+        let reader = std::thread::spawn(move || {
+            let mut bytes = [0; 8192];
+            loop {
+                match stdout.read(&mut bytes) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => {
+                        if out_events
+                            .send(contract::keeper::HostEvent::Output {
+                                stream: contract::keeper::Stream::Out,
+                                bytes: bytes[..count].to_vec(),
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        std::thread::spawn(move || {
+            if let Ok(status) = child.wait() {
+                let _ = reader.join();
+                let _sent =
+                    events.send(contract::keeper::HostEvent::Exit(contract::keeper::Exit {
+                        code: status.code(),
+                        signal: status.signal(),
+                        timed_out: false,
+                        output_cap: false,
+                    }));
+            }
+        });
+        Ok(contract::keeper::Started { pgid })
+    }
+
+    fn stop(&self, id: &str) -> bool {
+        let Some(pgid) = self.0.lock().unwrap().get(id).copied() else {
+            return false;
+        };
+        support::group::signal(pgid, rustix::process::Signal::TERM).is_ok()
+    }
+
+    fn write(&self, id: &str, _text: &str) -> Result<(), contract::keeper::HostError> {
+        Err(contract::keeper::HostError {
+            id: id.into(),
+            io: "test host has no terminal".into(),
+        })
+    }
+
+    fn adopt(
+        &self,
+        _id: &str,
+        _job_id: &contract::JobId,
+        _output_path: &std::path::Path,
+        _errors_path: Option<&std::path::Path>,
+        _lines: bool,
+    ) -> Result<(), contract::keeper::HostError> {
+        Ok(())
+    }
+}
+
 fn service_rig(depth: u32) -> ServiceRig {
     let dir = fakes::TempDir::new("fiber-delegates-service");
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
@@ -2432,6 +2519,9 @@ fn service_rig(depth: u32) -> ServiceRig {
     );
     delegates.launch = launch;
     delegates.depth = depth;
+    delegates = delegates.with_command_host(Arc::new(TestCommandHost(Mutex::new(
+        std::collections::HashMap::new(),
+    ))));
     ServiceRig {
         _dir: dir,
         delegates,

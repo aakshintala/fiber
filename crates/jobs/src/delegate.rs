@@ -72,6 +72,8 @@ pub struct DelegateSpawn {
 /// The launch and lifecycle wiring shared by delegate spawn and fork.
 #[derive(Clone)]
 pub struct DelegateWiring {
+    /// This session's keeper for delegated process starts.
+    pub host: Arc<dyn contract::keeper::CommandHost>,
     /// This session's depth in the delegate tree.
     pub depth: u32,
     /// The session's jobs.
@@ -610,17 +612,82 @@ impl DelegateWiring {
                     self.registry.timing().cloned(),
                 );
                 let runner = runner.with_worktree(worktree_run);
-                let (mut child, listing) = match runner.spawn(&self.launch, &launched) {
+                let command = (self.launch)(&launched);
+                let program = PathBuf::from(command.get_program());
+                let args = command
+                    .get_args()
+                    .map(|arg| {
+                        arg.to_str().map(str::to_owned).ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "delegate argument is not UTF-8",
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|source| JobsError::SpawnFailed { source })?;
+                let env = command
+                    .get_envs()
+                    .map(|(key, value)| {
+                        let key = key.to_str().ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "delegate environment key is not UTF-8",
+                            )
+                        })?;
+                        let value = value.ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "delegate environment removal is unsupported",
+                            )
+                        })?;
+                        let value = value.to_str().ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "delegate environment value is not UTF-8",
+                            )
+                        })?;
+                        Ok((key.to_owned(), value.to_owned()))
+                    })
+                    .collect::<Result<Vec<_>, std::io::Error>>()
+                    .map_err(|source| JobsError::SpawnFailed { source })?;
+                let host_id = run::mint_command_id();
+                let spec = contract::keeper::Spawn {
+                    id: host_id.clone(),
+                    program,
+                    args,
+                    cwd: command
+                        .get_current_dir()
+                        .unwrap_or(&launched.workspace)
+                        .to_path_buf(),
+                    env,
+                    stdin: contract::keeper::HostStdin::SocketPair,
+                    timeout_ms: timeout
+                        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)),
+                    output_cap: self.cap,
+                    sandbox: None,
+                };
+                let (sender, events) =
+                    std::sync::mpsc::sync_channel(contract::keeper::HOST_EVENT_QUEUE);
+                let started = match self.host.start(spec, sender) {
                     Ok(started) => started,
-                    Err(source) => {
+                    Err(error) => {
                         runner.end_worktree();
-                        return Err(JobsError::SpawnFailed { source });
+                        return Err(JobsError::SpawnFailed {
+                            source: std::io::Error::other(error.to_string()),
+                        });
                     }
                 };
-                let identity = match run::process_identity(child.id()) {
+                runner.set_hosted(Arc::clone(&self.host), host_id.clone(), started.pgid);
+                let identity = match run::process_identity(started.pgid) {
                     Ok(identity) => identity,
                     Err(source) => {
-                        let source = process_identity_cleanup(&mut child, source);
+                        let _stopped = self.host.stop(&host_id);
+                        for event in events {
+                            if matches!(event, contract::keeper::HostEvent::Exit(_)) {
+                                break;
+                            }
+                        }
                         runner.end_worktree();
                         return Err(JobsError::SpawnFailed { source });
                     }
@@ -671,7 +738,14 @@ impl DelegateWiring {
                         delegate.clone(),
                     )
                 };
-                std::thread::spawn(move || runner.drive(child, Some(listing), finish));
+                if self
+                    .host
+                    .adopt(&host_id, &job_id, Path::new(&output_path), None, false)
+                    .is_err()
+                {
+                    runner.stop();
+                }
+                std::thread::spawn(move || runner.drive_host(events, finish));
                 Ok((
                     Started {
                         job_id,
@@ -787,12 +861,15 @@ pub(crate) mod test_rig {
         pub seen_actions: Arc<std::sync::Mutex<Vec<Option<contract::ActionId>>>>,
         pub launch: Launch,
         pub watch: Watch,
+        pub host_actions: Arc<std::sync::Mutex<Vec<&'static str>>>,
+        pub fail_adopt: Arc<std::sync::atomic::AtomicBool>,
     }
 
     impl Rig {
         pub(crate) fn wiring(&self) -> super::DelegateWiring {
             let sessions = self.sessions.clone();
             super::DelegateWiring {
+                host: test_host(Arc::clone(&self.host_actions), Arc::clone(&self.fail_adopt)),
                 depth: 0,
                 registry: Arc::clone(&self.registry),
                 parent: contract::SessionId("s_parent".into()),
@@ -809,6 +886,118 @@ pub(crate) mod test_rig {
                 finish: crate::support::clean_finish(),
             }
         }
+    }
+
+    pub(crate) fn test_host(
+        actions: Arc<std::sync::Mutex<Vec<&'static str>>>,
+        fail_adopt: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Arc<dyn contract::keeper::CommandHost> {
+        struct TestHost {
+            pgids: std::sync::Mutex<std::collections::HashMap<String, u32>>,
+            actions: Arc<std::sync::Mutex<Vec<&'static str>>>,
+            fail_adopt: Arc<std::sync::atomic::AtomicBool>,
+        }
+        impl contract::keeper::CommandHost for TestHost {
+            fn start(
+                &self,
+                spec: contract::keeper::Spawn,
+                events: std::sync::mpsc::SyncSender<contract::keeper::HostEvent>,
+            ) -> Result<contract::keeper::Started, contract::keeper::HostError> {
+                use std::io::Read as _;
+                use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
+                let id = spec.id.clone();
+                self.actions.lock().unwrap().push("start");
+                let mut command = Command::new(spec.program);
+                command.args(spec.args).current_dir(spec.cwd).envs(spec.env);
+                command
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped());
+                command.process_group(0);
+                let mut child = command
+                    .spawn()
+                    .map_err(|error| contract::keeper::HostError {
+                        id: id.clone(),
+                        io: error.to_string(),
+                    })?;
+                let pgid = child.id();
+                self.pgids.lock().unwrap().insert(id.clone(), pgid);
+                let mut stdout = child.stdout.take().expect("stdout was piped");
+                let out_events = events.clone();
+                let reader = std::thread::spawn(move || {
+                    let mut bytes = [0u8; 8192];
+                    loop {
+                        match stdout.read(&mut bytes) {
+                            Ok(0) | Err(_) => break,
+                            Ok(count) => {
+                                if out_events
+                                    .send(contract::keeper::HostEvent::Output {
+                                        stream: contract::keeper::Stream::Out,
+                                        bytes: bytes[..count].to_vec(),
+                                    })
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                });
+                let actions = Arc::clone(&self.actions);
+                std::thread::spawn(move || {
+                    if let Ok(status) = child.wait() {
+                        let _ = reader.join();
+                        actions.lock().unwrap().push("exit");
+                        let code = status.code();
+                        let signal = status.signal();
+                        let _sent = events.send(contract::keeper::HostEvent::Exit(
+                            contract::keeper::Exit {
+                                code,
+                                signal,
+                                timed_out: false,
+                                output_cap: false,
+                            },
+                        ));
+                    }
+                });
+                Ok(contract::keeper::Started { pgid })
+            }
+            fn stop(&self, id: &str) -> bool {
+                self.actions.lock().unwrap().push("stop");
+                let Some(pgid) = self.pgids.lock().unwrap().get(id).copied() else {
+                    return false;
+                };
+                support::group::signal(pgid, rustix::process::Signal::TERM).is_ok()
+            }
+            fn write(&self, id: &str, _text: &str) -> Result<(), contract::keeper::HostError> {
+                Err(contract::keeper::HostError {
+                    id: id.into(),
+                    io: "test host has no terminal".into(),
+                })
+            }
+            fn adopt(
+                &self,
+                id: &str,
+                _job_id: &contract::JobId,
+                _output_path: &std::path::Path,
+                _errors_path: Option<&std::path::Path>,
+                _lines: bool,
+            ) -> Result<(), contract::keeper::HostError> {
+                self.actions.lock().unwrap().push("adopt");
+                if self.fail_adopt.load(Ordering::SeqCst) {
+                    Err(contract::keeper::HostError {
+                        id: id.into(),
+                        io: "adopt failed".into(),
+                    })
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        Arc::new(TestHost {
+            pgids: std::sync::Mutex::new(std::collections::HashMap::new()),
+            actions,
+            fail_adopt,
+        })
     }
 
     pub(crate) fn rig() -> Rig {
@@ -863,6 +1052,8 @@ pub(crate) mod test_rig {
             seen_actions: Arc::new(std::sync::Mutex::new(Vec::new())),
             launch,
             watch,
+            host_actions: Arc::new(std::sync::Mutex::new(Vec::new())),
+            fail_adopt: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 

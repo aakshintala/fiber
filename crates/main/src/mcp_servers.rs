@@ -380,12 +380,7 @@ pub(crate) fn session_tools(
 > {
     pending.join()?;
     let images = Arc::clone(&pending.images);
-    let keeper = crate::keeper::Host::session(
-        fiber.clone(),
-        home.to_path_buf(),
-        delegates.session().clone(),
-        Arc::clone(clock),
-    );
+    let keeper = delegates.host();
     let (mut tools, mut infos, driver, forget, images) = crate::builtin::builtin_timed(
         fiber,
         home,

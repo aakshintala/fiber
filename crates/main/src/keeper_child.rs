@@ -96,6 +96,7 @@ struct Process {
     state: Mutex<State>,
     cv: Condvar,
     input: Option<contract::jobs::Input>,
+    _lifeline: Option<UnixStream>,
 }
 impl Wake for Process {
     fn wake(&self) {
@@ -448,6 +449,7 @@ impl Runtime {
         let process = Arc::new(Process {
             pgid: child.id(),
             input: streams.input,
+            _lifeline: streams.lifeline,
             state: Mutex::new(State {
                 sink: Sink::Control,
                 adoption: None,

@@ -93,6 +93,8 @@ pub enum HostStdin {
     Null,
     /// A pseudo-terminal owned by the keeper.
     Pty,
+    /// A Unix socketpair whose peer remains open in the keeper.
+    SocketPair,
 }
 
 /// A started process's group, for read-only liveness probes.

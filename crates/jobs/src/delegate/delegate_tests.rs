@@ -647,6 +647,11 @@ fn a_good_call_returns_its_receipt_with_started_records() {
     // before any assertion that could fail and strand it.
     let _watchdog = child_group(&rig);
     assert!(output.error.is_none());
+    assert_eq!(
+        *rig.host_actions.lock().unwrap(),
+        ["start", "adopt"],
+        "the host start precedes the adoption",
+    );
     // The call records its start; the runner reports the end later, so
     // the answer carries exactly the two start records.
     let [
@@ -692,6 +697,24 @@ fn text_of(part: &contract::shapes::ContentPart) -> String {
 }
 
 #[test]
+fn adopt_failure_stops_the_hosted_child_and_reports_after_exit() {
+    let rig = rig();
+    rig.fail_adopt.store(true, Ordering::SeqCst);
+    let output = tool(&rig).run(
+        &arguments("fiber:fake/m"),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(output.error.is_none());
+    assert_cancelled_notice(&rig);
+    assert_eq!(
+        *rig.host_actions.lock().unwrap(),
+        ["start", "adopt", "stop", "exit"],
+        "failed adoption stops and drains through the hosted exit",
+    );
+}
+
+#[test]
 fn a_spawn_error_fails_io_failed_with_no_job() {
     let rig = rig();
     let failing: Launch = Arc::new(|_: &Launched| Command::new("/nonexistent/fiber-test-binary"));
@@ -710,6 +733,7 @@ fn a_spawn_error_fails_io_failed_with_no_job() {
         "the model sees why: {text}"
     );
     assert!(output.jobs.is_empty());
+    assert_eq!(*rig.host_actions.lock().unwrap(), ["start"]);
     assert_eq!(rig.registry.list_text(), "No jobs.\n");
     assert!(
         rig.inbox.try_recv().is_err(),

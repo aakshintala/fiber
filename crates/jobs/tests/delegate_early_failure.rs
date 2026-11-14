@@ -23,6 +23,90 @@ use fakes::clock::FakeClock;
 use fakes::{CancelToken, Deadline, Recorder, TempDir, Watchdog};
 use jobs::{DelegateSpawn, JobsTool, Registry, Resolve};
 
+struct IdleHost;
+
+impl contract::keeper::CommandHost for IdleHost {
+    fn start(
+        &self,
+        spec: contract::keeper::Spawn,
+        events: std::sync::mpsc::SyncSender<contract::keeper::HostEvent>,
+    ) -> Result<contract::keeper::Started, contract::keeper::HostError> {
+        use std::io::Read as _;
+        use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
+        let id = spec.id.clone();
+        let mut command = std::process::Command::new(spec.program);
+        command.args(spec.args).current_dir(spec.cwd).envs(spec.env);
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped());
+        command.process_group(0);
+        let mut child = command
+            .spawn()
+            .map_err(|error| contract::keeper::HostError {
+                id: id.clone(),
+                io: error.to_string(),
+            })?;
+        let pgid = child.id();
+        let mut stdout = child.stdout.take().expect("stdout was piped");
+        let out_events = events.clone();
+        let reader = std::thread::spawn(move || {
+            let mut bytes = [0u8; 8192];
+            loop {
+                match stdout.read(&mut bytes) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => {
+                        if out_events
+                            .send(contract::keeper::HostEvent::Output {
+                                stream: contract::keeper::Stream::Out,
+                                bytes: bytes[..count].to_vec(),
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        std::thread::spawn(move || {
+            if let Ok(status) = child.wait() {
+                let _ = reader.join();
+                let _sent =
+                    events.send(contract::keeper::HostEvent::Exit(contract::keeper::Exit {
+                        code: status.code(),
+                        signal: status.signal(),
+                        timed_out: false,
+                        output_cap: false,
+                    }));
+            }
+        });
+        Ok(contract::keeper::Started { pgid })
+    }
+
+    fn stop(&self, _id: &str) -> bool {
+        false
+    }
+
+    fn write(&self, id: &str, _text: &str) -> Result<(), contract::keeper::HostError> {
+        Err(contract::keeper::HostError {
+            id: id.into(),
+            io: "idle host".into(),
+        })
+    }
+
+    fn adopt(
+        &self,
+        id: &str,
+        _job_id: &contract::JobId,
+        _output_path: &std::path::Path,
+        _errors_path: Option<&std::path::Path>,
+        _lines: bool,
+    ) -> Result<(), contract::keeper::HostError> {
+        let _ = id;
+        Ok(())
+    }
+}
+
 fn args(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
     use serde_json::Value;
     match value {
@@ -84,6 +168,7 @@ fn a_delegate_failing_before_its_session_reports_that_failure_and_no_log() {
     let watch: jobs::Watch = Arc::new(|_, _, _| Err(std::io::Error::other("refused")));
     let spawn = DelegateSpawn {
         wiring: jobs::DelegateWiring {
+            host: Arc::new(IdleHost),
             create: Arc::new(
                 #[allow(
                     clippy::result_large_err,
