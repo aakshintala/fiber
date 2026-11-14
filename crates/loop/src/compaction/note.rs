@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use contract::events::{
-    CompactionCompleted, CompactionStarted, CompactionTrigger, ContextAdded, Event, Note, Outcome,
-    TurnCompleted, TurnOutcome,
+    CompactionCompleted, CompactionStarted, CompactionTrigger, ContextAdded, Event, Note, Notice,
+    Outcome, TurnCompleted, TurnOutcome,
 };
 use contract::provider::{Finish, Input, ModelRequest, Reply, ReplyAction};
 use contract::shapes::Failure;
@@ -282,7 +282,9 @@ impl Loop {
             .then(|| self.diag.timed(contract::diag::Op::TurnRequest))
             .flatten();
         let mut full = if trigger == CompactionTrigger::Overflow {
-            self.moved_results()
+            let (conversation, notices) = self.moved_results();
+            let _ = notices;
+            conversation
         } else {
             self.conversation.clone()
         };
@@ -486,8 +488,9 @@ impl Loop {
     /// result after the last reply input is replaced by a line naming its
     /// artifact, written here where the result has none. A result whose
     /// artifact cannot be written stays inline; the log holds it in full.
-    fn moved_results(&self) -> Vec<Input> {
+    fn moved_results(&self) -> (Vec<Input>, Vec<Notice>) {
         let mut conversation = self.conversation.clone();
+        let mut notices = Vec::new();
         // From the end back to the last reply input: what followed the reply.
         let after_reply = conversation.iter_mut().rev().take_while(|input| {
             !matches!(
@@ -499,17 +502,22 @@ impl Loop {
             if let Input::ToolResult {
                 action_id, text, ..
             } = input
-                && let Some(path) = self.artifact_of(action_id, text)
             {
-                *text = fill(message("moved-result"), &[("path", path.as_str())]);
+                let (path, notice) = self.artifact_of(action_id, text);
+                if let Some(path) = path {
+                    *text = fill(message("moved-result"), &[("path", path.as_str())]);
+                }
+                if let Some(notice) = notice {
+                    notices.push(notice);
+                }
             }
         }
-        conversation
+        (conversation, notices)
     }
 
     /// The path of the full text of a tool result: its artifact, or one
     /// written now, named after the call's action.
-    fn artifact_of(&self, action: &ActionId, text: &str) -> Option<String> {
+    fn artifact_of(&self, action: &ActionId, text: &str) -> (Option<String>, Option<Notice>) {
         let relative = match self
             .compaction
             .carry
@@ -519,15 +527,27 @@ impl Loop {
         {
             Some((_, path)) => path.clone(),
             None => {
-                self.log
-                    .write_artifact(&format!("{}.txt", action.0), text.as_bytes())
-                    .ok()?
-                    .0
+                let name = format!("{}.txt", action.0);
+                #[cfg(test)]
+                let artifact = if crate::timing_tests::take_fail_artifact_write() {
+                    Err(crate::timing_tests::artifact_write_error(&name))
+                } else {
+                    self.log.write_artifact(&name, text.as_bytes())
+                };
+                #[cfg(not(test))]
+                let artifact = self.log.write_artifact(&name, text.as_bytes());
+                match artifact {
+                    Ok((path, _)) => path,
+                    Err(_) => return (None, None),
+                }
             }
         };
         let session = std::path::Path::new(&self.compaction.carry.session_log).parent();
-        Some(session.map_or(relative.clone(), |dir| {
-            dir.join(&relative).display().to_string()
-        }))
+        (
+            Some(session.map_or(relative.clone(), |dir| {
+                dir.join(&relative).display().to_string()
+            })),
+            None,
+        )
     }
 }

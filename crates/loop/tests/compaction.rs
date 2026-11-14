@@ -797,11 +797,10 @@ fn automatic_compaction_off_never_compacts() {
 }
 
 #[test]
-fn a_fresh_context_is_unmeasured_until_a_reply_measures_it() {
-    // A trigger of one token is passed by any context. Before the first
-    // reply nothing has measured the context, so the first request is sent;
-    // after the compaction the new context is unmeasured again, so the request
-    // from the note is sent too, and the turn does not compact twice.
+fn a_fresh_context_is_estimated_until_a_reply_measures_it() {
+    // A trigger of one token is passed by the fresh conversation estimate, so
+    // the first step compacts before the first model request. The later step
+    // may compact once again, but no step compacts twice.
     let mut session = session(
         vec![called(5), Scripted::text("The note."), said("Done.", 5)],
         CompactionSettings {
@@ -811,14 +810,44 @@ fn a_fresh_context_is_unmeasured_until_a_reply_measures_it() {
     );
 
     let (outcome, lines) = run(&mut session, "hi");
-    assert_kinds(
-        &lines,
-        &[OPENING, STEP, CALL_BODY, STEP, COMPACTED, REPLY, ENDED],
-    );
-
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_eq!(of_kind(&lines, "compaction_started").len(), 1);
-    assert_eq!(session.requests().len(), 3);
+    assert_eq!(of_kind(&lines, "compaction_started").len(), 2);
+    assert_eq!(session.requests().len(), 4);
+}
+
+#[test]
+fn a_resumed_session_above_the_trigger_compacts_before_its_first_request() {
+    let prompt = "x".repeat(5_000);
+    let mut session = session(
+        vec![
+            said("First reply.", 10),
+            Scripted::text("The note."),
+            Scripted::text("Done."),
+        ],
+        settings(),
+    );
+    let (outcome, _) = run(&mut session, &prompt);
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let previous_requests = session.requests().len();
+
+    session.resume(Vec::new());
+    session.inbox.send(delivery("again")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+
+    let lines = session.lines();
+    let compaction = lines
+        .iter()
+        .rposition(|line| line.kind() == EventKind::CompactionStarted)
+        .unwrap();
+    let request = lines
+        .iter()
+        .enumerate()
+        .skip(compaction + 1)
+        .find(|(_, line)| line.kind() == EventKind::AssistantMessageStarted)
+        .map(|(index, _)| index)
+        .unwrap();
+    assert!(compaction < request);
+    assert_eq!(session.requests().len(), previous_requests + 2);
 }
 
 #[test]

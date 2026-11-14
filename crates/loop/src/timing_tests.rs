@@ -46,6 +46,7 @@ static REQUEST_SEND_ADVANCE_MS: Mutex<Option<u64>> = Mutex::new(None);
 static REQUEST_NOTE_ADVANCE_MS: Mutex<Option<u64>> = Mutex::new(None);
 static CANCEL_AFTER_SUBSCRIBE: Mutex<bool> = Mutex::new(false);
 static FAIL_STREAM_WRITE: Mutex<Option<bool>> = Mutex::new(None);
+static FAIL_ARTIFACT_WRITE: Mutex<Option<bool>> = Mutex::new(None);
 static FAIL_COMPACTION_STARTED: Mutex<Option<bool>> = Mutex::new(None);
 static FAIL_COMPACTION_COMPLETED: Mutex<Option<bool>> = Mutex::new(None);
 static FAIL_RESTARTED: Mutex<Option<bool>> = Mutex::new(None);
@@ -78,6 +79,23 @@ pub(crate) fn arm_cancel_after_subscribe() {
 /// Fails the next stream sink write once with `Error::Log`.
 fn arm_fail_stream_write() {
     *lock(&FAIL_STREAM_WRITE) = Some(true);
+}
+
+/// Fails the next artifact write once.
+fn arm_fail_artifact_write() {
+    *lock(&FAIL_ARTIFACT_WRITE) = Some(true);
+}
+
+/// Whether the next artifact write fails. Consumed once.
+pub(crate) fn take_fail_artifact_write() -> bool {
+    lock(&FAIL_ARTIFACT_WRITE).take().is_some()
+}
+
+pub(crate) fn artifact_write_error(path: &str) -> log::Error {
+    log::Error::Io {
+        path: path.into(),
+        source: std::io::Error::other("injected artifact write failure"),
+    }
 }
 
 /// Fails the next compaction-started record once with `Error::Log`.
@@ -2837,6 +2855,26 @@ fn a_cancel_mid_note_times_compaction_and_the_entered_note() {
             assert_eq!(models.len(), 2, "{:?}", op_records(&world));
             assert_eq!(models[1].ms, 7);
         },
+    );
+}
+
+#[test]
+fn an_artifact_write_failure() {
+    let mut world = auto_world(vec![
+        run_tokens_tool_answer("get_weather", json!({}), fakes::CONTEXT_WINDOW + 1, 3, 0),
+        run_answer("The note.", 0),
+        run_answer("Done.", 0),
+    ]);
+    arm_fail_artifact_write();
+    prompt(&world, "hi");
+    let outcome = world.loop_mut().turn();
+    assert!(
+        outcome.is_ok(),
+        "the note completes despite the failed artifact write"
+    );
+    assert!(
+        kinds(&world).contains(&EventKind::Notice),
+        "the artifact failure is reported as a notice"
     );
 }
 
