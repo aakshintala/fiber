@@ -308,6 +308,7 @@ fn entries(providers: &Providers, config: &Config) -> Vec<tui::ModelEntry> {
                     .get("thinking", Some(&reference))
                     .and_then(|(value, _)| value.as_str().map(str::to_owned)),
                 roles: cli::roles_of(config, &reference),
+                is_new: model.is_new,
                 price: price(model.cost.as_ref()),
             });
         }

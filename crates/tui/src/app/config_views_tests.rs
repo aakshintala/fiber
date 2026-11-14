@@ -828,6 +828,7 @@ fn priced(reference: &str, micros: Option<u64>) -> crate::catalogue::ModelEntry 
         default_level: None,
         configured: None,
         roles: Vec::new(),
+        is_new: false,
         name: None,
         price: micros.map(|micros| crate::catalogue::Price {
             micros_per_mtok: micros,
