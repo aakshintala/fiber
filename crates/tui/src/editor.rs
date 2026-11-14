@@ -69,18 +69,21 @@ pub(crate) enum Target {
 
 /// The editor command: the configured value when non-empty, else `$VISUAL`,
 /// then `$EDITOR` when non-empty, read through `var`.
+pub(crate) fn fallback(var: impl Fn(&str) -> Option<String>) -> Option<(&'static str, String)> {
+    ["VISUAL", "EDITOR"].into_iter().find_map(|name| {
+        var(name)
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| (name, value))
+    })
+}
+
 pub(crate) fn command(
     configured: Option<String>,
     var: impl Fn(&str) -> Option<String>,
 ) -> Option<String> {
     configured
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            ["VISUAL", "EDITOR"]
-                .into_iter()
-                .filter_map(var)
-                .find(|value| !value.trim().is_empty())
-        })
+        .or_else(|| fallback(var).map(|(_, value)| value))
 }
 
 /// Runs `command` on a new temporary file holding `text`, in the

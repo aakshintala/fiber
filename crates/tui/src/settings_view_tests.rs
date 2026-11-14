@@ -1157,11 +1157,17 @@ fn editor_fake() -> Fake {
 }
 
 fn open_other_field(settings: &mut Settings, fake: &Fake) {
+    let current = settings
+        .rows
+        .iter()
+        .find(|row| row.key == "tui.editor")
+        .and_then(|row| super::current_text(&row.value))
+        .expect("editor value");
     settings.open_dynamic_choices(
         "tui.editor".to_owned(),
         Layer::Global,
         vec!["Default".to_owned(), "Other…".to_owned()],
-        Some("24h".to_owned()),
+        Some(current),
         &ctx(fake),
     );
     settings.choose("Other…", &ctx(fake));
@@ -2923,7 +2929,7 @@ fn editor_picker_uses_path_order_and_saves_wait_for_gui_editors() {
         "tui.editor",
         "Editor",
         SettingsTab::Sessions,
-        value("\"code --wait\""),
+        value("\"nvim --wait\""),
         "global",
         PERSON,
         SettingControl::Text,
@@ -2931,7 +2937,7 @@ fn editor_picker_uses_path_order_and_saves_wait_for_gui_editors() {
     let mut settings = at(&fake, "tui.editor");
     assert_eq!(
         row_of(&screen(&settings), "Editor"),
-        "› Editor code --wait ›"
+        "› Editor nvim --wait ›"
     );
     settings.open_dynamic_choices(
         "tui.editor".to_owned(),
@@ -2954,9 +2960,9 @@ fn editor_picker_uses_path_order_and_saves_wait_for_gui_editors() {
         "saved command did not select its program"
     );
     settings.choose("code", &ctx(&fake));
-    assert_eq!(
-        writes(&fake),
-        [w(Layer::Global, "tui.editor", "\"code --wait\"")]
+    assert!(
+        writes(&fake).is_empty(),
+        "choosing the already selected program wrote a value"
     );
 
     let mut absolute = at(&fake, "tui.editor");
@@ -2971,11 +2977,11 @@ fn editor_picker_uses_path_order_and_saves_wait_for_gui_editors() {
         panic!("editor choices did not open");
     };
     assert_eq!(list.selected(), 1);
+    assert!(screen(&absolute).contains("code  (current)"));
     absolute.choose("code", &ctx(&fake));
-    assert_eq!(
-        writes(&fake).last(),
-        Some(&w(Layer::Global, "tui.editor", "\"code --wait\"")),
-        "reselecting code must preserve its saved command"
+    assert!(
+        writes(&fake).is_empty(),
+        "reselecting the current program wrote a value"
     );
 
     let mut other = at(&fake, "tui.editor");
@@ -3007,7 +3013,7 @@ fn editor_picker_uses_path_order_and_saves_wait_for_gui_editors() {
     );
     cancel.choose("Other…", &ctx(&fake));
     one(&mut cancel, &fake, Key::Esc);
-    assert_eq!(writes(&fake).len(), 3, "cancel wrote a value");
+    assert_eq!(writes(&fake).len(), 1, "cancel wrote a value");
 
     let empty_fake = Fake::new(row_on(
         "tui.editor",
@@ -3571,16 +3577,16 @@ fn settings_editing() {
     let mut all = rows();
     all.push(on(
         SettingsTab::Appearance,
-        "Text",
-        "test.text",
+        "Editor",
+        "tui.editor",
         value("\"vim\""),
         "project",
         PERSON,
         SettingControl::Text,
     ));
     let fake = Fake::new(all);
-    let mut settings = at(&fake, "test.text");
-    one(&mut settings, &fake, Key::Enter);
+    let mut settings = at(&fake, "tui.editor");
+    open_other_field(&mut settings, &fake);
     typed(&mut settings, &fake, "5");
     let super::Mode::Field(field) = &settings.mode else {
         panic!("no field");

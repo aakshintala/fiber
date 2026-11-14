@@ -1888,10 +1888,21 @@ impl Settings {
             });
             return Act::Stay;
         }
-        let Mode::Choices { key, layer, .. } = &self.mode else {
+        let Mode::Choices {
+            key,
+            layer,
+            current,
+            ..
+        } = &self.mode
+        else {
             return Act::Stay;
         };
-        let (key, layer) = (key.clone(), *layer);
+        let (key, layer, current) = (key.clone(), *layer, current.clone());
+        if key == EDITOR && selected(&key, Some(name)) == selected(&key, current.as_deref()) {
+            self.mode = Mode::Rows;
+            self.reread(ctx);
+            return Act::Stay;
+        }
         let saved = if name == "Default" {
             let Some(row) = self.rows.iter().find(|row| row.key == key) else {
                 return Act::Stay;
@@ -3087,16 +3098,17 @@ fn shown_value(row: &SettingRow) -> (String, Option<String>) {
         }
         (SettingControl::Model, Shown::Unset) => "Default ›".to_owned(),
         (SettingControl::Model, Shown::Value(text)) => format!("{} ›", as_typed(text)),
-        (SettingControl::Text, Shown::Unset) if row.key == EDITOR => editor_default(
-            std::env::var("VISUAL")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-                .as_deref(),
-            std::env::var("EDITOR")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-                .as_deref(),
-        ),
+        (SettingControl::Text, Shown::Unset) if row.key == EDITOR => {
+            let fallback = crate::editor::fallback(|name| std::env::var(name).ok());
+            editor_default(
+                fallback
+                    .as_ref()
+                    .and_then(|(name, value)| (*name == "VISUAL").then_some(value.as_str())),
+                fallback
+                    .as_ref()
+                    .and_then(|(name, value)| (*name == "EDITOR").then_some(value.as_str())),
+            )
+        }
         (SettingControl::Text, Shown::Value(text)) if row.key == EDITOR => {
             format!("{} ›", as_typed(text))
         }
