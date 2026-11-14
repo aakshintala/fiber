@@ -485,3 +485,4 @@ crates/tools/src/shell/keeper_lock_tests.rs	fiber-4842	plan	2026-11-14T21:28:31Z
 crates/tools/src/shell/command.rs	fiber-4842	plan	2026-11-14T21:28:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tools/src/shell/sandbox/protected.rs	fiber-4842	plan	2026-11-14T21:28:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tools/src/shell/sandbox/protected/baseline.rs	fiber-4842	plan	2026-11-14T21:28:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/log/src/search_tests.rs	fiber-4685	plan	2026-11-14T21:35:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
