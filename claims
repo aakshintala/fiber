@@ -356,3 +356,6 @@ crates/loop/src/skills_tests.rs:1509-1510	fiber-4774	plan	2026-11-14T01:01:49Z	r
 docs/system-prompt.md:325-325	fiber-4774	plan	2026-11-14T01:01:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4774-skills-home-overlap	
 crates/cli/src/models_tests.rs	fiber-4636	plan	2026-11-14T01:03:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/cli/src/setup_tests.rs	fiber-4636	plan	2026-11-14T01:03:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/config/src/keys.rs	fiber-4583	grant	2026-11-14T01:08:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4583-settings-rows	
+crates/main/src/settings_metadata_tests.rs	fiber-4583	grant	2026-11-14T01:08:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4583-settings-rows	
+crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4583	grant	2026-11-14T01:08:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4583-settings-rows	
