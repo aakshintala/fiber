@@ -22,28 +22,41 @@ use support::pty::{Grid, Run};
 /// The installed provider file and any cached list, so a catalogue stall
 /// says whether the picker was waiting on models that are already on disk.
 /// A missing file and a cache read error are reported as themselves.
-fn tui_stage_diagnostics(setup: &Setup) -> String {
+pub(super) fn tui_stage_diagnostics(setup: &Setup) -> String {
     let codes = ["models_read_done", "models_applied", "models_ask_started"];
     let logs = setup.home().join("logs");
     let mut found = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(logs) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            if !name.to_string_lossy().starts_with("tui-") {
-                continue;
-            }
-            let Ok(text) = std::fs::read_to_string(entry.path()) else {
-                continue;
-            };
-            for line in text.lines() {
-                if codes
-                    .iter()
-                    .any(|code| line.contains(&format!("\"code\":\"{code}\"")))
-                {
-                    found.push(line.to_owned());
+    let mut errors = Vec::new();
+    match std::fs::read_dir(&logs) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        errors.push(format!("directory entry: {error}"));
+                        continue;
+                    }
+                };
+                let name = entry.file_name();
+                if !name.to_string_lossy().starts_with("tui-") {
+                    continue;
+                }
+                match std::fs::read_to_string(entry.path()) {
+                    Ok(text) => {
+                        for line in text.lines() {
+                            if codes
+                                .iter()
+                                .any(|code| line.contains(&format!("\"code\":\"{code}\"")))
+                            {
+                                found.push(line.to_owned());
+                            }
+                        }
+                    }
+                    Err(error) => errors.push(format!("{}: {error}", entry.path().display())),
                 }
             }
         }
+        Err(error) => errors.push(format!("{}: {error}", logs.display())),
     }
     let absent: Vec<_> = codes
         .iter()
@@ -55,10 +68,59 @@ fn tui_stage_diagnostics(setup: &Setup) -> String {
         .copied()
         .collect();
     format!(
-        "TUI stage lines: {}; absent codes: {:?}",
+        "TUI stage lines: {}; absent codes: {:?}; log read errors: {:?}",
         found.join("\n"),
-        absent
+        absent,
+        errors
     )
+}
+
+#[test]
+fn tui_stage_diagnostics_reports_present_missing_and_unreadable_logs() {
+    let setup = Setup::without_provider();
+    let logs = setup.home().join("logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    std::fs::write(
+        logs.join("tui-one"),
+        ["models_read_done", "models_applied", "models_ask_started"]
+            .map(|code| format!(r#"{{"code":"{code}"}}"#))
+            .join("\n"),
+    )
+    .unwrap();
+    let report = tui_stage_diagnostics(&setup);
+    for code in ["models_read_done", "models_applied", "models_ask_started"] {
+        assert!(report.contains(code), "{report}");
+    }
+    assert!(report.contains("absent codes: []"), "{report}");
+
+    std::fs::write(logs.join("tui-one"), r#"{"code":"models_read_done"}"#).unwrap();
+    let partial = tui_stage_diagnostics(&setup);
+    assert!(partial.contains("models_read_done"), "{partial}");
+    assert!(
+        partial.contains("absent codes: [\"models_applied\", \"models_ask_started\"]"),
+        "{partial}"
+    );
+
+    std::fs::remove_dir_all(&logs).unwrap();
+    let missing = tui_stage_diagnostics(&setup);
+    assert!(
+        missing.contains("logs") && missing.contains("log read errors"),
+        "{missing}"
+    );
+
+    std::fs::write(&logs, "not a directory").unwrap();
+    let not_directory = tui_stage_diagnostics(&setup);
+    assert!(
+        not_directory.contains("logs") && not_directory.contains("log read errors"),
+        "{not_directory}"
+    );
+
+    std::fs::remove_file(&logs).unwrap();
+    std::fs::create_dir_all(&logs).unwrap();
+    std::fs::create_dir(logs.join("tui-unreadable")).unwrap();
+    let unreadable = tui_stage_diagnostics(&setup);
+    assert!(unreadable.contains("tui-unreadable"), "{unreadable}");
+    assert!(unreadable.contains("log read errors"), "{unreadable}");
 }
 
 fn catalogue_on_disk(setup: &Setup) -> String {
