@@ -232,10 +232,11 @@ fn a_named_recent_row_seeds_the_sender_label_and_a_statusless_row_keeps_it() {
     let out = app.on_line(accepted(&recent, json!({"sessions": [named_row]})));
     let scoped: Vec<Value> = commands(out)
         .into_iter()
-        .filter(|line| line["command"] == "recent")
+        .filter(|line| line["command"] == "recent" && !is_archived(line))
         .collect();
     // A project that first appears earns one scoped `recent` ask
-    // (`docs/tui.md`, "Home", "The session list").
+    // (`docs/tui.md`, "Home", "The session list"); the archived ask
+    // rides beside it.
     assert_eq!(scoped.len(), 1, "the new project earns one scoped ask");
     app.on_line(turn_with_sender_message("s_aaaaaaaaaaaaaaaa"));
     let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
@@ -328,10 +329,11 @@ fn an_unnamed_home_row_with_a_display_name_still_labels_by_sender_id() {
     let out = app.on_line(accepted(&recent, json!({"sessions": [unnamed_row]})));
     let scoped: Vec<Value> = commands(out)
         .into_iter()
-        .filter(|line| line["command"] == "recent")
+        .filter(|line| line["command"] == "recent" && !is_archived(line))
         .collect();
     // A project that first appears earns one scoped `recent` ask
-    // (`docs/tui.md`, "Home", "The session list").
+    // (`docs/tui.md`, "Home", "The session list"); the archived ask
+    // rides beside it.
     assert_eq!(scoped.len(), 1, "the new project earns one scoped ask");
     app.on_line(turn_with_sender_message("s_aaaaaaaaaaaaaaaa"));
     let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
@@ -644,7 +646,7 @@ fn hello_sends_feed_then_recent_once() {
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0]["command"], "feed");
     assert_eq!(lines[1]["command"], "recent");
-    assert!(lines[1].get("args").is_none());
+    assert_eq!(lines[1]["args"], json!({}));
     assert_ne!(lines[0]["id"], lines[1]["id"]);
 }
 
@@ -665,7 +667,12 @@ fn a_status_after_hello_queues_one_scoped_ask() {
     let mut app = home_with(80, 24, launch());
     app.on_line(hello());
     let lines = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
-    // `docs/tui.md`, "The session list" (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask of each in flight per
+    // project); this test pins the exited ask's shape.
+    let lines: Vec<Value> = lines
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     assert_eq!(lines.len(), 1);
     // `docs/invocation.md`, "What the hub speaks" (recent command).
     assert_eq!(lines[0]["command"], "recent");
@@ -720,10 +727,10 @@ fn session_status_for_the_attached_session_still_reaches_the_conversation() {
     for ch in "hi".chars() {
         app.on_key(Key::Char(ch), now);
     }
-    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter sends the start");
     };
-    let start = commands(lines);
+    let start = commands(sents.into_iter().map(|sent| sent.line).collect());
     let id = start[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("start id"));
@@ -733,9 +740,14 @@ fn session_status_for_the_attached_session_still_reaches_the_conversation() {
         Some("s_aaaaaaaaaaaaaaaa")
     );
     // The status folds into the rows, and passes through to the
-    // conversation below, queuing its project's scoped ask beside it.
+    // conversation below, queuing its project's scoped asks beside it.
     let queued = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
-    // `docs/tui.md`, "The session list" (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask of each in flight per
+    // project); this test pins the exited ask.
+    let queued: Vec<Value> = queued
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     assert_eq!(queued.len(), 1);
     // `docs/tui.md`, "The session list" (scoped ask carries the project's key).
     assert_eq!(queued[0]["args"]["project"], "-w");
@@ -859,7 +871,8 @@ fn a_closing_row_shows_closing_with_no_number() {
             ListLine::Head { .. }
             | ListLine::ExitedHead { .. }
             | ListLine::Exited { .. }
-            | ListLine::More { .. } => None,
+            | ListLine::More { .. }
+            | ListLine::ArchivedHead { .. } => None,
         });
     assert_eq!(
         live.next(),
@@ -892,12 +905,12 @@ fn start_names_the_launch_workspace() {
     for ch in "hi".chars() {
         app.on_key(Key::Char(ch), now);
     }
-    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter sends the start");
     };
-    assert_eq!(lines.len(), 1);
+    assert_eq!(sents.len(), 1);
     let line: serde_json::Value =
-        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+        serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("start: {err}"));
     assert_eq!(line["command"], "start");
     assert_eq!(line["args"]["workspace"], "/w");
     assert!(line["args"].get("content").is_none());
@@ -931,7 +944,8 @@ fn more_key(app: &App, project: &str) -> Option<u64> {
             ListLine::Head { .. }
             | ListLine::Live { .. }
             | ListLine::ExitedHead { .. }
-            | ListLine::Exited { .. } => None,
+            | ListLine::Exited { .. }
+            | ListLine::ArchivedHead { .. } => None,
         })
 }
 
@@ -942,6 +956,13 @@ fn open(app: &mut App, key: u64) -> Vec<Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             .collect(),
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
+            })
+            .collect(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
@@ -950,7 +971,7 @@ fn open(app: &mut App, key: u64) -> Vec<Value> {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => panic!("opening sends"),
@@ -1130,9 +1151,10 @@ fn accept_summary(app: &mut App, session: &str, ack: &str) {
 /// Starts a session from the draft and accepts the start for `session`:
 /// the app attached, its `full` subscribe in flight.
 fn start_session(app: &mut App, session: &str) -> Vec<Value> {
-    let Effect::Send(lines) = enter_text(app, "hi") else {
+    let Effect::SendTracked(sents) = enter_text(app, "hi") else {
         panic!("Enter sends the start");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     assert_eq!(lines.len(), 1);
     let start: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
     let out: Vec<Value> = app
@@ -1425,7 +1447,8 @@ fn a_click_on_a_row_opens_it() {
             assert_eq!(commands["command"], "commands");
             assert_eq!(commands["session_id"], "s_aaaaaaaaaaaaaaaa");
         }
-        Effect::None
+        Effect::SendTracked(_)
+        | Effect::None
         | Effect::Quit
         | Effect::ListFiles
         | Effect::ReadImage(_)
@@ -1433,7 +1456,7 @@ fn a_click_on_a_row_opens_it() {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => panic!("a click opens the row"),
@@ -2163,6 +2186,316 @@ fn home_arrows_focus_the_list_and_entry_bar() {
     );
 }
 
+/// Two live rows in the launch project and one live row in "other".
+fn two_projects(app: &mut App) {
+    linked(app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "tidy docs",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    app.on_line(live(
+        "s_cccccccccccccccc",
+        "other work",
+        "/o",
+        "other",
+        json!({"state": "idle"}),
+    ));
+}
+
+/// Focuses the home row of `session`.
+fn focus_session(app: &mut App, session: &str) {
+    let key = row_key(app, session);
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+}
+
+#[test]
+fn shift_down_from_a_projects_middle_row_lands_on_the_next_projects_first_row() {
+    let mut app = home_with(80, 24, launch());
+    two_projects(&mut app);
+    drawn(&mut app);
+    focus_session(&mut app, "s_bbbbbbbbbbbbbbbb");
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_cccccccccccccccc"
+        ))))
+    );
+    assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
+    drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_aaaaaaaaaaaaaaaa"
+        ))))
+    );
+}
+
+#[test]
+fn shift_keys_hold_at_the_first_and_last_project() {
+    let mut app = home_with(80, 24, launch());
+    two_projects(&mut app);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    focus_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
+    drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_aaaaaaaaaaaaaaaa"
+        ))))
+    );
+    focus_session(&mut app, "s_cccccccccccccccc");
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_cccccccccccccccc"
+        ))))
+    );
+}
+
+#[test]
+fn shift_keys_keep_focus_with_one_project() {
+    let mut app = home_with(80, 24, launch());
+    two_rows(&mut app);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    focus_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    drawn(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_aaaaaaaaaaaaaaaa"
+        ))))
+    );
+    assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
+    drawn(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_aaaaaaaaaaaaaaaa"
+        ))))
+    );
+}
+
+#[test]
+fn shift_down_lands_on_the_first_exited_row_with_no_live_rows() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_cccccccccccccccc", "old work", "/o", "other")]}),
+    );
+    let scoped = fanout
+        .iter()
+        .find(|line| !is_archived(line) && line["args"]["project"] == "other")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the other project's scoped ask: {fanout:?}"))
+        .to_owned();
+    assert!(
+        app.on_line(accepted(
+            &scoped,
+            json!({"sessions": [exited_in("s_cccccccccccccccc", "old work", "/o", "other")], "total": 1}),
+        ))
+        .is_empty()
+    );
+    drawn(&mut app);
+    focus_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_cccccccccccccccc"
+        ))))
+    );
+}
+
+#[test]
+fn shift_down_expands_a_more_collapsed_project() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_cccccccccccccccc", "old work", "/o", "other")]}),
+    );
+    let scoped = fanout
+        .iter()
+        .find(|line| !is_archived(line) && line["args"]["project"] == "other")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the other project's scoped ask: {fanout:?}"))
+        .to_owned();
+    assert!(
+        app.on_line(accepted(
+            &scoped,
+            json!({"sessions": [
+                exited_in("s_dddddddddddddddd", "second old", "/o", "other"),
+                exited_in("s_eeeeeeeeeeeeeeee", "third old", "/o", "other"),
+                exited_in("s_ffffffffffffffff", "fourth old", "/o", "other"),
+            ], "total": 4}),
+        ))
+        .is_empty()
+    );
+    drawn(&mut app);
+    let stops = app.all_list_stops();
+    assert!(
+        stops.iter().any(|stop| matches!(stop, Spot::More(_))),
+        "{stops:?}"
+    );
+    assert!(
+        !stops.contains(&Spot::Entry(row_key(&app, "s_ffffffffffffffff"))),
+        "{stops:?}"
+    );
+    focus_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    assert!(
+        app.all_list_stops()
+            .contains(&Spot::Entry(row_key(&app, "s_cccccccccccccccc"))),
+    );
+    drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_cccccccccccccccc"
+        ))))
+    );
+    assert!(
+        app.all_list_stops()
+            .contains(&Spot::Entry(row_key(&app, "s_ffffffffffffffff"))),
+    );
+}
+
+#[test]
+fn shift_down_opens_an_archived_only_project() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_cccccccccccccccc", "old work", "/o", "other")]}),
+    );
+    let scoped = fanout
+        .iter()
+        .find(|line| !is_archived(line) && line["args"]["project"] == "other")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the other project's scoped ask: {fanout:?}"))
+        .to_owned();
+    let archived = fanout
+        .iter()
+        .find(|line| is_archived(line) && line["args"]["project"] == "other")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the other project's archived ask: {fanout:?}"))
+        .to_owned();
+    assert!(
+        app.on_line(accepted(&scoped, json!({"sessions": [], "total": 1})))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            &archived,
+            json!({"sessions": [exited_in("s_cccccccccccccccc", "filed work", "/o", "other")], "total": 1}),
+        ))
+        .is_empty()
+    );
+    assert!(!app.home.sessions.is_archived_open("other"));
+    drawn(&mut app);
+    focus_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    drawn(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_cccccccccccccccc"
+        ))))
+    );
+    assert!(app.home.sessions.is_archived_open("other"));
+}
+
+#[test]
+fn shift_down_with_a_home_question_open_keeps_the_question() {
+    let mut app = home_with(80, 24, launch());
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    // The Delete key arrives as the delete edit and asks: Backspace
+    // archives a focused exited row at once, so it opens no question.
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
+    let before = question(&app);
+    assert!(before.contains("Delete old work"), "{before}");
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    assert_eq!(question(&app), before);
+}
+
+#[test]
+fn shift_down_from_the_entry_bar_routes_on() {
+    let mut app = home_with(80, 24, launch());
+    two_rows(&mut app);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.focused(), None);
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    assert_eq!(app.focused(), None);
+}
+
 #[test]
 fn up_on_a_home_with_nothing_open_focuses_the_last_row_and_esc_drops_it() {
     let mut app = home_with(80, 24, launch());
@@ -2294,7 +2627,7 @@ fn up_and_j_walk_the_row_stops() {
 }
 
 #[test]
-fn j_does_not_move_from_a_row_before_the_last_drawn_stop() {
+fn j_steps_onto_the_focused_exited_rows_cross() {
     let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let rows = [
@@ -2302,8 +2635,12 @@ fn j_does_not_move_from_a_row_before_the_last_drawn_stop() {
         exited_in("s_bbbbbbbbbbbbbbbb", "beta", "/work/beta", "beta"),
         exited_in("s_cccccccccccccccc", "gamma", "/work/gamma", "gamma"),
     ];
-    // The unscoped answer fans out one scoped ask per project.
-    let fanout = commands(app.on_line(accepted(&recent, json!({"sessions": rows}))));
+    // The unscoped answer fans out one scoped ask of each kind per
+    // project; this test pins the exited asks.
+    let fanout: Vec<Value> = commands(app.on_line(accepted(&recent, json!({"sessions": rows}))))
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(fanout.len(), 3);
     let (_, targets) = drawn_frame(&app);
@@ -2331,10 +2668,12 @@ fn j_does_not_move_from_a_row_before_the_last_drawn_stop() {
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(entries[1])))
     );
+    // An exited row draws its ✕, so j steps onto it instead of leaving
+    // the row.
     assert_eq!(app.on_key(Key::Char('j'), now), Effect::None);
     assert_eq!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Start(entries[2])))
+        Some(crate::mouse::TargetId::Home(Spot::Stop(entries[1])))
     );
 }
 
@@ -2783,11 +3122,11 @@ fn picker_keys_move_choose_and_close() {
     assert_eq!(picker(&app).map(|(_, selected)| selected), Some(1));
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(picker(&app).map(|(_, selected)| selected), Some(2));
-    // The selection clamps to the list.
+    // The selection wraps at either end.
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(picker(&app).map(|(_, selected)| selected), Some(2));
+    assert_eq!(picker(&app).map(|(_, selected)| selected), Some(0));
     assert_eq!(app.on_key(Key::Up, now), Effect::None);
-    assert_eq!(picker(&app).map(|(_, selected)| selected), Some(1));
+    assert_eq!(picker(&app).map(|(_, selected)| selected), Some(2));
     assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(picker(&app).map(|(_, selected)| selected), Some(0));
@@ -2850,7 +3189,8 @@ fn clicking_plus_chooses_that_projects_workspace_and_focuses_the_entry_bar() {
                 | crate::home::ListLine::Live { .. }
                 | crate::home::ListLine::ExitedHead { .. }
                 | crate::home::ListLine::Exited { .. }
-                | crate::home::ListLine::More { .. } => None,
+                | crate::home::ListLine::More { .. }
+                | crate::home::ListLine::ArchivedHead { .. } => None,
             })
         })
         .unwrap_or_else(|| panic!("the other project's plus target"));
@@ -2873,9 +3213,10 @@ fn clicking_plus_chooses_that_projects_workspace_and_focuses_the_entry_bar() {
     assert_eq!(app.focused(), None, "the entry bar has focus");
     assert!(chips(&app).contains(&"[ ] new worktree".to_owned()));
 
-    let Effect::Send(lines) = enter_text(&mut app, "hi") else {
+    let Effect::SendTracked(sents) = enter_text(&mut app, "hi") else {
         panic!("Enter sends the start");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let start = commands(lines)[0].clone();
     assert_eq!(start["command"], "start");
     assert_eq!(start["args"]["workspace"], "/other");
@@ -2893,9 +3234,10 @@ fn start_names_the_chosen_workspace() {
     for ch in "hi".chars() {
         app.on_key(Key::Char(ch), now);
     }
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter sends the start");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     assert_eq!(lines.len(), 1);
     let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
     assert_eq!(line["command"], "start");
@@ -2975,7 +3317,7 @@ fn the_first_recent_page_names_no_project() {
     let id = lines[1]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("recent id"));
-    assert_eq!(lines[1], json!({"id": id, "command": "recent"}));
+    assert_eq!(lines[1], json!({"id": id, "command": "recent", "args": {}}));
 }
 
 #[test]
@@ -2993,9 +3335,10 @@ fn down_from_the_last_row_asks_the_next_page_before_the_last_loaded_recent_row()
     focus_last(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     // ↓ on the last row asks the next page at once.
-    let Effect::Send(lines) = app.on_key(Key::Down, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Down, now) else {
         panic!("the last row asks the next page");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     assert_eq!(lines.len(), 1);
     let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(line["command"], "recent");
@@ -3046,9 +3389,10 @@ fn down_from_the_last_row_asks_nothing_after_an_empty_page() {
     answer_recent(&mut app, &recent, &[("s_bbbbbbbbbbbbbbbb", "old work")]);
     focus_last(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Down, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Down, now) else {
         panic!("the last row asks the next page");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let page: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
     // An empty older page ends paging.
     assert!(
@@ -3125,8 +3469,12 @@ fn a_click_on_more_expands_the_same_project_only() {
     .into_iter()
     .map(|(id, name, workspace, project)| exited_in(id, name, workspace, project))
     .collect::<Vec<_>>();
-    // The unscoped answer fans out one scoped ask per project.
-    let fanout = commands(app.on_line(accepted(&recent, json!({"sessions": rows}))));
+    // The unscoped answer fans out one scoped ask of each kind per
+    // project; this test follows the exited asks.
+    let fanout: Vec<Value> = commands(app.on_line(accepted(&recent, json!({"sessions": rows}))))
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(fanout.len(), 2);
     let first_hidden = more_key(&app, "-w").expect("first project has more");
@@ -3140,7 +3488,8 @@ fn a_click_on_more_expands_the_same_project_only() {
             crate::home::ListLine::Head { .. }
             | crate::home::ListLine::Live { .. }
             | crate::home::ListLine::ExitedHead { .. }
-            | crate::home::ListLine::More { .. } => None,
+            | crate::home::ListLine::More { .. }
+            | crate::home::ListLine::ArchivedHead { .. } => None,
             crate::home::ListLine::Exited { key, .. } => Some(*key),
         })
         .collect::<Vec<_>>();
@@ -3154,7 +3503,8 @@ fn a_click_on_more_expands_the_same_project_only() {
                 crate::home::ListLine::Head { .. }
                 | crate::home::ListLine::Live { .. }
                 | crate::home::ListLine::ExitedHead { .. }
-                | crate::home::ListLine::Exited { .. } => None,
+                | crate::home::ListLine::Exited { .. }
+                | crate::home::ListLine::ArchivedHead { .. } => None,
                 crate::home::ListLine::More { key, .. } => Some(*key),
             })
             .collect::<Vec<_>>(),
@@ -3297,9 +3647,10 @@ fn first_run_login_escape_restores_blocker_and_key_only_click_reopens_login() {
 fn a_rejected_start_sets_the_blocker_lines() {
     let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
-    let Effect::Send(lines) = enter_text(&mut app, "hi") else {
+    let Effect::SendTracked(sents) = enter_text(&mut app, "hi") else {
         panic!("Enter sends the start");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let start: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
     let id = start["id"].as_str().unwrap_or_else(|| panic!("start id"));
     let message = "No provider key.\nRun fiber login to fix it.";
@@ -3344,9 +3695,10 @@ fn a_rejected_prompt_sets_none() {
 fn the_next_start_clears_them() {
     let mut app = home_with(80, 24, launch());
     app.on_line(hello());
-    let Effect::Send(lines) = enter_text(&mut app, "hi") else {
+    let Effect::SendTracked(sents) = enter_text(&mut app, "hi") else {
         panic!("Enter sends the start");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let start: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
     start_rejected(
         &mut app,
@@ -3354,7 +3706,7 @@ fn the_next_start_clears_them() {
         "No provider key.",
     );
     assert_eq!(blockers(&app), ["No provider key."]);
-    let Effect::Send(_) = enter_text(&mut app, "again") else {
+    let Effect::SendTracked(_) = enter_text(&mut app, "again") else {
         panic!("Enter tries again");
     };
     assert!(blockers(&app).is_empty());
@@ -3364,9 +3716,10 @@ fn the_next_start_clears_them() {
 fn the_feed_arriving_keeps_them() {
     let mut app = home_with(80, 24, launch());
     let (feed, recent) = linked(&mut app);
-    let Effect::Send(lines) = enter_text(&mut app, "hi") else {
+    let Effect::SendTracked(sents) = enter_text(&mut app, "hi") else {
         panic!("Enter sends the start");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let start: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
     start_rejected(
         &mut app,
@@ -3456,7 +3809,7 @@ fn the_foot_names_the_key_maps_bound_key() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F2 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F2 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3468,7 +3821,7 @@ fn the_foot_leaves_the_key_map_out_when_unbound() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · Ctrl+C twice to quit"
     );
 }
 
@@ -3480,7 +3833,7 @@ fn x_with_the_link_down_sends_nothing() {
     assert_eq!(click_stop(&mut app), Effect::None);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3513,10 +3866,38 @@ fn a_refused_close_notes_the_row() {
 }
 
 #[test]
-fn x_on_an_exited_row_asks_to_delete() {
+fn stop_click_on_an_exited_row_archives_without_a_question() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    assert_eq!(click_stop(&mut app), Effect::None);
+    let Effect::Send(lines) = click_stop(&mut app) else {
+        panic!("the ✕ archives");
+    };
+    assert_eq!(lines.len(), 1);
+    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "archive");
+    assert_eq!(line["args"]["session"], "s_aaaaaaaaaaaaaaaa");
+    assert!(app.home.questions.prompt().is_none());
+}
+
+#[test]
+fn delete_or_shift_backspace_on_an_exited_row_asks() {
+    let mut app = home_with(80, 24, launch());
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    // The Delete key arrives as the delete edit.
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
+    assert_eq!(
+        question(&app),
+        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · Enter delete · Esc keep"
+    );
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    // With the kitty protocol Shift+Backspace arrives shifted, and the
+    // key map reads it as the same delete edit.
+    let stroke =
+        crate::stroke::Stroke::parse("shift+backspace").unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(app.on_press(stroke, now), Effect::None);
     assert_eq!(
         question(&app),
         "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · Enter delete · Esc keep"
@@ -3524,17 +3905,44 @@ fn x_on_an_exited_row_asks_to_delete() {
 }
 
 #[test]
-fn backspace_on_a_focused_exited_row_asks() {
+fn delete_on_an_archived_row_asks() {
+    let mut app = home_with_archived_row();
+    drawn(&mut app);
+    let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
+    assert_eq!(
+        question(&app),
+        "Delete filed work (s_bbbbbbbbbbbbbbbb)? It cannot be undone · Enter delete · Esc keep"
+    );
+}
+
+#[test]
+fn backspace_on_an_archived_row_does_nothing() {
+    let mut app = home_with_archived_row();
+    drawn(&mut app);
+    let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
+    assert!(app.home.questions.prompt().is_none());
+}
+
+#[test]
+fn backspace_on_a_focused_exited_row_archives_without_a_question() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Up, now), Effect::None);
-    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
-    assert_eq!(
-        question(&app),
-        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · Enter delete · Esc keep"
-    );
+    let Effect::Send(lines) = app.on_key(Key::Backspace, now) else {
+        panic!("Backspace archives");
+    };
+    assert_eq!(lines.len(), 1);
+    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "archive");
+    assert_eq!(line["args"]["session"], "s_aaaaaaaaaaaaaaaa");
+    assert!(app.home.questions.prompt().is_none());
 }
 
 #[test]
@@ -3566,8 +3974,43 @@ fn backspace_on_a_focused_live_row_does_nothing() {
     assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
+}
+
+#[test]
+fn backspace_on_a_focused_exited_row_with_the_link_down_sends_nothing() {
+    let mut app = home_with(80, 24, launch());
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    drawn(&mut app);
+    // The link drops with the exited row focused: with nowhere to send,
+    // Backspace must not queue an archive behind the outage.
+    app.disconnected();
+    let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
+    assert!(app.home.questions.prompt().is_none());
+}
+
+#[test]
+fn backspace_on_a_focused_unreadable_exited_row_sends_nothing() {
+    let mut app = home_with(80, 24, launch());
+    linked(&mut app);
+    let mut envelope = status("s_aaaaaaaaaaaaaaaa");
+    if let crate::link::Line::Session(status) = &mut envelope {
+        status.schema_version = contract::SCHEMA_VERSION + 1;
+    }
+    app.on_line(envelope);
+    // The row exits after its status stopped parsing: still unreadable,
+    // so Backspace must not archive what the terminal cannot read.
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    drawn(&mut app);
+    let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
+    assert!(app.home.questions.prompt().is_none());
 }
 
 #[test]
@@ -3582,7 +4025,7 @@ fn backspace_with_focus_on_another_stop_is_still_swallowed() {
     assert!(!app.quit_open());
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
     assert!(app.input().expand().is_empty());
 }
@@ -3591,11 +4034,12 @@ fn backspace_with_focus_on_another_stop_is_still_swallowed() {
 fn enter_sends_delete_without_cascade() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = commands(lines);
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "delete");
@@ -3607,12 +4051,12 @@ fn enter_sends_delete_without_cascade() {
 fn esc_sends_nothing() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Esc, now), Effect::None);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3628,7 +4072,7 @@ fn drawn_frame(app: &App) -> (String, Vec<crate::mouse::Target>) {
 fn clicking_the_drawn_cross_keeps_the_session() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     // The draw holds exactly one ✕ target, ending the title row.
     let (text, targets) = drawn_frame(&app);
     let title = text
@@ -3675,11 +4119,12 @@ fn clicking_the_drawn_cross_keeps_the_session() {
 fn clicking_the_cross_on_the_cascade_question_keeps_everything() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -3751,7 +4196,7 @@ fn a_keep_click_leaves_the_quit_question_open() {
 fn clicks_on_the_delete_frame_do_nothing() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let asked = question(&app);
     assert!(!asked.is_empty(), "the question is open");
     let (text, targets) = drawn_frame(&app);
@@ -3810,7 +4255,7 @@ fn clicks_on_the_delete_frame_do_nothing() {
 fn hovering_the_delete_slab_tints_nothing() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let area = ratatui::layout::Rect::new(0, 0, 80, 24);
     let mut plain = ratatui::buffer::Buffer::empty(area);
     let targets = crate::view::render(&app, area, &mut plain, None);
@@ -3843,7 +4288,7 @@ fn hovering_the_delete_slab_tints_nothing() {
 fn other_keys_do_nothing_in_the_question() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Char('x'), now), Effect::None);
     assert!(app.input().expand().is_empty());
@@ -3857,7 +4302,7 @@ fn other_keys_do_nothing_in_the_question() {
 fn ctrl_c_passes_through_the_question() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::CtrlC, now), Effect::None);
     assert!(app.hint());
@@ -3870,11 +4315,12 @@ fn up_and_down_scroll_the_delete_question() {
     // offset scrolls by one row.
     app.set_size(60, 12);
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -3914,11 +4360,12 @@ fn an_accepted_delete_removes_the_row_and_asks_recent_again() {
             exited("s_bbbbbbbbbbbbbbbb", "older work"),
         ]}),
     ));
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -3926,11 +4373,11 @@ fn an_accepted_delete_removes_the_row_and_asks_recent_again() {
     let lines = commands(app.on_line(accepted(&delete, json!({}))));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "recent");
-    assert!(lines[0].get("args").is_none());
+    assert_eq!(lines[0]["args"], json!({}));
     assert_eq!(rows(&app), ["○  older work"]);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3938,11 +4385,12 @@ fn an_accepted_delete_removes_the_row_and_asks_recent_again() {
 fn dependents_ask_again_naming_them_and_enter_sends_cascade_with_expect() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -3958,9 +4406,10 @@ fn dependents_ask_again_naming_them_and_enter_sends_cascade_with_expect() {
         "Delete fix the parser (s_0123456789abcdef) and 2 sessions that continue it: \
         s_1111111111111111, s_2222222222222222? It cannot be undone · Enter delete all · Esc keep"
     );
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
-        panic!("Enter deletes all");
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = commands(lines);
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "delete");
@@ -3982,11 +4431,12 @@ fn dependents_ask_again_naming_them_and_enter_sends_cascade_with_expect() {
 fn a_stale_cascade_asks_again_with_the_new_set() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -4006,9 +4456,10 @@ fn a_stale_cascade_asks_again_with_the_new_set() {
         "Delete fix the parser (s_0123456789abcdef) and 1 session that continues it: \
         s_1111111111111111? It cannot be undone · Enter delete all · Esc keep"
     );
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
-        panic!("Enter deletes all");
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let cascade = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("cascade id"))
@@ -4024,9 +4475,10 @@ fn a_stale_cascade_asks_again_with_the_new_set() {
         "Delete fix the parser (s_0123456789abcdef) and 2 sessions that continue it: \
         s_1111111111111111, s_3333333333333333? It cannot be undone · Enter delete all · Esc keep"
     );
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
-        panic!("Enter deletes all");
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let lines = commands(lines);
     assert_eq!(
         lines[0]["args"]["expect"],
@@ -4042,11 +4494,12 @@ fn a_stale_cascade_asks_again_with_the_new_set() {
 fn a_dependents_refusal_with_no_other_ids_notes_the_row() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -4061,7 +4514,7 @@ fn a_dependents_refusal_with_no_other_ids_notes_the_row() {
     assert_eq!(app.notice(), Some(message));
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
     // The notice carries the refusal's own code, not a default.
     assert!(app.notices().iter().any(|line| matches!(
@@ -4093,11 +4546,12 @@ fn a_refusal_code_is_the_payload_code_or_malformed() {
 fn a_refused_cascade_delete_notes_the_row() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -4111,9 +4565,10 @@ fn a_refused_cascade_delete_notes_the_row() {
         ))
         .is_empty()
     );
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
-        panic!("Enter deletes all");
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let cascade = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("cascade id"))
@@ -4127,7 +4582,7 @@ fn a_refused_cascade_delete_notes_the_row() {
     assert_eq!(app.notice(), Some(message));
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4169,7 +4624,8 @@ fn unreadable_rows_have_no_x() {
             crate::home::ListLine::Exited { .. } => Some(false),
             crate::home::ListLine::Head { .. }
             | crate::home::ListLine::ExitedHead { .. }
-            | crate::home::ListLine::More { .. } => None,
+            | crate::home::ListLine::More { .. }
+            | crate::home::ListLine::ArchivedHead { .. } => None,
         })
         .collect();
     assert_eq!(rows.len(), 3);
@@ -4204,7 +4660,7 @@ fn x_on_an_unreadable_row_says_so() {
 fn enter_with_the_link_down_keeps_the_question() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     app.disconnected();
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Enter, now), Effect::None);
@@ -4241,7 +4697,7 @@ fn backspace_with_the_box_focused_edits_the_draft() {
     assert!(app.input().expand().is_empty());
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4249,7 +4705,7 @@ fn backspace_with_the_box_focused_edits_the_draft() {
 fn delete_edit_in_the_question_does_nothing() {
     let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
     assert_eq!(
         question(&app),
@@ -4264,7 +4720,7 @@ fn stop_on_a_key_with_no_row_does_nothing() {
     assert_eq!(app.home_click(Spot::Stop(999)), Effect::None);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4501,11 +4957,12 @@ fn an_accepted_delete_closes_its_question() {
             exited("s_bbbbbbbbbbbbbbbb", "older work"),
         ]}),
     ));
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -4532,19 +4989,23 @@ fn an_answer_for_another_delete_keeps_the_newer_question() {
             exited("s_bbbbbbbbbbbbbbbb", "older work"),
         ]}),
     ));
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
         .to_owned();
-    // A newer question asks about the second row; the first row's answer
-    // leaves it open.
+    // Esc closes the question without settling its ask: the hub still
+    // answers the sent delete. A newer question asks about the second
+    // row; the first row's answer leaves it open.
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
     let second = keys(&app)[1];
-    app.home_click(Spot::Stop(second));
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(second)));
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
     app.on_line(accepted(&delete, json!({})));
     assert_eq!(rows(&app), ["○  older work"]);
     assert!(
@@ -4564,11 +5025,12 @@ fn an_accepted_delete_asks_the_first_page_unscoped() {
             exited("s_bbbbbbbbbbbbbbbb", "older work"),
         ]}),
     ));
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(lines)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -4576,7 +5038,7 @@ fn an_accepted_delete_asks_the_first_page_unscoped() {
     let lines = commands(app.on_line(accepted(&delete, json!({}))));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "recent");
-    assert!(lines[0].get("args").is_none());
+    assert_eq!(lines[0]["args"], json!({}));
 }
 
 #[test]
@@ -4593,9 +5055,10 @@ fn the_next_page_in_git_is_unscoped() {
     answer_recent(&mut app, &recent, &[("s_bbbbbbbbbbbbbbbb", "old work")]);
     focus_last(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Down, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Down, now) else {
         panic!("the last row asks the next page");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     assert_eq!(lines.len(), 1);
     let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(line["command"], "recent");
@@ -4791,50 +5254,54 @@ fn start_sends_worktree_only_when_the_switch_is_on_and_shown() {
     for ch in "hi".chars() {
         app.on_key(Key::Char(ch), now);
     }
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let Effect::SendTracked(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter sends the start");
     };
-    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+    let line: Value =
+        serde_json::from_str(&lines[0].line).unwrap_or_else(|err| panic!("start: {err}"));
     assert_eq!(line["command"], "start");
     assert_eq!(line["args"]["workspace"], "/w");
     assert_eq!(line["args"]["worktree"], true);
     // Shown and off: the key is absent.
     let mut app = git_home();
-    assert!(app.start_args().get("worktree").is_none());
+    assert_eq!(app.start_args().unwrap().worktree, None);
     // Hidden, even with the switch on: the key is absent.
     let mut app = home_with(80, 24, launch());
     assert_eq!(app.home_click(Spot::Worktree), Effect::None);
-    let args = app.start_args();
-    assert_eq!(args["workspace"], "/w");
-    assert!(args.get("worktree").is_none());
+    let args = app.start_args().unwrap();
+    assert_eq!(args.workspace, "/w");
+    assert_eq!(args.worktree, None);
 }
 
 #[test]
 fn start_carries_the_terminal_layer_in_overrides() {
     // No layer, no key: the shape every existing start keeps.
     let mut app = home_with(80, 24, launch());
-    let bare = app.start_args();
-    assert_eq!(bare["workspace"], "/w");
-    assert!(bare.get("overrides").is_none());
+    let bare = app.start_args().unwrap();
+    assert_eq!(bare.workspace, "/w");
+    assert_eq!(bare.overrides, None);
     // The layer rides in order, beside the workspace.
     app.set_launch_overrides(vec![
         "model=acme/m".to_owned(),
         "retry.attempts=2".to_owned(),
     ]);
-    let args = app.start_args();
-    assert_eq!(args["workspace"], "/w");
+    let args = app.start_args().unwrap();
+    assert_eq!(args.workspace, "/w");
     assert_eq!(
-        args["overrides"],
-        json!(["model=acme/m", "retry.attempts=2"])
+        args.overrides,
+        Some(vec![
+            "model=acme/m".to_owned(),
+            "retry.attempts=2".to_owned()
+        ])
     );
-    assert!(args.get("worktree").is_none());
+    assert_eq!(args.worktree, None);
     // Beside the worktree switch: both keys ride.
     let mut app = git_home();
     app.launch_overrides = vec!["model=acme/m".to_owned()];
     assert_eq!(app.home_click(Spot::Worktree), Effect::None);
-    let args = app.start_args();
-    assert_eq!(args["overrides"], json!(["model=acme/m"]));
-    assert_eq!(args["worktree"], true);
+    let args = app.start_args().unwrap();
+    assert_eq!(args.overrides, Some(vec!["model=acme/m".to_owned()]));
+    assert_eq!(args.worktree, Some(true));
 }
 
 /// Focuses the last list stop from the entry bar.
@@ -4889,6 +5356,13 @@ fn stop(app: &mut App) -> Vec<Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
             .collect(),
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
+            })
+            .collect(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
@@ -4897,7 +5371,7 @@ fn stop(app: &mut App) -> Vec<Value> {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => panic!("the ✕ sends"),
@@ -4908,6 +5382,14 @@ fn stop(app: &mut App) -> Vec<Value> {
 fn click_stop(app: &mut App) -> Effect {
     let key = keys(app)[0];
     app.home_click(Spot::Stop(key))
+}
+
+/// Opens the delete question for the first row with the Delete key,
+/// the path the key map gives it now that Backspace archives.
+fn delete_first_row(app: &mut App) {
+    let key = keys(app)[0];
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
 }
 
 /// One crashed `recent` row for `session`.
@@ -4936,7 +5418,7 @@ fn the_foot_names_the_default_keys() {
     let app = home_with(80, 24, launch());
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4955,7 +5437,20 @@ fn the_foot_bolds_each_key_and_dims_the_rest() {
         })
         .map(|span| span.content.to_string())
         .collect();
-    assert_eq!(bold, ["Enter", "↑↓", "Delete", "F1", "Ctrl+C"]);
+    // `docs/tui.md`, "Home" (the foot names the keys in this order, each bold with the rest dim).
+    assert_eq!(
+        bold,
+        [
+            "Enter",
+            "↑↓",
+            "Shift+↑↓",
+            "Delete",
+            "Backspace",
+            "F1",
+            "Ctrl+C"
+        ]
+    );
+
     for span in &screen.foot.spans {
         if bold.contains(&span.content.to_string()) {
             assert!(
@@ -4997,7 +5492,7 @@ fn the_foot_uses_rebound_labels_in_their_slots() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Ctrl+O opens the focused session, or starts one from the box · ↑↓ move · x stops a live one, deletes an exited one · F2 the key map · Ctrl+C twice to quit"
+        "Ctrl+O opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · x stops a live one, deletes an exited one · Backspace archives an exited one · F2 the key map · Ctrl+C twice to quit"
     );
     let screen = app.home_screen().expect("home draws");
     let bold: Vec<String> = screen
@@ -5011,7 +5506,11 @@ fn the_foot_uses_rebound_labels_in_their_slots() {
         })
         .map(|span| span.content.to_string())
         .collect();
-    assert_eq!(bold, ["Ctrl+O", "↑↓", "x", "F2", "Ctrl+C"]);
+    // `docs/tui.md`, "Home" (the foot names the keys in this order, each bold with the rest dim).
+    assert_eq!(
+        bold,
+        ["Ctrl+O", "↑↓", "Shift+↑↓", "x", "Backspace", "F2", "Ctrl+C"]
+    );
 }
 
 #[test]
@@ -5022,7 +5521,7 @@ fn the_foot_lists_only_the_first_key_of_a_multi_key_list() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · F7 stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · F7 stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5034,7 +5533,7 @@ fn the_foot_leaves_open_focused_out_when_unbound() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5046,7 +5545,19 @@ fn the_foot_leaves_delete_session_out_when_unbound() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_foot_leaves_archive_session_out_when_unbound() {
+    let mut app = home_with(80, 24, launch());
+    let mut user = serde_json::Map::new();
+    user.insert("archive_session".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5059,7 +5570,7 @@ fn the_foot_leaves_unbound_pairs_out_without_stray_joiners() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "↑↓ move · Delete stops a live one, deletes an exited one · Ctrl+C twice to quit"
+        "↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · Ctrl+C twice to quit"
     );
     let mut user = serde_json::Map::new();
     user.insert("key_map".to_owned(), json!([]));
@@ -5067,7 +5578,7 @@ fn the_foot_leaves_unbound_pairs_out_without_stray_joiners() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Backspace archives an exited one · Ctrl+C twice to quit"
     );
     let mut user = serde_json::Map::new();
     user.insert("open_focused".to_owned(), json!([]));
@@ -5075,7 +5586,15 @@ fn the_foot_leaves_unbound_pairs_out_without_stray_joiners() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "↑↓ move · F1 the key map · Ctrl+C twice to quit"
+        "↑↓ move · Shift+↑↓ project · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
+    let mut user = serde_json::Map::new();
+    user.insert("delete_session".to_owned(), json!([]));
+    user.insert("archive_session".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5085,9 +5604,35 @@ fn the_foot_with_nothing_bound_shows_only_move_and_quit() {
     let mut user = serde_json::Map::new();
     user.insert("key_map".to_owned(), json!([]));
     user.insert("open_focused".to_owned(), json!([]));
+    user.insert("focus_project".to_owned(), json!([]));
     user.insert("delete_session".to_owned(), json!([]));
+    user.insert("archive_session".to_owned(), json!([]));
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(foot(&app), "↑↓ move · Ctrl+C twice to quit");
+}
+
+#[test]
+fn the_foot_leaves_focus_project_out_when_unbound() {
+    let mut app = home_with(80, 24, launch());
+    let mut user = serde_json::Map::new();
+    user.insert("focus_project".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_foot_keeps_the_project_wording_on_rebound_keys() {
+    let mut app = home_with(80, 24, launch());
+    let mut user = serde_json::Map::new();
+    user.insert("focus_project".to_owned(), json!(["f9", "f10"]));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
 }
 
 #[test]
@@ -5135,7 +5680,7 @@ fn the_foot_names_the_back_key_after_home_from_a_live_session() {
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · → or Esc back to the session · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · → or Esc back to the session · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5149,7 +5694,7 @@ fn the_foot_names_the_rebound_back_key() {
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · → or F5 back to the session · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · → or F5 back to the session · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5163,7 +5708,7 @@ fn the_foot_leaves_the_back_key_out_when_unbound() {
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · → back to the session · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · → back to the session · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5178,7 +5723,7 @@ fn the_foot_keeps_quit_named_when_the_key_map_is_unbound() {
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · → back to the session · Delete stops a live one, deletes an exited one · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · → back to the session · Delete stops a live one, deletes an exited one · Backspace archives an exited one · Ctrl+C twice to quit"
     );
 }
 
@@ -5214,7 +5759,7 @@ fn opening_a_row_then_closing_names_no_back_key() {
     assert!(app.on_home());
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -5372,10 +5917,15 @@ fn a_left_with_no_ask_in_flight_sends_one_scoped_ask() {
     app.on_line(hello());
     // An unknown session names no row: no trigger.
     assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
-    // A live session's status queues its scoped ask, drained at once
-    // (`docs/tui.md`, "The session list": one ask in flight per project).
+    // A live session's status queues its scoped asks, drained at once
+    // (`docs/tui.md`, "The session list": one ask of each in flight per
+    // project); this test follows the exited ask.
     let queued = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
-    // `docs/tui.md`, "The session list" (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask of each in flight per project).
+    let queued: Vec<Value> = queued
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     assert_eq!(queued.len(), 1);
     let first = line_id(&queued[0]).to_owned();
     // While in flight, the left marks dirty and sends nothing, keeping
@@ -5448,11 +5998,12 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
     assert!(kinds.contains(&"recent"));
     assert!(kinds.contains(&"sessions"));
     // The scoped refetches cover both projects; request order is open.
+    // The archived refetch lines carry a project too, and filter out.
     let scoped: Vec<Value> = lines
         .iter()
         .filter(|line| {
             line.get("args")
-                .is_some_and(|args| args.get("project").is_some())
+                .is_some_and(|args| args.get("project").is_some() && args.get("archived").is_none())
         })
         .cloned()
         .collect();
@@ -5460,11 +6011,27 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
     projects.sort_unstable();
     // `docs/tui.md`, "The session list" (one ask per project).
     assert_eq!(projects, ["-other", "-w"]);
+    // The reconnect refetches the archived count beside the exited one
+    // (`docs/tui.md`, "The session list": one ask of each in flight per
+    // project).
+    let mut archived: Vec<&str> = lines
+        .iter()
+        .filter(|line| is_archived(line))
+        .map(|line| {
+            line["args"]["project"]
+                .as_str()
+                .unwrap_or_else(|| panic!("a scoped archived ask: {line}"))
+        })
+        .collect();
+    archived.sort_unstable();
+    assert_eq!(archived, ["-other", "-w"]);
     // Totals are empty but rows stay for the refetch.
     // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), None);
     // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-other"), None);
+    assert_eq!(archived_stored(&app, "-w"), None);
+    assert_eq!(archived_stored(&app, "-other"), None);
     // The rows tie on recency, so no `docs/<area>.md` line promises
     // their order: assert the rows as a set.
     let mut rows = listed(&app);
@@ -5489,7 +6056,7 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
     // already have asks in flight.
     let recent_id = lines
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| line["command"] == "recent" && line.get("args") == Some(&json!({})))
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("recent id"));
     assert!(
@@ -5588,11 +6155,12 @@ fn an_accepted_delete_asks_the_deleted_projects_scoped_page() {
         app.on_line(accepted(&own_id, json!({"sessions": [], "total": 1})))
             .is_empty()
     );
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(sent) = app.on_key(Key::Enter, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let sent: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(sent)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -5600,7 +6168,7 @@ fn an_accepted_delete_asks_the_deleted_projects_scoped_page() {
     let outgoing = commands(app.on_line(accepted(&delete, json!({}))));
     let refill = outgoing
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| line["command"] == "recent" && line.get("args") == Some(&json!({})))
         .unwrap_or_else(|| panic!("the unscoped refill"));
     let refill_id = line_id(refill).to_owned();
     let scoped: Vec<Value> = outgoing
@@ -5645,11 +6213,12 @@ fn an_accepted_delete_while_scoped_in_flight_marks_dirty() {
         .map(line_id)
         .unwrap_or_else(|| panic!("the launch project's scoped ask"))
         .to_owned();
-    click_stop(&mut app);
+    delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(sent) = app.on_key(Key::Enter, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
+    let sent: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let delete = commands(sent)[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
@@ -5662,7 +6231,7 @@ fn an_accepted_delete_while_scoped_in_flight_marks_dirty() {
     assert!(
         lines
             .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()),
+            .any(|line| line["command"] == "recent" && line.get("args") == Some(&json!({}))),
         "an unscoped refill went out: {lines:?}"
     );
     assert!(
@@ -5695,9 +6264,14 @@ fn a_new_section_status_queues_one_scoped_ask_for_home_outgoing() {
     app.on_line(hello());
     // `home_line` returns `None`, so the status reaches the session.
     assert_eq!(app.home_line(&status("s_aaaaaaaaaaaaaaaa")), None);
-    // `home_outgoing` drains the queued scoped ask.
+    // `home_outgoing` drains the queued scoped asks, one of each kind.
     let lines = commands(app.home_outgoing());
-    // `docs/tui.md`, "The session list" (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask of each in flight per
+    // project); this test pins the exited ask's shape.
+    let lines: Vec<Value> = lines
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     assert_eq!(lines.len(), 1);
     // `docs/invocation.md`, "What the hub speaks" (recent command).
     assert_eq!(lines[0]["command"], "recent");
@@ -5732,6 +6306,9 @@ fn list_shapes(app: &App) -> Vec<String> {
                     ListLine::Head { name, .. } => format!("section {name}"),
                     ListLine::ExitedHead { count } => format!("head {count}"),
                     ListLine::More { count, .. } => format!("more {count}"),
+                    ListLine::ArchivedHead { count, .. } => {
+                        format!("archived {count}")
+                    }
                     ListLine::Exited { .. } | ListLine::Live { .. } => "row".to_owned(),
                 })
                 .collect()
@@ -5741,7 +6318,9 @@ fn list_shapes(app: &App) -> Vec<String> {
 
 /// Answers each scoped ask in `lines` with `total` and no rows.
 fn answer_scoped_empty(app: &mut App, lines: &[Value], total: usize) {
-    for line in lines {
+    // Only the exited asks answer: the archived asks stay in flight, so
+    // no archived head draws in these exited-shape tests.
+    for line in lines.iter().filter(|line| !is_archived(line)) {
         assert!(
             app.on_line(accepted(
                 line_id(line),
@@ -5895,9 +6474,10 @@ fn enter_on_more_with_more_held_asks_the_next_scoped_page() {
     );
     answer_scoped_empty(&mut app, &fanout, 3);
     let key = more_key(&app, "-w").expect("a more row");
-    let Effect::Send(lines) = app.home_click(Spot::More(key)) else {
+    let Effect::SendTracked(sents) = app.home_click(Spot::More(key)) else {
         panic!("More opens the next scoped page");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     // `docs/tui.md`, "The session list" (opening it pages the project's `recent`).
     assert_eq!(lines.len(), 1);
     let page: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
@@ -5954,9 +6534,10 @@ fn down_on_the_last_row_pages_the_project_while_it_holds_more() {
     drawn(&mut app);
     app.focus = Some(crate::mouse::TargetId::Home(Spot::More(key)));
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter on More pages the project");
     };
+    let lines: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     // `docs/tui.md`, "The session list" (opening it pages the project's `recent`).
     assert_eq!(lines.len(), 1);
     let page: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
@@ -6177,11 +6758,11 @@ fn resolve(app: &mut App, seam: &Fake) {
 /// a linked app.
 fn press(app: &mut App, key: Key) -> Value {
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(key, now) else {
+    let Effect::SendTracked(sents) = app.on_key(key, now) else {
         panic!("the key sends");
     };
-    assert_eq!(lines.len(), 1);
-    serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"))
+    assert_eq!(sents.len(), 1);
+    serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("{err}"))
 }
 
 /// A hub `command_accepted` carrying the offer's import `result`.
@@ -6576,8 +7157,9 @@ fn answer_value(app: &mut App, id: &str, result: Value) -> Vec<Value> {
 fn fanout_projects(lines: &[Value]) -> Vec<&str> {
     lines
         .iter()
+        .filter(|line| !is_archived(line))
         .map(|line| {
-            // `docs/invocation.md`, "What the hub speaks" (each fanout line is a scoped `recent`).
+            // `docs/invocation.md`, "What the hub speaks" (each fanout line is a scoped `recent`; the archived asks ride beside these).
             assert_eq!(line["command"], "recent");
             line["args"]["project"]
                 .as_str()
@@ -6596,6 +7178,20 @@ fn line_id(line: &Value) -> &str {
 /// The stored scoped total for `project`.
 fn stored(app: &App, project: &str) -> Option<usize> {
     app.home.sessions.total_for(project)
+}
+
+/// The stored archived scoped total for `project`.
+fn archived_stored(app: &App, project: &str) -> Option<usize> {
+    app.home.sessions.archived_total_for(project)
+}
+
+/// Whether `line` is an archived scoped `recent` ask.
+fn is_archived(line: &Value) -> bool {
+    line["command"] == "recent"
+        && line["args"]
+            .get("archived")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
 }
 
 #[test]
@@ -6619,8 +7215,12 @@ fn an_unscoped_answer_fans_out_one_scoped_ask_per_new_project() {
         assert!(line["args"].get("before").is_none());
     }
     // `docs/tui.md`, "The session list" (one ask per project): the two new projects'
-    // asks carry distinct ids; request order is open.
-    let mut ids: Vec<&str> = lines.iter().map(line_id).collect();
+    // exited asks carry distinct ids; request order is open.
+    let mut ids: Vec<&str> = lines
+        .iter()
+        .filter(|line| !is_archived(line))
+        .map(line_id)
+        .collect();
     ids.sort_unstable();
     ids.dedup();
     assert_eq!(ids.len(), 2);
@@ -6898,9 +7498,10 @@ fn an_unscoped_older_page_after_a_scoped_refusal_sends_nothing() {
     // The older unscoped page holds the same project: no scoped retry.
     focus_last(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(page) = app.on_key(Key::Down, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Down, now) else {
         panic!("the last row asks the next page");
     };
+    let page: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
     let page_id = page["id"].as_str().unwrap_or_else(|| panic!("page id"));
     assert!(page["args"].get("project").is_none());
@@ -6937,9 +7538,10 @@ fn unknown_before_on_an_unscoped_page_leaves_totals_alone() {
     // page stays unscoped.
     focus_last(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(page) = app.on_key(Key::Down, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Down, now) else {
         panic!("the last row asks the next page");
     };
+    let page: Vec<String> = sents.into_iter().map(|sent| sent.line).collect();
     let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
     let page_id = page["id"].as_str().unwrap_or_else(|| panic!("page id"));
     assert_eq!(page["args"]["before"], "s_aaaaaaaaaaaaaaaa");
@@ -6995,10 +7597,11 @@ fn out_of_order_scoped_answers_leave_the_unscoped_cursor() {
     // Both projects hold exactly their loaded rows, so paging stays on
     // the unscoped cursor: the last unscoped row.
     let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
-    let Some(Effect::Send(page)) = app.page_recent(key) else {
+    let Some(Effect::SendTracked(sents)) = app.page_recent(key) else {
         panic!("the unscoped cursor pages");
     };
-    let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(sents.len(), 1);
+    let page: Value = serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(page["command"], "recent");
     assert_eq!(page["args"]["before"], "s_bbbbbbbbbbbbbbbb");
     assert!(page["args"].get("project").is_none());
@@ -7237,10 +7840,11 @@ fn the_recent_tags_are_the_only_record() {
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
     ));
     let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
-    let Some(Effect::Send(page)) = app.page_recent(key) else {
+    let Some(Effect::SendTracked(sents)) = app.page_recent(key) else {
         panic!("the last row asks the next page");
     };
-    let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(sents.len(), 1);
+    let page: Value = serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("{err}"));
     let page_id = line_id(&page).to_owned();
     assert_eq!(
         app.outbox.waiting(&page_id),
@@ -7250,7 +7854,7 @@ fn the_recent_tags_are_the_only_record() {
     assert_eq!(app.page_recent(key), None);
     // Its tag settles out of band, and the next ask goes out.
     app.outbox.settled(&page_id);
-    assert!(matches!(app.page_recent(key), Some(Effect::Send(_))));
+    assert!(matches!(app.page_recent(key), Some(Effect::SendTracked(_))));
 }
 
 #[test]
@@ -7262,10 +7866,11 @@ fn a_page_ask_is_not_a_first_ask() {
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
     ));
     let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
-    let Some(Effect::Send(page)) = app.page_recent(key) else {
+    let Some(Effect::SendTracked(sents)) = app.page_recent(key) else {
         panic!("the last row asks the next page");
     };
-    let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(sents.len(), 1);
+    let page: Value = serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("{err}"));
     app.on_line(accepted(
         line_id(&page),
         json!({"sessions": [exited_in("s_bbbbbbbbbbbbbbbb", "b", "/w", "-w")]}),
@@ -7290,7 +7895,12 @@ fn one_scoped_ask_per_project_comes_from_the_tags() {
     assert_eq!(scoped_tag_ids(&app, "-w"), ids);
     // The tag settles out of band: the project is asked again.
     app.outbox.settled(&ids[0]);
-    let sent = commands(app.scoped_first("-w"));
+    let sent = commands(
+        app.scoped_first("-w")
+            .into_iter()
+            .map(|sent| sent.line)
+            .collect(),
+    );
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0]["args"]["project"], "-w");
     assert_eq!(scoped_tag_ids(&app, "-w").len(), 1);
@@ -7305,10 +7915,11 @@ fn a_reconnect_settles_scoped_tags_and_keeps_the_unscoped_ones() {
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
     ));
     let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
-    let Some(Effect::Send(page)) = app.page_recent(key) else {
+    let Some(Effect::SendTracked(sents)) = app.page_recent(key) else {
         panic!("the last row asks the next page");
     };
-    let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(sents.len(), 1);
+    let page: Value = serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("{err}"));
     let page_id = line_id(&page).to_owned();
     let old_scoped = scoped_tag_ids(&app, "-w");
     assert_eq!(old_scoped.len(), 1);
@@ -7365,7 +7976,7 @@ fn an_early_import_registers_its_tag_at_queue_time() {
         .outbox
         .held
         .iter()
-        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{err}")))
+        .map(|sent| serde_json::from_str(&sent.line).unwrap_or_else(|err| panic!("{err}")))
         .collect();
     let import = held
         .iter()
@@ -7512,9 +8123,10 @@ fn set_home_replaces_the_seeded_home() {
     app.on_line(hello());
     let asked = match app.on_key(Key::Up, crate::app::testkit::now()) {
         Effect::Send(lines) => commands(lines),
+        Effect::SendTracked(sents) => commands(sents.into_iter().map(|sent| sent.line).collect()),
         Effect::None
         | Effect::Quit
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::Search { .. }
         | Effect::Editor { .. }
@@ -7536,4 +8148,628 @@ fn set_home_replaces_the_seeded_home() {
     });
     app.settle();
     assert_eq!(app.chrome().layout().expect("a layout").rail, None);
+}
+
+/// A hub `session_deleted` or `session_archived` wire line, as the hub
+/// sends it: before the fix it parses as `Unknown` and is ignored, so
+/// the stale row stays and no line goes out.
+fn forgot(kind: &str, session: &str, project: &str) -> Line {
+    crate::link::parse_line(&format!(
+        r#"{{"kind":"{kind}","ts":0,"schema_version":1,"payload":{{"session_id":"{session}","project":"{project}"}}}}"#
+    ))
+    .unwrap_or_else(|| panic!("the forgot line parses"))
+}
+
+/// The home view's drawn text, one string per row.
+fn rendered(app: &App) -> Vec<String> {
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    (0..24)
+        .map(|y| {
+            (0..80)
+                .map(|x| buf[(x, y)].symbol().to_owned())
+                .collect::<String>()
+        })
+        .collect()
+}
+
+/// Loads one exited row for `session`: the status-triggered and the
+/// exit-triggered scoped asks are asked and settled, so the next
+/// trigger queues exactly one ask of each kind.
+fn load_exited(app: &mut App, session: &str, name: &str) {
+    let lines = commands(app.on_line(hello()));
+    let feed = lines[0]["id"].as_str().unwrap_or_else(|| panic!("feed id"));
+    assert!(app.on_line(accepted(feed, json!({}))).is_empty());
+    let asked: Vec<Value> = commands(app.on_line(status(session)))
+        .into_iter()
+        .filter(|line| line["command"] == "recent")
+        .collect();
+    // (`docs/tui.md`, "The session list"): a new project's counts are
+    // asked when it first appears, with one ask of each in flight: the
+    // exited scoped page and the archived scoped page.
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    let scoped = exited_ask_id(&asked);
+    let archived = archived_ask_id(&asked);
+    app.on_line(accepted(&scoped, json!({"sessions": [], "total": 0})));
+    app.on_line(accepted(&archived, json!({"sessions": [], "total": 0})));
+    let reasked: Vec<Value> = commands(app.on_line(left(session, "exited")));
+    // (`docs/tui.md`, "The session list"): the counts are re-asked when
+    // one of the project's sessions leaves, with one ask of each in
+    // flight.
+    assert_eq!(reasked.len(), 2, "{reasked:?}");
+    let scoped = exited_ask_id(&reasked);
+    let archived = archived_ask_id(&reasked);
+    app.on_line(accepted(
+        &scoped,
+        json!({"sessions": [exited(session, name)], "total": 1}),
+    ));
+    app.on_line(accepted(&archived, json!({"sessions": [], "total": 0})));
+}
+
+/// The forgot line drops the loaded exited row and re-asks that
+/// project's counts (`docs/tui.md`, "The session list"): one exited
+/// scoped and one archived scoped `recent` first page, no unscoped
+/// refill. The view renders without the forgotten row.
+fn forgot_drops_the_loaded_exited_row(kind: &str) {
+    let mut app = home_with(80, 24, launch());
+    load_exited(&mut app, "s_aaaaaaaaaaaaaaaa", "fix the parser");
+    assert_eq!(rows(&app), ["○  fix the parser"]);
+    let sent = commands(app.on_line(forgot(kind, "s_aaaaaaaaaaaaaaaa", "-w")));
+    // (`docs/tui.md`, "The session list"): a delete or an archive can
+    // move either count, so the forgot line re-asks both, with one ask
+    // of each in flight.
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    let exited = sent
+        .iter()
+        .find(|line| !is_archived(line))
+        .unwrap_or_else(|| panic!("the exited ask: {sent:?}"));
+    let archived = sent
+        .iter()
+        .find(|line| is_archived(line))
+        .unwrap_or_else(|| panic!("the archived ask: {sent:?}"));
+    for line in [exited, archived] {
+        assert_eq!(line["command"], "recent");
+        assert_eq!(line["args"]["project"], "-w");
+        assert!(line["args"].get("before").is_none());
+    }
+    assert!(rows(&app).is_empty(), "{:?}", rows(&app));
+    let drawn = rendered(&app);
+    assert!(
+        drawn.iter().all(|row| !row.contains("fix the parser")),
+        "{drawn:?}"
+    );
+}
+
+#[test]
+fn forgot_deleted_drops_the_exited_row_and_reasks_its_project() {
+    forgot_drops_the_loaded_exited_row("session_deleted");
+}
+
+#[test]
+fn forgot_archived_drops_the_exited_row_and_reasks_its_project() {
+    forgot_drops_the_loaded_exited_row("session_archived");
+}
+
+#[test]
+fn forgot_for_an_unknown_session_still_reasks_its_project() {
+    let mut app = home_with(80, 24, launch());
+    let lines = commands(app.on_line(hello()));
+    let feed = lines[0]["id"].as_str().unwrap_or_else(|| panic!("feed id"));
+    assert!(app.on_line(accepted(feed, json!({}))).is_empty());
+    // No row is loaded, and no scoped ask is in flight: the unknown id
+    // drops nothing but still re-asks its project's counts
+    // (`docs/tui.md`, "The session list"), one ask of each.
+    let sent = commands(app.on_line(forgot("session_deleted", "s_dddddddddddddddd", "-w")));
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    for line in &sent {
+        assert_eq!(line["command"], "recent");
+        assert_eq!(line["args"]["project"], "-w");
+    }
+    assert!(sent.iter().any(|line| !is_archived(line)), "{sent:?}");
+    assert!(sent.iter().any(is_archived), "{sent:?}");
+    assert!(rows(&app).is_empty());
+}
+
+#[test]
+fn forgot_without_a_project_changes_nothing_and_sends_nothing() {
+    let mut app = home_with(80, 24, launch());
+    load_exited(&mut app, "s_aaaaaaaaaaaaaaaa", "fix the parser");
+    assert_eq!(rows(&app), ["○  fix the parser"]);
+    for text in [
+        r#"{"kind":"session_deleted","ts":0,"schema_version":1,"payload":{"session_id":"s_aaaaaaaaaaaaaaaa"}}"#,
+        r#"{"kind":"session_archived","ts":0,"schema_version":1,"payload":{"session_id":"s_aaaaaaaaaaaaaaaa","project":""}}"#,
+    ] {
+        let line = crate::link::parse_line(text).unwrap_or_else(|| panic!("parses"));
+        assert!(app.on_line(line).is_empty());
+    }
+    assert_eq!(rows(&app), ["○  fix the parser"]);
+    let drawn = rendered(&app);
+    assert!(
+        drawn.iter().any(|row| row.contains("fix the parser")),
+        "{drawn:?}"
+    );
+}
+
+#[test]
+fn a_failed_feed_fold_settles_by_its_carried_id() {
+    let mut app = home_with(80, 24, launch());
+    // A close the quit question asked: its resume line must survive a
+    // failure the close never rode.
+    app.park_closing(contract::SessionId("s_9".to_owned()), "c_close".to_owned());
+    // Hello's feed and first page cruise the fold, paired as built.
+    let lines: Vec<String> = app.on_line(hello());
+    let at = lines
+        .iter()
+        .position(|line| line.contains("\"feed\""))
+        .expect("a feed line");
+    let carried: String = serde_json::from_str::<Value>(&lines[at])
+        .ok()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .expect("feed id");
+    // Tamper with the feed line's JSON id, then pair the tampered line
+    // as a builder whose line and id diverge would: settlement must
+    // follow the carried id, never the line's JSON.
+    let tampered = lines[at].replacen(&carried, "c_close", 1);
+    assert_ne!(tampered, lines[at]);
+    app.outbox
+        .note_hub_sent(&contract::CommandId(carried), &tampered);
+    let mut failed = lines;
+    failed[at] = tampered;
+    app.write_failed(&failed);
+    assert!(app.closing_sessions().contains(&"s_9".to_owned()));
+}
+
+/// The archived scoped ask's id among outgoing `recent` lines.
+fn archived_ask_id(lines: &[Value]) -> String {
+    lines
+        .iter()
+        .find(|line| is_archived(line))
+        .map(line_id)
+        .unwrap_or_else(|| panic!("an archived ask: {lines:?}"))
+        .to_owned()
+}
+
+/// The exited scoped ask's id among outgoing `recent` lines.
+fn exited_ask_id(lines: &[Value]) -> String {
+    lines
+        .iter()
+        .filter(|line| !is_archived(line) && line["args"].get("project").is_some())
+        .map(line_id)
+        .next()
+        .unwrap_or_else(|| panic!("an exited scoped ask: {lines:?}"))
+        .to_owned()
+}
+
+/// Home with one archived row ("filed work") in `-w` and both counts
+/// held: the unscoped answer carries one exited row, the exited scoped
+/// answer is empty, and the archived scoped answer carries the
+/// archived row.
+fn home_with_archived_row() -> App {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
+    );
+    let scoped = exited_ask_id(&fanout);
+    let archived = archived_ask_id(&fanout);
+    assert!(
+        app.on_line(accepted(&scoped, json!({"sessions": [], "total": 1})))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            &archived,
+            json!({"sessions": [exited("s_bbbbbbbbbbbbbbbb", "filed work")], "total": 1}),
+        ))
+        .is_empty()
+    );
+    app
+}
+
+#[test]
+fn archived_status_unarchives_the_row_without_duplicating_it() {
+    let mut app = home_with_archived_row();
+    let id = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    assert!(app.home.sessions.is_archived(&id));
+    // A live status for the archived id unarchives it locally: the row
+    // leaves the archived map and folds live, keeping its key, so no id
+    // ever shows in both lists.
+    assert!(
+        app.on_line(live(
+            "s_bbbbbbbbbbbbbbbb",
+            "resumed work",
+            "/w",
+            "-w",
+            json!({"state": "idle"}),
+        ))
+        .is_empty()
+    );
+    // Deleting the archived-map eviction lists the row twice, once live
+    // and once archived: the archived half fails this assertion.
+    assert!(!app.home.sessions.is_archived(&id));
+    let row = app
+        .home
+        .sessions
+        .row(&id)
+        .unwrap_or_else(|| panic!("the unarchived row"));
+    assert!(row.left.is_none());
+    assert!(
+        app.home
+            .sessions
+            .feed_row(&id)
+            .is_some_and(|row| row.left.is_none()),
+        "the row folds live"
+    );
+    assert_eq!(listed(&app), ["✓  resumed work", "○  old work"]);
+}
+
+#[test]
+fn archived_opening_an_archived_row_sends_the_subscribe_sequence() {
+    let mut app = home_with_archived_row();
+    // Opening an archived row resumes it the same way as an exited one:
+    // the same subscribe sequence goes out (`docs/tui.md`, "The session
+    // list"), with no pointer coordinates anywhere.
+    let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
+    let lines = open(&mut app, key);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "subscribe");
+    assert_eq!(lines[0]["session_id"], "s_bbbbbbbbbbbbbbbb");
+    assert_eq!(lines[0]["args"]["level"], "summary");
+    let ack = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    accept_summary(&mut app, "s_bbbbbbbbbbbbbbbb", ack);
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_bbbbbbbbbbbbbbbb")
+    );
+}
+
+#[test]
+fn archived_resumed_exit_returns_the_row_under_exited() {
+    let mut app = home_with_archived_row();
+    let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
+    let lines = open(&mut app, key);
+    let ack = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    accept_summary(&mut app, "s_bbbbbbbbbbbbbbbb", ack);
+    // The resumed session exits: both counts refetch, and its exit
+    // appends a row without `archived`, so the next scoped answers move
+    // it back under "exited" (`docs/invocation.md`, "Archiving").
+    let retrigger: Vec<Value> = commands(app.on_line(left("s_bbbbbbbbbbbbbbbb", "exited")));
+    assert_eq!(retrigger.len(), 2);
+    let scoped = exited_ask_id(&retrigger);
+    let archived = archived_ask_id(&retrigger);
+    assert!(
+        app.on_line(accepted(
+            &scoped,
+            json!({"sessions": [exited("s_bbbbbbbbbbbbbbbb", "filed work")], "total": 1}),
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(&archived, json!({"sessions": [], "total": 0})))
+            .is_empty()
+    );
+    // `docs/invocation.md`, "What the hub speaks" (recent total) and `docs/tui.md`, "The session list" (counts from total).
+    assert_eq!(stored(&app, "-w"), Some(1));
+    assert_eq!(archived_stored(&app, "-w"), Some(0));
+    assert!(
+        !app.home
+            .sessions
+            .is_archived(&contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()))
+    );
+    // The scoped page appends the returned row past the loaded one.
+    assert_eq!(listed(&app), ["○  old work", "○  filed work"]);
+}
+
+#[test]
+fn archived_a_missing_workspace_refusal_retries_then_renders_verbatim() {
+    let mut app = home_with_archived_row();
+    let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
+    let lines = open(&mut app, key);
+    let ack = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    let message = "Session s_bbbbbbbbbbbbbbbb could not resume: /w no longer exists";
+    // The exact missing-workspace shape retries once, with a fresh id,
+    // instead of failing the open.
+    let retry: Vec<Value> = commands(app.on_line(session_refused(
+        "s_bbbbbbbbbbbbbbbb",
+        ack,
+        "io_failed",
+        message,
+    )));
+    assert_eq!(retry.len(), 1, "exactly one retry goes out: {retry:?}");
+    assert_eq!(retry[0]["command"], "subscribe", "{retry:?}");
+    assert_eq!(retry[0]["args"], json!({"level": "full"}), "{retry:?}");
+    let second = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("retry id"));
+    assert_ne!(second, ack, "the retry mints a fresh id");
+    assert!(!app.on_home(), "the open holds through the retry");
+    // An archived log ends in the marker, never `fiber_exited`, so the
+    // hub refuses the retry too: the open fails home with the message
+    // verbatim, and the row stays archived (`docs/tui.md`, "The session
+    // list").
+    assert!(
+        app.on_line(session_refused(
+            "s_bbbbbbbbbbbbbbbb",
+            second,
+            "io_failed",
+            message
+        ))
+        .is_empty()
+    );
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert_eq!(app.notice(), Some(message), "{message}");
+    let id = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    assert!(
+        app.home.sessions.is_archived(&id),
+        "the archived row stays: {message}"
+    );
+    let row = app
+        .home
+        .sessions
+        .row(&id)
+        .unwrap_or_else(|| panic!("the row stays: {message}"));
+    assert_eq!(
+        row.note.as_deref(),
+        Some(message),
+        "the row's note renders verbatim: {message}"
+    );
+    assert!(
+        app.home.sessions.cards().is_empty(),
+        "no rail card: {message}"
+    );
+}
+
+#[test]
+fn archived_head_keys_and_text_follow_their_own_project() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [
+            exited_in("s_1111111111111111", "w1", "/w", "-w"),
+            exited_in("s_2222222222222222", "w2", "/w", "-w"),
+            exited_in("s_3333333333333333", "o1", "/other", "-other"),
+        ]}),
+    );
+    // One scoped and one archived ask per project.
+    let ask_id = |project: &str, archived: bool| {
+        fanout
+            .iter()
+            .filter(|line| is_archived(line) == archived)
+            .find(|line| line["args"]["project"] == project)
+            .map(line_id)
+            .unwrap_or_else(|| panic!("an ask for {project} archived={archived}"))
+            .to_owned()
+    };
+    assert!(
+        app.on_line(accepted(
+            &ask_id("-w", false),
+            json!({"sessions": [], "total": 2})
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            &ask_id("-other", false),
+            json!({"sessions": [], "total": 1})
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            &ask_id("-w", true),
+            json!({"sessions": [exited_in("s_4444444444444444", "aw", "/w", "-w")], "total": 1}),
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            &ask_id("-other", true),
+            json!({"sessions": [
+                exited_in("s_5555555555555555", "ao1", "/other", "-other"),
+                exited_in("s_6666666666666666", "ao2", "/other", "-other"),
+            ], "total": 2}),
+        ))
+        .is_empty()
+    );
+    // The archived rows took fresh keys past the three unscoped rows,
+    // so neither head key is 0 or 1: replacing the head key with 0 or 1
+    // fails the equalities below.
+    let heads: Vec<(u64, String)> = app
+        .home_screen()
+        .unwrap_or_else(|| panic!("a screen"))
+        .list
+        .into_iter()
+        .filter_map(|line| match line {
+            ListLine::ArchivedHead { key, .. } => {
+                let project = app.home.sessions.by_key(key)?.project.clone();
+                Some((key, project))
+            }
+            ListLine::Head { .. }
+            | ListLine::Live { .. }
+            | ListLine::ExitedHead { .. }
+            | ListLine::Exited { .. }
+            | ListLine::More { .. } => None,
+        })
+        .collect();
+    assert_eq!(heads.len(), 2);
+    for (key, project) in &heads {
+        // `==` keeps each head on its own project: `!=` swaps the
+        // sections and fails the count below.
+        let expected = if project == "-w" { 1 } else { 2 };
+        assert_eq!(
+            app.home_text(Spot::Archived(*key)).as_deref(),
+            Some(&format!("archived · {expected}")[..]),
+            "text for {project}",
+        );
+        let first = if project == "-w" {
+            "s_4444444444444444"
+        } else {
+            "s_5555555555555555"
+        };
+        assert_eq!(*key, row_key(&app, first), "head key for {project}");
+    }
+}
+
+/// Renders the attached screen at 80x24 and returns its text, one row
+/// per line.
+fn screen_text(app: &mut App) -> String {
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(app, area, &mut buf, None);
+    app.drawn(&targets);
+    crate::view::text(&buf)
+}
+
+/// Opens the exited row read only: the first-stage refusal retries
+/// once, and the hub accept carrying the missing path attaches without
+/// resuming.
+fn open_read_only(app: &mut App, session: &str, path: &str) {
+    let lines = open_first(app);
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    let message = format!("Session {session} could not resume: {path} no longer exists");
+    let retry: Vec<Value> =
+        commands(app.on_line(session_refused(session, first, "io_failed", &message)));
+    assert_eq!(retry.len(), 1, "exactly one retry goes out");
+    assert_eq!(retry[0]["args"], json!({"level": "full"}));
+    let second = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("retry id"));
+    assert!(
+        app.on_line(accepted(
+            second,
+            json!({"last_seq": 3, "workspace_gone": path})
+        ))
+        .is_empty()
+    );
+    assert_eq!(app.unwritable(), Some(path));
+}
+
+#[test]
+fn read_only_open_shows_the_bar_with_no_input_box_or_card() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
+    open_read_only(&mut app, "s_aaaaaaaaaaaaaaaa", "/w");
+    assert!(!app.on_home());
+    assert!(app.pass_open(), "the fold boundary is recorded");
+    let text = screen_text(&mut app);
+    // The one-row bar replaces the input box: the missing path and the
+    // note, dim, with no draft rows and no cursor.
+    assert!(
+        text.contains("`/w` no longer exists. Read only."),
+        "the bar row: {text}"
+    );
+    assert!(
+        app.input().expand().is_empty(),
+        "no draft rows behind the bar"
+    );
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    assert!(
+        crate::view::cursor(&app, area).is_none(),
+        "no cursor over the bar"
+    );
+    // No rail card appears for the read-only session.
+    assert!(app.home.sessions.cards().is_empty(), "no rail card");
+    // The row keeps its place and its exited mark, with no note.
+    assert_eq!(listed(&app), ["○  old work"]);
+    let row = app
+        .home
+        .sessions
+        .row(&contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()))
+        .unwrap_or_else(|| panic!("the row stays"));
+    assert!(
+        matches!(row.left, Some(crate::home::Left::Exited)),
+        "the row stays under exited"
+    );
+    assert!(row.note.is_none(), "no row note");
+    assert!(row.status.is_none(), "no folded status yet");
+    // A replayed status reaches the conversation but never touches the
+    // rows: the archived-or-exited row stays put with no status folded.
+    let before = listed(&app);
+    let _ = app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "old work",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    assert_eq!(listed(&app), before, "the row keeps its place");
+    let row = app
+        .home
+        .sessions
+        .row(&contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()))
+        .unwrap_or_else(|| panic!("the row stays"));
+    assert!(
+        matches!(row.left, Some(crate::home::Left::Exited)),
+        "no left clearing"
+    );
+    assert!(row.status.is_none(), "no row-status fold");
+    // Esc returns home with the row in place.
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(crate::keys::Key::Esc, now);
+    assert!(app.session().is_none(), "Esc leaves the session");
+    assert!(app.on_home(), "Esc goes home");
+    assert_eq!(listed(&app), ["○  old work"], "the row stays home");
+}
+
+#[test]
+fn read_only_archived_row_stays_archived_out_of_the_feed() {
+    let mut app = home_with_archived_row();
+    let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
+    let lines = open(&mut app, key);
+    let ack = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    let message = "Session s_bbbbbbbbbbbbbbbb could not resume: /w no longer exists";
+    let retry: Vec<Value> = commands(app.on_line(session_refused(
+        "s_bbbbbbbbbbbbbbbb",
+        ack,
+        "io_failed",
+        message,
+    )));
+    assert_eq!(retry.len(), 1, "exactly one retry goes out");
+    let second = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("retry id"));
+    assert!(
+        app.on_line(session_refused(
+            "s_bbbbbbbbbbbbbbbb",
+            second,
+            "io_failed",
+            message
+        ))
+        .is_empty()
+    );
+    assert!(app.on_home());
+    let id = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    assert!(
+        app.home.sessions.is_archived(&id),
+        "the archived row stays archived"
+    );
+    // The archived row never enters the feed.
+    assert_eq!(listed(&app), ["○  old work"]);
+    assert!(
+        !listed(&app).iter().any(|line| line.contains("filed work")),
+        "stays out of the feed: {:?}",
+        listed(&app)
+    );
+    let text = screen_text(&mut app);
+    assert!(
+        !text.contains("filed work"),
+        "the archived row draws nowhere: {text}"
+    );
 }

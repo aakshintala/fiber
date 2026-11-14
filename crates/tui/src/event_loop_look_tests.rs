@@ -58,7 +58,7 @@ fn the_frame_written_is_painted_and_the_kept_frame_is_not() {
     let written = screen.backend().buffer();
     assert_eq!(written[(0, 0)].fg, Color::Rgb(0x6e, 0xaa, 0xfe));
     assert_eq!(written[(1, 0)].fg, Color::Reset);
-    assert_eq!(written[(3, 1)].bg, Color::Reset);
+    assert_eq!(written[(3, 1)].bg, Color::Rgb(0x0c, 0x0c, 0x11));
     let (kept, _) = screen.last().expect("a kept frame");
     assert_eq!(kept[(0, 0)].fg, Role::Accent.color());
     assert_eq!(kept[(1, 0)].fg, Role::Text.color());
@@ -186,7 +186,12 @@ fn a_fixed_dark_theme_stays_dark_after_a_light_report() {
     screen.appearance(Appearance::Light);
     let mut app = App::new(std::path::PathBuf::from("/w"));
     screen.draw_with(&mut app, None, hi).expect("a draw");
-    assert_eq!(screen.backend().buffer()[(3, 1)].bg, Color::Reset);
+    // The fixed dark theme keeps its own page under a light report
+    // (`docs/tui.md`, "Themes").
+    assert_eq!(
+        screen.backend().buffer()[(3, 1)].bg,
+        Color::Rgb(0x0c, 0x0c, 0x11)
+    );
 }
 
 #[test]
@@ -195,10 +200,19 @@ fn a_light_report_through_the_loop_repaints_light() {
     use crate::Input;
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     let (_, step_rx) = mpsc::channel();
-    assert_eq!(lp.step(Input::Bytes(Vec::new()), &step_rx), None);
-    assert_eq!(lp.screen.backend().buffer()[(0, 0)].bg, Color::Reset);
     assert_eq!(
-        lp.step(Input::Bytes(b"\x1b[?997;2n".to_vec()), &step_rx),
+        (lp.step(Input::Bytes(Vec::new()), &step_rx)).expect("event loop result succeeds"),
+        None
+    );
+    // The loop starts dark: the page paints on the panel tint
+    // (`docs/tui.md`, "Themes").
+    assert_eq!(
+        lp.screen.backend().buffer()[(0, 0)].bg,
+        Color::Rgb(0x0c, 0x0c, 0x11)
+    );
+    assert_eq!(
+        (lp.step(Input::Bytes(b"\x1b[?997;2n".to_vec()), &step_rx))
+            .expect("event loop result succeeds"),
         None
     );
     assert_eq!(

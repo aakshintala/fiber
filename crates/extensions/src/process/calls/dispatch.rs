@@ -10,8 +10,63 @@ use crate::process::{
     oauth, requests, transport,
 };
 
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+pub(crate) fn report_delegate_run_failure(
+    runtime: &crate::runtime::Runtime,
+    owner: &str,
+    error: &dyn std::fmt::Display,
+) {
+    runtime.emit(&contract::events::Event::Notice(contract::events::Notice {
+        code: contract::ErrorCode::HookFailed,
+        message: format!("The delegate `run` failed, so its result was dropped: {error}"),
+        extension: Some(owner.to_owned()),
+    }));
+}
+
 impl ProcessExtension {
+    /// Routes delegate events to the process callback that bound the job.
+    /// A finish waits for its completion before the one `run` request is sent.
+    pub(crate) fn observe_delegate(&self, event: &contract::events::Event) -> bool {
+        if let contract::events::Event::DelegateFinished(finished) = event {
+            return self.shared.table.hold_delegate_finish(finished);
+        }
+        let contract::events::Event::JobCompleted(completed) = event else {
+            return false;
+        };
+        let Some(route) = self.shared.table.finish_delegate(completed) else {
+            return false;
+        };
+        if route.run {
+            let shared = Arc::clone(&self.shared);
+            let dispatch = requests::Dispatch {
+                kind: requests::RequestKind::Function,
+                registration: route.handle,
+                key: "run".to_owned(),
+                ran_by: format!("delegate {}", completed.job_id.0),
+                args: vec![delegate_run_arg(completed, route.finish.as_ref())],
+                timeout: route.timeout,
+                state_call: None,
+                credential: None,
+                inner_calls: None,
+            };
+            let spawned = std::thread::Builder::new()
+                .name(format!("process delegate run {}", self.shared.owner))
+                .spawn(move || {
+                    if let Err(error) =
+                        requests::run_request(&shared, dispatch, &support::cancel::Token::new())
+                    {
+                        report_delegate_run_failure(&shared.runtime, &shared.owner, &error);
+                    }
+                });
+            match spawned {
+                Ok(thread) => drop(thread), // Detach: the callback completes independently.
+                Err(error) => {
+                    report_delegate_run_failure(&self.shared.runtime, &self.shared.owner, &error)
+                } // The notice records that the bound run never started.
+            }
+        }
+        true
+    }
+
     /// Handles one line or close from the child, answering it. A close
     /// records the death once per child spawn, retiring the generation
     /// so late calls and replies read stale.
@@ -91,6 +146,9 @@ impl ProcessExtension {
                     ErrorCode::InvalidArguments,
                     transport::UNFIT.to_owned(),
                 );
+            }
+            transport::ParsedLine::Refused { id, message } => {
+                self.answer_rejected(&id, ErrorCode::InvalidArguments, message);
             }
             transport::ParsedLine::Malformed { id } => {
                 self.answer_rejected(&id, ErrorCode::Malformed, transport::MALFORMED.to_owned());
@@ -214,7 +272,9 @@ impl ProcessExtension {
         };
         match decoded {
             calls::DecodedCall::Service(operation) => {
-                self.serve_host(id, call.to_owned(), operation, callback.clone());
+                let host_call =
+                    requests::HostCallHandle::new(id.clone(), Arc::clone(&self.shared.table));
+                self.serve_host(id, call.to_owned(), operation, callback.clone(), host_call);
             }
             calls::DecodedCall::Ask(_) => {
                 self.serve_ask(id, callback.clone());
@@ -252,6 +312,7 @@ impl ProcessExtension {
         call: String,
         operation: context::HostOperation,
         callback: crate::host::admission::CallbackContext,
+        host_call: requests::HostCallHandle,
     ) {
         let shared = Arc::clone(&self.shared);
         // The context clones before the worker starts: no service call
@@ -267,7 +328,7 @@ impl ProcessExtension {
                 let cancel = callback.cancel.clone();
                 match shared
                     .services
-                    .perform(&context, &callback, operation, &cancel)
+                    .perform(&context, &callback, operation, &host_call, &cancel)
                 {
                     Ok(value) => answer_on(
                         &shared,
@@ -487,7 +548,8 @@ impl ProcessExtension {
         Arc::new(
             move |args: Value,
                   scope: Option<crate::lua::CredentialFor>,
-                  caller: &dyn contract::tool::Cancel| {
+                  caller: &dyn contract::tool::Cancel,
+                  inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
                 requests::run_request(
                     &shared,
                     requests::Dispatch {
@@ -499,12 +561,61 @@ impl ProcessExtension {
                         timeout,
                         state_call: None,
                         credential: scope,
+                        inner_calls,
                     },
                     caller,
                 )
             },
         )
     }
+}
+
+/// The argument passed to a process delegate's completion callback.
+fn delegate_run_arg(
+    completed: &contract::events::JobCompleted,
+    finished: Option<&contract::events::DelegateFinished>,
+) -> Value {
+    let status = match completed.status {
+        contract::events::Outcome::Completed => "completed",
+        contract::events::Outcome::Failed => "failed",
+        contract::events::Outcome::Cancelled => "cancelled",
+    };
+    let mut result = serde_json::json!({
+        "job_id": completed.job_id.0,
+        "status": status,
+    });
+    if let (Some(finished), Some(result)) = (finished, result.as_object_mut()) {
+        result.insert("text".to_owned(), Value::String(finished.text.clone()));
+        result.insert(
+            "usage".to_owned(),
+            serde_json::to_value(&finished.usage).unwrap_or(Value::Null),
+        );
+        for (key, value) in [
+            (
+                "artifact",
+                finished.artifact.as_ref().map(|v| Value::String(v.clone())),
+            ),
+            (
+                "questions",
+                finished
+                    .questions
+                    .as_ref()
+                    .and_then(|v| serde_json::to_value(v).ok()),
+            ),
+            (
+                "worktree",
+                finished
+                    .worktree
+                    .as_ref()
+                    .and_then(|v| serde_json::to_value(v).ok()),
+            ),
+        ] {
+            if let Some(value) = value {
+                result.insert(key.to_owned(), value);
+            }
+        }
+    }
+    result
 }
 
 /// The sentence a command this Fiber does not build is rejected with,

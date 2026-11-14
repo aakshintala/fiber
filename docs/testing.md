@@ -332,6 +332,9 @@ In `docs/testing/running.md`.
   the binary cannot be made to lose on every run, because its pause point
   sits inside a crate and the shipped binary takes no test-only switch, is
   reproduced at crate level through that pause point ("Waits and timeouts").
+- **A change to behaviour an existing test pins:** the assertion for the new
+  behaviour, at the same level as the one it replaces. Deleting the old
+  assertion alone leaves the new behaviour unpinned there.
 - **A new event kind:** a binary-level test in which a consumer sees it.
 - **A new member of a closed set a person sees,** such as a view or a notice code: a screen or binary-level test in which the person-facing consumer shows it.
 - **A breaking log format change:** its migration and the migration's test

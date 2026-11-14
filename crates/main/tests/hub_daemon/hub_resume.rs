@@ -144,9 +144,19 @@ impl Setup {
 
     /// The `sessions` directory of the workspace's project.
     fn sessions(&self) -> PathBuf {
-        let workspace = fs::canonicalize(self.workspace()).unwrap();
-        let key = workspace.to_string_lossy().replace('/', "-");
-        self.home().join("projects").join(key).join("sessions")
+        self.home()
+            .join("projects")
+            .join(self.project_key())
+            .join("sessions")
+    }
+
+    /// The project key of the workspace's project: the canonical
+    /// workspace path with `/` as `-`.
+    fn project_key(&self) -> String {
+        fs::canonicalize(self.workspace())
+            .unwrap()
+            .to_string_lossy()
+            .replace('/', "-")
     }
 }
 
@@ -329,6 +339,16 @@ fn prompt(id: &str, session: &str, text: &str) -> Value {
     )
 }
 
+fn history(id: &str, session: &str, args: Value) -> Value {
+    command(id, session, "history", args)
+}
+
+/// A hub `archive` line for `session`: a hub command, so it carries no
+/// `session_id`.
+fn archive(id: &str, session: &str) -> Value {
+    json!({"id": id, "command": "archive", "args": {"session": session}})
+}
+
 fn close(session: &str) -> Value {
     json!({"id": "c_close", "session_id": session, "command": "close"})
 }
@@ -355,6 +375,17 @@ fn echo_call() -> Response {
         "call_id": "call_1",
         "name": "shell",
         "arguments": json!({"command": "echo hi"}).to_string()
+    }})])
+}
+
+/// An `openai-responses` stream that writes a file into a worktree.
+fn write_call(path: &str, content: &str) -> Response {
+    stream(&[json!({"type": "response.output_item.done", "item": {
+        "type": "function_call",
+        "id": "fc_write_1",
+        "call_id": "call_write_1",
+        "name": "write",
+        "arguments": json!({"path": path, "content": content}).to_string()
     }})])
 }
 
@@ -772,44 +803,388 @@ fn a_subscribe_through_the_hub_to_an_exited_delegate_is_refused() {
     hub.lock().unwrap().take().expect("the hub ran").finish();
 }
 
+/// A child log continuing `parent` through its seq 1: `session_started`
+/// with the fork point, two turn lines, and the exit mark. Every line
+/// carries its seq, as a real log does.
+fn write_child_log(setup: &Setup, child: &str, parent: &str, workspace: &str) {
+    let dir = setup
+        .home()
+        .join("projects")
+        .join(setup.project_key())
+        .join("sessions")
+        .join(child);
+    fs::create_dir_all(&dir).unwrap();
+    let line = |seq: u64, kind: &str, payload: Value| {
+        json!({
+            "kind": kind, "seq": seq, "session_id": child,
+            "ts": 1, "schema_version": 1, "payload": payload,
+        })
+        .to_string()
+    };
+    let text = [
+        line(
+            0,
+            "session_started",
+            json!({"workspace": workspace, "forked_from": {"session_id": parent, "seq": 1}}),
+        ),
+        line(1, "turn_started", json!({})),
+        line(2, "turn_completed", json!({})),
+        line(3, "fiber_exited", json!({})),
+    ]
+    .join("\n")
+        + "\n";
+    fs::write(dir.join("events.jsonl"), text).unwrap();
+}
+
 #[test]
-fn a_resume_of_a_session_whose_workspace_is_gone_is_io_failed_naming_it() {
+fn a_full_subscribe_for_a_gone_workspace_replays_its_fold_with_the_missing_path() {
     let setup = Setup::new_with_fr_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let (code, lines) = setup.run(&["ask", "one"]);
     assert_eq!(code, Some(0));
-    let id = lines[0]["session_id"].as_str().unwrap().to_owned();
+    let parent = lines[0]["session_id"].as_str().unwrap().to_owned();
+    let child = "s_1111111111111111";
     // The live session records its getcwd, which is canonical: on macOS
     // `/var` is a symlink to `/private/var`, so the text form mismatches.
     let workspace = fs::canonicalize(setup.workspace())
         .unwrap()
         .display()
         .to_string();
+    write_child_log(&setup, child, &parent, &workspace);
     let hub = Arc::new(Mutex::new(None));
     let client = connect_hub(&setup, &hub);
-    // The session exited; its plain workspace cannot be made again. The
+    // The sessions exited; the plain workspace cannot be made again. The
     // removal lands after the hub started, which runs in the workspace.
     fs::remove_dir_all(setup.workspace()).unwrap();
-    client.send(&subscribe_line("c_sub", &id));
-    let rejected = until_hub(&client, "the rejection", |line| {
+    // A `full` subscribe answers the fold's boundary and the missing
+    // path, then the log's fold in order, and nothing further.
+    client.send(&subscribe_line("c_sub", child));
+    let acked = until_hub(&client, "the full subscribe", |line| {
+        acknowledges(line, "c_sub")
+    });
+    let accept = acked.last().unwrap();
+    assert_eq!(accept["payload"]["command_id"], "c_sub", "{accept}");
+    let last = accept["payload"]["result"]["last_seq"]
+        .as_u64()
+        .expect("a nonempty fold has a boundary");
+    assert_eq!(last, 3, "{accept}");
+    assert_eq!(
+        accept["payload"]["result"]["workspace_gone"].as_str(),
+        Some(workspace.as_str()),
+        "{accept}"
+    );
+    // The fold is the whole stored chain, as for a finished delegate:
+    // the parent's held lines first, then the session's own lines in
+    // order, and nothing further.
+    let mut fold = Vec::new();
+    for _ in 0..6 {
+        fold.push(client.next("the fold", &fold));
+    }
+    let shape: Vec<_> = fold
+        .iter()
+        .map(|line| {
+            (
+                line["session_id"].as_str().unwrap_or("?"),
+                line["seq"].as_u64().unwrap_or(u64::MAX),
+                line["kind"].as_str().unwrap_or("?"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            (parent.as_str(), 0, "session_started"),
+            (parent.as_str(), 1, "fiber_started"),
+            (child, 0, "session_started"),
+            (child, 1, "turn_started"),
+            (child, 2, "turn_completed"),
+            (child, 3, "fiber_exited"),
+        ],
+        "{shape:?}"
+    );
+    let acks: Vec<_> = fold
+        .iter()
+        .filter(|line| {
+            matches!(
+                line["kind"].as_str(),
+                Some("command_accepted" | "command_rejected")
+            )
+        })
+        .collect();
+    assert!(
+        acks.is_empty(),
+        "no accept or reject after the ack: {acks:?}"
+    );
+    // The `prompt` refusal proves the fold completed: a command routed
+    // while the replay drains queues on its retiring entry and is
+    // passed on only at its end, so the refusal arrives strictly after
+    // the whole fold, in command order (`crates/hub/src/relay.rs`: "A
+    // command for a retiring relay queues unsent when its thread is
+    // alive, and its thread passes the queue on in read order"). The
+    // gather holds every line in between: anything but the refusal is
+    // a live-tail leak, with no silence wait involved.
+    client.send(&prompt("c_prompt", child, "hi"));
+    let refused = until_hub(&client, "the prompt refusal", |line| {
         line["kind"] == "command_rejected"
     });
-    let rejected = rejected.last().unwrap();
+    assert_eq!(
+        refused.len(),
+        1,
+        "no tail between the fold and the refusal: {refused:?}"
+    );
+    let rejected = refused.last().unwrap();
     assert_eq!(rejected["payload"]["code"], "io_failed", "{rejected}");
-    assert_eq!(rejected["payload"]["command_id"], "c_sub");
+    assert_eq!(rejected["payload"]["command_id"], "c_prompt", "{rejected}");
     assert_eq!(
         rejected["payload"]["message"].as_str().unwrap(),
-        format!("Session {id} could not resume: {workspace} no longer exists"),
+        format!("Session {child} could not resume: {workspace} no longer exists"),
         "{rejected}"
     );
-    // No session process started: nothing bound the socket, and the hub
-    // logged the refusal without the path. The terminal's no-card
-    // rendering of this refusal is pinned in the tui screen test.
-    assert!(!setup.home().join("run").join(&id).exists());
+    // No live tail follows the completed fold: the next command's
+    // answer is the controlled signal. Its gather holds every line
+    // between the refusal and the answer, so anything but the answer
+    // is a live-tail leak, with no silence wait involved.
+    // `history` pages the gone session's own log and its forked-from
+    // parent's, as the session would.
+    client.send(&history("c_hist", child, json!({})));
+    let answered = until_hub(&client, "the history answer", |line| {
+        acknowledges(line, "c_hist")
+    });
+    assert_eq!(
+        answered.len(),
+        1,
+        "no tail between the refusal and the history answer: {answered:?}"
+    );
+    let answered = answered.last().unwrap();
+    let seqs: Vec<_> = answered["payload"]["result"]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["seq"].as_u64().unwrap())
+        .collect();
+    assert_eq!(seqs, [0, 1, 2, 3], "{answered}");
+    client.send(&history(
+        "c_par",
+        child,
+        json!({"session_id": parent, "from_seq": 0}),
+    ));
+    let answered = until_hub(&client, "the parent page", |line| {
+        acknowledges(line, "c_par")
+    });
+    assert_eq!(
+        answered.len(),
+        1,
+        "no tail between the history answers: {answered:?}"
+    );
+    let answered = answered.last().unwrap();
+    let parent_lines = answered["payload"]["result"]["lines"].as_array().unwrap();
+    assert!(
+        parent_lines.len() == 2 && parent_lines.iter().all(|line| line["session_id"] == parent),
+        "{answered}"
+    );
+    assert_eq!(
+        parent_lines
+            .iter()
+            .map(|line| line["seq"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        [0, 1],
+        "{answered}"
+    );
+    // The `prompt` above already proved any other command still reaches
+    // the resume guard. No session process started: nothing bound the
+    // socket, and the hub logged no resume.
+    assert!(!setup.home().join("run").join(child).exists());
     let log = setup.hub_log();
     assert!(!log.contains("session_resumed"), "{log}");
-    assert!(!log.contains(&workspace), "{log}");
+    // Archiving the gone session is accepted, and it stays archived:
+    // nothing resumes it, so nothing unarchives it, and a later prompt
+    // is still refused without a process.
+    client.send(&archive("c_arch", child));
+    let archived = until_hub(&client, "the archive answer", |line| {
+        acknowledges(line, "c_arch")
+    });
+    assert_eq!(
+        archived.len(),
+        1,
+        "no tail between the history page and the archive answer: {archived:?}"
+    );
+    assert_eq!(archived.last().unwrap()["kind"], "command_accepted");
+    let log = setup.log(child);
+    assert_eq!(log.last().unwrap()["kind"], "archived", "{log:?}");
+    assert!(
+        log.iter()
+            .skip_while(|line| line["kind"] != "fiber_exited")
+            .all(|line| line["kind"] != "fiber_started"),
+        "no resume past the exit: {log:?}"
+    );
+    client.send(&prompt("c_after", child, "hi"));
+    let rejected = until_hub(&client, "the second refusal", |line| {
+        line["kind"] == "command_rejected"
+    });
+    assert_eq!(
+        rejected.len(),
+        1,
+        "no tail between the archive answer and the second refusal: {rejected:?}"
+    );
+    let rejected = rejected.last().unwrap();
+    assert_eq!(rejected["payload"]["code"], "io_failed", "{rejected}");
+    assert!(!setup.home().join("run").join(child).exists());
+    assert!(!setup.hub_log().contains("session_resumed"));
+    // An archived-final log still replays: the `full` subscribe is
+    // accepted with the missing path, and the fold follows as before
+    // with the `archived` marker last. Nothing unarchives the row.
+    client.send(&subscribe_line("c_sub2", child));
+    let acked = until_hub(&client, "the archived replay", |line| {
+        acknowledges(line, "c_sub2")
+    });
+    assert_eq!(
+        acked.len(),
+        1,
+        "no tail between the second refusal and the archived replay: {acked:?}"
+    );
+    let accept = acked.last().unwrap();
+    assert_eq!(accept["payload"]["command_id"], "c_sub2", "{accept}");
+    let last = accept["payload"]["result"]["last_seq"]
+        .as_u64()
+        .expect("a nonempty fold has a boundary");
+    assert_eq!(last, 4, "{accept}");
+    assert_eq!(
+        accept["payload"]["result"]["workspace_gone"].as_str(),
+        Some(workspace.as_str()),
+        "{accept}"
+    );
+    let mut fold = Vec::new();
+    for _ in 0..7 {
+        fold.push(client.next("the archived fold", &fold));
+    }
+    let shape: Vec<_> = fold
+        .iter()
+        .map(|line| {
+            (
+                line["session_id"].as_str().unwrap_or("?"),
+                line["seq"].as_u64().unwrap_or(u64::MAX),
+                line["kind"].as_str().unwrap_or("?"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            (parent.as_str(), 0, "session_started"),
+            (parent.as_str(), 1, "fiber_started"),
+            (child, 0, "session_started"),
+            (child, 1, "turn_started"),
+            (child, 2, "turn_completed"),
+            (child, 3, "fiber_exited"),
+            (child, 4, "archived"),
+        ],
+        "{shape:?}"
+    );
+    let log = setup.log(child);
+    assert_eq!(log.last().unwrap()["kind"], "archived", "{log:?}");
+    drop(client);
+    hub.lock().unwrap().take().expect("the hub ran").finish();
+}
+
+#[test]
+fn an_auto_archived_worktree_session_resumes_and_is_listed_unarchived() {
+    let setup = Setup::new_with_fr_root();
+    let server =
+        ProviderServer::start([hello(), write_call("kept.txt", "worktree\n"), hello()]).unwrap();
+    setup.provider(&server);
+    let repository = setup.workspace();
+    support::git(setup.deadline, &repository, &["init", "--quiet"]);
+    fs::write(repository.join("tracked.txt"), "base\n").unwrap();
+    support::git(setup.deadline, &repository, &["add", "."]);
+    support::git(
+        setup.deadline,
+        &repository,
+        &["commit", "--quiet", "-m", "base"],
+    );
+
+    let (code, lines) = setup.run(&["ask", "--worktree", "one"]);
+    assert_eq!(code, Some(0));
+    let id = lines
+        .iter()
+        .find(|line| line["kind"] == "session_started")
+        .expect("session_started was written")["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let original = setup.log(&id);
+    let worktree = original
+        .iter()
+        .find(|line| line["kind"] == "session_started")
+        .and_then(|line| line["payload"]["workspace"].as_str())
+        .expect("the worktree path is recorded")
+        .to_owned();
+    assert!(
+        !PathBuf::from(&worktree).exists(),
+        "clean worktree was removed"
+    );
+    assert!(
+        setup.workspace().join(".git").exists(),
+        "repository remains"
+    );
+
+    let hub = Arc::new(Mutex::new(None));
+    let client = connect_hub(&setup, &hub);
+    client.send(&json!({"id": "c_archived", "command": "sessions", "args": {"archived": true}}));
+    let archived = until_hub(&client, "the archived listing", |line| {
+        acknowledges(line, "c_archived")
+    });
+    let archived_rows = &archived.last().unwrap()["payload"]["result"]["exited"];
+    assert!(
+        archived_rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| { row["session_id"] == id && row["archived"] == true }),
+        "the absent worktree was automatically archived: {archived_rows}"
+    );
+
+    client.send(&subscribe_line("c_sub", &id));
+    let subscribed = until_hub(&client, "the resumed-session subscription", |line| {
+        acknowledges(line, "c_sub")
+    });
+    let sub = support::Subscribed::from_ack(Some(&id), subscribed.last().unwrap().clone());
+
+    client.send(&prompt("c_prompt", &id, "write a file"));
+    let mut resumed = false;
+    let mut completed = false;
+    let turn = until_hub(&client, "the resumed worktree turn", |line| {
+        if resumed && line["kind"] == "turn_completed" {
+            completed = true;
+        }
+        resumed |= line["kind"] == "fiber_started" && line["payload"]["resumed"] == true;
+        resumed && completed
+    });
+    assert!(
+        turn.iter()
+            .any(|line| line["kind"] == "tool_call_completed"),
+        "the resumed turn wrote into its worktree: {turn:?}"
+    );
+    let resumed_path = PathBuf::from(&worktree);
+    assert_eq!(
+        fs::read_to_string(resumed_path.join("kept.txt")).unwrap(),
+        "worktree\n"
+    );
+
+    client.send(&close(&id));
+    until_exited(&client, &setup, Some(&sub));
+    client.send(&json!({"id": "c_unarchived", "command": "sessions", "args": {}}));
+    let listed = until_hub(&client, "the unarchived listing", |line| {
+        acknowledges(line, "c_unarchived")
+    });
+    let rows = &listed.last().unwrap()["payload"]["result"]["exited"];
+    assert!(
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .any(|row| { row["session_id"] == id && row["archived"] != true }),
+        "resuming unarchived the row: {rows}"
+    );
     drop(client);
     hub.lock().unwrap().take().expect("the hub ran").finish();
 }

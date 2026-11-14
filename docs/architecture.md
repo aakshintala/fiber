@@ -136,7 +136,8 @@ and `TokenFiles`, credential
 files in `config` that `mcp` uses for remote servers' OAuth tokens, and `HostModel`,
 the session's model call in `main` that `extensions` uses for `host.model`, `HostDelegate`,
 the session's delegate start in `main` that `extensions` uses for `host.delegate`, and `CommandHost`,
-the shell host in `main` that `tools` uses for keeper runs.
+the shell host in `main` that `tools` uses for keeper runs, and `KeeperProbe`,
+the keeper probe in `hub` that `main` injects for the feed's keeper set and `stop_keepers`.
 
 1. Calls point one way. If A may call B, B may never call A. B answers, or it
    emits an event and A picks it up.
@@ -358,9 +359,9 @@ ones through an emitter handle defined in `contract`. This keeps `seq` minted
 in one place and keeps the fsync ordering rule in `docs/events.md` — two
 fsyncs bracketing each side effect — a property of one thread's sequence of
 calls rather than of a race. While the session is gone, its keeper appends
-`job_completed` as the holder of `session.lock` (`docs/events.md`;
-`docs/tools.md`, "The keeper"). One process holds the lock at a time, so `seq`
-still has one minter.
+`keeper_started`, `keeper_bound`, then `job_completed` as the holder of
+`session.lock` (`docs/events.md`; `docs/tools.md`, "The keeper"). One
+process holds the lock at a time, so `seq` still has one minter.
 
 ### Tool calls in a step
 

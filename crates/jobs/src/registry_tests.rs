@@ -62,6 +62,7 @@ fn extension_delegates_are_unknown_to_message_and_hide_only_the_final_text_in_an
                 "scan".into(),
                 "/child/events.jsonl".into(),
                 Stop(Box::new(|| {})),
+                crate::support::identity(),
                 delegate_started("j_one"),
             )
         } else {
@@ -72,6 +73,7 @@ fn extension_delegates_are_unknown_to_message_and_hide_only_the_final_text_in_an
                     "scan".into(),
                     "/child/events.jsonl".into(),
                     Stop(Box::new(|| {})),
+                    crate::support::identity(),
                     delegate_started("j_one"),
                 )
                 .1
@@ -95,7 +97,7 @@ fn extension_delegates_are_unknown_to_message_and_hide_only_the_final_text_in_an
         let mut called = false;
         let resumed = registry.resume("j_one", None, |_| {
             called = true;
-            Err::<(Stop, ()), _>(())
+            Err::<(Stop, contract::jobs::JobIdentity, ()), _>(())
         });
         assert_eq!(
             matches!(resumed, Err(super::runs::Resume::Unknown)),
@@ -115,6 +117,7 @@ fn delegate_message_refuses_an_extensions_running_and_ended_job_without_contacti
         "scan".into(),
         "/child/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        crate::support::identity(),
         delegate_started("j_ext"),
     );
     let tool = crate::delegate::DelegateMessage {
@@ -692,6 +695,9 @@ fn counted_stop(
             })),
             lines: false,
             input: None,
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     (opened.started.job_id.clone(), calls, opened)
@@ -720,11 +726,11 @@ fn stop_through_the_trait_on_an_ended_or_unknown_job_is_false() {
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     let cancel = CancelToken::new();
     assert!(matches!(
-        registry.stop("j_missing", &cancel),
+        registry.stop("j_missing", &cancel, false),
         Err(contract::jobs::StopError::NotRunning)
     ));
     assert!(matches!(
-        registry.stop(&id.0, &cancel),
+        registry.stop(&id.0, &cancel, false),
         Err(contract::jobs::StopError::Ended(Outcome::Completed))
     ));
 }
@@ -834,6 +840,9 @@ fn open_tty(
                     .write_all(reply)
                     .map(|()| bytes.len())
             }))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     *sink.lock().unwrap() = Some(opened.file.try_clone().unwrap());
@@ -975,6 +984,9 @@ fn a_failed_write_to_the_terminal_is_an_io_error() {
             input: Some(contract::jobs::Input(Box::new(|_, _, _| {
                 Err(std::io::Error::other("the terminal is closed"))
             }))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     let id = opened.started.job_id.0.clone();
@@ -1024,6 +1036,9 @@ fn a_write_that_typed_less_than_it_was_given_says_so() {
             stop: Stop(Box::new(|| {})),
             lines: false,
             input: Some(contract::jobs::Input(Box::new(|_, _, _| Ok(1)))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     let id = opened.started.job_id.0.clone();
@@ -1114,6 +1129,9 @@ fn open_stuck(registry: &Arc<Registry>) -> (String, contract::jobs::Opened, mpsc
                     ))
                 }
             }))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     (opened.started.job_id.0.clone(), opened, entry_rx)
@@ -1192,6 +1210,9 @@ fn seam_write_behind_another_writer_still_times_out_at_the_deadline() {
                     ))
                 }
             }))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     let id = opened.started.job_id.0.clone();
@@ -1264,6 +1285,9 @@ fn seam_write_wakes_through_the_deadline_subscription_alone() {
                 }
                 Ok(0)
             }))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     let id = opened.started.job_id.0.clone();
@@ -1304,6 +1328,9 @@ fn seam_write_reports_a_short_write_as_a_timeout() {
             stop: Stop(Box::new(|| {})),
             lines: false,
             input: Some(contract::jobs::Input(Box::new(|_, _, _| Ok(1)))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     assert!(
@@ -1335,6 +1362,9 @@ fn seam_write_succeeds_when_the_terminal_drains_before_the_deadline() {
                 tick.advance(Duration::from_millis(500));
                 Ok(bytes.len())
             }))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     seam_write(&registry, &opened.started.job_id, "hi").unwrap();
@@ -1396,6 +1426,9 @@ fn seam_write_reports_a_failed_terminal_write_as_io() {
             input: Some(contract::jobs::Input(Box::new(|_, _, _| {
                 Err(std::io::Error::other("the terminal is closed"))
             }))),
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     assert!(matches!(
@@ -1504,6 +1537,7 @@ fn open_started_records_the_job_without_a_file() {
         "scan".into(),
         output.clone(),
         stop_of(&flag),
+        crate::support::identity(),
         delegate_started(&id.0),
     );
     assert_eq!(started.job_id, id);
@@ -1513,6 +1547,34 @@ fn open_started_records_the_job_without_a_file() {
     assert!(!std::path::Path::new(&output).exists());
     assert!(registry.list_text().contains(&id.0));
     assert!(registry.list_text().contains("scan"));
+}
+
+#[test]
+fn detached_admission_preserves_the_existing_log_and_lists_the_identity() {
+    let (_dir, registry) = world();
+    let log = registry.artifacts.join("detached.log");
+    std::fs::write(&log, "already written\n").unwrap();
+    let mut detached = opening("sleep 60");
+    detached.detached = Some(log.clone());
+    detached.identity = Some(contract::jobs::JobIdentity {
+        pgid: 4242,
+        start_time: 99,
+    });
+    let opened = registry.open(detached).unwrap();
+    assert!(registry.contains(&opened.started.job_id.0));
+    assert!(!Jobs::running(registry.as_ref()).contains(&opened.started.job_id));
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), "already written\n");
+    assert!(opened.started.output_path.ends_with("detached.log"));
+    let row = registry.list_text();
+    assert!(row.contains("detached running sleep 60"), "{row}");
+    assert_eq!(
+        Jobs::owned_identities(registry.as_ref()),
+        vec![contract::jobs::JobIdentity {
+            pgid: 4242,
+            start_time: 99,
+        }]
+    );
+    drop(opened.end);
 }
 
 #[test]
@@ -1533,6 +1595,7 @@ fn a_delegate_wait_answers_the_final_message_and_records_once() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        crate::support::identity(),
         delegate_started(&id.0),
     );
     finish.report(
@@ -1587,6 +1650,7 @@ fn a_notice_claimed_by_wait_claims_nothing_and_vice_versa() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        crate::support::identity(),
         delegate_started(&id.0),
     );
     finish.report(ended_ok(&id.0), Some(delegate_finished(&id.0, "Done.")));
@@ -1605,6 +1669,7 @@ fn a_notice_claimed_by_wait_claims_nothing_and_vice_versa() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        crate::support::identity(),
         delegate_started(&id.0),
     );
     finish.report(ended_ok(&id.0), Some(delegate_finished(&id.0, "Done.")));
@@ -1624,6 +1689,7 @@ fn a_dropped_delegate_end_is_indeterminate_with_an_empty_finish() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        crate::support::identity(),
         delegate_started(&id.0),
     );
     drop(finish);
@@ -1672,6 +1738,7 @@ fn stop_delegates_stops_only_running_delegates() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         stop_of(&delegate_flag),
+        crate::support::identity(),
         delegate_started(&delegate_id.0),
     );
     assert_eq!(registry.stop_delegates(), 1);
@@ -1736,6 +1803,7 @@ fn a_stop_racing_a_gated_start_stops_the_starting_delegate() {
                     "scan".into(),
                     "/sessions/s_x/events.jsonl".into(),
                     stop,
+                    crate::support::identity(),
                     delegate_started(&id.0),
                 );
                 id_tx.send(id).expect("the test reads the committed id");
@@ -1788,6 +1856,7 @@ fn retain_extensions_stops_only_unlisted_extension_jobs_once() {
         "scan".into(),
         "/child/events.jsonl".into(),
         stop_of(&flag_a),
+        crate::support::identity(),
         delegate_started(&id_a.0),
     );
     let flag_b = stopped();
@@ -1798,6 +1867,7 @@ fn retain_extensions_stops_only_unlisted_extension_jobs_once() {
         "scan".into(),
         "/child/events.jsonl".into(),
         stop_of(&flag_b),
+        crate::support::identity(),
         delegate_started(&id_b.0),
     );
     let model_flag = stopped();
@@ -1808,6 +1878,7 @@ fn retain_extensions_stops_only_unlisted_extension_jobs_once() {
         "scan".into(),
         "/child/events.jsonl".into(),
         stop_of(&model_flag),
+        crate::support::identity(),
         delegate_started(&model_id.0),
     );
     let shell_flag = stopped();
@@ -1839,6 +1910,7 @@ fn retain_extensions_with_no_loaded_names_stops_every_extension_job() {
         "scan".into(),
         "/child/events.jsonl".into(),
         stop_of(&flag_a),
+        crate::support::identity(),
         delegate_started(&id_a.0),
     );
     let flag_b = stopped();
@@ -1849,6 +1921,7 @@ fn retain_extensions_with_no_loaded_names_stops_every_extension_job() {
         "scan".into(),
         "/child/events.jsonl".into(),
         stop_of(&flag_b),
+        crate::support::identity(),
         delegate_started(&id_b.0),
     );
     assert_eq!(registry.retain_extensions(&[]), 2);
@@ -1875,6 +1948,7 @@ fn retain_extensions_waits_for_a_start_holding_the_gate_then_stops_it() {
                 "scan".into(),
                 "/child/events.jsonl".into(),
                 stop_of(&flag),
+                crate::support::identity(),
                 delegate_started(&id.0),
             );
             Ok::<_, ()>((id, finish, flag))
@@ -1934,6 +2008,7 @@ fn answer_for_end(completed: JobCompleted, text: &str) -> (TempDir, String) {
             .to_string_lossy()
             .into_owned(),
         Stop(Box::new(|| {})),
+        crate::support::identity(),
         delegate_started(&id.0),
     );
     finish.report(completed, Some(delegate_finished(&id.0, text)));
@@ -1973,4 +2048,633 @@ fn a_failed_delegate_with_an_error_over_16_kib_names_the_file_inside_the_first_1
         String::from_utf8_lossy(head).contains(&line),
         "the retained prefix keeps the path line"
     );
+}
+
+// `restore`: a job a keeper handed over, recorded under the `job_started` the
+// log already holds.
+
+fn started(id: &str, description: &str) -> contract::events::JobStarted {
+    contract::events::JobStarted {
+        job_id: JobId(id.into()),
+        tool: Some("shell".into()),
+        extension: None,
+        description: description.into(),
+        output_path: format!("artifacts/{id}.log"),
+        pgid: None,
+        start_time: None,
+        kind: None,
+    }
+}
+
+fn stop_counter() -> (Stop, Arc<std::sync::atomic::AtomicUsize>) {
+    let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let stops = Arc::clone(&count);
+    (
+        Stop(Box::new(move || {
+            stops.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })),
+        count,
+    )
+}
+
+#[test]
+fn restore_appends_to_the_keepers_bytes_and_keeps_the_ids() {
+    let (dir, registry) = world();
+    let file = dir.path().join("artifacts/j_kept.log");
+    std::fs::write(&file, b"before the crash\n").unwrap();
+    let (stop, _) = stop_counter();
+    let mut opened = registry
+        .restore(started("j_kept", "make"), stop, None, false)
+        .unwrap();
+    assert_eq!(opened.started, started("j_kept", "make"));
+    assert_eq!(opened.path, file);
+    assert!(opened.lines.is_none());
+    opened.file.write_all(b"after the handover\n").unwrap();
+    // The keeper's bytes stay and the session adds after them.
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        b"before the crash\nafter the handover\n"
+    );
+    let text = registry.list_text();
+    assert!(text.contains("j_kept"), "{text}");
+    assert!(text.contains("make"), "{text}");
+    drop(opened.end);
+}
+
+#[test]
+fn restore_writes_no_job_started_and_mints_nothing() {
+    let dir = TempDir::new("fiber-jobs-restore-quiet");
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir(&artifacts).unwrap();
+    std::fs::write(artifacts.join("j_kept.log"), b"").unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    let recorder = Arc::new(Recorder::default());
+    let registry = Registry::new(artifacts, clock, Arc::clone(&recorder) as _);
+    let (stop, _) = stop_counter();
+    let opened = registry
+        .restore(started("j_kept", "make"), stop, None, false)
+        .unwrap();
+    assert!(recorder.events().is_empty(), "restore writes no line");
+    assert_eq!(Jobs::running(&*registry), vec![JobId("j_kept".into())]);
+    drop(opened.end);
+}
+
+#[test]
+fn restore_stops_once_and_types_only_where_the_keeper_holds_a_terminal() {
+    let (dir, registry) = world();
+    std::fs::write(dir.path().join("artifacts/j_plain.log"), b"").unwrap();
+    std::fs::write(dir.path().join("artifacts/j_tty.log"), b"").unwrap();
+    let (stop, stops) = stop_counter();
+    let plain = registry
+        .restore(started("j_plain", "plain"), stop, None, false)
+        .unwrap();
+    let typed: Typed = Arc::default();
+    let record = Arc::clone(&typed);
+    let tty = registry
+        .restore(
+            started("j_tty", "python3"),
+            Stop(Box::new(|| {})),
+            Some(contract::jobs::Input(Box::new(move |bytes, _, _| {
+                record.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }))),
+            false,
+        )
+        .unwrap();
+    assert!(matches!(
+        registry.write("j_plain", "x", 0, &CancelToken::new()),
+        Err(super::WriteError::NotTty)
+    ));
+    registry
+        .write("j_tty", "1+1\n", 0, &CancelToken::new())
+        .unwrap();
+    assert_eq!(&*typed.lock().unwrap(), b"1+1\n");
+    // A second stop does not send the closure again.
+    assert!(Jobs::stop(&*registry, &JobId("j_plain".into())));
+    assert!(Jobs::stop(&*registry, &JobId("j_plain".into())));
+    assert_eq!(stops.load(std::sync::atomic::Ordering::SeqCst), 1);
+    drop((plain.end, tty.end));
+}
+
+#[test]
+fn restore_delivers_monitor_lines_before_the_end() {
+    let (dir, registry) = world();
+    std::fs::write(dir.path().join("artifacts/j_mon.log"), b"").unwrap();
+    let (inbox, deliveries) = mpsc::channel();
+    Jobs::deliver_to(&*registry, inbox);
+    let (stop, _) = stop_counter();
+    let opened = registry
+        .restore(started("j_mon", "tail"), stop, None, true)
+        .unwrap();
+    let lines = opened.lines.expect("a monitor restores with its feed");
+    (lines.0)(contract::events::JobLine {
+        job_id: JobId("j_mon".into()),
+        lines: "ready".into(),
+        suppressed: None,
+        changed_by: None,
+    });
+    (opened.end.0)(ended_ok("j_mon"));
+    let dl = Deadline::after(Duration::from_secs(10));
+    assert!(
+        matches!(dl.recv_or_fail(&deliveries, "the monitor's batch"), Delivery::JobLine(line) if line.lines == "ready")
+    );
+    assert!(
+        matches!(dl.recv_or_fail(&deliveries, "the monitor's end"), Delivery::Job(end) if end.completed.job_id.0 == "j_mon")
+    );
+}
+
+#[test]
+fn restore_with_the_inbox_attached_after_it_still_delivers_the_end() {
+    // A restored job ends after the inbox exists: the end reaches the loop
+    // the way any job's does.
+    let (dir, registry) = world();
+    std::fs::write(dir.path().join("artifacts/j_late.log"), b"").unwrap();
+    let (stop, _) = stop_counter();
+    let opened = registry
+        .restore(started("j_late", "make"), stop, None, false)
+        .unwrap();
+    let (inbox, deliveries) = mpsc::channel();
+    Jobs::deliver_to(&*registry, inbox);
+    (opened.end.0)(ended_ok("j_late"));
+    let delivered = Deadline::after(Duration::from_secs(10)).recv_or_fail(&deliveries, "the end");
+    assert!(matches!(delivered, Delivery::Job(end) if end.completed.job_id.0 == "j_late"));
+    assert!(deliveries.try_recv().is_err(), "delivered once");
+}
+
+#[test]
+fn restore_failures_record_nothing_and_leave_the_id_free() {
+    let (dir, registry) = world();
+    let artifacts = dir.path().join("artifacts");
+    let fail = |started: contract::events::JobStarted, kind: Option<std::io::ErrorKind>| {
+        let (stop, _) = stop_counter();
+        let Err(error) = registry.restore(started, stop, None, false) else {
+            panic!("a restore that cannot hold recorded a job");
+        };
+        if let Some(kind) = kind {
+            assert_eq!(error.source.kind(), kind, "{error}");
+        }
+        assert_eq!(registry.list_text(), "No jobs.\n");
+    };
+    // The keeper's file is gone.
+    fail(
+        started("j_missing", "x"),
+        Some(std::io::ErrorKind::NotFound),
+    );
+    // Cannot be opened for appending: a directory stands where the file is.
+    std::fs::create_dir(artifacts.join("j_dir.log")).unwrap();
+    fail(started("j_dir", "x"), None);
+    // Paths outside artifacts/<file> are never opened.
+    std::fs::write(dir.path().join("outside.log"), b"").unwrap();
+    // A file that does exist under artifacts/, named through another directory.
+    std::fs::write(artifacts.join("j_bad.log"), b"").unwrap();
+    for bad in [
+        "elsewhere/j_bad.log",
+        "../outside.log",
+        "artifacts/../outside.log",
+        "artifacts/sub/j.log",
+        "/etc/passwd",
+        "artifacts",
+        "j_kept.log",
+        "",
+    ] {
+        let mut bad_started = started("j_bad", "x");
+        bad_started.output_path = bad.into();
+        fail(bad_started, Some(std::io::ErrorKind::InvalidInput));
+    }
+    // The failures left the id free: a good file restores.
+    std::fs::write(artifacts.join("j_missing.log"), b"").unwrap();
+    let (stop, _) = stop_counter();
+    let ok = registry
+        .restore(started("j_missing", "x"), stop, None, false)
+        .unwrap();
+    drop(ok.end);
+}
+
+fn detached_started(id: &str, path: &std::path::Path) -> contract::events::JobStarted {
+    contract::events::JobStarted {
+        job_id: JobId(id.into()),
+        tool: Some("shell".into()),
+        extension: None,
+        description: "sleep 60".into(),
+        output_path: path.to_string_lossy().into_owned(),
+        pgid: None,
+        start_time: None,
+        kind: Some(contract::events::JobKind::Detached),
+    }
+}
+
+#[test]
+fn restore_detached_keeps_existing_log_and_writes_no_second_start() {
+    let dir = TempDir::new("fiber-jobs-restore-detached");
+    let root = dir.path().join("detached");
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("d_1_0.log");
+    std::fs::write(&path, b"kept\\n").unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    let recorder = Arc::new(Recorder::default());
+    let registry = Registry::new(dir.path().join("artifacts"), clock, recorder.clone());
+    let opened = registry
+        .restore_detached(detached_started("j_detached", &path), Stop(Box::new(|| {})))
+        .unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"kept\\n");
+    assert_eq!(opened.started.job_id, JobId("j_detached".into()));
+    assert!(
+        recorder.events().is_empty(),
+        "restore writes no job_started"
+    );
+    assert!(registry.list_text().contains("j_detached detached running"));
+    opened.end.0(contract::events::JobCompleted {
+        job_id: JobId("wrong_id".into()),
+        status: contract::events::Outcome::Failed,
+        error: None,
+        process: None,
+        output_tail: None,
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
+    });
+    assert!(
+        registry.list_text().contains("j_detached detached failed"),
+        "Registry::restore_detached must attach its recorded job id to End"
+    );
+}
+
+#[test]
+fn restore_detached_admits_paths_outside_root_and_missing_files() {
+    let dir = TempDir::new("fiber-jobs-restore-detached-path");
+    let root = dir.path().join("detached");
+    std::fs::create_dir(&root).unwrap();
+    let external = dir.path().join("outside.log");
+    std::fs::write(&external, b"untouched").unwrap();
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    std::fs::write(nested.join("x.log"), b"nested").unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    let registry = Registry::new(
+        dir.path().join("artifacts"),
+        clock,
+        Arc::new(Recorder::default()),
+    );
+    for (id, path) in [
+        ("j_outside", external.clone()),
+        ("j_nested", nested.join("x.log")),
+        ("j_missing", root.join("missing.log")),
+        ("j_root", root.to_path_buf()),
+    ] {
+        let result = registry.restore_detached(
+            detached_started(id, &path),
+            Stop(Box::new(|| panic!("restore must not signal"))),
+        );
+        let opened = result.unwrap_or_else(|error| panic!("{} rejected: {error}", path.display()));
+        assert_eq!(opened.path, path);
+        assert!(registry.contains(id), "restore omitted {id}");
+        drop(opened.end);
+    }
+    assert_eq!(std::fs::read(&external).unwrap(), b"untouched");
+    for id in ["j_outside", "j_nested", "j_missing", "j_root"] {
+        assert!(registry.list_text().contains(id), "{id} was not listed");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_admits_fifo_without_opening_or_blocking() {
+    let dir = TempDir::new("fiber-jobs-restore-detached-fifo");
+    let root = dir.path().join("detached");
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("d_fifo.log");
+    fakes::fifo(&path);
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    let registry = Arc::new(Registry::new(
+        dir.path().join("artifacts"),
+        clock,
+        Arc::new(Recorder::default()),
+    ));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let stop_calls = Arc::clone(&calls);
+    let (result_tx, result_rx) = mpsc::channel();
+    let worker_registry = Arc::clone(&registry);
+    let worker_path = path.clone();
+    let worker = thread::spawn(move || {
+        let result = worker_registry.restore_detached(
+            detached_started("j_fifo", &worker_path),
+            Stop(Box::new(move || {
+                stop_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })),
+        );
+        result_tx.send(result).unwrap();
+    });
+    let result = match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&result_rx) {
+        Ok(result) => result,
+        Err(_) => {
+            // If append-open regresses to blocking on the FIFO, open both
+            // ends to release the worker before failing the bounded test.
+            let _release = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap();
+            let result = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                .recv(&result_rx)
+                .expect("the FIFO reader releases the append-open");
+            if let Ok(opened) = result {
+                drop(opened.end);
+            }
+            worker.join().unwrap();
+            panic!("restore blocked while opening a FIFO");
+        }
+    };
+    worker.join().unwrap();
+    let opened = result.unwrap_or_else(|error| panic!("FIFO admission failed: {error}"));
+    assert!(registry.contains("j_fifo"));
+    assert!(registry.list_text().contains("j_fifo"));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    drop(opened.end);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn restore_detached_admits_symlink_path_without_following_it() {
+    use std::os::unix::fs::symlink;
+
+    let dir = TempDir::new("fiber-jobs-restore-detached-symlink");
+    let root = dir.path().join("detached");
+    std::fs::create_dir(&root).unwrap();
+    let target = dir.path().join("outside.log");
+    std::fs::write(&target, b"unchanged").unwrap();
+    let path = root.join("d_link.log");
+    symlink(&target, &path).unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    let registry = Registry::new(
+        dir.path().join("artifacts"),
+        clock,
+        Arc::new(Recorder::default()),
+    );
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let stop_calls = Arc::clone(&calls);
+    let result = registry.restore_detached(
+        detached_started("j_symlink", &path),
+        Stop(Box::new(move || {
+            stop_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })),
+    );
+    let opened = result.unwrap_or_else(|error| panic!("symlink admission failed: {error}"));
+    assert!(registry.contains("j_symlink"));
+    assert!(registry.list_text().contains("j_symlink"));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    drop(opened.end);
+    assert_eq!(std::fs::read(&target).unwrap(), b"unchanged");
+}
+
+#[test]
+fn restore_refuses_a_job_already_recorded() {
+    let (dir, registry) = world();
+    std::fs::write(dir.path().join("artifacts/j_dup.log"), b"keep").unwrap();
+    let (stop, _) = stop_counter();
+    let first = registry
+        .restore(started("j_dup", "one"), stop, None, false)
+        .unwrap();
+    let (stop, _) = stop_counter();
+    let Err(error) = registry.restore(started("j_dup", "two"), stop, None, false) else {
+        panic!("the same job restored twice");
+    };
+    assert_eq!(error.source.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(Jobs::running(&*registry), vec![JobId("j_dup".into())]);
+    assert_eq!(
+        std::fs::read(dir.path().join("artifacts/j_dup.log")).unwrap(),
+        b"keep"
+    );
+    // A job a normal open recorded is as taken as a restored one.
+    let opened = registry.open(opening("make")).unwrap();
+    let mut clash = started("j_x", "x");
+    clash.job_id = opened.started.job_id.clone();
+    clash.output_path = opened.started.output_path.clone();
+    let (stop, _) = stop_counter();
+    assert!(registry.restore(clash, stop, None, false).is_err());
+    drop((first.end, opened.end));
+}
+
+// `restore_detached_rows`: fold the event log and admit only outstanding,
+// live detached groups whose recorded identity still matches.
+
+#[cfg(unix)]
+fn restore_row_line(seq: u64, event: contract::events::Event) -> contract::Envelope {
+    contract::Envelope {
+        kind: contract::events::EventKind::from_name(event.kind()),
+        session_id: contract::SessionId("restore-rows".into()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(contract::Seq(seq)),
+        payload: event.payload().unwrap(),
+    }
+}
+
+#[cfg(unix)]
+fn restore_row_started(id: &str, pgid: u32) -> contract::events::JobStarted {
+    let mut started = detached_started(id, std::path::Path::new("detached.log"));
+    started.pgid = Some(pgid);
+    started.start_time = support::group::start_time(pgid);
+    started
+}
+
+#[cfg(unix)]
+fn live_restore_row_group() -> (std::process::Child, fakes::Watchdog) {
+    use std::os::unix::process::CommandExt as _;
+    let mut command = std::process::Command::new("sleep");
+    command.arg("60").process_group(0);
+    let child = command.spawn().expect("start a controlled process group");
+    let watchdog = fakes::Watchdog::group(child.id());
+    (child, watchdog)
+}
+
+#[cfg(unix)]
+fn reap_restore_row_group(mut child: std::process::Child, watchdog: fakes::Watchdog) {
+    drop(watchdog);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = tx.send(child.wait());
+    });
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&rx)
+        .expect("the restored-row child was reaped")
+        .expect("wait for the restored-row child");
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_returns_the_valid_detached_start() {
+    let (_dir, registry) = world();
+    let (child, watchdog) = live_restore_row_group();
+    let pgid = child.id();
+    let started = restore_row_started("j_rows_valid", pgid);
+    let rows = registry.restore_detached_rows(
+        [Ok::<_, ()>(restore_row_line(
+            1,
+            contract::events::Event::JobStarted(started.clone()),
+        ))],
+        |_| (Stop(Box::new(|| {})), "tracked"),
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.started, started);
+    assert_eq!(rows[0].1, "tracked");
+    drop(rows);
+    reap_restore_row_group(child, watchdog);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_uses_the_event_kind_discriminator() {
+    let (_dir, registry) = world();
+    let (child, watchdog) = live_restore_row_group();
+    let started = restore_row_started("j_rows_kind", child.id());
+    let line = restore_row_line(1, contract::events::Event::JobStarted(started));
+    assert_eq!(line.kind(), contract::events::EventKind::JobStarted);
+    let mut calls = 0;
+    let rows = registry.restore_detached_rows([Ok::<_, ()>(line)], |_| {
+        calls += 1;
+        (Stop(Box::new(|| {})), ())
+    });
+    assert_eq!(rows.len(), 1);
+    assert_eq!(calls, 1);
+    drop(rows);
+    reap_restore_row_group(child, watchdog);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_omits_a_live_non_detached_start() {
+    let (_dir, registry) = world();
+    let (child, watchdog) = live_restore_row_group();
+    let mut started = restore_row_started("j_rows_plain", child.id());
+    started.kind = None;
+    let mut calls = 0;
+    let rows = registry.restore_detached_rows(
+        [Ok::<_, ()>(restore_row_line(
+            1,
+            contract::events::Event::JobStarted(started),
+        ))],
+        |_| {
+            calls += 1;
+            (Stop(Box::new(|| {})), ())
+        },
+    );
+    assert!(rows.is_empty());
+    assert_eq!(calls, 0);
+    reap_restore_row_group(child, watchdog);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_removes_a_start_with_its_matching_completion() {
+    let (_dir, registry) = world();
+    let (child, watchdog) = live_restore_row_group();
+    let started = restore_row_started("j_rows_done", child.id());
+    let completed = JobCompleted {
+        job_id: started.job_id.clone(),
+        status: Outcome::Completed,
+        error: None,
+        process: None,
+        output_tail: None,
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
+    };
+    let mut calls = 0;
+    let rows = registry.restore_detached_rows(
+        [
+            Ok::<_, ()>(restore_row_line(
+                1,
+                contract::events::Event::JobStarted(started),
+            )),
+            Ok(restore_row_line(
+                2,
+                contract::events::Event::JobCompleted(completed),
+            )),
+        ],
+        |_| {
+            calls += 1;
+            (Stop(Box::new(|| {})), ())
+        },
+    );
+    assert!(rows.is_empty());
+    assert_eq!(calls, 0);
+    reap_restore_row_group(child, watchdog);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_omits_a_group_with_pgid_one() {
+    let (_dir, registry) = world();
+    let started = restore_row_started("j_rows_one", 1);
+    let mut calls = 0;
+    let rows = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        registry.restore_detached_rows(
+            [Ok::<_, ()>(restore_row_line(
+                1,
+                contract::events::Event::JobStarted(started),
+            ))],
+            |_| {
+                calls += 1;
+                (Stop(Box::new(|| {})), ())
+            },
+        )
+    }));
+    assert!(rows.is_ok(), "pgid 1 must not panic or be admitted");
+    assert!(rows.unwrap().is_empty());
+    assert_eq!(calls, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_omits_a_reaped_group_without_calling_parts() {
+    let (_dir, registry) = world();
+    let (mut child, watchdog) = live_restore_row_group();
+    let pgid = child.id();
+    drop(watchdog);
+    child
+        .wait()
+        .expect("reap the child once before testing its group");
+    assert!(!support::group::alive(pgid));
+    let started = restore_row_started("j_rows_dead", pgid);
+    let mut calls = 0;
+    let rows = registry.restore_detached_rows(
+        [Ok::<_, ()>(restore_row_line(
+            1,
+            contract::events::Event::JobStarted(started),
+        ))],
+        |_| {
+            calls += 1;
+            (Stop(Box::new(|| {})), ())
+        },
+    );
+    assert!(rows.is_empty());
+    assert_eq!(calls, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_detached_rows_omits_a_live_group_with_a_mismatched_start_time() {
+    let (_dir, registry) = world();
+    let (child, watchdog) = live_restore_row_group();
+    let mut started = restore_row_started("j_rows_identity", child.id());
+    let actual_start_time = started
+        .start_time
+        .expect("the live process group has a readable start time");
+    started.start_time = Some(actual_start_time.wrapping_add(1));
+    let mut calls = 0;
+    let rows = registry.restore_detached_rows(
+        [Ok::<_, ()>(restore_row_line(
+            1,
+            contract::events::Event::JobStarted(started),
+        ))],
+        |_| {
+            calls += 1;
+            (Stop(Box::new(|| {})), ())
+        },
+    );
+    assert!(rows.is_empty());
+    assert_eq!(calls, 0);
+    reap_restore_row_group(child, watchdog);
 }

@@ -11,10 +11,14 @@ use std::time::{Duration, SystemTime};
 use contract::JobId;
 use contract::clock::Clock;
 use contract::emit::Emit;
-use contract::events::JobCompleted;
+use contract::events::{JobCompleted, Outcome};
+use contract::jobs::JobIdentity;
 use contract::jobs::Jobs;
 use contract::keeper::{CommandHost, Exit, HostEvent, Sandbox, Spawn, Started};
+use contract::shapes::Failure;
 use contract::tool::Cancel;
+
+use crate::error::{ShellError, ToolError};
 
 use super::command::{self, Finished, Kept, MovePolicy, Ran, SpawnStreams};
 use super::output::{OUTPUT_CAP, Shared, bump, hosted_bytes, lock, read_errors, read_output};
@@ -53,6 +57,10 @@ impl Waiter {
             Self::Child { child, .. } => child.id(),
             Self::Host { started, .. } => started.pgid,
         }
+    }
+    pub(super) fn identity(&self) -> Option<JobIdentity> {
+        let pgid = self.pgid();
+        support::group::start_time(pgid).map(|start_time| JobIdentity { pgid, start_time })
     }
     pub(super) fn monitor(&self) -> bool {
         match self {
@@ -198,7 +206,9 @@ pub(super) fn execute(
         drop(guard);
         return Ok(Ran::Declined);
     }
-    let (sender, events) = std::sync::mpsc::channel();
+    // Bounded like every handover queue: a drive that falls behind makes
+    // the keeper wait instead of buffering the call in the session.
+    let (sender, events) = std::sync::mpsc::sync_channel(contract::keeper::HOST_EVENT_QUEUE); // ruling: #4054
     let started = host
         .start(spec, sender)
         .map_err(|error| io::Error::other(error.to_string()))?;
@@ -257,6 +267,23 @@ pub fn kept_end(job_id: JobId, exit: &Exit) -> JobCompleted {
         None,
     );
     completed.output_tail = None;
+    completed
+}
+
+/// The completion the session writes for a job it took over from a keeper:
+/// a live job's ending, with the tail read from the job's `output` file.
+pub fn adopted_end(job_id: JobId, output: &Path, exit: &Exit) -> JobCompleted {
+    let mut completed = kept_end(job_id, exit);
+    completed.output_tail = super::background::output_tail(output);
+    completed
+}
+
+/// The completion for a job taken over from a keeper that a flood stopped:
+/// [`adopted_end`] with the `flooded` failure a live monitor's flood ends in.
+pub fn adopted_flooded_end(job_id: JobId, output: &Path, exit: &Exit) -> JobCompleted {
+    let mut completed = adopted_end(job_id, output, exit);
+    completed.status = Outcome::Failed;
+    completed.error = Some(Failure::from(&ToolError::from(ShellError::Flooded)));
     completed
 }
 

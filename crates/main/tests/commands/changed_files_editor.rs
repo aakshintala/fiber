@@ -117,7 +117,7 @@ fn ctrl_g_opens_the_file_at_its_first_hunk_and_rereads_on_return() {
     run.write(b"/diff\r");
     run.wait_bytes(list_from, FRAME_END, "the changed files frame");
     run.wait_screen("the changed files card", |grid| {
-        grid.rows[0].contains("Changed files") && find_row(grid, "f.txt +1").is_some()
+        grid.rows[0].contains("Changed files") && find_row(grid, "M  f.txt  +1").is_some()
     });
     // Enter opens the file's diff, keyboard-only. The frame-end marker
     // proves a frame drew after Enter, and the title plus the hunk rows

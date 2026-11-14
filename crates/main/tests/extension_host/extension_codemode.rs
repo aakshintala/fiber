@@ -78,18 +78,38 @@ fn script(setup: &Setup, name: &str, script: &Value) {
 
 /// Installs the real `codemode` package from the repository.
 fn install_codemode(setup: &Setup) {
-    extensions::plan(
+    let request = extensions::Request::Path(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/codemode"),
+    );
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/codemode"),
-        ),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
+        None,
+    );
+}
+
+/// Installs codemode with a fixture-specific VM memory cap.
+fn install_codemode_with_memory_mib(setup: &Setup, memory_mib: u64) {
+    let source = setup.root.path().join("codemode-fixture");
+    support::write_json(
+        &source.join("extension.json"),
+        &json!({"name": CODEMODE_NAME, "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "memory_mib": memory_mib}),
+    );
+    std::fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/codemode/init.lua"),
+        source.join("init.lua"),
     )
-    .unwrap()
-    .commit()
     .unwrap();
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
+        &setup.home(),
+        setup.deadline.start_wait(),
+        &request,
+        "0.0.0",
+        None,
+    );
 }
 
 /// Configures the scripted reviewer; the model arrives on the command line.
@@ -280,7 +300,7 @@ fn null_tests_by_equality_and_indexing_null_errors() {
 
 #[test]
 fn an_uncut_row_names_no_artifact_while_the_script_sees_whole_bytes() {
-    let big = "B".repeat(20 * 1024);
+    let big = "B".repeat(2 * 1024 * 1024);
     let source = "local small = _G.host.tool(\"read\", { path = \"small.txt\" })\n\
         local nested = load('local o = host.tool(\"read\", { path = \"nested.txt\" }); print(\"nested:\" .. o.content[1].text)')\n\
         nested()\n\
@@ -316,7 +336,7 @@ fn an_uncut_row_names_no_artifact_while_the_script_sees_whole_bytes() {
     let shell_row = lines.pop().unwrap();
     let nested_read_row = lines.pop().unwrap();
     let read_row = lines.pop().unwrap();
-    // The script saw the whole 20 KiB output: the file bytes plus the
+    // The script saw the whole 2 MiB output: the file bytes plus the
     // shell tool's closing line (`text_of`/`exit_line` in
     // `crates/tools/src/shell.rs`), with no cut marker.
     let whole = format!("{big}\nExit code 0.\n");
@@ -341,6 +361,20 @@ fn an_uncut_row_names_no_artifact_while_the_script_sees_whole_bytes() {
     assert_large_eq(completed_text(inner), &whole);
     assert_eq!(inner["payload"].get("artifact"), None);
     assert_eq!(inner["payload"].get("kept"), None);
+    // `docs/tools.md`, "Bounded results", promises the 16 KiB model-facing
+    // bound; "Shell" → "Result and output" promises no inner-shell spill artifact.
+    assert!(
+        text.len() <= 16 * 1024,
+        "model-facing result: {} bytes",
+        text.len()
+    );
+    let artifacts = run.session_dir(&setup).join("artifacts");
+    // `docs/tools.md`, "Shell" → "Result and output" promises no inner-shell
+    // spill artifact.
+    assert!(
+        !artifacts.exists() || std::fs::read_dir(&artifacts).unwrap().next().is_none(),
+        "inner shell call created an artifact"
+    );
     // The turn finished on the scripted follow-up.
     assert_eq!(
         run.of("text_completed").last().unwrap()["payload"]["text"],
@@ -654,16 +688,14 @@ fn install_url(setup: &Setup, name: &str, url: &str, protocol: &str) {
             "models": [model]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// Installs the parent's `pa/m` and the child's `pb/m` on
@@ -1233,4 +1265,87 @@ print(o.content[1].text)"#;
     let stored = std::fs::read(run.session_dir(&setup).join(path)).unwrap();
     assert_eq!(stored, b"full hook output");
     assert_eq!(run.of("turn_completed").len(), 1);
+}
+
+#[test]
+fn an_oversized_inner_shell_result_errors_at_the_call_site() {
+    const MEMORY_CAP: u64 = 1024 * 1024;
+    let output_bytes = MEMORY_CAP * 2;
+    for (wrapped, expected_status) in [(true, "Script finished"), (false, "Script failed:")] {
+        let source = if wrapped {
+            format!(
+                "local earlier = host.tool('read', {{ path = 'small.txt' }})\nprint('before')\nlocal ok, err = pcall(function() return host.tool('shell', {{ command = 'yes x | head -c {output_bytes}' }}) end)\nprint(ok)\nprint(tostring(err))"
+            )
+        } else {
+            format!(
+                "local earlier = host.tool('read', {{ path = 'small.txt' }})\nprint('before')\nlocal result = host.tool('shell', {{ command = 'yes x | head -c {output_bytes}' }})"
+            )
+        };
+        let setup = Setup::new();
+        script(&setup, "s.json", &calling(&source));
+        script(&setup, "r.json", &allow());
+        configure(&setup);
+        install_codemode_with_memory_mib(&setup, 1);
+        std::fs::write(setup.workspace().join("small.txt"), "hello").unwrap();
+        let run = ask(&setup, "run it");
+        assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+        assert!(
+            run.of("tool_call_completed").iter().any(|line| {
+                line["payload"]["content"].as_array().is_some_and(|parts| {
+                    parts.iter().any(|part| {
+                        part["text"]
+                            .as_str()
+                            .is_some_and(|text| text.contains(expected_status))
+                    })
+                })
+            }),
+            "expected {expected_status:?}; completed: {:?}; tool errors: {:?}; stderr: {}",
+            run.of("tool_call_completed")
+                .iter()
+                .map(|line| {
+                    let content = line["payload"]["content"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|part| part["text"].as_str())
+                        .map(|text| text.chars().take(400).collect::<String>())
+                        .collect::<Vec<_>>();
+                    (line["payload"]["status"].clone(), content)
+                })
+                .collect::<Vec<_>>(),
+            run.of("tool_error")
+                .iter()
+                .map(|line| &line["payload"])
+                .collect::<Vec<_>>(),
+            run.stderr,
+        );
+        let completed = completed_holding(&run, expected_status);
+        let text = completed_text(completed);
+        // `docs/extensions.md`, “Code mode” promises printed lines precede status and rows, and raised calls leave no row.
+        assert!(text.starts_with("before\n"), "prior print: {text}");
+        assert!(text.contains("Lua memory cap"), "cap error: {text}");
+        if wrapped {
+            assert!(text.contains("false\n"), "pcall catches the string: {text}");
+            assert!(text.contains("Script finished"), "script continues: {text}");
+        } else {
+            assert!(
+                text.contains("Script failed: Lua memory cap"),
+                "script fails normally: {text}"
+            );
+        }
+        assert!(
+            text.contains("- read completed"),
+            "earlier ledger row remains: {text}"
+        );
+        assert!(
+            !text.contains("- shell "),
+            "raised call has no ledger row: {text}"
+        );
+        assert_eq!(completed["payload"]["status"], "completed");
+        assert!(
+            !run.of("tool_error")
+                .iter()
+                .any(|line| line["payload"]["tool"] == "codemode")
+        );
+    }
 }

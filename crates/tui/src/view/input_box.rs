@@ -91,6 +91,48 @@ fn item_hint(app: &App) -> Option<String> {
     }
 }
 
+/// Draws the read-only bar on the row above `bottom`: the missing path
+/// and the Read only note, dim, the path in the attention role
+/// (`docs/tui.md`, "The session list"). No draft rows, no targets, no
+/// cursor: the bar is the only affordance.
+fn draw_read_only(area: Rect, bottom: &mut u16, buf: &mut Buffer, path: &str) -> u16 {
+    let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) else {
+        return *bottom;
+    };
+    *bottom = y;
+    let text = text_area(area);
+    let room = usize::from(text.width);
+    let head = format!("`{path}` ");
+    let head_width = format::width(&head);
+    if head_width >= room {
+        buf.set_stringn(
+            text.x,
+            y,
+            crate::text::cut(&head, room, ""),
+            room,
+            style(Role::Attention).add_modifier(Modifier::DIM),
+        );
+        return y;
+    }
+    let (end, _) = buf.set_stringn(
+        text.x,
+        y,
+        &head,
+        room,
+        style(Role::Attention).add_modifier(Modifier::DIM),
+    );
+    let rest = "no longer exists. Read only.";
+    let rest_room = room.saturating_sub(usize::from(end.saturating_sub(text.x)));
+    buf.set_stringn(
+        end,
+        y,
+        crate::text::cut(rest, rest_room, ""),
+        rest_room,
+        Style::new().add_modifier(Modifier::DIM),
+    );
+    y
+}
+
 /// Draws the input box on the rows above `bottom`: its rows on the surface
 /// tint with edges where they fit, token targets over them. The Ctrl+R
 /// panel draws centred over the conversation instead of in reserved rows,
@@ -105,6 +147,10 @@ pub(super) fn draw(
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
 ) -> u16 {
+    // A read-only attach draws its one-row bar instead of the box.
+    if let Some(path) = app.unwritable() {
+        return draw_read_only(area, bottom, buf, path);
+    }
     let (rows, top, cursor_row, cursor_col) = rows(app, area.width);
     let fits = surface::edged(rows.len(), usize::from(area.height)) > rows.len();
     // While the rail holds focus the box steps back: its stripe in
@@ -214,11 +260,11 @@ pub(super) fn draw(
     if cursor_shown(app) {
         let (x, y) = caret_cell(area, below, &rows, cursor_row, cursor_col);
         // The caret's cell draws over the selection: the covered
-        // character in the slab's colour on the text colour, or a block
-        // in the text colour past the last character (`docs/tui.md`,
-        // "The input box"). The terminal's own cursor stays where
-        // `super::cursor` puts it. The row always sits inside the area:
-        // the caret's row shows.
+        // character reversed over its own colours, or a block in the
+        // text colour past the last character (`docs/tui.md`, "The input
+        // box"). The terminal's own cursor stays where `super::cursor`
+        // puts it. The row always sits inside the area: the caret's row
+        // shows.
         let covered = rows
             .get(cursor_row)
             .and_then(|row| super::cursor::covered_symbol(row, usize::from(cursor_col)));

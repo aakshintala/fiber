@@ -267,7 +267,7 @@ prints each such notice.
 | `mcp list` | Lists every declared server, the layer that declares it, and whether a repository's server is approved. |
 | `mcp login <server>` | Logs in to a server that needs OAuth. |
 | `mcp logout <server>` | Deletes a server's stored token. |
-| `mcp serve` | The stdio MCP server a delegate on another harness uses to send session messages (`docs/delegates.md`). |
+| `mcp serve` | The stdio MCP server a delegate on another harness uses to send session messages (`docs/delegates.md`). Not built yet: see #600. |
 
 **Configuration.** `fiber config` reads and writes configuration
 (`docs/configuration.md`, "When Fiber writes").
@@ -330,6 +330,8 @@ Help and version are printed before Fiber reads `FIBER_HOME`, configuration,
 credentials or stdin, so they succeed when home is empty or no provider is
 installed. A failed write to stdout is ignored and the exit is still 0, as
 with `fiber extension list`.
+
+Every other command stops quietly with exit 0 when standard output is closed early, as with `| head`; any other failed write to standard output is an error, with exit 1. A command that has already failed keeps its own exit code and error, and a failed write to standard output changes neither.
 
 ```sh
 fiber ask "review the diff on this branch"
@@ -757,6 +759,15 @@ repository: "<path> no longer exists". A recorded Fiber worktree whose
 repository still exists is made again, as "Isolation" says. A live session
 is attached as before, without the check.
 
+**A session whose workspace is gone and cannot be made again is still
+readable.** A `full` `subscribe` for it is not refused: the hub replays its
+log instead, as for a finished delegate. `command_accepted` carries
+`last_seq` and `workspace_gone`, the missing path, then the fold follows,
+with no live tail. The hub answers `history` for it from the log, its
+`forked_from` chain included, as the session would. Nothing resumes it, so
+nothing unarchives it. Every other command for it is refused `io_failed` as
+above.
+
 **A session that never got a prompt leaves nothing behind.** A session that
 exits with no `turn_started` and no `repository_code_offered` in its log
 deletes its own directory, unless its `session_started` has `forked_from`
@@ -1084,7 +1095,10 @@ Every client reaches sessions through the hub, the local terminal included.
   first (`docs/state.md`). Delegates are never in the feed or in that query;
   a client shows a delegate when the person opens its parent. A `dismiss`
   sends no line to clients already subscribed: a client showing the session
-  drops it at its next subscription.
+  drops it at its next subscription. When a session is deleted or archived,
+  the hub sends `session_deleted` or `session_archived` with its
+  `session_id` and `project` (`docs/events.md`, "The envelope"), so every
+  subscribed client drops its row and re-asks that project's counts.
 - **It starts sessions with the internal session command**, in the workspace
   the client names. Whoever starts a session generates its id and passes it
   on that command's line, so the starter knows the id before the process
@@ -1238,13 +1252,14 @@ answers each command it read exactly once. `Exited`: its log ends in
 |---|---|---|
 | `authenticate` | `token` (string) | On the port, the first command: presents a device token ("Remote clients"). |
 | `pair` | `code` (string) | On the port, instead of `authenticate`: exchanges a pairing code for a device token, returned in the acknowledgement. |
-| `feed` | none | Subscribes the connection to the feed: the latest `session_status` of every running or waiting top-level session, and every change after it, then a `session_left` line (`docs/events.md`) when one ends. Crashed sessions not yet dismissed come first: each one's last `session_status`, then its `session_left`. When 1,024 feed lines are queued for a connection that has not read them, the hub closes the connection; the client reconnects and sends `feed` again, which resyncs it. |
+| `feed` | none | Subscribes the connection to the feed: the latest `session_status` of every running or waiting top-level session, and every change after it, then a `session_left` line (`docs/events.md`) when one ends, and a `session_deleted` or `session_archived` line when one is deleted or archived. Crashed sessions not yet dismissed come first: each one's last `session_status`, then its `session_left`. When 1,024 feed lines are queued for a connection that has not read them, the hub closes the connection; the client reconnects and sends `feed` again, which resyncs it. |
 | `dismiss` | `session` (string) | Drops a crashed session from the feed, for every client; its log stays, and it can still be resumed from `recent`. Rejected `stale_request` unless the session is crashed. |
 | `recent` | `before` (string, optional), `project` (string, optional), `archived` (boolean, optional) | Answers with a page of exited sessions from `recent.jsonl`, newest first, skipping delegates, whose row's `status` carries `parent` (`docs/state.md`), and archived sessions, or with `archived` true only archived ones ("Archiving"), and `total`, the number of rows the pages list for `project` (every project when absent), whatever `before` and the page hold. `project` is the project's key, the name of its `projects/<key>/` directory. |
 | `sessions` | `project` (string, optional), `active` (boolean, optional), `archived` (boolean, optional) | Answers once with the latest `session_status` of every running top-level session and the `recent.jsonl` row of every exited one, newest first, delegates skipped, each session once. With `active` true, each entry carries `active`: the `ts` of the session log's last line, its opening `ts` when the last line has none, or `null` when neither can be read. Without it, no session log is opened. `project` keeps only that project's sessions, as for `recent`, and `archived` (boolean, optional) chooses archived sessions as it does there. A hub that has just started answers once it has read `run/` and each session it found there has sent its `session_status` or closed; a session that stays silent holds it for at most one rescan past the read. A session started since the hub last read `run/` can be missing, as it is from the feed. |
 | `start` | `workspace` (string), `model` (string, optional), `overrides` (array of strings, optional), `worktree` (boolean, optional), `continues` (string, optional), `content` (optional), `supervised` (boolean, optional) | Starts a session in the workspace, any absolute path, and answers with its `session_id`. With `supervised` true, the session is driven by a program, a supervisor outside Fiber, and `session_started` records it: it follows the delegate rules (`docs/permissions.md`, "Supervised sessions") and stays top-level, in the feed. Each of `overrides` is a `key=value` passed to the session as `-c` ("Commands and flags"). With `worktree` true, the session runs in a new worktree of the workspace ("Isolation"). With `continues` naming a session id, the session runs in that session's worktree instead of a new one, and the workspace must be that worktree's path ("Isolation"). An unknown session, a missing log, or a removed worktree refuses `session_not_found`; `continues` with `worktree` true, a named session with no worktree, and a workspace that is not the worktree refuse `invalid_arguments`. With `content`, the hub sends it as the session's first prompt after answering: once the session has accepted a `full` `subscribe` for the new session from the connection that sent `start`, at once when that connection closes first, or 1 second after the answer when neither has happened. A client that subscribes `full` when it reads the answer is connected when the session takes the prompt, so it can answer the repository's offer (`docs/extensions.md`, "Code a repository ships"); for a connection that never subscribes `full`, such as a script's, the session takes the prompt after the bound, and it decides with nobody to answer unless another `full` client is connected by then. A `content` that does not fit `prompt`'s `args` is rejected `invalid_arguments` before any session starts. A rejection of the first prompt after the answer is logged, not answered: the hub writes the session id, the `start` command id and the code to `logs/hub.log`, and no client is told. |
-| `archive` | `session` (string) | Archives an exited session ("Archiving"). Refused `session_held` while another process holds the session's lock. An archived session is accepted, and its log is not written again; when its newest `recent.jsonl` row lacks `archived`, as after an archive that failed partway, that row is appended again with `archived` true. |
-| `delete` | `session` (string), `cascade` (boolean, optional), `expect` (array of strings, optional), `dry_run` (boolean, optional) | Deletes an exited session ("Deleting and pruning"). With `cascade`, `expect` is the sessions the person confirmed; the delete is rejected `stale_request` when the sessions it would remove differ. With `dry_run`, it answers `sessions`, the ids it would remove, and `held`, those of them that another process holds right now, and deletes nothing. A real delete refused `session_held` also carries `held`, the busy ids in check order. On a rejection, this field appears only on that delete refusal. Its `message` stays ``Session `<id>` is held by another process.``, with `<id>` replaced by the first held id. If a later lock probe fails, the refusal is `io_failed` and nothing is deleted. |
+| `archive` | `session` (string) | Archives an exited session ("Archiving"). Refused `session_held` while another process holds the session's lock. An archived session is accepted, and its log is not written again; when its newest `recent.jsonl` row lacks `archived`, as after an archive that failed partway, that row is appended again with `archived` true. Every archived session is told to every feed subscriber as `session_archived`, carrying its `session_id` and `project` (`docs/events.md`, "The envelope"). A retry that writes nothing still tells every feed subscriber. |
+| `import` | `source` (string, optional), `claude-code` or `codex`; absent means both sources | Runs the same one-time import `fiber import` runs (`docs/configuration.md`, "Importing"), and reports the same imported and left-behind lists. |
+| `delete` | `session` (string), `cascade` (boolean, optional), `expect` (array of strings, optional), `dry_run` (boolean, optional) | Deletes an exited session ("Deleting and pruning"). With `cascade`, `expect` is the sessions the person confirmed; the delete is rejected `stale_request` when the sessions it would remove differ. With `dry_run`, it answers `sessions`, the ids it would remove, and `held`, those of them that another process holds right now, and deletes nothing. A real delete refused `session_held` also carries `held`, the busy ids in check order. On a rejection, this field appears only on that delete refusal. Its `message` stays ``Session `<id>` is held by another process.``, with `<id>` replaced by the first held id. If a later lock probe fails, the refusal is `io_failed` and nothing is deleted. Every removed session is told to every feed subscriber as `session_deleted`, carrying its `session_id` and `project` (`docs/events.md`, "The envelope"). With `cascade`, the lines arrive in removal order, each dependent before the session it continues. |
 | `prune` | `older_than` (string, optional), `cascade` (boolean, optional), `force` (boolean, optional), `dry_run` (boolean, optional), `expect` (object, optional) | Prunes the hub's own machine across every project ("Deleting and pruning"). A `prune` dry run answers `lines`, the lines prune would print, `would_free`, the space it would free, and `items`, the sessions (`{id, cascade}`), worktree paths, pinned content hashes and diagnostic paths it would remove; a confirmed run answers `freed`, the space freed, `total`, and `failures`, one entry per item that failed after execution began. The client sends the dry run's `items` back as `expect`, and the hub rejects the prune `stale_request` when what it would remove differs, deleting nothing. |
 | `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). `project` is the project's key, as for `recent`. |
 | `read_file` | `session` (string), `path` (string, relative to the session directory, as the log names the file, such as `artifacts/i_3f2a.png`) | Answers with one file from the session's `artifacts/` ("A session's files"). |
@@ -1261,6 +1276,7 @@ answers each command it read exactly once. `Exited`: its log ends in
 | `status` | none | Answers with `running`, `fiber_version`, `clients` and `variables`, once the hub's first login-shell capture has ended (`docs/events.md`, "`command_accepted`"). |
 | `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |
 | `stop` | `sessions` (boolean, optional) | Ends the hub as SIGTERM does. With `sessions` true, first shuts down every running session and keeper the hub finds in `run/`, each session through its own shutdown (`close` with `now`) and each keeper by its stop (`docs/tools.md`, "The keeper"), bounded, then exits. Any authenticated connection may send it. |
+| `stop_keepers` | `keepers` (array of session ids, nonempty) | Stops each named keeper through its stop, bounded, and answers how many confirmed, without closing any session and without exiting the hub. An unknown key, a wrong type, an explicit null, or an empty array is refused `invalid_arguments`. A keeper that answers the probe is left running and reported; one whose socket is gone is skipped. |
 | `placeholder_env` | `names` (array of strings) | Answers with the hub's captured values for the named placeholders, absent names omitted, so the list and the session agree (`docs/model-routing.md`, "Model discovery"). |
 | `pairing_code` | `device` (string) | Answers with a new pairing code for that device, as `fiber hub pair` prints. |
 | `devices` | none | Answers with the paired devices. |
@@ -1583,6 +1599,20 @@ session (`docs/tui.md`, "The session list"):
   and waits for exit evidence as `/delete` does, with the delegates that shut
   down with it, then sends `archive` for that one session. A stop the hub
   refuses archives nothing.
+- **The hub also archives on its own** when it answers `recent` or
+  `sessions`, with or without `archived`, before it answers, so the answer
+  and its `total` already count these as archived:
+  - an exited session whose workspace no longer exists, whether or not it
+    could be made again. Opening it resumes it, which makes a recorded
+    Fiber worktree again and unarchives it, or opens it read only
+    ("Lifecycle"). It costs one `stat` per exited row not yet archived
+    in the project asked for; an archived row is not checked again.
+  - in each project, every exited session past the `session.keep_exited`
+    most recent (`docs/configuration.md`), 10 by default; 0 keeps them
+    all. Live sessions do not count. Delegates do not count; archiving a session by any route archives its delegates with it.
+
+  It archives as `archive` does and asks nothing. A session whose lock
+  another process holds is skipped and tried again at the next answer.
 - **With `--hub`, the id resolves on that hub,** as for `sessions delete`.
 
 ## Deleting and pruning

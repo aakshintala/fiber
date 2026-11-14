@@ -81,7 +81,9 @@ impl Setup {
     }
 
     fn write_config(&self, value: &Value) {
-        std::fs::write(self.home().join("config.json"), value.to_string()).unwrap();
+        let mut config = value.clone();
+        config["model_lists"]["models_dev"] = json!(false);
+        std::fs::write(self.home().join("config.json"), config.to_string()).unwrap();
     }
 
     /// Installs a data-only extension `extension` registering provider
@@ -178,6 +180,41 @@ fn unloaded(called: &Cell<bool>) -> impl Fn(&Config) -> SessionExtensions + '_ {
         called.set(true);
         SessionExtensions::default()
     }
+}
+
+#[test]
+fn picker_catalogue_read_serves_cached_models_dev_fields() {
+    let setup = Setup::new("fiber-model-list-models-dev");
+    setup.install_data("acme-ext", "acme", &["m"], &json!({}));
+    let provider_file = setup.home().join("extensions/acme-ext/providers/acme.json");
+    let mut data: Value = serde_json::from_slice(&std::fs::read(&provider_file).unwrap()).unwrap();
+    data["models_dev"] = json!({"source": "acme", "pins": {}});
+    std::fs::write(provider_file, data.to_string()).unwrap();
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"acme":{"m":{"name":"Live model name","limit":{"context":200}}}}"#,
+    )
+    .unwrap();
+    let called = Cell::new(false);
+
+    let catalogue = read(
+        &setup.home(),
+        &setup.workspace(),
+        tui::Refresh::Cached,
+        now(),
+        &unloaded(&called),
+        &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+
+    assert!(!called.get(), "a cached catalogue read starts no extension");
+    let entry = catalogue
+        .models
+        .iter()
+        .find(|entry| entry.reference == "acme/m")
+        .unwrap();
+    assert_eq!(entry.name.as_deref(), Some("Live model name"));
 }
 
 #[test]

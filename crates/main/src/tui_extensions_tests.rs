@@ -1,7 +1,9 @@
 //! Loader and picker boundary tests (`docs/tui.md`, extension loading).
 use super::*;
 use fakes::clock::FakeClock;
-use tui::ext::{AnswerDisposition, KeyOutcome, LedgerResult, TurnCardState, TurnGroupState};
+use tui::ext::{
+    AnswerDisposition, KeyOutcome, LedgerResult, TuiCommand, TurnCardState, TurnGroupState,
+};
 
 #[test]
 fn turn_card_message_entries_serialize_all_message_fields() {
@@ -3416,4 +3418,670 @@ fn hook_rewrite_key_turn_card_call_holds_changed_by_only_when_a_hook_rewrote() {
             .is_some_and(|keys| !keys.contains_key("changed_by")),
         "an absent key, never null: {table}"
     );
+}
+
+/// A command source registering `name` with `body` as `run`.
+fn cmd_named(name: &str, body: &str) -> String {
+    format!("fiber.command('{name}', {{ timeout = 100, run = function(input) {body} end }})")
+}
+
+/// A `ledger-diff` command source whose `run` is `body`.
+fn cmd_source(body: &str) -> String {
+    cmd_named("ledger-diff", body)
+}
+
+/// Home: no session on screen and no halves observed.
+fn home_ctx() -> SessionCtx {
+    SessionCtx {
+        session_id: None,
+        halves: None,
+    }
+}
+
+/// An attached session with no halves observed yet.
+fn unseen_ctx() -> SessionCtx {
+    SessionCtx {
+        session_id: Some(contract::SessionId("s".into())),
+        halves: None,
+    }
+}
+
+/// A loader on its own clock-jumping temp dir, for timeout tests.
+fn jumping_loader() -> (fakes::TempDir, Loader) {
+    let dir = fakes::TempDir::new("fiber-tui-command-timeout");
+    let sources = config::Sources {
+        home: dir.path().join("home"),
+        workspace: dir.path().join("workspace"),
+        project: config::ProjectKey::new("p").unwrap(),
+        overrides: Vec::new(),
+    };
+    std::fs::create_dir_all(&sources.home).unwrap();
+    std::fs::create_dir_all(&sources.workspace).unwrap();
+    let origin = FakeClock::new();
+    let clock = std::sync::Arc::new(JumpClock {
+        origin: origin.now(),
+        step: std::time::Duration::from_millis(200),
+        calls: std::sync::atomic::AtomicU64::new(0),
+    });
+    (dir, Loader::new(sources, clock))
+}
+
+#[test]
+fn command_surfaces_with_description() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.command('ledger-diff', { timeout = 100, description = 'Diff the ledger row', \
+             run = function() end })",
+        ),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // `docs/extensions.md`, "Commands and screens": the terminal shows one `/` list holding the TUI command with its description.
+    assert_eq!(
+        renderer.tui_commands(&home_ctx()),
+        vec![TuiCommand {
+            name: "ledger-diff".into(),
+            description: "Diff the ledger row".into(),
+            extension: "a".into(),
+        }]
+    );
+}
+
+#[test]
+fn command_lists_both_final_names() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.command('zulu', { timeout = 100, run = function() end })\n\
+             fiber.command('alpha', { timeout = 100, run = function() end })",
+        ),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // `docs/extensions.md`, "Commands and screens": both registered names list.
+    let names: std::collections::BTreeSet<String> = renderer
+        .tui_commands(&home_ctx())
+        .into_iter()
+        .map(|command| command.name)
+        .collect();
+    assert_eq!(
+        names,
+        std::collections::BTreeSet::from(["alpha".to_owned(), "zulu".to_owned()])
+    );
+}
+
+#[test]
+fn command_malformed_registrations_become_load_notices() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.command('ledger-diff', { run = function() end })\n\
+             fiber.command('a/b', { timeout = 100, run = function() end })",
+        ),
+    );
+    let (renderer, notices) = loader.load();
+    // `docs/tui.md`, "When an extension fails": each malformed registration reports one notice; nothing lists.
+    assert_eq!(notices.len(), 2, "{notices:?}");
+    for notice in &notices {
+        assert_eq!(notice.0, "extension_failed", "{notices:?}");
+    }
+    assert!(renderer.tui_commands(&home_ctx()).is_empty());
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn command_builtin_names_are_skipped() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.command('quit', { timeout = 100, run = function() end })\n\
+             fiber.command('reload', { timeout = 100, run = function() end })\n\
+             fiber.command('ledger-diff', { timeout = 100, run = function() end })",
+        ),
+    );
+    let (renderer, notices) = loader.load();
+    // `docs/extensions.md`, "Commands and screens": a TUI command never takes a built-in name, so `/quit` and `/reload` stay reachable; naming one records one rejection and skips that registration.
+    assert_eq!(notices.len(), 2, "{notices:?}");
+    for notice in &notices {
+        assert_eq!(notice.0, "extension_failed", "{notices:?}");
+    }
+    assert_eq!(
+        renderer.tui_commands(&home_ctx()),
+        vec![TuiCommand {
+            name: "ledger-diff".into(),
+            description: String::new(),
+            extension: "a".into(),
+        }]
+    );
+}
+
+#[test]
+fn command_rename_applies() {
+    let (_dir, loader) = fixture();
+    package(&loader, "a", None, Some(&cmd_source("return true")));
+    std::fs::write(
+        loader.sources.home.join("config.json"),
+        json!({"extensions":{"a":{"commands":{"ledger-diff":"ledger-new"}}}}).to_string(),
+    )
+    .unwrap();
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // `docs/configuration.md`, "Extension settings": a new name for one of the extension's commands, when two extensions clash.
+    assert_eq!(
+        renderer.tui_commands(&home_ctx()),
+        vec![TuiCommand {
+            name: "ledger-new".into(),
+            description: String::new(),
+            extension: "a".into(),
+        }]
+    );
+    assert_eq!(
+        renderer.run_tui_command(&ctx(None), "ledger-new", ""),
+        KeyOutcome::Handled
+    );
+    assert_eq!(
+        renderer.run_tui_command(&ctx(None), "ledger-diff", ""),
+        KeyOutcome::NotHandled
+    );
+}
+
+#[test]
+fn command_rename_resolves_a_clash() {
+    let (_dir, loader) = fixture();
+    package(&loader, "a", None, Some(&cmd_source("return true")));
+    package(&loader, "b", None, Some(&cmd_source("return true")));
+    std::fs::write(
+        loader.sources.home.join("config.json"),
+        json!({"extensions":{"a":{"commands":{"ledger-diff":"ledger-a"}}}}).to_string(),
+    )
+    .unwrap();
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // `docs/extensions.md`, "Commands and screens": configuration can rename one, so both list under distinct names.
+    let listed: std::collections::BTreeSet<(String, String)> = renderer
+        .tui_commands(&home_ctx())
+        .into_iter()
+        .map(|command| (command.name, command.extension))
+        .collect();
+    assert_eq!(
+        listed,
+        std::collections::BTreeSet::from([
+            ("ledger-a".to_owned(), "a".to_owned()),
+            ("ledger-diff".to_owned(), "b".to_owned())
+        ])
+    );
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn command_non_plain_rename_is_ignored() {
+    let (_dir, loader) = fixture();
+    package(&loader, "a", None, Some(&cmd_source("return true")));
+    for rename in ["", "a b", "a/b", "a:b"] {
+        std::fs::write(
+            loader.sources.home.join("config.json"),
+            json!({"extensions":{"a":{"commands":{"ledger-diff":rename}}}}).to_string(),
+        )
+        .unwrap();
+        let (renderer, notices) = loader.load();
+        // `docs/extensions.md`, "Commands and screens": names are plain, so a non-plain rename is ignored with one notice and the registered name stands.
+        assert_eq!(notices.len(), 1, "{rename}: {notices:?}");
+        assert_eq!(notices[0].0, "extension_failed", "{rename}: {notices:?}");
+        assert_eq!(
+            renderer
+                .tui_commands(&home_ctx())
+                .iter()
+                .map(|command| command.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ledger-diff"],
+            "{rename}"
+        );
+    }
+}
+
+#[test]
+fn command_same_final_name_neither_wins() {
+    let (_dir, loader) = fixture();
+    package(&loader, "a", None, Some(&cmd_source("return true")));
+    package(&loader, "b", None, Some(&cmd_source("return true")));
+    package(
+        &loader,
+        "c",
+        Some(json!({"min":"v1.0.0"})),
+        Some(&cmd_source("return true")),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // Unseen halves gate the ranged contender out, so the contender set
+    // differs from home's: each state notices once with its own set.
+    for (state, owners) in [(unseen_ctx(), "a and b"), (home_ctx(), "a and b and c")] {
+        for _ in 0..2 {
+            assert!(renderer.tui_commands(&state).is_empty());
+        }
+        let pending = renderer.take_pending();
+        // `docs/extensions.md`, "Commands and screens": when two extensions register the same name, neither gets it, and a `notice` names both.
+        assert_eq!(pending.len(), 1, "{pending:?}");
+        assert_eq!(pending[0].0, "command_conflict", "{pending:?}");
+        assert!(pending[0].1.contains(owners), "{pending:?}");
+    }
+    // A conflicted name runs nowhere, silently after its one notice.
+    assert_eq!(
+        renderer.run_tui_command(&ctx(None), "ledger-diff", "fast"),
+        KeyOutcome::NotHandled
+    );
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn command_incompatible_halves_are_excluded() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "ranged",
+        Some(json!({"min":"v1.0.0"})),
+        Some(&cmd_named("ledger-ranged", "return true")),
+    );
+    package(
+        &loader,
+        "open",
+        None,
+        Some(&cmd_named("ledger-open", "return true")),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // Unseen: no halves observed yet, so the ranged command lists nowhere and no notice follows; the open one never gates.
+    assert_eq!(
+        renderer
+            .tui_commands(&unseen_ctx())
+            .iter()
+            .map(|command| command.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["ledger-open"]
+    );
+    assert!(renderer.take_pending().is_empty());
+    // NotLoaded: the session half omits the extension, with one notice naming the extension.
+    let not_loaded = ctx(Some(vec![]));
+    assert_eq!(
+        renderer
+            .tui_commands(&not_loaded)
+            .iter()
+            .map(|command| command.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["ledger-open"]
+    );
+    let pending = renderer.take_pending();
+    // `docs/tui.md`, "How a TUI extension runs": for any other session it draws nothing, with one notice naming the extension and both versions.
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "extension_incompatible", "{pending:?}");
+    // Out of range: the half is too old, with one notice naming both versions.
+    let old = ctx(Some(vec![("ranged", "v0.9.0")]));
+    assert_eq!(
+        renderer
+            .tui_commands(&old)
+            .iter()
+            .map(|command| command.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["ledger-open"]
+    );
+    let pending = renderer.take_pending();
+    // `docs/tui.md`, "How a TUI extension runs": for any other session it draws nothing, with one notice naming the extension and both versions.
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "extension_incompatible", "{pending:?}");
+    assert!(pending[0].1.contains("v0.9.0"), "{pending:?}");
+    // Compatible: the ranged command lists beside the open one.
+    let loaded = ctx(Some(vec![("ranged", "v1.0.0")]));
+    let listed: std::collections::BTreeSet<String> = renderer
+        .tui_commands(&loaded)
+        .into_iter()
+        .map(|command| command.name)
+        .collect();
+    assert_eq!(
+        listed,
+        std::collections::BTreeSet::from(["ledger-open".to_owned(), "ledger-ranged".to_owned()])
+    );
+    // Home lists every loaded winner with no half gate.
+    assert_eq!(renderer.tui_commands(&home_ctx()).len(), 2);
+}
+
+#[test]
+fn command_timeout_switches_off_with_one_notice() {
+    let (_dir, loader) = jumping_loader();
+    package(
+        &loader,
+        "slow",
+        None,
+        Some("fiber.command('ledger-diff', { timeout = 100, run = function() return true end })"),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // The handler spans two clock reads, so it is already past its
+    // 100 ms deadline when it returns: typed failure, switched off.
+    assert_eq!(
+        renderer.run_tui_command(&ctx(None), "ledger-diff", ""),
+        KeyOutcome::NotHandled
+    );
+    let pending = renderer.take_pending();
+    // `docs/tui.md`, "When an extension fails": a handler that passes its timeout switches the extension off until `/reload`, with one `extension_failed` notice.
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "extension_failed", "{pending:?}");
+    assert!(pending[0].1.contains("slow"), "{pending:?}");
+    // Off until reload: the command lists nowhere, and a later call
+    // stays silent with no second notice.
+    assert!(renderer.tui_commands(&home_ctx()).is_empty());
+    assert!(renderer.tui_commands(&ctx(None)).is_empty());
+    assert_eq!(
+        renderer.run_tui_command(&ctx(None), "ledger-diff", ""),
+        KeyOutcome::NotHandled
+    );
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn command_error_is_one_hook_failed_then_silent() {
+    let (_dir, loader) = fixture();
+    package(&loader, "a", None, Some(&cmd_source("return 5")));
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    for _ in 0..2 {
+        assert_eq!(
+            renderer.run_tui_command(&ctx(None), "ledger-diff", "fast"),
+            KeyOutcome::NotHandled
+        );
+    }
+    let pending = renderer.take_pending();
+    // `docs/tui.md`, "When an extension fails": one `hook_failed` notice for each extension and command until `/reload`.
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "hook_failed", "{pending:?}");
+    assert!(
+        pending[0].1.contains('a')
+            && pending[0].1.contains("ledger-diff")
+            && pending[0].1.contains("wrong shape")
+            && pending[0].1.contains("fast"),
+        "{pending:?}"
+    );
+    // A wrong shape leaves the extension on: the failure repeats silently.
+    assert_eq!(
+        renderer.run_tui_command(&ctx(None), "ledger-diff", "fast"),
+        KeyOutcome::NotHandled
+    );
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn command_run_receives_session_and_args() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(&cmd_source(
+            "if input.session_id ~= 's' then error('session_id was ' .. tostring(input.session_id)) end\n\
+             if input.args ~= 'fast' then error('args was ' .. tostring(input.args)) end",
+        )),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // `docs/extensions.md`, "Commands and screens": `run` receives the session on screen and the text after the name.
+    assert_eq!(
+        renderer.run_tui_command(&ctx(None), "ledger-diff", "fast"),
+        KeyOutcome::Handled
+    );
+}
+
+#[test]
+fn command_home_run_omits_session_id() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(&cmd_source(
+            "if input.session_id ~= nil then error('session_id was present') end\n\
+             if input.args ~= '' then error('args was not empty') end",
+        )),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // `docs/extensions.md`, "Commands and screens": with no `session_id` key on home.
+    assert_eq!(
+        renderer.run_tui_command(&home_ctx(), "ledger-diff", ""),
+        KeyOutcome::Handled
+    );
+}
+
+#[test]
+fn command_unknown_name_is_not_handled() {
+    let (_dir, loader) = fixture();
+    package(&loader, "a", None, Some(&cmd_source("return true")));
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(
+        renderer.run_tui_command(&ctx(None), "nope", "fast"),
+        KeyOutcome::NotHandled
+    );
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn kitty_binding_and_fallback_dispatch_through_composite() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "keys",
+        None,
+        Some(
+            "fiber.key('shift+enter', {timeout=100, run=function() seen='kitty' return true end})\n\
+             fiber.key('enter', {timeout=100, run=function() seen='fallback' return true end})",
+        ),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(
+        renderer.run_key(&ctx(None), "shift+enter", false),
+        KeyOutcome::Handled
+    );
+    assert_eq!(
+        renderer.run_key(&ctx(None), "enter", false),
+        KeyOutcome::Handled
+    );
+    assert!(renderer.take_pending().is_empty());
+}
+
+/// A focus handler that is `body`, timeout 100 ms.
+fn focus_source(body: &str) -> String {
+    format!("fiber.on_focus({{ timeout = 100, run = function(input) {body} end }})")
+}
+
+#[test]
+fn focus_rejection_notices_once_at_load() {
+    let (_dir, loader) = fixture();
+    package(&loader, "a", None, Some("fiber.on_focus(5)"));
+    let (_, notices) = loader.load();
+    // `docs/extensions.md`, "Commands and screens": one rejection per malformed registration; loading skips it.
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].0, "extension_failed");
+    assert!(notices[0].1.contains("fiber.on_focus"), "{notices:?}");
+}
+
+#[test]
+fn focus_dispatch_runs_winners_in_name_order() {
+    let (_dir, loader) = fixture();
+    for name in ["a", "b"] {
+        package(
+            &loader,
+            name,
+            None,
+            Some(&focus_source(&format!("error('{name}-boom')"))),
+        );
+    }
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    renderer.on_focus(&ctx(None));
+    let pending = renderer.take_pending();
+    // Load order is name order, and every winner runs in turn.
+    assert_eq!(pending.len(), 2, "{pending:?}");
+    assert_eq!(pending[0].0, "hook_failed");
+    assert!(pending[0].1.contains("extension a"), "{pending:?}");
+    assert!(pending[0].1.contains("a-boom"), "{pending:?}");
+    assert_eq!(pending[1].0, "hook_failed");
+    assert!(pending[1].1.contains("extension b"), "{pending:?}");
+    assert!(pending[1].1.contains("b-boom"), "{pending:?}");
+    // A second failure is silent until `/reload`.
+    renderer.on_focus(&ctx(None));
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn focus_error_hook_failed_once_until_reload() {
+    let (_dir, loader) = fixture();
+    package(&loader, "a", None, Some(&focus_source("error('boom')")));
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    renderer.on_focus(&ctx(None));
+    let pending = renderer.take_pending();
+    // `docs/tui.md`, "When an extension fails": one `hook_failed` notice per extension until `/reload`.
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "hook_failed");
+    assert!(pending[0].1.contains("extension a"), "{pending:?}");
+    assert!(pending[0].1.contains("boom"), "{pending:?}");
+    renderer.on_focus(&ctx(None));
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn focus_home_omits_and_session_carries_session_id() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(&focus_source(
+            "if input.session_id ~= nil then error('saw-id') end",
+        )),
+    );
+    package(
+        &loader,
+        "b",
+        None,
+        Some(&focus_source(
+            "if input.session_id == nil then error('saw-nil') end",
+        )),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // Home sends no `session_id` key and Lua reads nil.
+    renderer.on_focus(&home_ctx());
+    let pending = renderer.take_pending();
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "hook_failed");
+    assert!(pending[0].1.contains("extension b"), "{pending:?}");
+    assert!(pending[0].1.contains("saw-nil"), "{pending:?}");
+    // A session screen carries the session on screen.
+    renderer.on_focus(&ctx(None));
+    let pending = renderer.take_pending();
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "hook_failed");
+    assert!(pending[0].1.contains("extension a"), "{pending:?}");
+    assert!(pending[0].1.contains("saw-id"), "{pending:?}");
+}
+
+#[test]
+fn focus_inert_half_skipped_silently() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "ranged",
+        Some(json!({"min":"v2.0.0"})),
+        Some(&focus_source("error('ran')")),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // An inert half never reaches the VM: an erroring handler stays silent.
+    renderer.on_focus(&ctx(Some(vec![("ranged", "v1.0.0")])));
+    assert!(renderer.take_pending().is_empty());
+    // A compatible half runs the handler.
+    renderer.on_focus(&ctx(Some(vec![("ranged", "v2.0.0")])));
+    let pending = renderer.take_pending();
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "hook_failed");
+    assert!(pending[0].1.contains("extension ranged"), "{pending:?}");
+}
+
+#[test]
+fn focus_without_registration_is_silent() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some("fiber.slot('notice', {timeout=100, render=function() return {} end})"),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    renderer.on_focus(&ctx(None));
+    renderer.on_focus(&home_ctx());
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "no code under test waits on the clock (ruling 6179403686): the provider thread only moves the fake past the deadline the post-perform check reads"
+)]
+fn focus_timeout_switches_off_with_one_notice() {
+    let dir = fakes::TempDir::new("fiber-tui-focus-timeout");
+    let sources = config::Sources {
+        home: dir.path().join("home"),
+        workspace: dir.path().join("workspace"),
+        project: config::ProjectKey::new("p").unwrap(),
+        overrides: Vec::new(),
+    };
+    std::fs::create_dir_all(&sources.home).unwrap();
+    std::fs::create_dir_all(&sources.workspace).unwrap();
+    let clock = FakeClock::new();
+    let server = fakes::ProviderServer::start_responding({
+        let clock = clock.clone();
+        move |_| {
+            // On request arrival the provider moves the fake past the
+            // deadline; the instant answer keeps the test off the wall clock.
+            clock.advance(std::time::Duration::from_millis(150));
+            fakes::Response::status(200, "x")
+        }
+    })
+    .expect("the server starts");
+    let url = server.url();
+    let loader = Loader::new(sources, clock);
+    package(
+        &loader,
+        "slow",
+        None,
+        Some(&format!(
+            "fiber.on_focus({{ timeout = 100, run = function(input) host.http({{url = '{url}'}}) end }})"
+        )),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    renderer.on_focus(&ctx(None));
+    let pending = renderer.take_pending();
+    // `docs/tui.md`, "When an extension fails": a timeout switches the extension off until `/reload`, with one notice.
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "extension_failed");
+    assert!(pending[0].1.contains("extension slow"), "{pending:?}");
+    assert!(pending[0].1.contains("switched off"), "{pending:?}");
+    // Switched off: a later focus run answers silently.
+    renderer.on_focus(&ctx(None));
+    assert!(renderer.take_pending().is_empty());
 }

@@ -2408,6 +2408,64 @@ fn a_persons_deny_ends_permission_without_running() {
     );
 }
 
+/// The next `permission_requested` payload on a watcher registered before
+/// the turn. One wait started at entry covers the whole drain, as
+/// [`wait_requested`] does.
+fn wait_requested_payload(
+    watcher: &mut log::Watcher,
+    deadline: &Deadline,
+    what: &str,
+) -> Map<String, Value> {
+    let wait = deadline.start_wait();
+    loop {
+        let line = watcher
+            .recv_timeout(wait.left())
+            .unwrap_or_else(|| panic!("a line arrives before the deadline: {what}"))
+            .expect("the log stays readable")
+            .expect("no end yet");
+        if line.kind() == EventKind::PermissionRequested {
+            return line.payload.clone();
+        }
+    }
+}
+
+// A standing ask on a rewritten call writes the hook's arguments and
+// names onto its `permission_requested`.
+#[test]
+fn permission_requested_rewrite_on_a_standing_ask_carries_the_rewritten_arguments() {
+    let rules = Arc::new(FakeRules::default());
+    rules.set(ask_rule("atlas", "atlas"));
+    let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&tool));
+    let mut rewritten = Map::new();
+    rewritten.insert("mode".to_owned(), json!("fast"));
+    setup.hooks = Some(Arc::new(ProbeHooks::rewriting(rewritten.clone())));
+    let home = fakes::TempDir::new("fiber-4400-ask");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer("atlas", json!({}), 0), text_answer("Done.", 0)],
+    );
+    prompt(&world, "hi");
+    let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
+    let flight = spawn_turn(&mut world);
+    let requested = wait_requested_payload(
+        &mut watcher,
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+        "the approval is raised",
+    );
+    assert_eq!(requested["arguments"], json!({"mode": "fast"}));
+    assert_eq!(requested["changed_by"], json!(["probe"]));
+    let id = requested["request_id"].as_str().unwrap().to_owned();
+    reply(&world, &id, allow());
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(tool.ran_args(), vec![rewritten]);
+}
+
 // With nobody to answer, the approval is denied with one record.
 #[test]
 fn a_headless_approval_is_denied_with_one_record() {
@@ -3289,6 +3347,8 @@ fn dropping_suspended_state_closes_its_guard_once() {
                     prefix: "atlas".into(),
                 },
             },
+            arguments: None,
+            changed_by: None,
         }),
         action: ActionId("a_test".into()),
         batch: Vec::new(),
@@ -3433,7 +3493,7 @@ fn a_check_then_second_allow_times_two_reviewer_records() {
     let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
     let mut setup = Setup::new(Arc::clone(&rules));
     setup.tools.push(Arc::clone(&tool));
-    setup.reviewer_script = Some(vec![review_text("check", 3), review_text("allow: fine", 5)]);
+    setup.reviewer_script = Some(vec![review_text("check", 3), review_text("fine\nallow", 5)]);
     let home = fakes::TempDir::new("fiber-tool-timing");
     let mut world = build(
         &setup,
@@ -3681,7 +3741,7 @@ fn a_budget_reached_between_stages_times_only_the_first() {
         cache_write: None,
         tiers: Vec::new(),
     });
-    setup.reviewer_script = Some(vec![review_text("check", 0), review_text("allow: fine", 0)]);
+    setup.reviewer_script = Some(vec![review_text("check", 0), review_text("fine\nallow", 0)]);
     let home = fakes::TempDir::new("fiber-tool-timing");
     let mut world = build(
         &setup,
@@ -3794,7 +3854,7 @@ fn an_escalated_block_splits_stage_and_wait_durations() {
     let mut setup = Setup::new(Arc::clone(&rules));
     setup.tools.push(Arc::clone(&tool));
     setup.reviewer_limits = Some((1, 20));
-    setup.reviewer_script = Some(vec![review_text("check", 3), review_text("block: nope", 3)]);
+    setup.reviewer_script = Some(vec![review_text("check", 3), review_text("nope\nblock", 3)]);
     let home = fakes::TempDir::new("fiber-tool-timing");
     let mut world = build(
         &setup,
@@ -6038,7 +6098,7 @@ fn an_idle_unwind_commits_the_cursor_past_the_applied_first_stage() {
     setup.reviewer_script = Some(vec![
         review_text("allow", 0),
         review_text("check", 0),
-        review_text("block its reason", 0),
+        review_text("its reason\nblock", 0),
     ]);
     setup.reviewer_limits = Some((1, 20));
     setup.idle = Some(IDLE);
@@ -6079,8 +6139,8 @@ fn a_second_blocks_count_lands_the_escalation_on_the_third_call() {
         review_text("check", 1),
         review_text("check", 1),
         review_text("allow", 1),
-        review_text("block second reason", 1),
-        review_text("block third reason", 1),
+        review_text("second reason\nblock", 1),
+        review_text("third reason\nblock", 1),
     ]);
     setup.reviewer_limits = Some((2, 20));
     let home = fakes::TempDir::new("fiber-tool-timing");
@@ -6293,7 +6353,7 @@ fn a_mixed_batch_matches_the_serial_event_stream() {
     }
     let check = review_text("check", 1);
     let allow = review_text("allow", 1);
-    let block = review_text("block coral reason", 1);
+    let block = review_text("coral reason\nblock", 1);
     let batch = run(
         None,
         vec![
@@ -6370,7 +6430,7 @@ fn a_grant_remembers_across_the_rest_of_the_batch() {
         review_text("check", 1),
         review_text("check", 1),
         review_text("check", 1),
-        review_text("block atlas reason", 1),
+        review_text("atlas reason\nblock", 1),
         review_text("allow", 1),
         review_text("allow", 1),
     ]);

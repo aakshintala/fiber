@@ -21,8 +21,8 @@ use std::time::Duration;
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{
-    CommandAccepted, Empty, Event, EventKind, ExtensionsLoaded, FiberExited, LoadedExtension,
-    Notice, SessionState, SessionStatus, ToolState,
+    Clients, CommandAccepted, Empty, Event, EventKind, ExtensionsLoaded, FiberExited,
+    LoadedExtension, Notice, SessionState, SessionStatus, ToolState,
 };
 use contract::inbox::Delivery;
 use contract::provider::ToolDefinition;
@@ -35,7 +35,7 @@ use fakes::clock::FakeClock;
 use log::Log;
 use serde_json::{Map, Value};
 
-use super::{Gate, Session};
+use super::{Gate, Session, drain, write_until_stop};
 use crate::SessionError;
 
 #[allow(
@@ -46,6 +46,66 @@ use crate::SessionError;
 mod support;
 
 use support::{DEADLINE, Opened, close_within, subscribe_line};
+
+struct FailedStdout(io::ErrorKind);
+
+impl Write for FailedStdout {
+    fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+        Err(io::Error::from(self.0))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn stdout_copy_preserves_the_writer_error_kind() {
+    let clock = FakeClock::new();
+    let session = contract::SessionId("s_0123456789abcdef".to_owned());
+    let line = super::envelope(
+        &session,
+        clock.as_ref(),
+        &Event::Clients(Clients { count: 0 }),
+    );
+    for (kind, code) in [
+        (io::ErrorKind::BrokenPipe, 0),
+        (io::ErrorKind::StorageFull, 1),
+    ] {
+        let error = write_until_stop(&mut FailedStdout(kind), &line)
+            .expect_err("the copy returns the original write error");
+        assert_eq!(error.kind(), kind);
+        assert_eq!(crate::stdout_write_exit_code(&error), code);
+    }
+}
+
+#[test]
+fn stdout_stop_control_drain_propagates_writer_errors_without_stopping_session() {
+    for kind in [io::ErrorKind::BrokenPipe, io::ErrorKind::StorageFull] {
+        let opened = Opened::open(Vec::new());
+        let mut watcher = opened.log.watch();
+        watcher.injector().push_kept(crate::client::control_line(
+            &opened.id,
+            crate::client::ControlKind::Stop,
+            0,
+        ));
+        opened
+            .log
+            .append(&Event::Clients(Clients { count: 0 }), None, None)
+            .unwrap();
+        let error = drain(&mut watcher, &mut FailedStdout(kind))
+            .expect_err("the catch-up drain returns its writer error");
+        assert_eq!(error.kind(), kind);
+        opened
+            .log
+            .append(&Event::Clients(Clients { count: 1 }), None, None)
+            .expect("the session log remains usable after its copy fails");
+        opened
+            .session
+            .close(opened.log)
+            .expect("the session closes normally after the copy fails");
+    }
+}
 
 /// How long a held writer stays blocked in `write`: far past the test's own
 /// waits, so when close never releases it the test's deadline names the hang
@@ -770,7 +830,7 @@ fn close_joins_a_reader_that_is_still_connected() {
     let session = opened.session;
     let log = opened.log;
     thread::spawn(move || {
-        session.close(log);
+        session.close(log).unwrap_or(());
         if let Ok(()) = done_tx.send(()) {}
     });
     {
@@ -1200,7 +1260,7 @@ fn a_blocked_writer_holds_close_until_the_grace_passes() {
     let session = opened.session;
     let log = opened.log;
     thread::spawn(move || {
-        session.close(log);
+        session.close(log).unwrap_or(());
         if let Ok(()) = done_tx.send(()) {}
     });
     assert!(
@@ -1985,7 +2045,7 @@ fn a_shell_registered_after_close_is_cancelled() {
     let session = opened.session;
     let log = opened.log;
     thread::spawn(move || {
-        session.close(log);
+        session.close(log).unwrap_or(());
         if let Ok(()) = done_tx.send(()) {}
     });
     assert!(
@@ -2227,6 +2287,9 @@ fn run_sends_the_jobs_ends_to_the_loops_inbox() {
             stop: Stop(Box::new(|| {})),
             lines: false,
             input: None,
+
+            identity: None,
+            detached: None,
         })
         .unwrap();
     let id = job.started.job_id.clone();
@@ -2738,7 +2801,7 @@ fn close_cancels_a_running_driver_shell_and_waits_for_its_answer() {
     let (done_tx, done) = mpsc::channel();
     let gate = Arc::clone(&session.gate);
     thread::spawn(move || {
-        session.close(log);
+        session.close(log).unwrap_or(());
         done_tx.send(()).unwrap();
     });
     Deadline::after(DEADLINE)
@@ -2864,7 +2927,7 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
     let session = opened.session;
     let log = opened.log;
     thread::spawn(move || {
-        session.close(log);
+        session.close(log).unwrap_or(());
         if let Ok(()) = done_tx.send(()) {}
     });
     Deadline::after(DEADLINE)
@@ -4115,7 +4178,7 @@ fn the_state_setter_does_nothing_once_close_begins() {
     let log = opened.log;
     let (done_tx, done) = mpsc::channel();
     thread::spawn(move || {
-        session.close(log);
+        session.close(log).unwrap_or(());
         let _ignored = done_tx.send(());
     });
     Deadline::after(DEADLINE)
@@ -4392,7 +4455,7 @@ fn print_ends_at_rewound_while_the_log_is_held() {
         .spawn({
             let out = Arc::clone(&out);
             move || {
-                super::print(watcher, Box::new(SharedOut(out)));
+                super::print(watcher, Box::new(SharedOut(out))).unwrap_or(());
                 done.send(()).unwrap_or(());
             }
         })
@@ -4470,7 +4533,7 @@ fn print_ends_at_moved_while_the_log_is_held() {
         .spawn({
             let out = Arc::clone(&out);
             move || {
-                super::print(watcher, Box::new(SharedOut(out)));
+                super::print(watcher, Box::new(SharedOut(out))).unwrap_or(());
                 done.send(()).unwrap_or(());
             }
         })
@@ -4936,7 +4999,7 @@ fn close_prints_durable_lines_dropped_before_stop() {
     let (done_tx, done_rx) = mpsc::channel();
     let closing = Arc::clone(&log);
     thread::spawn(move || {
-        session.close(closing);
+        session.close(closing).unwrap_or(());
         if let Ok(()) = done_tx.send(()) {}
     });
     drop(log);
@@ -6075,7 +6138,7 @@ fn acks_for<'a>(lines: &'a [Value], id: &str) -> Vec<&'a Value> {
 fn close_on_thread(session: Session, log: Arc<Log>) -> (thread::ThreadId, mpsc::Receiver<()>) {
     let (done_tx, done) = mpsc::channel();
     let closer = thread::spawn(move || {
-        session.close(log);
+        session.close(log).unwrap_or(());
         if let Ok(()) = done_tx.send(()) {}
     });
     (closer.thread().id(), done)

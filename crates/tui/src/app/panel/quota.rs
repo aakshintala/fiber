@@ -174,6 +174,8 @@ impl App {
             | EventKind::DelegateFinished
             | EventKind::JobCompleted
             | EventKind::JobsPendingNotified
+            | EventKind::KeeperStarted
+            | EventKind::KeeperBound
             | EventKind::Unknown(_) => {}
         }
         if matches!(self.panel_state.quota.ask, Ask::Due) || ended {

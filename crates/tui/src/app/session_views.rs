@@ -3,6 +3,7 @@
 //! These views fold the stream the terminal already reads and fetch a file's
 //! diff only when the person chooses it.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use super::call_view::CallView;
@@ -90,6 +91,12 @@ pub(in crate::app) struct SessionViews {
     diff_list: List,
     figures_request: Option<String>,
     figures: Option<changed_files_view::NumstatAnswer>,
+    tracking_request: Option<String>,
+    tracking: Option<changed_files_view::Tracking>,
+    /// Changed files paths whose latest diff answer read empty: the
+    /// view learns a path is no-diff only from an `Empty` answer, so
+    /// the set lives per view-open and its rows draw dim.
+    no_diff: BTreeSet<String>,
     hooks_request: Option<String>,
     hooks_rows: Option<Vec<contract::events::HookInfo>>,
     /// The remote Changed files copy the editor holds: fetched from the
@@ -154,7 +161,7 @@ impl App {
             SessionView::Quota => Open::Quota(List::default()),
             SessionView::Context => Open::Context(List::default()),
             SessionView::Status => Open::Status(List::default()),
-            SessionView::ChangedFiles => Open::Files(List::default()),
+            SessionView::ChangedFiles => Open::Files(List::gutter_accent()),
             SessionView::ReleaseNotes => Open::ReleaseNotes(List::default()),
             SessionView::Delegates => Open::Delegates(List::default()),
             SessionView::Jobs => Open::Jobs(List::default()),
@@ -174,14 +181,35 @@ impl App {
         self.rewind = super::rewind::Rewind::default();
         self.session_views.hooks_request = None;
         if matches!(view, SessionView::ChangedFiles) {
+            self.session_views.no_diff.clear();
+            self.reseat_files_list();
             return self.send_figures_request();
         }
         Effect::None
     }
 
+    /// Puts the Changed files selection on a file row: folder and rule
+    /// rows take no Enter or click, so the view opens with a file
+    /// focused.
+    fn reseat_files_list(&mut self) {
+        let (workspace, viewed) = self.changed_files_roots();
+        let takes = changed_files_view::file_takes(
+            self.panel_state.changes(),
+            workspace,
+            viewed.as_deref(),
+        );
+        let Some((rows, height)) = self.session_view_list_metrics() else {
+            return;
+        };
+        if let Some(Open::Files(list)) = self.session_views.open.as_mut() {
+            list.rest_on(&takes, rows, height);
+        }
+    }
+
     /// Opens Changed files and fetches `rank` from the displayed
-    /// figures ordering. The open sends the numstat query first, so a
-    /// file click yields its line then the diff line, in that order.
+    /// figures ordering. The open sends the numstat query first, then
+    /// the tracking query, so a file click yields their lines before
+    /// the diff line, in that order.
     pub(in crate::app) fn open_changed_file(&mut self, rank: usize) -> Effect {
         let effect = self.open_session_view(SessionView::ChangedFiles);
         if !self.session_view_open() {
@@ -201,10 +229,14 @@ impl App {
     /// Sends the Changed files figures query over the card's listed
     /// paths, like `open_hooks` sends its query: a late answer after
     /// another open folds nowhere, and with no driver the view opens
-    /// showing the card's figures.
+    /// showing the card's figures. The tracking query runs on the same
+    /// side and channel right after it, over the same paths: both
+    /// answers fold through the figures path.
     fn send_figures_request(&mut self) -> Effect {
         self.session_views.figures_request = None;
         self.session_views.figures = None;
+        self.session_views.tracking_request = None;
+        self.session_views.tracking = None;
         let Some(session) = self.session().cloned() else {
             return Effect::None;
         };
@@ -227,13 +259,22 @@ impl App {
         );
         self.outbox.wait(&id, super::Waiting::Figures);
         self.session_views.figures_request = Some(id);
-        Effect::Send(vec![line])
+        let tracking_id = support::mint("c_");
+        let tracking_line = shell::command(
+            &tracking_id,
+            &session,
+            &changed_files_view::tracking_command(&paths),
+            false,
+        );
+        self.outbox.wait(&tracking_id, super::Waiting::Figures);
+        self.session_views.tracking_request = Some(tracking_id);
+        Effect::Send(vec![line, tracking_line])
     }
 
     /// The Changed files rows' figures: the numstat answer resolved
-    /// over the card's sums, or the card's sums until it answers. The
-    /// list and the Enter rank share this, so rows and fetching
-    /// always agree.
+    /// over the card's sums, or the card's sums until the figures and
+    /// tracking answers both arrive. The list and the Enter rank share
+    /// this, so rows and fetching always agree.
     fn displayed_figures(&self) -> changed_files_view::ResolvedFigures {
         // The viewed workspace names the hub workspace on a remote
         // terminal, whose card holds hub workspace paths.
@@ -243,6 +284,7 @@ impl App {
                 self.panel_state.changes(),
                 Some(answer.raw.as_str()),
                 &answer.lines,
+                self.session_views.tracking.as_ref(),
                 self.workspace_root(),
                 viewed.as_deref(),
             ),
@@ -250,9 +292,35 @@ impl App {
                 self.panel_state.changes(),
                 None,
                 &std::collections::BTreeMap::new(),
+                None,
                 self.workspace_root(),
                 viewed.as_deref(),
             ),
+        }
+    }
+
+    /// Unions the fold's no-diff paths into the view-open set: paths the
+    /// numstat answer omits that tracking does not call untracked. Runs
+    /// only with both answers stored; until then the rows show the card.
+    fn mark_fold_no_diff(&mut self) {
+        let (Some(figures), Some(tracking)) = (
+            self.session_views.figures.as_ref(),
+            self.session_views.tracking.as_ref(),
+        ) else {
+            return;
+        };
+        let viewed = self.workspace();
+        let dim = changed_files_view::resolve_figures(
+            self.panel_state.changes(),
+            Some(figures.raw.as_str()),
+            &figures.lines,
+            Some(tracking),
+            self.workspace_root(),
+            viewed.as_deref(),
+        )
+        .dim;
+        for path in dim {
+            self.session_views.no_diff.insert(path);
         }
     }
 
@@ -304,9 +372,19 @@ impl App {
             if self.session_views.diff.is_some() {
                 self.session_views.diff_list.key(key, rows, height);
             } else if *key == Key::Enter {
-                return Some(self.session_view_file_rank(list.selected()));
-            } else if let Some(Open::Files(list)) = self.session_views.open.as_mut() {
-                list.key(key, rows, height);
+                return Some(self.session_view_file_enter(list.selected()));
+            } else {
+                // Folder and rule rows take no Enter: the selection moves
+                // over file rows only.
+                let (workspace, viewed) = self.changed_files_roots();
+                let takes = changed_files_view::file_takes(
+                    self.panel_state.changes(),
+                    workspace,
+                    viewed.as_deref(),
+                );
+                if let Some(Open::Files(list)) = self.session_views.open.as_mut() {
+                    list.key_over(key, rows, height, &takes);
+                }
             }
             return Some(Effect::None);
         }
@@ -425,16 +503,32 @@ impl App {
         };
         if matches!(self.session_views.open, Some(Open::Files(_))) {
             if self.session_views.diff.is_some() {
-                if let Spot::Row(at) = spot {
-                    self.session_views.diff_list.select(at, rows, height);
+                match spot {
+                    Spot::Row(at) => self.session_views.diff_list.select(at, rows, height),
+                    // A click on "Open in editor ›" runs the same editor
+                    // path as Ctrl+G.
+                    Spot::Cell(_, _) => return self.open_in_editor(),
+                    Spot::Close | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_) => {}
                 }
                 return Effect::None;
             }
             if let Spot::Row(at) = spot {
+                // A click on a file row does what Enter does on it; a
+                // click on a folder or rule row is a no-op, never a diff
+                // request for a stale rank.
+                let (workspace, viewed) = self.changed_files_roots();
+                let takes = changed_files_view::file_takes(
+                    self.panel_state.changes(),
+                    workspace,
+                    viewed.as_deref(),
+                );
+                if !takes.contains(&at) {
+                    return Effect::None;
+                }
                 if let Some(Open::Files(list)) = self.session_views.open.as_mut() {
                     list.select(at, rows, height);
                 }
-                return self.session_view_file_rank(at);
+                return self.session_view_file_enter(at);
             }
             return Effect::None;
         }
@@ -575,11 +669,23 @@ impl App {
                 } else {
                     *list
                 };
+                // Until the figures answer arrives the frame shows the
+                // card's figures with M.
+                let displayed = self
+                    .session_views
+                    .figures
+                    .as_ref()
+                    .map(|_| self.displayed_figures());
+                let (workspace, viewed) = self.changed_files_roots();
                 Some(changed_files_view::frame(
                     self.panel_state.changes(),
-                    Some(&self.displayed_figures()),
+                    displayed.as_ref(),
                     chosen,
                     list,
+                    &self.session_views.no_diff,
+                    workspace,
+                    viewed.as_deref(),
+                    width,
                 ))
             }
             Open::ReleaseNotes(list) => {
@@ -670,10 +776,15 @@ impl App {
             }
             Some((path, _)) => Some((path.clone(), 1)),
             None => {
-                let displayed = self.displayed_figures();
-                let (path, _, _) = changed_files_view::ranked(&displayed.figures)
-                    .get(list.selected())
-                    .copied()?;
+                // The grouped row's path: a folder or rule row selects
+                // no file, so Ctrl+G opens nothing.
+                let (workspace, viewed) = self.changed_files_roots();
+                let plan = changed_files_view::list_rows(
+                    self.panel_state.changes(),
+                    workspace,
+                    viewed.as_deref(),
+                );
+                let path = changed_files_view::row_path(&plan, list.selected())?;
                 Some((path.to_owned(), 1))
             }
         }
@@ -817,6 +928,26 @@ impl App {
         relative
     }
 
+    /// Enter or a click on the grouped list row `at`: the row's path
+    /// sends its diff request through its ranked index, while a folder
+    /// or rule row sends nothing, and a stale rank leaves an empty list.
+    fn session_view_file_enter(&mut self, at: usize) -> Effect {
+        let (workspace, viewed) = self.changed_files_roots();
+        let plan =
+            changed_files_view::list_rows(self.panel_state.changes(), workspace, viewed.as_deref());
+        let Some(path) = changed_files_view::row_path(&plan, at).map(str::to_owned) else {
+            return Effect::None;
+        };
+        let displayed = self.displayed_figures();
+        let Some(rank) = changed_files_view::ranked(&displayed.figures)
+            .iter()
+            .position(|(candidate, _, _)| *candidate == path.as_str())
+        else {
+            return Effect::None;
+        };
+        self.session_view_file_rank(rank)
+    }
+
     /// Starts the selected file's diff request, or leaves an empty list when
     /// `rank` no longer names a file in the displayed figures ordering.
     fn session_view_file_rank(&mut self, rank: usize) -> Effect {
@@ -915,10 +1046,14 @@ impl App {
                         | super::Waiting::Subscribe { .. }
                         | super::Waiting::Stop
                         | super::Waiting::Delete
+                        | super::Waiting::Archive
                         | super::Waiting::OfferImport
                         | super::Waiting::DeleteDiscovery(..)
                         | super::Waiting::DeleteStop { .. }
                         | super::Waiting::DeleteFinal(..)
+                        | super::Waiting::ArchiveDiscovery(..)
+                        | super::Waiting::ArchiveStop { .. }
+                        | super::Waiting::ArchiveFinal(..)
                         | super::Waiting::Feed
                         | super::Waiting::Recent(..)
                         | super::Waiting::Close,
@@ -997,10 +1132,14 @@ impl App {
                         | super::Waiting::Subscribe { .. }
                         | super::Waiting::Stop
                         | super::Waiting::Delete
+                        | super::Waiting::Archive
                         | super::Waiting::OfferImport
                         | super::Waiting::DeleteDiscovery(..)
                         | super::Waiting::DeleteStop { .. }
                         | super::Waiting::DeleteFinal(..)
+                        | super::Waiting::ArchiveDiscovery(..)
+                        | super::Waiting::ArchiveStop { .. }
+                        | super::Waiting::ArchiveFinal(..)
                         | super::Waiting::Feed
                         | super::Waiting::Recent(..)
                         | super::Waiting::Close,
@@ -1072,6 +1211,12 @@ impl App {
         if self.session_views.figures_request.as_deref() == Some(accepted.command_id.0.as_str()) {
             self.session_views.figures_request = None;
             self.session_views.figures = self.answered_figures(accepted);
+            self.mark_fold_no_diff();
+        }
+        if self.session_views.tracking_request.as_deref() == Some(accepted.command_id.0.as_str()) {
+            self.session_views.tracking_request = None;
+            self.session_views.tracking = self.answered_tracking(accepted);
+            self.mark_fold_no_diff();
         }
         let Some((id, path)) = self.session_views.request.as_ref() else {
             return;
@@ -1081,8 +1226,21 @@ impl App {
         }
         let path = path.clone();
         self.session_views.request = None;
-        self.session_views.diff =
-            Some((path, changed_files_view::answer(accepted.result.as_ref())));
+        let diff = changed_files_view::answer(accepted.result.as_ref());
+        // The view learns a path is no-diff only from an `Empty` answer:
+        // a committed or undone file stays listed and dim, while a fresh
+        // diff unmarks it. An untracked file never lands in the set: its
+        // diff reads through --no-index as lines, never empty, per
+        // `changed_files_view::diff_command`.
+        match &diff {
+            Diff::Empty => {
+                self.session_views.no_diff.insert(path.clone());
+            }
+            Diff::Reading | Diff::Lines { .. } | Diff::Failed(_) => {
+                self.session_views.no_diff.remove(&path);
+            }
+        }
+        self.session_views.diff = Some((path, diff));
     }
 
     /// Folds a numstat answer into stored figures: git's raw output
@@ -1131,6 +1289,30 @@ impl App {
         Some(changed_files_view::NumstatAnswer { raw, lines })
     }
 
+    /// Folds a tracking answer into per-path classes: anything but a
+    /// readable tracking answer stores nothing, so the rows keep the
+    /// card's figures with no class applied.
+    fn answered_tracking(
+        &self,
+        accepted: &CommandAccepted,
+    ) -> Option<changed_files_view::Tracking> {
+        let Some(contract::events::CommandResult::Shell {
+            output, process, ..
+        }) = accepted.result.as_ref()
+        else {
+            return None;
+        };
+        if process.signal.is_some() || process.timed_out {
+            return None;
+        }
+        // Only a clean run counts, as with the numstat answer.
+        if process.exit_code != Some(0) {
+            return None;
+        }
+        let body = changed_files_view::numstat_body(output, process.exit_code);
+        changed_files_view::parse_tracking(body)
+    }
+
     /// The local launch workspace, when the terminal has one: the
     /// root the Changed files paths read against.
     fn workspace_root(&self) -> Option<&std::path::Path> {
@@ -1138,6 +1320,13 @@ impl App {
             crate::LaunchLocation::Local { workspace, .. } => Some(workspace),
             crate::LaunchLocation::Remote { .. } => None,
         }
+    }
+
+    /// The roots the Changed files list shows paths against: the local
+    /// launch workspace, else the viewed one on a remote terminal, like
+    /// the figures lookup.
+    fn changed_files_roots(&self) -> (Option<&std::path::Path>, Option<std::path::PathBuf>) {
+        (self.workspace_root(), self.workspace())
     }
 
     /// A session rejection fills only the diff request that still owns its id.
@@ -1152,6 +1341,9 @@ impl App {
     pub(in crate::app) fn session_views_refused(&mut self, id: &str, message: &str) {
         if self.session_views.figures_request.as_deref() == Some(id) {
             self.session_views.figures_request = None;
+        }
+        if self.session_views.tracking_request.as_deref() == Some(id) {
+            self.session_views.tracking_request = None;
         }
         let Some((request, path)) = self.session_views.request.as_ref() else {
             return;

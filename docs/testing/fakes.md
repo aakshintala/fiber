@@ -71,7 +71,8 @@ is a real child session process, because it is Fiber. The fakes are:
   never draws it, so no concurrent listener can take it
 - a second client on a session's socket
 - test helpers for what many test files share: `fakes::fifo` makes a FIFO
-  by one function, `fakes::tool_args` builds a tool call's argument map
+  by one function, `fakes::shell_quote` single-quotes a path for a shell command,
+  `fakes::tool_args` builds a tool call's argument map
   and `fakes::text_of` reads a tool result's text, `fakes::wait_output`
   returns a spawned system tool's output under a deadline, killing its
   group on expiry, and `fakes::wait_until` waits for a predicate to hold
@@ -175,18 +176,23 @@ program or waiting on a test.
   crate may depend on, so what it shows is that layer alone. It may use
   `fakes`, as a test-only dependency. It reads its arguments with
   `std::env::args`.
-- **A test runs the jig's built binary.** `cargo test` builds the crate's
-  examples, so a jig test starts `target/<profile>/examples/<jig>` (found
-  from `std::env::current_exe`) directly. It never runs `cargo run`, which
-  would wait on the build directory's lock inside the test's deadline. Its
-  first start runs through the shared helper's start bound
-  (`fakes::warm_up`), because the first exec of a freshly linked binary can
-  stall for seconds on macOS (`docs/testing.md`, the first-run stall). The
-  path helper returns `fakes::WarmedJig`, which warms before returning, and
-  exec sites take it, so an unwarmed jig path does not compile.
-  `fakes::warm_up` is for an already-built `CARGO_BIN_EXE_*` product binary
-  and the checked-in MCP fixture script (see `fakes::mcp_fixture`);
-  a jig example binary starts through `WarmedJig::warm`.
+- **A test runs the jig's built binary.** A jig test starts
+  `target/<profile>/examples/<jig>` (found from `std::env::current_exe`)
+  directly. It never runs `cargo run`, which would wait on the build
+  directory's lock inside the test's deadline. Its first start runs through
+  the shared helper's start bound (`fakes::warm_up`), because the first
+  exec of a freshly linked binary can stall for seconds on macOS
+  (`docs/testing.md`, the first-run stall). The path helper returns
+  `fakes::WarmedJig`, which warms before returning, and exec sites take
+  it, so an unwarmed jig path does not compile. `WarmedJig::warm` first
+  compares the binary against every file its sibling `<binary>.d` dep-info
+  file lists and refuses a binary older than any of them, so a narrowed
+  build that skipped the examples fails loud naming the stale binary and
+  `cargo build --examples` instead of running stale bytes. A binary with no
+  sibling dep-info file warms unchecked. `fakes::warm_up` is for an
+  already-built `CARGO_BIN_EXE_*` product binary and the checked-in MCP
+  fixture script (see `fakes::mcp_fixture`); a jig example binary starts
+  through `WarmedJig::warm`.
 - **Its own logic is tested from shared support.** Code in a jig that a
   test checks without running the binary, such as its argument parsing,
   lives in a support file under the crate's `tests/support/`. The jig
@@ -224,6 +230,7 @@ A crate's first implementation ticket ships the jigs listed for it:
 | `loop` | `review` | Prints the reviewer's stage inputs and compaction selection requests for a session directory, including unreplayable calls. With `--reviewer-denies DIR`, prints one unlabelled sampled-kind set line per reviewer deny at the deny's seq, each carrying the recorded verdict with its reviewed prefix ending in the entry's own call; allows, native decisions and unreplayable denies emit nothing, closed-class entries drop loudly, the first deny per action wins, and no sample cap applies. |
 | `extensions` | `pin_check` | Times checking a repository's declared paths against `pinned.json`, cold and warm, in one process. |
 | `doors` | `connect` | Connects to a running session through the hub, or to its socket, and sends the JSON commands typed on stdin, printing what comes back. |
+| `support` | `framing` | Reads one file through the wire line reader with a stalled read after a cut point, printing what the read returns and what a follow-up read finds. |
 
 `contract` has no jig: it holds types, not behaviour. A jig not in this table
 is added to it by the ticket that builds it.
@@ -245,4 +252,4 @@ An eval measures the model plus Fiber's prompting as a pass rate over many
 runs. It is a development instrument for prompts and tool definitions. No eval
 gates a merge or a release.
 
-Run the reviewer gate as three sweep commands, one per candidate model: `cargo run -p main --example review_sweep -- --models <model> --set crates/loop/tests/fixtures/reviewer_eval/calls.jsonl --dirs <each of the 16 reviewer_consent sessions> --runs 1 --live`. Each command drives the same 42 entries once (the 25 set rows plus the 17 consent-dir folds, with the `review_person_input` dir dropped so the three tables compare), worst case 42 times 4 is 168 billed requests against the 170 budget, and prints one table row per call with a `src` column telling set rows from dir rows, the verdict of each run, and the token and latency totals. The sweep drives the reviewer only behind the explicit `--live` flag and never runs in CI. Folding a committed session directory emits one entry per replayable call in file order with 1-based `{dirname}-{n}` ids, mirroring the set derivation; a judged call with no logged declared effects contributes no entry and counts as unreplayable apart. The sweep drives each entry's runs back to back in entry order, at most four billed requests per entry-run (one stage call plus its re-ask, and the second stage only on a first `check`). The tape records each reviewer call's reply text in call order, so the recorded stage texts equal the scripted verdicts in order. The free-text detail renders one line per run with single-lined reasons and texts.
+Run the reviewer gate as two sweep commands per candidate model: `cargo run -p main --example review_sweep -- --models <model> --set crates/loop/tests/fixtures/reviewer_eval/calls.jsonl --runs 1 --live` drives the 34 set rows once, worst case 1 model times 34 entries times 1 run times 4 is 136 billed requests against the 170 budget, and `cargo run -p main --example review_sweep -- --models <model> --dirs <each of the 24 reviewer_consent sessions, reviewer_eval/contradictory-consent and review_person_input> --runs 1 --live` folds 26 committed directories into 27 entries: `shape-6-reason-names-different-call` yields two. The worst case is 1 model times 27 entries times 1 run times 4, or 108 requests. Each command prints one row per call with a `src` column telling set rows from dir rows, the verdicts and token and latency totals. Never combine set and dirs in one command (61 entries, 244 worst-case, rejected by `check_call_cap`) and never `--runs 3` on the full set. The sweep drives the reviewer only behind the explicit `--live` flag and never runs in CI. Folding a committed session directory emits one entry per replayable call in file order with 1-based `{dirname}-{n}` ids, mirroring the set derivation; a judged call with no logged declared effects contributes no entry and counts as unreplayable apart. The sweep drives each entry's runs back to back in entry order, at most four billed requests per entry-run (one stage call plus its re-ask, and the second stage only on a first `check`). The tape records each reviewer call's reply text in call order, so the recorded stage texts equal the scripted verdicts in order. The free-text detail renders one line per run with single-lined reasons and texts.

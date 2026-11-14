@@ -191,7 +191,7 @@ fn hold_total(app: &mut App, total: usize) {
         .unwrap_or_else(|| panic!("a feed"));
     let recent = start
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| line["command"] == "recent" && line.get("args") == Some(&json!({})))
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("an unscoped recent"));
     assert!(app.on_line(accepted(feed, json!({}))).is_empty());

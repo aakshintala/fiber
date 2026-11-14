@@ -91,6 +91,14 @@ fn install(setup: &Setup, server: &ProviderServer, thinking: &str) -> String {
         "{}",
         installed.stderr
     );
+    let config_path = setup.home().join("config.json");
+    let mut config: Value = match std::fs::read(&config_path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(error) => panic!("reading {}: {error}", config_path.display()),
+    };
+    config["model_lists"]["models_dev"] = json!(false);
+    write_json(&config_path, &config);
     server.url().strip_prefix("http://").unwrap().to_owned()
 }
 
@@ -846,22 +854,77 @@ fn service_without_an_endpoint_is_left_out_and_logged() {
         include_str!("../../../../providers/databricks/thinking.lua"),
     );
 
-    let run = run(
+    let ask = run(
         &setup,
         &["ask", "--model", "databricks/databricks-gpt-6-sol", "hi"],
         &credentials(&host),
     );
 
-    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    let without_extension_log: Vec<Value> = run
+    assert_eq!(ask.code, Some(0), "stderr: {}", ask.stderr);
+    let stream: Vec<Value> = ask
         .lines
         .iter()
         .filter(|line| line["kind"] != "extension_log")
         .cloned()
         .collect();
-    support::assert_kinds_multiset(&without_extension_log, &HELLO_KINDS, &[], None, COUNT_DOC);
-    assert_eq!(run.text_completed(), "Hello.");
+    // The omission is a client-facing notice on the ask stream, the way
+    // `model_invalid` is: one `notice` event naming the model and the
+    // provider's reason (`docs/model-routing.md`, "Model discovery"), with
+    // the remaining kinds equal to `HELLO_KINDS`.
+    let notices: Vec<&Value> = stream
+        .iter()
+        .filter(|line| line["kind"] == "notice")
+        .collect();
+    // One notice per marked entry (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0]["payload"]["code"], "model_omitted");
+    assert_eq!(
+        notices[0]["payload"]["message"],
+        "The model `databricks/databricks-glm-5.3` was left out of the model \
+         list: no serving endpoint with a matching name."
+    );
+    assert_eq!(
+        notices[0]["payload"]["extension"],
+        "github.com/aakshintala/fiber/providers/databricks"
+    );
+    let rest: Vec<Value> = stream
+        .into_iter()
+        .filter(|line| line["kind"] != "notice")
+        .collect();
+    support::assert_kinds_multiset(&rest, &HELLO_KINDS, &[], None, COUNT_DOC);
+    assert_eq!(ask.text_completed(), "Hello.");
     assert_turn(&server.requests(), "/ai-gateway/codex/v1/responses");
+    // The same discovery behind `fiber models` prints the singleton
+    // notice unchanged and lists only the backed models.
+    let models = run(&setup, &["models", "--json"], &credentials(&host));
+    assert_eq!(models.code, Some(0), "stderr: {}", models.stderr);
+    assert!(
+        models.stderr.contains(
+            "The model `databricks/databricks-glm-5.3` was left out of the model \
+             list: no serving endpoint with a matching name.\n"
+        ),
+        "stderr: {}",
+        models.stderr
+    );
+    // The home also holds the harness's fake provider, so the comparison
+    // scopes to the provider under test.
+    let mut listed: Vec<&str> = models
+        .lines
+        .iter()
+        .map(|line| line["model"].as_str().unwrap())
+        .filter(|model| model.starts_with("databricks/"))
+        .collect();
+    listed.sort_unstable();
+    // Discovery drains the marked entry (`docs/model-routing.md`, "Model discovery"):
+    // two backed models listed.
+    assert_eq!(
+        listed,
+        [
+            "databricks/databricks-claude-opus-5",
+            "databricks/databricks-gpt-6-sol",
+        ],
+        "{listed:?}"
+    );
     let lines = log_lines(&setup);
     let omissions: Vec<&Value> = lines
         .iter()
@@ -881,6 +944,237 @@ fn service_without_an_endpoint_is_left_out_and_logged() {
     );
     assert!(!message.contains("dapi-test"), "{message}");
     assert!(!message.contains("authorization"), "{message}");
+}
+
+/// Two services without endpoints group into one `model_omitted` notice on
+/// `fiber models` stderr: the grouped count names both omitted models with
+/// their per-item extension attribution, and stdout lists only the backed
+/// model. No order across omissions is promised, so the test asserts the
+/// set, not which omission leads.
+#[test]
+fn two_services_without_endpoints_group_into_one_notice() {
+    // No harness fake provider, so the list holds only what discovery
+    // found, like `models_lists_exactly_the_three_discovered_references`.
+    let setup = Setup::without_provider();
+    let server = ProviderServer::start([
+        Response::status(200, services_body().to_string()),
+        Response::status(200, catalog_body().to_string()),
+        Response::status(
+            200,
+            json!({"endpoints": [{"name": "gpt-6-sol"}]}).to_string(),
+        ),
+    ])
+    .unwrap();
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../../providers/databricks/thinking.lua"),
+    );
+
+    let models = run(&setup, &["models", "--json"], &credentials(&host));
+    assert_eq!(models.code, Some(0), "stderr: {}", models.stderr);
+    // A pass that finds several problems of one code raises one notice whose
+    // message gives the count (`docs/errors.md`, "Registry"): two omissions.
+    assert!(
+        models.stderr.contains("2 `model_omitted` notices:"),
+        "stderr: {}",
+        models.stderr
+    );
+    for omitted in [
+        "databricks/databricks-claude-opus-5",
+        "databricks/databricks-glm-5.3",
+    ] {
+        assert!(
+            models.stderr.contains(&format!(
+                "- The model `{omitted}` was left out of the model list: \
+                 no serving endpoint with a matching name. \
+                 (extension `github.com/aakshintala/fiber/providers/databricks`)"
+            )),
+            "stderr: {}",
+            models.stderr
+        );
+    }
+    // The grouped notice lists each item (`docs/errors.md`, "Registry"): two items.
+    assert_eq!(
+        models
+            .stderr
+            .lines()
+            .filter(|line| line.starts_with("- "))
+            .count(),
+        2,
+        "stderr: {}",
+        models.stderr
+    );
+    let listed: Vec<&str> = models
+        .lines
+        .iter()
+        .map(|line| line["model"].as_str().unwrap())
+        .collect();
+    // Discovery drains the marked entries (`docs/model-routing.md`, "Model discovery"):
+    // one backed model listed.
+    assert_eq!(listed, ["databricks/databricks-gpt-6-sol"], "{listed:?}");
+}
+
+/// A warm model cache names the endpoint-less service once: the load reports
+/// the marked omission, and `add_lua` repeats none of it
+/// (`docs/model-routing.md`, "Model discovery").
+#[test]
+fn a_warm_cache_names_the_omission_once_on_a_later_ask() {
+    let setup = Setup::new();
+    let server = ProviderServer::start(
+        [
+            Response::status(200, services_body().to_string()),
+            Response::status(200, catalog_body().to_string()),
+            Response::status(
+                200,
+                json!({"endpoints": [{"name": "claude-opus-5"}, {"name": "gpt-6-sol"}]})
+                    .to_string(),
+            ),
+        ]
+        .into_iter()
+        .chain([hello(), hello()]),
+    )
+    .unwrap();
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../../providers/databricks/thinking.lua"),
+    );
+
+    // The first turn discovers and warms the model cache; the omission is
+    // one notice on its stream.
+    let first = run(
+        &setup,
+        &["ask", "--model", "databricks/databricks-gpt-6-sol", "hi"],
+        &credentials(&host),
+    );
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let first_notices: Vec<&Value> = first
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "notice")
+        .collect();
+    // One notice per marked entry (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(first_notices.len(), 1, "{first_notices:?}");
+    assert_eq!(first_notices[0]["payload"]["code"], "model_omitted");
+
+    // A later turn on the warm cache carries exactly one `model_omitted`
+    // notice event for the omitted service, with the same code, message
+    // and extension as the cold turn.
+    let ask = run(
+        &setup,
+        &["ask", "--model", "databricks/databricks-gpt-6-sol", "hi"],
+        &credentials(&host),
+    );
+    assert_eq!(ask.code, Some(0), "stderr: {}", ask.stderr);
+    let stream: Vec<Value> = ask
+        .lines
+        .iter()
+        .filter(|line| line["kind"] != "extension_log")
+        .cloned()
+        .collect();
+    let notices: Vec<&Value> = stream
+        .iter()
+        .filter(|line| line["kind"] == "notice")
+        .collect();
+    // One notice per marked entry (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0]["payload"]["code"], "model_omitted");
+    assert_eq!(
+        notices[0]["payload"]["message"],
+        "The model `databricks/databricks-glm-5.3` was left out of the model \
+         list: no serving endpoint with a matching name."
+    );
+    assert_eq!(
+        notices[0]["payload"]["extension"],
+        "github.com/aakshintala/fiber/providers/databricks"
+    );
+    let rest: Vec<Value> = stream
+        .into_iter()
+        .filter(|line| line["kind"] != "notice")
+        .collect();
+    support::assert_kinds_multiset(&rest, &HELLO_KINDS, &[], None, COUNT_DOC);
+    assert_eq!(ask.text_completed(), "Hello.");
+    assert_turn(&server.requests(), "/ai-gateway/codex/v1/responses");
+}
+
+/// A disabled process package has no Lua discovery path, but its warm cache
+/// still reports the marked service during load (`docs/model-routing.md`, "Model discovery").
+#[test]
+fn a_disabled_process_package_warm_cache_names_the_omission_once() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    let to = setup.root.path().join("pkg-databricks-disabled");
+    support::package::copy_package("databricks", &to, "https://", "http://");
+    let manifest_path = to.join("extension.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["process"] = json!({"program": "run", "exit_timeout_ms": 0});
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    support::install_with_retry(
+        &setup.home(),
+        setup.deadline.start_wait(),
+        &extensions::Request::Path(to),
+        "0.1.0",
+        None,
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({
+            "model": "fake/m",
+            "extensions": {"github.com/aakshintala/fiber/providers/databricks": {"enabled": false}}
+        }),
+    );
+    let server_url = server.url();
+    let host = server_url.strip_prefix("http://").unwrap();
+    let base = "http://{workspace}/ai-gateway";
+    config::write_model_cache(&setup.home(), "databricks", &json!([
+        {"id":"databricks-claude-opus-5", "protocol":"anthropic-messages", "base_url":format!("{base}/anthropic/v1"), "context_window":200000},
+        {"id":"databricks-gpt-6-sol", "protocol":"openai-responses", "base_url":format!("{base}/codex/v1"), "context_window":400000},
+        {"id":"databricks-glm-5.3", "protocol":"openai-completions", "base_url":format!("{base}/mlflow/v1"), "context_window":200000, "omit_reason":"no serving endpoint with a matching name"}
+    ])).unwrap();
+    let ask = run(
+        &setup,
+        &["ask", "--model", "databricks/databricks-gpt-6-sol", "hi"],
+        &credentials(host),
+    );
+    assert_eq!(ask.code, Some(0), "stderr: {}", ask.stderr);
+    let notices: Vec<_> = ask
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "notice")
+        .collect();
+    // The load emits one notice per marked entry (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0]["payload"]["code"], "model_omitted");
+    assert_eq!(
+        notices[0]["payload"]["message"],
+        "The model `databricks/databricks-glm-5.3` was left out of the model list: no serving endpoint with a matching name."
+    );
+    assert_eq!(
+        notices[0]["payload"]["extension"],
+        "github.com/aakshintala/fiber/providers/databricks"
+    );
+    let rest: Vec<Value> = ask
+        .lines
+        .iter()
+        .filter(|line| line["kind"] != "notice")
+        .cloned()
+        .collect();
+    support::assert_kinds_multiset(&rest, &HELLO_KINDS, &[], None, COUNT_DOC);
+    assert_eq!(ask.text_completed(), "Hello.");
+    let requests = server.requests();
+    let model = find_request(&requests, "/ai-gateway/codex/v1/responses");
+    assert_eq!(tags_header(model), json!({"source":"fiber"}));
+    for request in &requests {
+        assert_fingerprint(request, "authorization", "Bearer dapi-test");
+    }
+    assert!(
+        !requests
+            .iter()
+            .any(|request| DISCOVERY_PATHS.contains(&request.path.as_str())),
+        "{requests:?}"
+    );
 }
 
 /// Every service backed by an endpoint turns with no omission line in the
@@ -917,4 +1211,95 @@ fn all_services_backed_logs_no_omission() {
     // Every service is backed, so there is no deliberate omission to name
     // (`docs/model-routing.md`, "Model discovery"): no line.
     assert!(omissions.is_empty(), "{lines:?}");
+}
+
+/// The discovery answers for one Databricks Gemini service: the service
+/// list, its catalog row and its serving endpoint.
+fn argon_discovery() -> [Response; 3] {
+    [
+        Response::status(
+            200,
+            json!({"model_services": [
+                {"name": "model-services/system.ai.gemini-4-argon",
+                 "supported_api_types": ["mlflow/v1/chat/completions"]},
+            ]})
+            .to_string(),
+        ),
+        Response::status(
+            200,
+            json!({"models": [
+                {"model_name": "gemini-4-argon", "mode": "chat",
+                 "provider_type": "GEMINI_ENTERPRISE",
+                 "context_window": {"max_input": 1000000, "max_output": 64000},
+                 "capabilities": {"vision": false},
+                 "base_pricing": {"input_per_million_tokens": 0.5,
+                                  "output_per_million_tokens": 2}},
+            ]})
+            .to_string(),
+        ),
+        Response::status(
+            200,
+            json!({"endpoints": [{"name": "gemini-4-argon"}]}).to_string(),
+        ),
+    ]
+}
+
+/// A discovered Databricks `gemini-4-argon` service takes no thinking
+/// levels: its `openai-completions` request body carries no
+/// `reasoning_effort` key at all, and a `:level` suffix on the level-less
+/// model is rejected before the session starts (`docs/model-routing.md`,
+/// "Thinking").
+#[test]
+fn gemini_4_argon_takes_no_thinking_levels() {
+    let setup = Setup::new();
+    let server =
+        ProviderServer::start(argon_discovery().into_iter().chain([completions_hello()])).unwrap();
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../../providers/databricks/thinking.lua"),
+    );
+
+    let run = run(
+        &setup,
+        &[
+            "ask",
+            "--model",
+            "databricks/databricks-gemini-4-argon",
+            "hi",
+        ],
+        &credentials(&host),
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.text_completed(), "Hello.");
+    let requests = server.requests();
+    assert_turn(&requests, "/ai-gateway/mlflow/v1/chat/completions");
+    let model = find_request(&requests, "/ai-gateway/mlflow/v1/chat/completions");
+    let body: Value = serde_json::from_slice(&model.body).unwrap();
+    assert!(body.get("reasoning_effort").is_none(), "{body}");
+
+    // A level suffix on the level-less model is refused with
+    // `invalid_arguments`, naming that the model takes no thinking level.
+    let denied = Setup::new();
+    let deny_server = ProviderServer::start(argon_discovery()).unwrap();
+    let deny_host = install(
+        &denied,
+        &deny_server,
+        include_str!("../../../../providers/databricks/thinking.lua"),
+    );
+    let mut command = denied.fiber(&[
+        "ask",
+        "--model",
+        "databricks/databricks-gemini-4-argon:medium",
+        "hi",
+    ]);
+    command.envs(credentials(&deny_host).iter().copied());
+    let output = run_to_exit(denied.deadline, "fiber ask", command);
+    let message = assert_pre_session(&output, 1, "invalid_arguments");
+    assert_eq!(
+        message,
+        "The thinking level `medium` is not one model \
+         `databricks/databricks-gemini-4-argon` takes: it takes no thinking level."
+    );
 }

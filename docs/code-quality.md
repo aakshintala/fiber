@@ -117,7 +117,7 @@ the code and the list disagree.
 
 | Crate | File | Why |
 |---|---|---|
-| `support` | `crates/support/src/group.rs` | `pre_exec` calls `setsid`, and for a `tty` command the `TIOCSCTTY` ioctl on fd 0, between fork and exec |
+| `support` | `crates/support/src/group.rs` | `pre_exec` calls `setsid`, and for a `tty` command the `TIOCSCTTY` ioctl on fd 0, between fork and exec; on macOS, `proc_pidinfo` reads the leader start time into a caller-sized `proc_bsdinfo` |
 | `tools` | `crates/tools/src/shell/command.rs` | on Linux, `pre_exec` installs the prepared Landlock and seccomp policy between fork and exec; success runs only syscalls, failure aborts spawn |
 | `support` | `crates/support/src/peer.rs` | on macOS, `getsockopt` with `LOCAL_PEERPID` reads the socket peer's pid from a borrowed fd, `proc_pidinfo` with `PROC_PIDT_SHORTBSDINFO` reads one process's parent pid and effective uid, and `sysctl` with `KERN_PROCARGS2` reads its argument vector into a caller-sized buffer |
 | `fakes` | `crates/fakes/src/crash_ports.rs` | on macOS, `pre_exec` calls `task_set_exception_ports` so a re-run child's deliberate `abort()` writes no ReportCrash report; its test reads the port back with `task_get_exception_ports` |
@@ -265,8 +265,8 @@ Only what no tool can:
   as a notice's code has a row in `docs/errors.md`, "Registry", or its
   notices table
 - in each test the pull request adds or changes: every asserted order or
-  count cites the doc line that promises it (`docs/testing.md`, "Event
-  streams"); every pointer input follows a readiness signal, not a grid
+  count cites the doc sentence that promises it, by heading
+  (`docs/testing.md`, "Event streams"); every pointer input follows a readiness signal, not a grid
   match (`docs/testing/screens.md`); every fake's signal is sent after the
   state it announces
 - the Spec review of a build pull request checks every doc line its ticket

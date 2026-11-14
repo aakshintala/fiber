@@ -209,6 +209,18 @@ pub(crate) struct Plan {
     pub(crate) shards: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PathState {
+    Present(Option<Vec<u8>>),
+    Deleted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChangedPath {
+    pub(crate) path: String,
+    pub(crate) state: PathState,
+}
+
 /// Shards for `count` mutants: none without mutants, else one per
 /// `MUTANTS_PER_SHARD`, rounded up, at most `MAX_MUTANT_SHARDS`.
 pub(crate) fn mutant_shards(count: u64) -> u64 {
@@ -229,31 +241,30 @@ pub(crate) fn shard_timeout_minutes(count: u64) -> u64 {
 /// `mode` is the diff's selection mode, `packages` the selected packages,
 /// `event` the GitHub event name, `draft` whether the pull request is a
 /// draft, `bug` whether an issue the pull request resolves is labelled
-/// `bug`, `mutants` whether the pull request runs its mutants and
-/// `mutant_count` how many mutants its diff holds.
+/// `bug`, and `mutants` supplies labels, count and the reuse result.
 pub(crate) fn plan(
     mode: &str,
     packages: &[String],
     event: &str,
     draft: bool,
     bug: bool,
-    mutants: bool,
-    mutant_count: u64,
+    mutants: MutantPlanInput,
 ) -> Plan {
     let pr = event == "pull_request";
     let code = mode != "docs";
     let test = !pr || !packages.is_empty();
+    let eligible = pr && (!draft || mutants.labels.iter().any(|label| label == "mutants"));
     // The backstop runs no mutants: each pull request tested its own diff.
-    // A run that selects no tests runs no mutants either.
-    let shards = if pr && mutants && test {
-        mutant_shards(mutant_count)
+    // A run that selects no tests runs no mutants either. A matching pass
+    // reuses its shards; lookup failure is represented as no reuse.
+    let shards = if eligible && test && mutants.reuse.is_none() {
+        mutant_shards(mutants.count)
     } else {
         0
     };
-    // A draft selects the same jobs as a ready pull request (`docs/ci.md`,
-    // "The merge gate"), so the selection ignores it.
-    let _ = draft;
     let jobs = BTreeMap::from([
+        ("clippy_macos", false),
+        ("scripts_self_test_macos", false),
         ("lint", !pr || code),
         // The backstop on `main` compiles the whole workspace on every push.
         // Linux x86_64 runs the selected tests on every event; `test` runs
@@ -272,6 +283,86 @@ pub(crate) fn plan(
         ("release", !pr),
     ]);
     Plan { jobs, shards }
+}
+
+/// Inputs used to decide the final mutants selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MutantPlanInput {
+    pub(crate) labels: Vec<String>,
+    pub(crate) count: u64,
+    pub(crate) reuse: Option<super::reuse::MatchedReuse>,
+}
+
+/// Suppress only the bug-red legs for a bug pull request with the documented
+/// budget-breach explanation and both measurements in its body.
+pub(crate) fn plan_with_budget_breach_body(mut plan: Plan, bug: bool, body: &str) -> Plan {
+    if bug && budget_breach_section(body) {
+        plan.jobs.insert("bug_red", false);
+    }
+    plan
+}
+
+/// Whether the body has a complete budget-breach section outside fenced code.
+pub(crate) fn budget_breach_section(body: &str) -> bool {
+    let mut fence: Option<(u8, usize)> = None;
+    let mut in_section = false;
+    let mut base = false;
+    let mut head = false;
+
+    for line in body.lines() {
+        let trimmed = line.trim_start();
+        let bytes = trimmed.as_bytes();
+        if let Some(&marker) = bytes.first()
+            && (marker == b'`' || marker == b'~')
+        {
+            let width = bytes.iter().take_while(|byte| **byte == marker).count();
+            if width >= 3 {
+                match fence {
+                    None => fence = Some((marker, width)),
+                    Some((open, open_width)) if marker == open && width >= open_width => {
+                        fence = None
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+        }
+        if fence.is_some() {
+            continue;
+        }
+        if let Some(heading) = trimmed.strip_prefix("## ") {
+            if in_section {
+                break;
+            }
+            in_section = heading.trim() == "Budget breach";
+            continue;
+        }
+        if in_section {
+            base |= trimmed.starts_with("Base:");
+            head |= trimmed.starts_with("Head:");
+        }
+    }
+    in_section && base && head
+}
+
+/// Add the pull-request-only macOS selections from the head paths and their
+/// current contents, while leaving release-path selection separate.
+pub(crate) fn plan_with_changed_paths(
+    mut plan: Plan,
+    pull_request: bool,
+    changed_paths: &[ChangedPath],
+) -> Plan {
+    let clippy_macos = pull_request && changed_paths.iter().any(|entry| {
+        matches!(&entry.state, PathState::Present(Some(contents)) if contents.windows(b"target_os".len()).any(|window| window == b"target_os"))
+    });
+    let scripts_self_test_macos = pull_request
+        && changed_paths.iter().any(|entry| {
+            entry.path.starts_with("scripts/") && matches!(entry.state, PathState::Present(_))
+        });
+    plan.jobs.insert("clippy_macos", clippy_macos);
+    plan.jobs
+        .insert("scripts_self_test_macos", scripts_self_test_macos);
+    plan
 }
 
 /// What the rerun at the base commit says about one test that failed at

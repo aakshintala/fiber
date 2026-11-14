@@ -10,15 +10,15 @@ expression: text(&screen(&app))
 ▌ $0.41 ▆░░░░░░░░░░░░░░░ 11%                                                                                                                                     test/model
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                                    ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆                  119
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                    compacts at —            11% of window
-▌ 3 ● WORKING             2h                                                                                                                                     then a summary, fresh context
-▌ write the rail                                                                                                                                                 tokens in / out                  1 / 2
-▌ ⎇ detached                                                                                                                                                     cache hits                          0%
-▌ $0.00                                                                                                                                                          cache resets in                      —
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                                    cost                             $0.41
-  hub +          $1.35 · 0 ✓                                                                                                                                     cost on subscription             $0.00
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                    speed, last reply                    —
-▌ 1 ! NEEDS INPUT        16s                                                                                                                                     turns                                0
-▌ fix flaky lock test                                                                                                                                          ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▌ 3 ● WORKING             2h                                                                                                                                     tokens in / out                  1 / 2
+▌ write the rail                                                                                                                                                 cache hits                          0%
+▌ ⎇ detached                                                                                                                                                     cache resets in                      —
+▌ $0.00                                                                                                                                                          cost                             $0.41
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                                    cost on subscription             $0.00
+  hub +          $1.35 · 0 ✓                                                                                                                                     speed, last reply                    —
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                    turns                                0
+▌ 1 ! NEEDS INPUT        16s                                                                                                                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▌ fix flaky lock test
 ▌ approval: shell cargo muta
 ▌ $1.35 ▆▆▆▆▆▆▆▆▆▆▆░░░░░ 70%
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀⋮                                                                                                                                ⋮

@@ -4,15 +4,16 @@
 
 use std::collections::BTreeSet;
 
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 mod settlement;
-use super::super::super::{App, Effect, Phase, Waiting};
+use super::super::super::{App, Effect, Phase, Sent, Waiting, hub_line};
 use super::super::{refusal, refusal_code};
 use super::Prompt;
 use crate::home::title;
 use contract::ErrorCode;
-use contract::SessionId;
+use contract::commands::hub::{Delete, HubCommand};
+use contract::{CommandId, SessionId};
 
 /// `/delete`'s feature-owned lifecycle under home's questions: one
 /// command at a time, each phase exclusive. The candidate set is
@@ -102,13 +103,19 @@ impl App {
             })
             .unwrap_or_else(|| session.0.clone());
         let home = &mut self.home;
-        let command = support::mint("c_");
-        let line = json!({
-            "id": command,
-            "command": "delete",
-            "args": {"session": session.0, "cascade": true, "dry_run": true},
-        })
-        .to_string();
+        let command = CommandId(support::mint("c_"));
+        let sent = Sent {
+            line: hub_line(
+                &command,
+                HubCommand::Delete(Delete {
+                    session: session.clone(),
+                    cascade: Some(true),
+                    expect: None,
+                    dry_run: Some(true),
+                }),
+            ),
+            id: command.clone(),
+        };
         let generation = home.questions.delete_command.generation.wrapping_add(1);
         home.questions.delete_command = DeleteCommand {
             generation,
@@ -118,9 +125,9 @@ impl App {
             },
         };
         self.outbox
-            .wait(&command, Waiting::DeleteDiscovery(generation));
+            .wait(&command.0, Waiting::DeleteDiscovery(generation));
         self.draft.clear();
-        Effect::Send(vec![line])
+        Effect::SendTracked(vec![sent])
     }
 
     /// Enter in the delete question: the command's confirmed stop/delete
@@ -343,7 +350,7 @@ impl App {
     /// and crashed retire a waiting session. Once none wait, the one
     /// existing delete goes out with the confirmed set. Never a second
     /// delete.
-    pub(in crate::app) fn delete_command_session_left(&mut self, id: &SessionId) -> Vec<String> {
+    pub(in crate::app) fn delete_command_session_left(&mut self, id: &SessionId) -> Vec<Sent> {
         let home = &mut self.home;
         let complete = match &mut home.questions.delete_command.state {
             State::Stopping { waiting, .. } => {
@@ -369,7 +376,11 @@ impl App {
             Some(sets) => sets,
             None => return Vec::new(),
         };
+        // The delete cruises the fold with the session batch: the
+        // mixer pairs its id, so a failed write settles by it.
         self.delete_command_send(target, sessions, name)
+            .map(|sent| vec![sent])
+            .unwrap_or_default()
     }
 
     /// The stopping command's confirmed sets, while every held id has
@@ -425,10 +436,10 @@ impl App {
         self.home.questions.prompt = None;
         if feed_held.is_empty() {
             self.go_home();
-            let lines = self.delete_command_send(target, sessions, name);
-            return match lines.is_empty() {
-                true => Effect::None,
-                false => Effect::Send(lines),
+            let sent = self.delete_command_send(target, sessions, name);
+            return match sent {
+                Some(sent) => Effect::SendTracked(vec![sent]),
+                None => Effect::None,
             };
         }
         let (lines, pairs) = self.close_lines(&feed_held);
@@ -436,9 +447,9 @@ impl App {
             self.home
                 .questions
                 .closing
-                .push((session.clone(), close.clone()));
+                .push((session.clone(), close.0.clone()));
             self.outbox.wait(
-                close,
+                &close.0,
                 Waiting::DeleteStop {
                     generation: self.home.questions.delete_command.generation,
                     session: session.clone(),
@@ -452,7 +463,7 @@ impl App {
             waiting,
         };
         self.go_home();
-        Effect::Send(lines)
+        Effect::SendTracked(lines)
     }
 
     /// Whether the running command is `generation`'s and is deleting:
@@ -497,18 +508,18 @@ impl App {
         target: SessionId,
         sessions: Vec<SessionId>,
         name: String,
-    ) -> Vec<String> {
+    ) -> Option<Sent> {
         if !self.outbox.is_up() {
             self.delete_command_delete_unknown();
-            return Vec::new();
+            return None;
         }
-        let (command, line) = super::delete_line(&target, Some(&sessions));
+        let sent = super::delete_line(&target, Some(&sessions));
         self.home
             .questions
             .asks
-            .insert(command.clone(), super::Ask::Delete(target.clone()));
+            .insert(sent.id.0.clone(), super::Ask::Delete(target.clone()));
         self.outbox.wait(
-            &command,
+            &sent.id.0,
             Waiting::DeleteFinal(self.home.questions.delete_command.generation),
         );
         self.home.questions.delete_command.state = State::Deleting {
@@ -522,7 +533,7 @@ impl App {
             .questions
             .closing
             .retain(|(session, _)| !sessions.contains(session));
-        vec![line]
+        Some(sent)
     }
 
     /// The deleting command's confirmed sets, while its delete waits.
@@ -590,20 +601,34 @@ impl App {
             .retain(|(session, _)| !sessions.contains(session));
     }
 
+    /// The ids of `generation`'s tags of one kind, in send order:
+    /// `generation_of` reads the generation off a tag of that kind.
+    /// Both `/delete` and `/archive` fold through this one helper so
+    /// their tag collectors cannot drift apart.
+    pub(super) fn command_tag_ids(
+        &self,
+        generation: u64,
+        generation_of: impl Fn(&Waiting) -> Option<u64>,
+    ) -> Vec<String> {
+        self.outbox
+            .tags()
+            .filter(|(_, tag)| generation_of(tag) == Some(generation))
+            .map(|(id, _)| id.to_owned())
+            .collect()
+    }
+
     /// The ids of the running command's tags of one kind, in send order:
     /// `generation_of` reads the generation off a tag of that kind, and
     /// only the running command's generation counts.
     fn delete_tag_ids(&self, generation_of: impl Fn(&Waiting) -> Option<u64>) -> Vec<String> {
         let running = self.home.questions.delete_command.generation;
-        self.outbox
-            .tags()
-            .filter(|(_, tag)| generation_of(tag) == Some(running))
-            .map(|(id, _)| id.to_owned())
-            .collect()
+        self.command_tag_ids(running, generation_of)
     }
 
     /// The row's sanitized title, or its id without one, for notices.
-    fn delete_display(&self, id: &SessionId) -> String {
+    /// Shared with `/archive`, whose stop-refused notice names the same
+    /// row text.
+    pub(super) fn delete_display(&self, id: &SessionId) -> String {
         self.home
             .sessions
             .row(id)
@@ -644,7 +669,10 @@ fn stop_generation(tag: &Waiting) -> Option<u64> {
 /// is a unique subset of it in the preview's relative order. Anything
 /// else is malformed: the caller shows the invalid-preview notice, and
 /// the invalid detail never reaches a person.
-fn validated_sets(result: &Value, target: &SessionId) -> Option<(Vec<SessionId>, Vec<SessionId>)> {
+pub(super) fn validated_sets(
+    result: &Value,
+    target: &SessionId,
+) -> Option<(Vec<SessionId>, Vec<SessionId>)> {
     let sessions = result.get("sessions").and_then(Value::as_array)?;
     if sessions.is_empty() {
         return None;

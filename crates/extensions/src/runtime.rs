@@ -18,7 +18,7 @@
 //! reference; in production the transport installs it, and in tests the
 //! test installs it, so the seam is exercised without a child process.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
@@ -29,6 +29,7 @@ use contract::clock::Clock;
 use contract::emit::Emit;
 use contract::events::Event;
 use contract::hook::{HookFailure, StateLine};
+use contract::inbox::Delivery;
 use contract::tool::{Cancel, InnerCalls};
 use serde_json::Value;
 
@@ -64,14 +65,20 @@ struct Inner {
     functions: BTreeMap<(CommandId, String, u64), (String, FunctionTarget)>,
     /// The session's emitter, for process failures with no VM to emit them.
     emit: Option<Arc<dyn Emit>>,
+    /// The loop inbox for process command inner calls.
+    inbox: Option<std::sync::mpsc::Sender<Delivery>>,
+    /// Command-anchored inner calls by owner, invocation and serving thread.
+    command_inner: HashMap<(String, CommandId, std::thread::ThreadId), usize>,
 }
+
+type RuntimeInner = Arc<Mutex<Inner>>;
 
 /// The session's backend-neutral callback owner: generations, function
 /// references and dispatch, shared by every adapter.
 #[derive(Clone)]
 pub(crate) struct Runtime {
     /// The registry. The lock is a leaf: no callback runs under it.
-    inner: Arc<Mutex<Inner>>,
+    inner: RuntimeInner,
 }
 
 impl Runtime {
@@ -84,6 +91,8 @@ impl Runtime {
                 owners: BTreeMap::new(),
                 functions: BTreeMap::new(),
                 emit: None,
+                inbox: None,
+                command_inner: HashMap::new(),
             })),
         }
     }
@@ -205,6 +214,11 @@ impl Runtime {
         inner.owners.contains_key(owner).then(|| owner.clone())
     }
 
+    /// Installs the session inbox used by process command inner calls.
+    pub(crate) fn set_inbox(&self, inbox: std::sync::mpsc::Sender<Delivery>) {
+        lock(&self.inner).inbox = Some(inbox);
+    }
+
     /// Installs the session's emitter, for process failures with no VM.
     pub(crate) fn set_emit(&self, emit: Arc<dyn Emit>) {
         lock(&self.inner).emit = Some(emit);
@@ -245,8 +259,8 @@ impl Runtime {
             }
             FunctionTarget::Process(invoke) => {
                 let cancel = support::cancel::Token::new();
-                let returned =
-                    invoke(arg, scope, &cancel)?.ok_or_else(|| no_answer(func, &resolved.owner))?;
+                let returned = invoke(arg, scope, &cancel, None)?
+                    .ok_or_else(|| no_answer(func, &resolved.owner))?;
                 accept(returned).map(|(value, changed)| (value, Vec::new(), changed))
             }
         }
@@ -276,15 +290,13 @@ impl Runtime {
                     Err(unknown(func, Some(resolved.owner.as_str())))
                 }
             }
-            FunctionTarget::Process(invoke) => invoke(args, scope, cancel),
+            FunctionTarget::Process(invoke) => invoke(args, scope, cancel, None),
         }
     }
 
     /// Runs the tool behind `func` as [`Runtime::tool_run`] does, with
-    /// `runner` for the inner calls the callback makes. A process callback
-    /// has no inner-call runner yet, so the runner is the model's path
-    /// alone and the call runs anyway. `scope` is the invocation's
-    /// credential, carried to the process handler.
+    /// `runner` for the inner calls the callback makes. `scope` is the
+    /// invocation's credential, carried to the process handler.
     pub(crate) fn tool_run_asking(
         &self,
         func: &FunctionRef,
@@ -306,7 +318,7 @@ impl Runtime {
                     Err(unknown(func, Some(resolved.owner.as_str())))
                 }
             }
-            FunctionTarget::Process(invoke) => invoke(args, scope, cancel),
+            FunctionTarget::Process(invoke) => invoke(args, scope, cancel, runner),
         }
     }
 
@@ -334,7 +346,7 @@ impl Runtime {
             }
             FunctionTarget::Process(invoke) => {
                 let cancel = support::cancel::Token::new();
-                invoke(args, scope, &cancel)?.ok_or_else(|| no_answer(func, &resolved.owner))
+                invoke(args, scope, &cancel, None)?.ok_or_else(|| no_answer(func, &resolved.owner))
             }
         }
     }
@@ -362,7 +374,7 @@ impl Runtime {
                     Err(unknown(func, Some(resolved.owner.as_str())))
                 }
             }
-            FunctionTarget::Process(invoke) => invoke(args, scope, cancel),
+            FunctionTarget::Process(invoke) => invoke(args, scope, cancel, None),
         }
     }
 
@@ -390,9 +402,19 @@ impl Runtime {
                     Err(unknown(func, Some(resolved.owner.as_str())))
                 }
             }
-            FunctionTarget::Process(invoke) => Ok(CommandWait::Process(Arc::new(
-                ProcessQueued::new(resolved.owner, invoke, Value::String(text.to_owned()), None),
-            ))),
+            FunctionTarget::Process(invoke) => {
+                let inbox = lock(&self.inner).inbox.clone();
+                let command_inner = Arc::clone(&self.inner);
+                Ok(CommandWait::Process(Arc::new(ProcessQueued::new(
+                    resolved.owner,
+                    id,
+                    invoke,
+                    Value::String(text.to_owned()),
+                    None,
+                    inbox,
+                    command_inner,
+                ))))
+            }
         }
     }
 
@@ -438,7 +460,7 @@ impl Runtime {
             }
             FunctionTarget::Process(invoke) => {
                 let cancel = support::cancel::Token::new();
-                invoke(arg, scope, &cancel).ok()??;
+                invoke(arg, scope, &cancel, None).ok()??;
                 Some((0, lock(&self.inner).clock.now()))
             }
         }
@@ -469,7 +491,7 @@ impl Runtime {
             }
             FunctionTarget::Process(invoke) => {
                 let cancel = support::cancel::Token::new();
-                invoke(arg, scope, &cancel).map(|_| ())
+                invoke(arg, scope, &cancel, None).map(|_| ())
             }
         }
     }
@@ -487,11 +509,23 @@ impl Runtime {
         }
     }
 
-    /// Whether the hook behind `func` would wait behind its extension's own
-    /// command: only a Lua command running in its VM refuses its own hooks,
-    /// and a process owner never owns a command call.
+    /// Whether this thread's hook would wait behind its own command: Lua
+    /// command hooks and active process inner-call chains refuse their owner's hooks.
     pub(crate) fn runs_own_command(&self, func: &FunctionRef, point: &str) -> Option<HookFailure> {
         let resolved = self.resolve(func).ok()?;
+        let current_thread = std::thread::current().id();
+        if lock(&self.inner)
+            .command_inner
+            .iter()
+            .any(|((owner, _, thread), count)| {
+                owner == &resolved.owner && thread == &current_thread && *count > 0
+            })
+        {
+            return Some(HookFailure {
+                extension: resolved.owner,
+                message: format!("The `{point}` hook would wait behind its extension's command"),
+            });
+        }
         match resolved.target {
             FunctionTarget::Lua(binding) => {
                 let extension = binding.extension.upgrade()?;

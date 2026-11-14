@@ -1,25 +1,24 @@
-//! One held command call (`super`): the run waits for its release, on
-//! either backend. A Lua command holds its VM queue entry; a process
-//! command holds its handler here. Release runs the handler on the
-//! releasing thread, so the door protocol holds: admit, wait on one
-//! thread, release on the other.
-//!
-//! The state machine owns its own lock and wakeup: release runs the run
-//! once, and the wait takes the one answer. A second wait finds no answer
-//! and fails stopped instead of hanging.
+//! Queued process commands and their command-scoped inner-call runner.
 
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, mpsc};
 
+use contract::CommandId;
+use contract::clock::Wake;
+use contract::events::ToolCallCompleted;
+use contract::inbox::{Delivery, InnerCallRequest};
+use contract::tool::{Cancel, InnerCalls};
 use serde_json::Value;
 use support::lock;
 
 use crate::Error;
-
-use super::refs::ProcessInvoke;
 use crate::lua::CredentialFor;
+use crate::lua::command_calls::{Ended, Reply, cancelled};
 
-/// One queued command both backends admit: it never starts until its
-/// release, and the wait sees the run's answer.
+use super::RuntimeInner;
+use super::refs::ProcessInvoke;
+
+/// One held command call (`super`): the run waits for its release, on either backend.
 #[derive(Clone)]
 pub(crate) enum CommandWait {
     /// A Lua command held in its VM's queue.
@@ -46,79 +45,106 @@ impl CommandWait {
     }
 }
 
-/// A held queued process command: the handler runs on release, and the
-/// wait sees its answer. Release runs the handler on the releasing thread,
-/// so the door protocol holds: admit, wait on one thread, release on the
-/// other.
+/// A process command's one-shot invocation, with its answer published after
+/// the callback worker has returned.
 pub(crate) struct ProcessQueued {
-    /// The run, guarded: release runs it once, and the wait sees the one
-    /// answer.
-    state: Mutex<ProcessQueuedState>,
-    /// Wakes the wait when release answers.
-    done: Condvar,
+    state: Arc<Mutex<ProcessQueuedState>>,
+    done: Arc<Condvar>,
 }
 
 struct ProcessQueuedState {
-    /// The owner that registered the command, for the stopped message.
     owner: String,
-    /// The command's handler, taken by the release that runs it.
     invoke: Option<ProcessInvoke>,
-    /// The command's text, as its handler receives it.
     arg: Value,
-    /// The invocation's credential scope: commands run user code, never
-    /// a provider's `credential()`, so a queued command carries none.
     scope: Option<CredentialFor>,
-    /// The run's answer, once release ran it.
+    runner: Arc<ProcessCommandCalls>,
     answer: Option<Result<Value, Error>>,
+    in_flight: bool,
 }
 
 impl ProcessQueued {
-    /// A held call of `owner` running `invoke` on `arg` at release,
-    /// carrying `scope`.
-    pub(crate) fn new(
+    /// A held process command with the driver's invocation as its anchor.
+    pub(super) fn new(
         owner: String,
+        command: CommandId,
         invoke: ProcessInvoke,
         arg: Value,
         scope: Option<CredentialFor>,
+        inbox: Option<mpsc::Sender<Delivery>>,
+        active: RuntimeInner,
     ) -> Self {
+        let ended = Arc::new(Ended::default());
+        let runner = Arc::new(ProcessCommandCalls {
+            owner: owner.clone(),
+            command,
+            inbox,
+            ended,
+            active,
+        });
         Self {
-            state: Mutex::new(ProcessQueuedState {
+            state: Arc::new(Mutex::new(ProcessQueuedState {
                 owner,
                 invoke: Some(invoke),
                 arg,
                 scope,
+                runner,
                 answer: None,
-            }),
-            done: Condvar::new(),
+                in_flight: false,
+            })),
+            done: Arc::new(Condvar::new()),
         }
     }
 
-    /// Runs the handler, so the wait sees its answer. A second release
-    /// changes nothing: the first answer stands.
+    /// Claims and starts the callback on a worker, leaving the driver's
+    /// client-connection reader available for replies.
     pub(crate) fn release(&self) {
-        let mut state = lock(&self.state);
-        if state.answer.is_some() {
-            return;
+        let (invoke, arg, scope, runner, state, done) = {
+            let mut state = lock(&self.state);
+            if state.answer.is_some() || state.in_flight {
+                return;
+            }
+            let Some(invoke) = state.invoke.take() else {
+                return;
+            };
+            state.in_flight = true;
+            (
+                invoke,
+                state.arg.clone(),
+                state.scope.clone(),
+                Arc::clone(&state.runner),
+                Arc::clone(&self.state),
+                Arc::clone(&self.done),
+            )
+        };
+        let worker_runner = Arc::clone(&runner);
+        let spawned = std::thread::Builder::new()
+            .name("process command".to_owned())
+            .spawn(move || {
+                let inner_calls: Arc<dyn InnerCalls> = worker_runner.clone();
+                let result = invoke(arg, scope, worker_runner.ended.as_ref(), Some(inner_calls))
+                    .map(|returned| returned.unwrap_or(Value::Null));
+                worker_runner.ended.end();
+                let mut state = lock(&state);
+                state.answer = Some(result);
+                state.in_flight = false;
+                done.notify_all();
+            });
+        if let Err(error) = spawned {
+            runner.ended.end();
+            let mut state = lock(&self.state);
+            state.answer = Some(Err(Error::Lua {
+                extension: runner.owner.clone(),
+                message: format!("cannot start process command worker: {error}"),
+            }));
+            state.in_flight = false;
+            self.done.notify_all();
         }
-        let invoke = state.invoke.take();
-        let arg = state.arg.clone();
-        let scope = state.scope.clone();
-        if let Some(invoke) = invoke {
-            let cancel = support::cancel::Token::new();
-            // The driver's return value is ignored (`docs/extensions.md`,
-            // "Commands and screens"): answering nothing completes, and only
-            // an error fails the wait.
-            state.answer =
-                Some(invoke(arg, scope, &cancel).map(|returned| returned.unwrap_or(Value::Null)));
-        }
-        self.done.notify_all();
     }
 
-    /// Waits until a release answers the run, and takes the one answer: a
-    /// second wait finds no answer and fails stopped instead of hanging.
+    /// Waits through both queued and in-flight states, then takes the result.
     pub(crate) fn wait(&self) -> Result<Value, Error> {
         let mut state = lock(&self.state);
-        while state.answer.is_none() && state.invoke.is_some() {
+        while state.answer.is_none() && (state.invoke.is_some() || state.in_flight) {
             state = self
                 .done
                 .wait(state)
@@ -129,5 +155,122 @@ impl ProcessQueued {
                 extension: state.owner.clone(),
             })
         })
+    }
+}
+
+struct ProcessCommandCalls {
+    owner: String,
+    command: CommandId,
+    inbox: Option<mpsc::Sender<Delivery>>,
+    ended: Arc<Ended>,
+    active: RuntimeInner,
+}
+
+struct ActiveInnerCall {
+    entered: AtomicBool,
+    active: RuntimeInner,
+    key: (String, CommandId),
+    thread: Mutex<Option<std::thread::ThreadId>>,
+}
+
+impl ActiveInnerCall {
+    fn enter(&self) {
+        if self.entered.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let thread = std::thread::current().id();
+        *lock(&self.thread) = Some(thread);
+        *lock(&self.active)
+            .command_inner
+            .entry((self.key.0.clone(), self.key.1.clone(), thread))
+            .or_default() += 1;
+    }
+}
+
+impl Drop for ActiveInnerCall {
+    fn drop(&mut self) {
+        if !self.entered.swap(false, Ordering::AcqRel) {
+            return;
+        }
+        let Some(thread) = lock(&self.thread).take() else {
+            return;
+        };
+        let key = (self.key.0.clone(), self.key.1.clone(), thread);
+        let mut inner = lock(&self.active);
+        if let Some(count) = inner.command_inner.get_mut(&key) {
+            *count -= 1;
+            if *count == 0 {
+                inner.command_inner.remove(&key);
+            }
+        }
+    }
+}
+
+struct InnerAnswer(Arc<Reply>);
+
+impl InnerAnswer {
+    fn resolve(self, completed: Box<ToolCallCompleted>) {
+        self.0.resolve(completed);
+    }
+}
+
+impl Drop for InnerAnswer {
+    fn drop(&mut self) {
+        self.0.resolve(cancelled());
+    }
+}
+
+impl InnerCalls for ProcessCommandCalls {
+    fn run(
+        &self,
+        extension: &str,
+        name: &str,
+        arguments: Value,
+    ) -> Result<Box<ToolCallCompleted>, String> {
+        if self.ended.is_cancelled() {
+            return Ok(cancelled());
+        }
+        let Some(inbox) = self.inbox.as_ref() else {
+            return Ok(cancelled());
+        };
+        let reply = Arc::new(Reply::new(Arc::clone(&self.ended)));
+        let wake: Arc<dyn Wake> = reply.clone();
+        self.ended.subscribe(Arc::downgrade(&wake));
+        reply.wake();
+        if self.ended.is_cancelled() {
+            return Ok(cancelled());
+        }
+        let active = Arc::new(ActiveInnerCall {
+            entered: AtomicBool::new(false),
+            active: Arc::clone(&self.active),
+            key: (self.owner.clone(), self.command.clone()),
+            thread: Mutex::new(None),
+        });
+        let taken_active = Arc::clone(&active);
+        let answered_active = Arc::clone(&active);
+        let answer = InnerAnswer(Arc::clone(&reply));
+        let taken_reply = Arc::clone(&reply);
+        let ended = Arc::clone(&self.ended);
+        let request = Delivery::InnerCall(InnerCallRequest {
+            extension: extension.to_owned(),
+            command: self.command.clone(),
+            name: name.to_owned(),
+            arguments,
+            cancel: self.ended.clone(),
+            taken: Box::new(move || {
+                if !ended.is_cancelled() {
+                    taken_active.enter();
+                }
+                taken_reply.wake();
+            }),
+            answer: Box::new(move |completed| {
+                answered_active.enter();
+                answer.resolve(completed);
+            }),
+        });
+        if inbox.send(request).is_err() {
+            return Ok(cancelled());
+        }
+        Ok(reply.wait())
     }
 }

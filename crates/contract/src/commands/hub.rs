@@ -45,6 +45,8 @@ pub enum HubCommand {
     Start(Start),
     /// Archives an exited session.
     Archive(Archive),
+    /// Copies another harness's configuration into Fiber home, once.
+    Import(super::ImportArgs),
     /// Deletes an exited session.
     Delete(Delete),
     /// Prunes the hub's machine.
@@ -82,6 +84,10 @@ pub enum HubCommand {
     /// shutdown, bounded, then exits. Any authenticated connection may
     /// send it.
     Stop(StopArgs),
+    /// Stops the named keepers through their stop, bounded, and answers
+    /// how many confirmed, without closing any session and without
+    /// exiting. Any authenticated connection may send it.
+    StopKeepers(StopKeepers),
     /// Answers with the hub's captured values for the named placeholders.
     PlaceholderEnv(PlaceholderEnvArgs),
     /// Answers with a new pairing code for the device.
@@ -441,6 +447,32 @@ fn deserialize_sessions<'de, D: Deserializer<'de>>(
         }
     }
     deserializer.deserialize_option(Sessions)
+}
+
+/// The `args` of `stop_keepers`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StopKeepers {
+    /// The keepers to stop, in id order: each is still verified before
+    /// the stop. An empty array is refused, since unlike `stop` there
+    /// is no bare form with nothing named.
+    #[serde(deserialize_with = "deserialize_keepers")]
+    pub keepers: Vec<SessionId>,
+}
+
+/// Reads `keepers`: one id array, never empty. An explicit `null`, a
+/// wrong type, an unknown key or an empty array is refused, as
+/// `docs/invocation.md` ("What the hub speaks") requires.
+fn deserialize_keepers<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<SessionId>, D::Error> {
+    let keepers = Vec::<SessionId>::deserialize(deserializer)?;
+    if keepers.is_empty() {
+        return Err(<D::Error as serde::de::Error>::custom(
+            "`keepers` is empty, which stop_keepers refuses",
+        ));
+    }
+    Ok(keepers)
 }
 
 /// The `args` of `placeholder_env`: the placeholder variable names the

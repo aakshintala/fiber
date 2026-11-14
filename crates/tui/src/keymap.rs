@@ -99,9 +99,11 @@ impl KeyMap {
     pub(crate) fn key(&mut self, key: &Key, keys: &Keyset, fits: &dyn Fn(usize) -> usize) {
         let total = self.visible(keys).len();
         match key {
-            Key::Up => self.focus = self.focus.saturating_sub(1),
+            Key::Up => {
+                self.focus = crate::swapped::wrap_step(self.focus, total, -1);
+            }
             Key::Down => {
-                self.focus = self.focus.saturating_add(1).min(total.saturating_sub(1));
+                self.focus = crate::swapped::wrap_step(self.focus, total, 1);
             }
             Key::PageUp => {
                 let page = fits(self.top).saturating_sub(1).max(1);
@@ -126,6 +128,8 @@ impl KeyMap {
             | Key::AltA
             | Key::AltUp
             | Key::AltDown
+            | Key::ShiftUp
+            | Key::ShiftDown
             | Key::AltX
             | Key::AltP
             | Key::AltR
@@ -207,6 +211,8 @@ impl KeyMap {
             | Key::AltA
             | Key::AltUp
             | Key::AltDown
+            | Key::ShiftUp
+            | Key::ShiftDown
             | Key::AltX
             | Key::AltP
             | Key::Tab

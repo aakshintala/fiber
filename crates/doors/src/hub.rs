@@ -596,7 +596,7 @@ pub(crate) fn nonblocking_socket() -> io::Result<OwnedFd> {
 /// [`Clock::wait_until`] after each deadline check: `true` when the poll
 /// saw readiness, `false` past the deadline. `before_wait` runs after
 /// each check, just before the park.
-fn wait_ready(
+pub(crate) fn wait_ready(
     fd: BorrowedFd,
     events: PollFlags,
     clock: &dyn Clock,

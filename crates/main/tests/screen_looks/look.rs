@@ -980,6 +980,9 @@ const SURFACE_RGB: Colour = Colour::Rgb(26, 26, 34);
 const ACCENT_RGB: Colour = Colour::Rgb(110, 170, 254);
 const SURFACE_256: Colour = Colour::Indexed(234);
 const ACCENT_256: Colour = Colour::Indexed(75);
+/// The dark page's 256-colour entry: the panel tint's, since the page
+/// paints on the panel tint (`docs/tui.md`, "Themes").
+const PANEL_256: Colour = Colour::Indexed(233);
 
 #[test]
 fn truecolour_draws_the_input_box_as_a_striped_surface() {
@@ -1000,16 +1003,18 @@ fn truecolour_draws_the_input_box_as_a_striped_surface() {
     let stripe = screen.cell(BOX_LEFT, INPUT_ROW);
     assert_eq!(stripe.symbol.as_str(), "▌");
     assert_eq!(stripe.fg, ACCENT_RGB);
-    // Its edges: surface half blocks over the default background.
+    // Its edges: surface half blocks over the page's panel tint
+    // (`docs/tui.md`, "Themes").
     for (y, edge) in [(EDGE_TOP, "▄"), (EDGE_BOTTOM, "▀")] {
         for x in BOX_LEFT..BOX_RIGHT {
             let cell = screen.cell(x, y);
             assert_eq!(cell.symbol.as_str(), edge, "edge cell ({x}, {y})");
             assert_eq!(cell.fg, SURFACE_RGB, "edge cell ({x}, {y})");
-            assert_eq!(cell.bg, Colour::Default, "edge cell ({x}, {y})");
+            assert_eq!(cell.bg, PANEL_RGB, "edge cell ({x}, {y})");
         }
     }
-    // The conversation above is blank cells on the default background.
+    // The conversation above is blank cells on the page's panel tint
+    // (`docs/tui.md`, "Themes").
     let content = (1..EDGE_TOP)
         .find(|y| (BOX_LEFT..BOX_RIGHT).any(|x| screen.cell(x, *y).symbol.as_str() != " "));
     let first = content.expect("a content row above the input box");
@@ -1017,7 +1022,7 @@ fn truecolour_draws_the_input_box_as_a_striped_surface() {
     for y in 1..first {
         for x in BOX_LEFT..BOX_RIGHT {
             assert_eq!(screen.cell(x, y).symbol.as_str(), " ");
-            assert_eq!(screen.cell(x, y).bg, Colour::Default);
+            assert_eq!(screen.cell(x, y).bg, PANEL_RGB);
         }
     }
     // The reply draws in the default colour, not dim, on a turn card.
@@ -1071,7 +1076,31 @@ fn at_256_colours_every_colour_is_a_palette_entry() {
         let edge = screen.cell(x, EDGE_TOP);
         assert_eq!(edge.symbol.as_str(), "▄");
         assert_eq!(edge.fg, SURFACE_256);
-        assert_eq!(edge.bg, Colour::Default);
+        // The dark page paints on the panel tint: at 256 colours the
+        // page takes the panel's entry, 233 (`docs/tui.md`, "Themes").
+        assert_eq!(edge.bg, PANEL_256, "background and panel share one entry");
+    }
+}
+
+#[test]
+fn dark_conversation_page_is_the_panel_tint() {
+    // Every cell of the conversation is the page: the dark page paints
+    // on the panel tint, so the terminal's own background shows nowhere
+    // (`docs/tui.md`, "Themes").
+    let (screen, _) = one_turn(&TRUECOLOUR);
+    // debt: two blank-row scans stay (this one and the input-box test's);
+    // the grid-read ratchet caps look.rs at 163 unmarked reads
+    // (xtask/src/screen_ratchet.rs) and a per-file helper's reads count
+    // where it is defined, so a shared helper waits for a third scan;
+    // support/ is outside the fence.
+    let content = (1..EDGE_TOP) // settled: "the drawn turn" drew the reply with no input since.
+        .find(|y| (BOX_LEFT..BOX_RIGHT).any(|x| screen.cell(x, *y).symbol.as_str() != " "));
+    let first = content.expect("a content row above the input box");
+    for y in 1..first {
+        for x in BOX_LEFT..BOX_RIGHT {
+            assert_eq!(screen.cell(x, y).symbol.as_str(), " "); // settled: "the drawn turn".
+            assert_eq!(screen.cell(x, y).bg, PANEL_RGB, "page cell ({x}, {y})"); // settled: "the drawn turn".
+        }
     }
 }
 
@@ -1151,7 +1180,9 @@ fn settled(screen: &Grid, layout: SettledScreen) -> bool {
             && (left..=right).all(|x| screen.cell(x, y).bg == tint)
             && [left_gutter, right_gutter].into_iter().all(|x| {
                 let gutter = screen.cell(x, y);
-                gutter.symbol == " " && gutter.bg == Colour::Default
+                // The gutters are page cells: the panel tint
+                // (`docs/tui.md`, "Themes").
+                gutter.symbol == " " && gutter.bg == PANEL_RGB
             })
             && (0..3).all(|dx| {
                 let cell = screen.cell(reply_x + dx, y);
@@ -1188,7 +1219,9 @@ fn settled(screen: &Grid, layout: SettledScreen) -> bool {
                     grip.symbol == "⋮" && grip.dim && !grip.bold
                 })
         }
-        SettledScreen::Home => screen.cell(150, 20).bg == Colour::Default,
+        // The home screen's blank cells are page cells: the panel tint
+        // (`docs/tui.md`, "Themes").
+        SettledScreen::Home => screen.cell(150, 20).bg == PANEL_RGB,
         SettledScreen::Rail => {
             (0..48).all(|y| (0..24).all(|x| screen.cell(x, y).bg != Colour::Default))
                 && screen.cell(23, 0).bg == PANEL_RGB
@@ -1421,7 +1454,7 @@ fn followed_end_is_complete(grid: &Grid) -> bool {
     let second = bubble[1];
     if !bubble
         .iter()
-        .all(|y| grid.cell(57, *y).bg == Colour::Default && grid.cell(124, *y).fg == ACCENT_RGB)
+        .all(|y| grid.cell(57, *y).bg == PANEL_RGB && grid.cell(124, *y).fg == ACCENT_RGB)
     {
         return false;
     }
@@ -1434,14 +1467,14 @@ fn followed_end_is_complete(grid: &Grid) -> bool {
     for (y, edge) in [(first - 1, "▄"), (second + 1, "▀")] {
         if !(58..=124).all(|x| {
             let cell = grid.cell(x, y);
-            cell.symbol == edge && cell.fg == PROMPT_RGB && cell.bg == Colour::Default
+            cell.symbol == edge && cell.fg == PROMPT_RGB && cell.bg == PANEL_RGB
         }) {
             return false;
         }
     }
     if !(1..=124).all(|x| {
         let cell = grid.cell(x, first - 2);
-        cell.symbol == " " && cell.bg == Colour::Default
+        cell.symbol == " " && cell.bg == PANEL_RGB
     }) {
         return false;
     }
@@ -1463,7 +1496,7 @@ fn followed_end_is_complete(grid: &Grid) -> bool {
     let card_top = second + 4;
     if !(2..=124).all(|x| {
         let cell = grid.cell(x, card_top);
-        cell.symbol == "▄" && cell.fg == TURN_RGB && cell.bg == Colour::Default
+        cell.symbol == "▄" && cell.fg == TURN_RGB && cell.bg == PANEL_RGB
     }) {
         return false;
     }
@@ -1684,27 +1717,29 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
         for x in 58..=124 {
             assert_eq!(end.cell(x, *y).bg, PROMPT_RGB, "bubble cell ({x}, {y})");
         }
-        assert_eq!(end.cell(57, *y).bg, Colour::Default);
+        assert_eq!(end.cell(57, *y).bg, PANEL_RGB);
         assert_eq!(end.cell(124, *y).fg, ACCENT_RGB);
     }
     let first = bubble[0];
     assert_eq!(end.cell(58, first).symbol.as_str(), " ");
     assert_eq!(end.cell(59, first).symbol.as_str(), "a");
     assert_eq!(end.cell(123, first).symbol.as_str(), " ");
-    // Half-block edges above and below, on the terminal background.
+    // Half-block edges above and below, on the page's panel tint
+    // (`docs/tui.md`, "Themes").
     for (y, edge) in [(first - 1, "▄"), (bubble[1] + 1, "▀")] {
         for x in 58..=124 {
             let cell = end.cell(x, y);
             assert_eq!(cell.symbol.as_str(), edge, "edge cell ({x}, {y})");
             assert_eq!(cell.fg, PROMPT_RGB, "edge cell ({x}, {y})");
-            assert_eq!(cell.bg, Colour::Default, "edge cell ({x}, {y})");
+            assert_eq!(cell.bg, PANEL_RGB, "edge cell ({x}, {y})");
         }
     }
-    // A blank row above the top edge.
+    // A blank row above the top edge, on the page's panel tint
+    // (`docs/tui.md`, "Themes").
     for x in 1..=124 {
         let cell = end.cell(x, first - 2);
         assert_eq!(cell.symbol.as_str(), " ", "blank cell ({x}, {})", first - 2);
-        assert_eq!(cell.bg, Colour::Default, "blank cell ({x}, {})", first - 2);
+        assert_eq!(cell.bg, PANEL_RGB, "blank cell ({x}, {})", first - 2);
     }
     // The time row ends one column before the stripe, dim.
     let time: String = (0..160)
@@ -1740,12 +1775,7 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
             bubble[1] + 4
         );
         assert_eq!(cell.fg, TURN_RGB, "card edge ({x}, {})", bubble[1] + 4);
-        assert_eq!(
-            cell.bg,
-            Colour::Default,
-            "card edge ({x}, {})",
-            bubble[1] + 4
-        );
+        assert_eq!(cell.bg, PANEL_RGB, "card edge ({x}, {})", bubble[1] + 4);
     }
     // Every card row up to the card's bottom edge sits on the turn tint
     // with a blank column on each side.
@@ -1854,7 +1884,7 @@ const LIGHT_CURSOR_SURFACE: Colour = Colour::Rgb(0xea, 0xee, 0xf2);
 const LIGHT_CURSOR_TEXT: Colour = Colour::Rgb(0x1f, 0x23, 0x28);
 
 #[test]
-fn the_input_cursor_reverses_the_covered_character() {
+fn the_dark_input_cursor_inverses_the_covered_character() {
     reversed_cursor_look(
         serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200}, "tui": {"rail": {"shown": false}, "panel": {"cards": []}}}),
         CURSOR_SURFACE,
@@ -1863,7 +1893,7 @@ fn the_input_cursor_reverses_the_covered_character() {
 }
 
 #[test]
-fn the_light_input_cursor_reverses_the_covered_character() {
+fn the_light_input_cursor_inverses_the_covered_character() {
     reversed_cursor_look(
         serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200}, "tui": {"theme": "light", "rail": {"shown": false}, "panel": {"cards": []}}}),
         LIGHT_CURSOR_SURFACE,
@@ -1892,8 +1922,8 @@ fn needle_start(screen: &Grid, needle: &str) -> Option<(u16, u16)> {
 
 /// One cursor journey at 160x48 in truecolour: "abc" typed, the past-end
 /// block in the text colour on the slab, then two steps left, and the
-/// covered "b" in the slab colour on the text colour while its neighbours
-/// keep theirs (`docs/tui.md`, "The input box").
+/// covered "b" keeping its own colours and inverting them while its
+/// neighbours keep theirs (`docs/tui.md`, "The input box").
 fn reversed_cursor_look(config: serde_json::Value, surface: Colour, text: Colour) {
     let setup = Setup::new();
     support::write_json(
@@ -1945,10 +1975,10 @@ fn reversed_cursor_look(config: serde_json::Value, surface: Colour, text: Colour
             a.symbol == "a"
                 && a.bg == surface
                 && b.symbol == "b"
-                && b.fg == surface
-                && b.bg == text
+                && b.fg == a.fg
+                && b.bg == a.bg
+                && b.inverse
                 && !b.dim
-                && !b.inverse
                 && c.symbol == "c"
         })
     });
@@ -1964,12 +1994,11 @@ fn reversed_cursor_look(config: serde_json::Value, surface: Colour, text: Colour
         (a.symbol.as_str(), b.symbol.as_str(), c.symbol.as_str()),
         ("a", "b", "c")
     );
-    assert_eq!(b.fg, surface, "the covered cell takes the slab colour");
-    assert_eq!(b.bg, text, "the covered cell takes the text colour");
-    assert_eq!(b.fg, a.bg, "the cursor swaps against its neighbours");
+    assert_eq!(b.fg, a.fg, "the covered cell keeps its colours");
+    assert_eq!(b.bg, a.bg, "the covered cell keeps its colours");
     assert_eq!(a.bg, surface, "the neighbours keep the slab");
+    assert!(b.inverse, "the covered cell inverts");
     assert!(!b.dim, "no dim marks the cursor");
-    assert!(!b.inverse, "no reverse marks the cursor");
     // One Ctrl+C clears the draft, and the usual sequence quits from
     // the empty box.
     run.write(b"\x03");

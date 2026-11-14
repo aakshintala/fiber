@@ -1,6 +1,6 @@
 //! Tests for the loop, and for `run` through a pseudo-terminal.
 
-use super::{Input, Loop, Screen, hub::Connection};
+use super::{Input, Loop, Screen, ScreenFault, hub::Connection};
 use crate::app::App;
 use crate::catalogue::{Catalogue, ModelEntry};
 use crate::keys::Event;
@@ -67,6 +67,92 @@ fn test_catalogue() -> crate::ReadModels {
             ..Default::default()
         })
     })
+}
+
+#[derive(Default)]
+struct CursorFailure;
+
+impl crate::screen::SyncEmit for CursorFailure {
+    fn emit(&mut self, _begin: bool) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+impl Backend for CursorFailure {
+    type Error = io::Error;
+
+    fn draw<'a, I>(&mut self, _content: I) -> Result<(), Self::Error>
+    where
+        I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    {
+        Ok(())
+    }
+    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn show_cursor(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn get_cursor_position(&mut self) -> Result<ratatui::layout::Position, Self::Error> {
+        Err(io::Error::other("cursor reply stolen by input reader"))
+    }
+    fn set_cursor_position<P: Into<ratatui::layout::Position>>(
+        &mut self,
+        _position: P,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn clear(&mut self) -> Result<(), Self::Error> {
+        self.get_cursor_position()?;
+        Ok(())
+    }
+    fn clear_region(
+        &mut self,
+        _clear_type: ratatui::backend::ClearType,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn size(&self) -> Result<ratatui::layout::Size, Self::Error> {
+        Ok(ratatui::layout::Size::new(60, 12))
+    }
+    fn window_size(&mut self) -> Result<ratatui::backend::WindowSize, Self::Error> {
+        Ok(ratatui::backend::WindowSize {
+            columns_rows: ratatui::layout::Size::new(60, 12),
+            pixels: ratatui::layout::Size::new(0, 0),
+        })
+    }
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+#[test]
+fn logo_repaint_cursor_failure_exits_one() {
+    let (mut lp, _) = new_loop(CursorFailure, None);
+    lp.app.set_home(launch());
+    let tint = crate::graphics::logo::Tint {
+        wave: (1, 2, 3),
+        stops: [(1, 2, 3); 5],
+    };
+    lp.logo.after_frame(
+        crate::graphics::logo::Protocol::Iterm,
+        Some(ratatui::layout::Rect::new(0, 0, 32, 4)),
+        false,
+        false,
+        Some((tint, [0, 0, 0])),
+    );
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("logo-repaint-test".to_owned())
+        .spawn(move || done.send(lp.logo_step()).unwrap_or(()))
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    assert_eq!(
+        (Deadline::after(DEADLINE)
+            .recv(&finished)
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for logo repaint: {err}")))
+        .expect("event loop result succeeds"),
+        None
+    );
 }
 
 #[test]
@@ -238,6 +324,8 @@ impl<B: Backend> Loop<B> {
         let reader = super::Reader::spawn(&tty, files_out.clone())
             .unwrap_or_else(|err| panic!("the reader started: {err}"));
         Self {
+            #[cfg(test)]
+            screen_fault: None,
             app,
             parser: crate::keys::Parser::default(),
             screen,
@@ -299,7 +387,9 @@ fn taken<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> (i32, usize) {
         tx.send(input).unwrap_or_else(|err| panic!("send: {err}"));
     }
     drop(tx);
-    let code = lp.run(&rx);
+    let code = lp
+        .run(&rx)
+        .expect("loop completes without a terminal failure");
     (code, sent - rx.try_iter().count())
 }
 
@@ -368,7 +458,8 @@ fn models_diagnostic_records_post_apply_catalogue_size() {
     ));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     lp.diag = diag;
-    lp.handle_inner(Input::Models(Err("failed read".to_owned())));
+    lp.handle_inner(Input::Models(Err("failed read".to_owned())))
+        .expect("applying a failed model read does not stop the loop");
     let text = std::fs::read_to_string(
         home.path()
             .join("logs")
@@ -406,7 +497,8 @@ fn models_diagnostic_records_nonempty_post_apply_catalogue_size() {
             price: None,
         }],
         ..Catalogue::default()
-    })));
+    })))
+    .expect("applying a model catalogue does not stop the loop");
     let text = std::fs::read_to_string(
         home.path()
             .join("logs")
@@ -503,6 +595,17 @@ fn the_first_kitty_reply_pushes_the_flags_once() {
 }
 
 #[test]
+fn ctrl_c_once_on_empty_box() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (_tx, rx) = mpsc::channel();
+    assert_eq!(
+        (lp.step(Input::Bytes(vec![0x03]), &rx)).expect("event loop result succeeds"),
+        None
+    );
+    assert!(lp.app.hint(), "the first Ctrl+C arms the documented quit");
+}
+
+#[test]
 fn ctrl_c_twice_quits_with_zero() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     let (tx, rx) = mpsc::channel();
@@ -512,7 +615,7 @@ fn ctrl_c_twice_quits_with_zero() {
         .unwrap_or_else(|err| panic!("send: {err}"));
     // The sender stays: the loop returns on the quit, not on a closed
     // channel.
-    assert_eq!(lp.run(&rx), 0);
+    assert_eq!((lp.run(&rx)).expect("event loop result succeeds"), 0);
     assert_eq!(rx.try_iter().count(), 0);
     drop(tx);
 }
@@ -527,10 +630,16 @@ fn a_rebound_new_session_answers_its_new_key() {
     lp.app.set_keys(crate::KeysSetup { user });
     let (_, rx) = mpsc::channel();
     // `0x0e` is Ctrl+N: with `new_session` rebound it does nothing.
-    assert_eq!(lp.step(Input::Bytes(vec![0x0e]), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(vec![0x0e]), &rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(lp.app.session().is_some());
     // `0x14` is Ctrl+T: it goes home.
-    assert_eq!(lp.step(Input::Bytes(vec![0x14]), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(vec![0x14]), &rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(lp.app.session().is_none());
 }
 
@@ -882,13 +991,15 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
         .unwrap_or_else(|err| panic!("dup: {err}"));
     // The watcher starts before `run`, and is the only reader from the
     // first frame to end of file.
-    let frames = watch(
-        &pair.main,
-        vec![
-            b"refused" as &[u8],
-            b"\x1b[10;1H\x1b[1m\x1b[39;49mEnter" as &[u8],
-        ],
-    );
+    // The resized foot hint's pen, selected by the same depth production
+    // paints with: the dark page is the panel tint, the terminal default
+    // without colour (`docs/tui.md`, "Themes").
+    let foot_marker: &'static [u8] = match crate::look::depth(&|name| std::env::var(name).ok()) {
+        crate::look::Depth::NoColour => b"\x1b[10;1H\x1b[1m\x1b[39;49mEnter",
+        crate::look::Depth::Ansi256 => b"\x1b[10;1H\x1b[1m\x1b[39;48;5;233mEnter",
+        crate::look::Depth::True => b"\x1b[10;1H\x1b[1m\x1b[39;48;2;12;12;17mEnter",
+    };
+    let frames = watch(&pair.main, vec![b"refused" as &[u8], foot_marker]);
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("lib-run".to_owned())
@@ -932,7 +1043,7 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
     let wait = Deadline::after(DEADLINE);
     let foot = watched(&frames, "the foot hint on row 10", &wait);
     assert!(
-        foot.ends_with(b"\x1b[10;1H\x1b[1m\x1b[39;49mEnter"),
+        foot.ends_with(foot_marker),
         "the foot starts with its cursor move, bold and first word: {foot:?}"
     );
     pair.main
@@ -947,15 +1058,15 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
 #[test]
 fn run_returns_one_when_the_tty_cannot_be_set_up() {
     // `/dev/null` is no terminal: `term::setup` fails before any frame,
-    // so `run` returns 1 without reading the hub or drawing. The thread
-    // plus [`DEADLINE`] keeps a regression hanging the suite into a
-    // failure instead.
+    // so `run` returns its setup error without reading the hub or drawing.
+    // The thread plus [`DEADLINE`] keeps a regression hanging the suite into
+    // a failure instead.
     let tty = File::open("/dev/null").unwrap_or_else(|err| panic!("open /dev/null: {err}"));
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("lib-run".to_owned())
         .spawn(move || {
-            let code = super::run(
+            let result = super::run(
                 tty,
                 launch(),
                 Box::new(|| Err(io::Error::other("unused"))),
@@ -963,15 +1074,18 @@ fn run_returns_one_when_the_tty_cannot_be_set_up() {
                 fakes::clock::FakeClock::new(),
                 crate::timing::info_diag(),
                 None,
-            )
-            .unwrap_or_else(|error| panic!("run: {error}"));
-            done.send(code).unwrap_or(());
+            );
+            done.send(result).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let code = Deadline::after(DEADLINE)
+    let result = Deadline::after(DEADLINE)
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
-    assert_eq!(code, 1);
+    let error = result.unwrap_err();
+    assert!(
+        error.to_string().contains("terminal") && !error.to_string().contains("could not continue"),
+        "the returned error keeps the setup cause: {error}"
+    );
 }
 
 #[test]
@@ -1513,7 +1627,7 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
         (lp, code, seen)
     });
     drop(lp);
-    assert_eq!(code, None);
+    assert_eq!((code).expect("event loop result succeeds"), None);
     assert_eq!(seen, Some((true, "typed\n".to_owned())));
     assert!(!is_cooked(
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
@@ -1551,12 +1665,15 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
 fn hand_over_that_cannot_take_the_terminal_back_quits_with_one() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     let mut ran = false;
-    assert_eq!(
-        lp.hand_over(|| {
+    let error = lp
+        .hand_over(|| {
             ran = true;
             None
-        }),
-        Some(1)
+        })
+        .expect_err("a missing terminal setup prevents handover");
+    assert_eq!(
+        error.to_string(),
+        "terminal: could not take the terminal back: the terminal was never set up"
     );
     assert!(ran);
 }
@@ -1614,9 +1731,17 @@ fn fake_editor(body: &str) -> (FakeEditor, super::Var) {
 /// Runs `lp` over `inputs` on a thread with one deadline: the exit code
 /// and the draft.
 #[track_caller]
-fn feed_within(mut lp: Loop<TestBackend>, inputs: Vec<Input>) -> (i32, String) {
+fn feed_within(
+    mut lp: Loop<TestBackend>,
+    inputs: Vec<Input>,
+) -> (Result<i32, super::ExitCause>, String) {
     fakes::within("the loop", Deadline::after(DEADLINE), move || {
-        let code = feed(&mut lp, inputs);
+        let (tx, rx) = mpsc::channel();
+        for input in inputs {
+            tx.send(input).unwrap_or_else(|err| panic!("send: {err}"));
+        }
+        drop(tx);
+        let code = lp.run(&rx);
         (code, lp.app.draft())
     })
 }
@@ -1635,7 +1760,9 @@ fn ctrl_g_puts_the_editors_text_in_the_draft_and_the_loop_reads_on() {
     let (editor, var) = fake_editor("printf 'edited' > \"$1\"\n");
     lp.var = var;
     let inputs = ["a", "\x07", "!"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
-    assert_eq!(feed_within(lp, inputs.into()), (0, "edited!".to_owned()));
+    let (code, draft) = feed_within(lp, inputs.into());
+    assert_eq!(code.expect("editor returns the terminal"), 0);
+    assert_eq!(draft, "edited!");
     editor.assert_gone();
     crate::term::restore();
 }
@@ -1775,7 +1902,7 @@ fn a_shutdown_signal_while_a_file_editor_runs_quits_with_128_plus_it() {
     let code = Deadline::after(DEADLINE)
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the file editor to quit: {err}"));
-    assert_eq!(code, Some(143));
+    assert_eq!((code).expect("event loop result succeeds"), Some(143));
     // As above: suspended, not resumed, and the acknowledged editor pid
     // is gone.
     assert!(is_cooked(
@@ -1824,10 +1951,11 @@ fn a_clean_file_editor_return_without_a_line_rereads_the_config_view() {
     assert!(lp.app.config_view_open());
     let before = seam.reads().len();
     assert_eq!(
-        lp.open_file(crate::editor::OpenFile {
+        (lp.open_file(crate::editor::OpenFile {
             path: PathBuf::from("/w/settings.json"),
             line: None,
-        }),
+        }))
+        .expect("event loop result succeeds"),
         None
     );
     assert_eq!(lp.app.notices.newest(), None);
@@ -1875,10 +2003,11 @@ fn a_changed_file_return_while_offline_marks_the_diff_not_connected() {
     );
     assert!(lp.app.session_view_open());
     assert_eq!(
-        lp.open_file(crate::editor::OpenFile {
+        (lp.open_file(crate::editor::OpenFile {
             path: PathBuf::from("/w/src/file-0.rs"),
             line: Some(1),
-        }),
+        }))
+        .expect("event loop result succeeds"),
         None
     );
     assert_eq!(lp.app.notices.newest(), None);
@@ -2010,7 +2139,7 @@ fn a_remote_changed_file_return_stores_the_copy_through_the_close_path() {
     let (code, lp) =
         Deadline::after(Duration::from_secs(10)).recv_or_fail(&rx, "the editor return");
     handle.join().unwrap();
-    assert_eq!(code, None);
+    assert_eq!((code).expect("event loop result succeeds"), None);
     assert_eq!(lp.app.notices.newest(), None);
     drop(editor);
     crate::term::restore();
@@ -2022,7 +2151,13 @@ fn ctrl_g_that_cannot_take_the_terminal_back_quits_with_one() {
     let (editor, var) = fake_editor("printf 'edited' > \"$1\"\n");
     lp.var = var;
     let inputs = ["a", "\x07", "!"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
-    assert_eq!(feed_within(lp, inputs.into()), (1, "a".to_owned()));
+    let (error, draft) = feed_within(lp, inputs.into());
+    let error = error.expect_err("the terminal cannot be resumed without setup");
+    assert_eq!(
+        error.to_string(),
+        "terminal: could not take the terminal back: the terminal was never set up"
+    );
+    assert_eq!(draft, "a");
     editor.assert_gone();
 }
 
@@ -2208,9 +2343,9 @@ fn opening_a_row_by_key_calls_on_attach() {
     let mut reader = reader;
     let mut hello_lines: Vec<serde_json::Value> = Vec::new();
     while !(hello_lines.iter().any(|line| line["command"] == "feed")
-        && hello_lines
-            .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()))
+        && hello_lines.iter().any(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        }))
     {
         let (next, line) = command(reader, "a hello command");
         reader = next;
@@ -2223,7 +2358,8 @@ fn opening_a_row_by_key_calls_on_attach() {
     assert!(
         hello_lines
             .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()),
+            .any(|line| line["command"] == "recent"
+                && line.get("args") == Some(&serde_json::json!({}))),
         "an unscoped recent went out: {hello_lines:?}"
     );
     let status = contract::Envelope {
@@ -2272,7 +2408,9 @@ fn opening_a_row_by_key_calls_on_attach() {
             Input::Bytes(b"\x1b[<0;1;7m".to_vec()),
         ],
     );
-    let (reader, subscribe) = command(reader, "the subscribe command");
+    // The archived scoped ask rides beside the scoped one ahead of the
+    // open; `command_past_reads` steps past both `recent` lines.
+    let (reader, subscribe) = command_past_reads(reader, "the subscribe command");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(subscribe["args"]["level"], "summary");
@@ -2318,25 +2456,35 @@ fn an_exit_sends_its_lines_then_quits() {
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let reader = BufReader::new(theirs);
     let (_tx, rx) = mpsc::channel();
-    assert_eq!(lp.step(Input::Connected(ours, hello()), &rx), None);
     assert_eq!(
-        lp.step(
+        (lp.step(Input::Connected(ours, hello()), &rx)).expect("event loop result succeeds"),
+        None
+    );
+    assert_eq!(
+        (lp.step(
             Input::Hub(live_status("s_aaaaaaaaaaaaaaaa", "streaming")),
             &rx
-        ),
+        ))
+        .expect("event loop result succeeds"),
         None
     );
     // Ctrl+C twice asks while the session works, and `c` closes all.
-    assert_eq!(lp.step(Input::Bytes(vec![0x03]), &rx), None);
-    assert_eq!(lp.step(Input::Bytes(vec![0x03]), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(vec![0x03]), &rx)).expect("event loop result succeeds"),
+        None
+    );
+    assert_eq!(
+        (lp.step(Input::Bytes(vec![0x03]), &rx)).expect("event loop result succeeds"),
+        None
+    );
     // The hello fanned out feed and an unscoped recent; no doc promises
     // their order or count, so collect until both kinds appear.
     let mut reader = reader;
     let mut hello_lines: Vec<serde_json::Value> = Vec::new();
     while !(hello_lines.iter().any(|line| line["command"] == "feed")
-        && hello_lines
-            .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()))
+        && hello_lines.iter().any(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        }))
     {
         let (next, line) = command(reader, "a hello command");
         reader = next;
@@ -2349,7 +2497,8 @@ fn an_exit_sends_its_lines_then_quits() {
     assert!(
         hello_lines
             .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()),
+            .any(|line| line["command"] == "recent"
+                && line.get("args") == Some(&serde_json::json!({}))),
         "an unscoped recent went out: {hello_lines:?}"
     );
     // The introducing status queues its project's scoped ask; no doc
@@ -2366,8 +2515,13 @@ fn an_exit_sends_its_lines_then_quits() {
     // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md`, "What the hub speaks").
     assert_eq!(scoped["args"]["project"], "-w");
     // The close lines reach the far end, and the step quits with 0.
-    assert_eq!(lp.step(Input::Bytes(b"c".to_vec()), &rx), Some(0));
-    let (reader, subscribe) = command(reader, "the subscribe");
+    assert_eq!(
+        (lp.step(Input::Bytes(b"c".to_vec()), &rx)).expect("event loop result succeeds"),
+        Some(0)
+    );
+    // The archived scoped ask rides beside the scoped one; `command_past_reads`
+    // steps past both `recent` lines.
+    let (reader, subscribe) = command_past_reads(reader, "the subscribe");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(subscribe["args"]["level"], "summary");
@@ -2415,15 +2569,16 @@ const RESTORE: &[u8] =
 
 /// Runs the terminal on a pty from `started`, for a launch carrying the
 /// person's `keys`: the pty pair, the exit code once it quits, and the
-/// watched pty chunks. The pty is 160 columns wide so the whole foot
-/// hint shows, naming the rebound key.
+/// watched pty chunks. The pty is 220 columns wide so the whole foot
+/// hint shows, naming the rebound key: the merged foot outgrew 200
+/// columns with the project and archive parts beside each other.
 #[track_caller]
 fn spawn_run_with_launch(
     hub: UnixStream,
     markers: Vec<&'static [u8]>,
     started: super::Launch,
 ) -> (Pair, mpsc::Receiver<i32>, Receiver<Vec<u8>>) {
-    spawn_run_with_launch_at_height(hub, markers, started, 160, 12)
+    spawn_run_with_launch_at_height(hub, markers, started, 220, 12)
 }
 
 /// Runs the terminal at a height that leaves its home rows visible.
@@ -2613,7 +2768,8 @@ fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
     assert!(
         lines
             .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()),
+            .any(|line| line["command"] == "recent"
+                && line.get("args") == Some(&serde_json::json!({}))),
         "an unscoped recent went out: {lines:?}"
     );
     // One scoped ask for the newly seen project.
@@ -2731,13 +2887,20 @@ fn run_writes_the_title_once_until_it_changes() {
     let (_tx, rx) = mpsc::channel();
     // Two frames on home, one title; a status for the attached session
     // renames it, and the same status again writes nothing.
-    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
-    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(Vec::new()), &rx)).expect("event loop result succeeds"),
+        None
+    );
+    assert_eq!(
+        (lp.step(Input::Bytes(Vec::new()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     lp.app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     for _ in 0..2 {
         assert_eq!(
-            lp.step(Input::Hub(live_status("s_aaaaaaaaaaaaaaaa", "idle")), &rx),
+            (lp.step(Input::Hub(live_status("s_aaaaaaaaaaaaaaaa", "idle")), &rx))
+                .expect("event loop result succeeds"),
             None
         );
     }
@@ -2817,7 +2980,10 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
     lp.files_out = out;
     // No hub: a frame fetches no history, so nothing arrives here.
     let (_hub, idle) = mpsc::channel();
-    assert_eq!(lp.step(Input::Bytes(b"@".to_vec()), &idle), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(b"@".to_vec()), &idle)).expect("event loop result succeeds"),
+        None
+    );
     assert!(lp.search.is_some());
     let (generation, result) = next_result(
         &rx,
@@ -2825,14 +2991,26 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         &Deadline::after(DEADLINE),
     );
     assert_eq!(generation, lp.app.generation());
-    assert_eq!(lp.step(Input::Files { generation, result }, &idle), None);
+    assert_eq!(
+        (lp.step(Input::Files { generation, result }, &idle)).expect("event loop result succeeds"),
+        None
+    );
     let shown = lp.app.completions().map(|c| c.lines()).unwrap_or_default();
     assert_eq!(shown, owned(&["a.txt", "sub/b.rs"]));
-    assert_eq!(lp.step(Input::Bytes(b"b".to_vec()), &idle), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(b"b".to_vec()), &idle)).expect("event loop result succeeds"),
+        None
+    );
     let (generation, result) = next_result(&rx, "the search for b", &Deadline::after(DEADLINE));
     assert_eq!(result, Ok(owned(&["sub/b.rs"])));
-    assert_eq!(lp.step(Input::Files { generation, result }, &idle), None);
-    assert_eq!(lp.step(Input::Bytes(b"\t".to_vec()), &idle), None);
+    assert_eq!(
+        (lp.step(Input::Files { generation, result }, &idle)).expect("event loop result succeeds"),
+        None
+    );
+    assert_eq!(
+        (lp.step(Input::Bytes(b"\t".to_vec()), &idle)).expect("event loop result succeeds"),
+        None
+    );
     assert_eq!(lp.app.draft(), "sub/b.rs ");
     assert!(lp.search.is_none());
 }
@@ -2909,7 +3087,8 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
     // Ctrl+F and three keystrokes in one read: three pauses, one
     // generation each.
     assert_eq!(
-        lp.step(Input::Bytes(vec![0x06, b'x', b'y', b'z']), &main),
+        (lp.step(Input::Bytes(vec![0x06, b'x', b'y', b'z']), &main))
+            .expect("event loop result succeeds"),
         None
     );
     // Each pause sleeps on the injected clock, then sends its generation.
@@ -2956,7 +3135,10 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
     // A mutant that drops the send fails above, within `DEADLINE`.
     let (_, main) = mpsc::channel::<Input>();
     for generation in generations {
-        assert_eq!(lp.step(Input::FindDue(generation), &main), None);
+        assert_eq!(
+            (lp.step(Input::FindDue(generation), &main)).expect("event loop result succeeds"),
+            None
+        );
     }
     // Only the current generation scans: exactly one `history` command
     // reaches the hub.
@@ -3116,7 +3298,7 @@ fn keys_typed_while_a_reveal_loads_its_page_are_handled_after_in_order() {
     let (code, lp) = Deadline::after(DEADLINE)
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the loop to quit: {err}"));
-    assert_eq!(code, 0);
+    assert_eq!((code).expect("event loop result succeeds"), 0);
     assert!(lp.app.pages().part(0).is_some(), "the revealed page loaded");
     assert_eq!(
         lp.app.find_bar().map(|bar| bar.query).unwrap_or_default(),
@@ -3264,7 +3446,10 @@ fn opening_the_picker_asks_stale_through_the_loop() {
     let (tx, rx) = mpsc::channel();
     lp.files_out = tx;
     let (_, idle) = mpsc::channel();
-    assert_eq!(lp.step(Input::Bytes(vec![0x0c]), &idle), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(vec![0x0c]), &idle)).expect("event loop result succeeds"),
+        None
+    );
     assert!(lp.app.model_picker_open());
     let answer = Deadline::after(DEADLINE)
         .recv(&rx)
@@ -3272,7 +3457,10 @@ fn opening_the_picker_asks_stale_through_the_loop() {
     assert!(matches!(answer, Input::Models(Ok(_))));
     assert_eq!(*seen.lock().unwrap(), [crate::Refresh::Stale]);
     // The answer folds with no read owed.
-    assert_eq!(lp.step(answer, &idle), None);
+    assert_eq!(
+        (lp.step(answer, &idle)).expect("event loop result succeeds"),
+        None
+    );
     assert_eq!(lp.app.take_reads(), None);
 }
 
@@ -3582,7 +3770,10 @@ fn attached_frame_waits_for_a_completed_tail_read() {
     lp.timing = crate::timing::Timing::new(diag);
     lp.attached_frame = lp.timing.attached_frame();
     let (_tx, rx) = mpsc::channel();
-    assert_eq!(lp.frame_inner(&rx), None);
+    assert_eq!(
+        (lp.frame_inner(&rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(
         lp.attached_frame.is_some(),
         "a session draw before the open tail read leaves the guard open"
@@ -3614,7 +3805,10 @@ fn attached_frame_waits_for_an_attached_session() {
     lp.timing = crate::timing::Timing::new(diag);
     lp.attached_frame = lp.timing.attached_frame();
     let (_tx, rx) = mpsc::channel();
-    assert_eq!(lp.frame_inner(&rx), None);
+    assert_eq!(
+        (lp.frame_inner(&rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(
         lp.attached_frame.is_some(),
         "a home draw does not stop the guard"
@@ -3647,7 +3841,10 @@ fn attached_frame_is_discarded_without_a_stream() {
     lp.timing = crate::timing::Timing::new(diag);
     lp.attached_frame = lp.timing.attached_frame();
     let (_tx, rx) = mpsc::channel();
-    assert_eq!(lp.frame_inner(&rx), None);
+    assert_eq!(
+        (lp.frame_inner(&rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(
         lp.attached_frame.is_some(),
         "a missing stream leaves the guard open"
@@ -3693,7 +3890,10 @@ fn feedback_hands_the_screen_ring_to_the_writer() {
         .map(|ch| crate::keys::Event::Key(crate::keys::Key::Char(ch)))
         .collect();
     events.push(crate::keys::Event::Key(crate::keys::Key::Enter));
-    assert_eq!(lp.handle_events_inner(events), None);
+    assert_eq!(
+        (lp.handle_events_inner(events)).expect("event loop result succeeds"),
+        None
+    );
     let (description, session, shapes) =
         Deadline::after(DEADLINE).recv_or_fail(&rx, "feedback shapes");
     assert_eq!(description, "hi");
@@ -3702,4 +3902,112 @@ fn feedback_hands_the_screen_ring_to_the_writer() {
         Some(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()))
     );
     assert_eq!(shapes, want);
+}
+
+#[test]
+fn loop_exit_cause_displays_family_and_optional_source() {
+    for family in [
+        "terminal: could not send an image to the terminal",
+        "terminal: could not draw the screen",
+        "terminal: could not draw the logo",
+        "terminal: could not take the terminal back",
+    ] {
+        let sourceless = super::ExitCause::new(family, None);
+        assert_eq!(sourceless.to_string(), family);
+
+        let sourced = super::ExitCause::new(family, Some(io::Error::other("write failed")));
+        assert_eq!(sourced.to_string(), format!("{family}: write failed"));
+    }
+}
+
+#[test]
+fn frame_draw_failure_carries_source_and_io_failed_code() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.screen_fault = Some(ScreenFault::Frame);
+    let (_tx, rx) = mpsc::channel();
+
+    let cause = lp.frame_inner(&rx).expect_err("injected frame draw fails");
+    assert_eq!(
+        cause.to_string(),
+        "terminal: could not draw the screen: injected screen failure"
+    );
+    assert_eq!(
+        super::Error::LoopExit(io::Error::other(cause)).code(),
+        contract::ErrorCode::IoFailed
+    );
+}
+
+#[test]
+fn resize_failure_carries_screen_draw_cause() {
+    let pair = open();
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(pair.slave));
+    lp.screen_fault = Some(ScreenFault::Resize);
+
+    let cause = lp
+        .handle_inner(Input::Resize)
+        .expect_err("injected resize fails");
+    assert_eq!(
+        cause.to_string(),
+        "terminal: could not draw the screen: injected screen failure"
+    );
+}
+
+#[test]
+fn logo_tty_write_failure_carries_logo_cause() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (reader, writer) = UnixStream::pair().unwrap_or_else(|err| panic!("pipe pair: {err}"));
+    drop(reader);
+    lp.tty = File::from(std::os::fd::OwnedFd::from(writer));
+
+    let cause = lp
+        .logo_write(
+            crate::graphics::logo::Protocol::Iterm,
+            crate::graphics::logo::After {
+                bytes: b"logo".to_vec(),
+                repaint: false,
+            },
+        )
+        .expect_err("the full terminal rejects the logo write");
+    let message = cause.to_string();
+    assert!(
+        message.starts_with("terminal: could not draw the logo: "),
+        "cause includes its logo family and write source: {message}"
+    );
+    assert!(
+        std::error::Error::source(&cause).is_some(),
+        "a tty write failure retains its source"
+    );
+    assert_eq!(
+        super::Error::LoopExit(io::Error::other(cause)).code(),
+        contract::ErrorCode::IoFailed
+    );
+}
+
+#[test]
+fn logo_repaint_and_draw_failures_carry_logo_cause() {
+    for fault in [ScreenFault::LogoRepaint, ScreenFault::LogoDraw] {
+        let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+        lp.logo.after_frame(
+            crate::graphics::logo::Protocol::Iterm,
+            Some(ratatui::layout::Rect::new(0, 0, 32, 4)),
+            false,
+            false,
+            Some((
+                crate::graphics::logo::Tint {
+                    wave: (1, 2, 3),
+                    stops: [(1, 2, 3); 5],
+                },
+                [0, 0, 0],
+            )),
+        );
+        lp.screen_fault = Some(fault);
+
+        let cause = lp
+            .logo_step()
+            .expect_err("injected logo screen operation fails");
+        assert_eq!(
+            cause.to_string(),
+            "terminal: could not draw the logo: injected screen failure"
+        );
+    }
 }

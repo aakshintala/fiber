@@ -1403,17 +1403,9 @@ fiber.command("arm_exec", {{ timeout = 5000, run = function()
   return "armed" end }})
 fiber.command("plain", {{ timeout = 5000, run = function() return "plain" end }})
 "#,
-        ready = shell_quote(ready),
-        block = shell_quote(block),
+        ready = fakes::shell_quote(ready),
+        block = fakes::shell_quote(block),
     )
-}
-
-/// Single-quotes `path` for the `sh -c` line in [`timer_init`].
-// debt: third copy across three test crates (ceiling three); upgrade
-// trigger: a fourth copy, or the next edit to any of them, moves it into
-// fakes.
-fn shell_quote(path: &std::path::Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
 /// Commands for the gated-hold test: `arm_gated` sets a timer whose
@@ -1431,9 +1423,9 @@ fn gated_timer_init(
   host.after(100, function() host.exec("sh", {{ "-c", "echo $$ > {ready}; read _ < {gate}; read _ < {block}; exit 0" }}) return "fired" end, {{ timeout = 5000 }})
   return "armed" end }})
 "#,
-        ready = shell_quote(ready),
-        gate = shell_quote(gate),
-        block = shell_quote(block),
+        ready = fakes::shell_quote(ready),
+        gate = fakes::shell_quote(gate),
+        block = fakes::shell_quote(block),
     )
 }
 
@@ -2656,4 +2648,92 @@ fn bind_delegate_records_its_id_for_a_later_abandon() {
     };
     drop(unsent);
     assert_cancelled_free(&fake, &["j_bind"]);
+}
+
+#[test]
+fn scheduler_resumes_oversized_tool_as_error_and_incomplete_tool_as_value() {
+    use contract::events::{CallStatus, ToolCallCompleted};
+    use contract::shapes::ContentPart;
+    use contract::tool::InnerCalls;
+    use serde_json::Value;
+    use std::sync::Arc;
+
+    struct Answer(CallStatus, String);
+    impl InnerCalls for Answer {
+        fn run(
+            &self,
+            _extension: &str,
+            _name: &str,
+            _arguments: Value,
+        ) -> Result<Box<ToolCallCompleted>, String> {
+            Ok(Box::new(ToolCallCompleted {
+                status: self.0,
+                reason: None,
+                error: None,
+                process: None,
+                content: vec![ContentPart::Text {
+                    text: self.1.clone(),
+                }],
+                details: None,
+                artifact: None,
+                kept: None,
+                changes: None,
+                control: None,
+                changed_by: None,
+                protected_paths: None,
+                provider_item: None,
+                hosts_surfaced: Vec::new(),
+                loaded: None,
+            }))
+        }
+    }
+
+    const CAP: usize = 1024 * 1024;
+    for (status, reply, expected) in [
+        (
+            CallStatus::Completed,
+            "x".repeat(CAP * 2),
+            format!("error:{}", crate::host::MEMORY_CAP_ERROR),
+        ),
+        (
+            CallStatus::Denied,
+            "incomplete".to_owned(),
+            "value:denied".to_owned(),
+        ),
+    ] {
+        let dir = fakes::TempDir::new("fiber-schedule-memory");
+        std::fs::write(
+            dir.path().join("init.lua"),
+            "fiber.command('go', { timeout=5000, run=function() local ok, result = pcall(function() return host.tool('inner', {}) end); if not ok then return 'error:' .. tostring(result) end; return 'value:' .. result.status end })",
+        ).unwrap();
+        let clock = fakes::clock::FakeClock::new();
+        let hub = Hub::new(clock);
+        let id = {
+            let mut shared = hub.lock();
+            let id = shared.push(Target::Command("go".into()), Value::Null, hub.clock().now());
+            shared.runners.insert(id, Arc::new(Answer(status, reply)));
+            shared.phase = Phase::Registering { abandon_at: None };
+            id
+        };
+        let mut start = start_in(dir.path());
+        start.memory_cap = CAP;
+        let serve_hub = Arc::clone(&hub);
+        let serve_thread = std::thread::spawn(move || serve(serve_hub, start));
+        let shared = hub.lock();
+        assert!(
+            hub.wait_for(shared, fakes::MUST_SUCCEED_WITHIN, |shared| {
+                matches!(shared.calls.get(&id), Some(Progress::Done(_)))
+            }),
+            "command completes through scheduler Work::Resume"
+        );
+        let shared = hub.lock();
+        let Some(Progress::Done(Ok(result))) = shared.calls.get(&id) else {
+            panic!("command completes successfully");
+        };
+        assert_eq!(result.as_str(), Some(expected.as_str()));
+        drop(shared);
+        hub.lock().phase = Phase::Stopped(StopReason::Stopped);
+        hub.notify();
+        serve_thread.join().expect("scheduler thread stops");
+    }
 }

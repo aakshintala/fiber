@@ -694,16 +694,14 @@ fn install_providers(
             }),
         );
     }
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     write(
         &setup.home().join("config.json"),
         &json!({"model": default}),
@@ -1586,6 +1584,8 @@ fn ask_request(request_id: &str) -> Event {
                 prefix: "run tests".into(),
             },
         },
+        arguments: None,
+        changed_by: None,
     })
 }
 
@@ -1609,6 +1609,8 @@ fn review_request(request_id: &str) -> Event {
                 prefix: "run tests".into(),
             }),
         },
+        arguments: None,
+        changed_by: None,
     })
 }
 

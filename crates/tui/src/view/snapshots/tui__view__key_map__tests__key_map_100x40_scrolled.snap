@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/view/key_map_tests.rs
+assertion_line: 98
 expression: "whole_screen(&app, 100, 40)"
 ---
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -7,7 +8,7 @@ expression: "whole_screen(&app, 100, 40)"
    Key map                                                                                       ✕
 
    Every binding by area, with its other paths.
-   39 actions, 27 with other paths
+   41 actions, 29 with other paths
 
    All  Sessions  The input box  The conversation  Steering  Requests, models and help
    Type to search shortcuts› █
@@ -32,7 +33,7 @@ expression: "whole_screen(&app, 100, 40)"
      Requests, models and help  Refresh every model list in the     Ctrl+R · click "⟳ refresh all"
                                 model picker
    › Requests, models and help  Open the key map                    F1 · /? or /help
-   ↑ 26 more
+   ↑ 28 more
 
    ↑↓ move · ←→ tabs · Esc closes
 

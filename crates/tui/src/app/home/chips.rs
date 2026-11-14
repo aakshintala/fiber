@@ -40,7 +40,10 @@ impl App {
             self.focus,
             Some(TargetId::Home(spot))
                 if spot.is_chip()
-                    || matches!(spot, Spot::Entry(_) | Spot::Stop(_) | Spot::More(_))
+                    || matches!(
+                        spot,
+                        Spot::Entry(_) | Spot::Stop(_) | Spot::More(_) | Spot::Archived(_)
+                    )
         )
     }
 
@@ -117,6 +120,7 @@ impl App {
                             Some(Spot::Entry(key))
                         }
                         ListLine::More { key, .. } => Some(Spot::More(key)),
+                        ListLine::ArchivedHead { key, .. } => Some(Spot::Archived(key)),
                         ListLine::Head { .. } | ListLine::ExitedHead { .. } => None,
                     })
                     .collect()
@@ -197,6 +201,8 @@ impl App {
             | Key::AltA
             | Key::AltUp
             | Key::AltDown
+            | Key::ShiftUp
+            | Key::ShiftDown
             | Key::AltX
             | Key::AltP
             | Key::AltR

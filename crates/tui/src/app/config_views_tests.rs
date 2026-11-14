@@ -70,6 +70,24 @@ fn fake() -> Arc<Fake> {
     Arc::new(fake)
 }
 
+/// The configuration fixture with a free-text row for field-routing tests.
+fn fake_with_editor() -> Arc<Fake> {
+    let fake = fake();
+    fake.rows
+        .lock()
+        .expect("fixture rows mutex")
+        .as_mut()
+        .expect("fixture rows")
+        .push(appearance(controlled(
+            "tui.editor",
+            Shown::Value("\"vim\"".to_owned()),
+            "global",
+            WriteScope::Any { repo: false },
+            SettingControl::Text,
+        )));
+    fake
+}
+
 /// An app on home at 80x24 in `/w`, with `seam`.
 fn home(seam: Arc<Fake>) -> App {
     let mut app = App::new(PathBuf::from("/w"));
@@ -168,6 +186,46 @@ fn slash_settings_opens_the_view_attached_and_on_home() {
             .any(|row| row.starts_with(" › compaction.tokens")),
         "{rows:?}"
     );
+}
+
+#[test]
+fn settings_has_no_screen_reader_row() {
+    // settled: slash_settings returns Effect::None, config_view_open()
+    // holds, and draw_with renders synchronously, so the snapshotted
+    // grid is the settled frame.
+    // The pinned order and count are the contract for this fixture, not
+    // incidental: the open tab holds its keys in the order read, then
+    // its screen rows (`settings_view.rs`, `items`), Key bindings ends
+    // Appearance (`docs/tui.md`, `/settings`, "Rows"; `SCREEN_ROWS`
+    // order), and the fake reads two Appearance keys in fixed order.
+    for on_home in [true, false] {
+        let mut app = if on_home {
+            home(fake())
+        } else {
+            attached(fake())
+        };
+        assert_eq!(slash_settings(&mut app), Effect::None);
+        assert!(app.config_view_open());
+        let painted = painted(&mut app, crate::ThemeSetting::Follow);
+        let text = painted_text(&painted);
+        let rows: Vec<&str> = text.lines().collect();
+        assert!(rows.iter().any(|row| row.contains("Settings")), "{rows:?}");
+        assert!(
+            rows.iter().any(|row| row.contains("compaction.tokens")),
+            "{rows:?}"
+        );
+        for needle in ["Screen reader", "tui.screen_reader"] {
+            assert!(
+                rows.iter().all(|row| !row.contains(needle)),
+                "/settings draws no {needle} row: {rows:?}"
+            );
+        }
+        if on_home {
+            insta::assert_snapshot!("settings_has_no_screen_reader_row", text);
+        } else {
+            insta::assert_snapshot!("settings_has_no_screen_reader_row_attached", text);
+        }
+    }
 }
 
 #[test]
@@ -274,9 +332,11 @@ fn an_approval_waits_until_the_view_closes() {
 
 #[test]
 fn opening_a_view_drops_its_unsaved_field() {
-    let seam = fake();
+    let seam = fake_with_editor();
     let mut app = attached(Arc::clone(&seam));
     slash_settings(&mut app);
+    app.on_key(Key::Down, now());
+    app.on_key(Key::Down, now());
     app.on_key(Key::Enter, now());
     app.on_key(Key::Char('9'), now());
     let draft = |app: &App| {
@@ -518,8 +578,10 @@ fn a_save_says_the_reload_cost_of_the_session_on_screen() {
 
 #[test]
 fn an_edit_goes_to_the_open_field_not_the_input_box() {
-    let mut app = attached(fake());
+    let mut app = attached(fake_with_editor());
     slash_settings(&mut app);
+    app.on_key(Key::Down, now());
+    app.on_key(Key::Down, now());
     app.on_key(Key::Enter, now());
     app.on_edit(Edit::Paste("9".to_owned()));
     let text = app
@@ -571,6 +633,13 @@ fn sent(effect: Effect) -> Vec<serde_json::Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_default()
+            })
+            .collect(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
@@ -579,7 +648,7 @@ fn sent(effect: Effect) -> Vec<serde_json::Value> {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => Vec::new(),
@@ -1603,6 +1672,13 @@ fn enter_text(app: &mut App, text: &str) -> Vec<serde_json::Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_default()
+            })
+            .collect(),
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
@@ -1611,7 +1687,7 @@ fn enter_text(app: &mut App, text: &str) -> Vec<serde_json::Value> {
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_) => Vec::new(),
@@ -2209,6 +2285,7 @@ fn wheel_over_login_scrolls_the_list_not_the_conversation() {
             .map(|at| crate::configure::LoginTarget {
                 name: format!("p{at}"),
                 kind: crate::configure::LoginKind::Key,
+                label: None,
             })
             .collect());
     }
@@ -2676,11 +2753,14 @@ fn wheel_over_doctor_scrolls_the_list_not_the_conversation() {
 
 // The screen rows, the launch overrides and the `-c` guard, through the app.
 
-/// Presses Right until the open view is on `tab`, then Down `down` rows,
-/// and returns what Enter on that row does.
+/// Presses Right until the open view is on `tab`, focusing a non-numeric
+/// row before each switch, then Down `down` rows and returns what Enter does.
 fn enter_row(app: &mut App, tab: SettingsTab, down: usize) -> Effect {
     let at = SettingsTab::ALL.iter().position(|t| *t == tab).unwrap();
     for _ in 0..at {
+        // The fixture's first Appearance row is numeric; move to its
+        // following Theme row before an arrow can switch tabs.
+        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
         app.on_edit(Edit::Right);
     }
     for _ in 0..down {
@@ -2854,6 +2934,7 @@ fn login_seam() -> Arc<Fake> {
     *seam.targets.lock().unwrap() = Ok(vec![LoginTarget {
         name: "acme".to_owned(),
         kind: LoginKind::Key,
+        label: None,
     }]);
     seam
 }

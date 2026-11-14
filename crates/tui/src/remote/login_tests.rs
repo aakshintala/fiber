@@ -69,10 +69,10 @@ impl Hub {
         let router = Arc::clone(&self.router);
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            tx.send(router.ask("sentinel", json!({}), crate::remote::Caller::Loop))
+            tx.send(router.ask(HubCommand::Status(NoArgs {}), crate::remote::Caller::Loop))
                 .unwrap();
         });
-        let sentinel = self.line(deadline, "sentinel");
+        let sentinel = self.line(deadline, "status");
         self.reply(&sentinel, json!(null));
         assert!(deadline.recv_or_fail(&rx, "sentinel answer").is_ok());
     }
@@ -185,7 +185,7 @@ fn login_shows_device_code_and_stores_the_hubs_path() {
         ("https://example.test/device".into(), "ABCD".into())
     );
     let finish = hub.line(&d, "device_login_result");
-    assert!(finish.get("args").is_none());
+    assert_eq!(finish["args"], json!({}));
     hub.reply(&finish, json!({"path":"credentials/acme/default"}));
     assert_eq!(
         d.recv_or_fail(&result, "stored login").unwrap(),

@@ -133,9 +133,16 @@ fn sent(effect: Effect) -> Vec<Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
+        Effect::SendTracked(sents) => sents
+            .iter()
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_default()
+            })
+            .collect(),
         Effect::None => Vec::new(),
         Effect::Quit
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::Search { .. }
         | Effect::Editor { .. }
@@ -1000,8 +1007,9 @@ fn type_query(app: &mut App, query: &str) {
             } => generation = gen_no,
             Effect::None
             | Effect::Send(_)
+            | Effect::SendTracked(_)
             | Effect::Quit
-            | Effect::Exit(_)
+            | Effect::ExitTracked(_)
             | Effect::ListFiles
             | Effect::Search { .. }
             | Effect::Editor { .. }
@@ -1508,15 +1516,14 @@ fn scrolling_down_at_the_bottom_with_no_move_stays_following() {
         let view = app.call_view_mut().expect("open");
         view.follow = false;
     }
-    let selected = app.call_view().expect("open").list.selected();
     app.on_key(Key::Down, now());
     let view = app.call_view().expect("open");
     assert_eq!(
         view.list.selected(),
-        selected,
-        "Down at the end moves nowhere"
+        0,
+        "Down at the end wraps to the first row"
     );
-    assert!(view.follow, "Down with no move follows");
+    assert!(!view.follow, "Down wrapping to the top stays unfollowed");
 }
 
 #[test]
@@ -1551,11 +1558,16 @@ fn scrolling_down_at_the_end_refetches_a_missing_fill() {
         view.pager.missing.insert(99999);
     }
     let sends = sent(app.on_key(Key::Down, now()));
+    assert_eq!(
+        app.call_view().expect("open").list.selected(),
+        0,
+        "Down at the end wraps to the first row"
+    );
     assert!(
         sends
             .iter()
-            .any(|line| line["args"]["offset"] == json!(99999)),
-        "Down at the end refetches the missing fill: {sends:?}"
+            .all(|line| line["args"]["offset"] != json!(99999)),
+        "Down wrapping to the top refetches nothing: {sends:?}"
     );
 }
 
@@ -2424,13 +2436,12 @@ fn wheel_over_an_open_call_view_moves_visible_rows_not_the_conversation() {
     let top = app.top();
     assert!(top.is_some(), "opening keeps the scrolled conversation");
     // Leave the tail so three steps down move the selection instead of
-    // following at the end.
-    for _ in 0..5 {
-        app.on_key(Key::Up, now());
-    }
+    // following at the end: a page up leaves follow from the top row
+    // without crossing an edge.
+    app.on_key(Key::PageUp, now());
     assert!(
         !app.call_view().expect("open").follow,
-        "Up leaves follow mid-file"
+        "a page up leaves follow from the top row"
     );
     let before = app.call_view().expect("open").list.selected();
     let shown_top = app.call_view().expect("open").list.top();
@@ -2998,6 +3009,9 @@ fn a_resize_keeps_a_scroll_that_is_still_in_range() {
     let mut app = attached(40, 24);
     let id = message_call(&mut app, &message, None);
     app.open_call_view(id);
+    // Down and back up leaves follow without crossing an edge; the
+    // wheel then scrolls down from the top as before.
+    app.on_key(Key::Down, now());
     app.on_key(Key::Up, now());
     assert_eq!(app.on_wheel(&wheel(10, 5, true)), Effect::None);
     let before = scroll_of(&app);

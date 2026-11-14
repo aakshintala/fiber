@@ -27,6 +27,8 @@ use support::{Setup, TRUECOLOUR, write_json};
 
 /// `surface` in the dark theme.
 const SURFACE: Colour = Colour::Rgb(26, 26, 34);
+/// The dark page: the panel tint (`docs/tui.md`, "Themes").
+const PAGE: Colour = Colour::Rgb(12, 12, 17);
 /// `attention` in the dark theme.
 const ATTENTION: Colour = Colour::Rgb(255, 159, 67);
 /// `info` in the dark theme.
@@ -223,7 +225,7 @@ fn slab_cells(grid: &Grid) -> Option<(u16, u16, u16)> {
     for (row, want) in [(y - 2, "▄"), (y + 2, "▀")] {
         if !(first..=last).all(|x| {
             let cell = grid.cell(x, row);
-            cell.symbol == want && cell.fg == SURFACE && cell.bg == Colour::Default
+            cell.symbol == want && cell.fg == SURFACE && cell.bg == PAGE
         }) {
             return None;
         }
@@ -237,9 +239,9 @@ fn slab_cells(grid: &Grid) -> Option<(u16, u16, u16)> {
         }
     }
     // The slab ends one column left of the scroll bar's column: the
-    // cell past its right edge keeps the default background.
+    // cell past its right edge keeps the page's panel tint.
     let past = grid.cell(last + 1, y);
-    if past.symbol != " " || past.bg != Colour::Default {
+    if past.symbol != " " || past.bg != PAGE {
         return None;
     }
     Some((y, first, last))
@@ -358,18 +360,19 @@ fn the_search_bar_matches_the_doc() {
     // The count ends one blank before the slab's right edge: its last
     // cell sits two columns before the slab's right edge.
     assert_eq!(count + 6, last, "the count's right edge");
-    // The slab ends one column left of the scroll bar's column.
+    // The slab ends one column left of the scroll bar's column, on the
+    // page's panel tint.
     let past = grid.cell(last + 1, y);
     assert_eq!(past.symbol, " ");
-    assert_eq!(past.bg, Colour::Default);
-    // Half-block edges over the default background, above and below,
+    assert_eq!(past.bg, PAGE);
+    // Half-block edges over the page's panel tint, above and below,
     // with one blank row inside each.
     for (row, want) in [(y - 2, "▄"), (y + 2, "▀")] {
         for x in first..=last {
             let cell = grid.cell(x, row);
             assert_eq!(cell.symbol, want, "({x}, {row})");
             assert_eq!(cell.fg, SURFACE, "({x}, {row})");
-            assert_eq!(cell.bg, Colour::Default, "({x}, {row})");
+            assert_eq!(cell.bg, PAGE, "({x}, {row})");
         }
     }
     for row in [y - 1, y + 1] {
@@ -985,16 +988,18 @@ fn changed_file_row_ready(grid: &Grid) -> bool {
     if !grid.rows[0].contains(" Changed files  diff against HEAD") {
         return false;
     }
-    let Some(y) = row_with_or(&grid.rows, "changed.txt · +2 −0") else {
+    // The grouped row carries the letter before the name; the panel
+    // repeats the bare path, so the letter keeps the match on the list.
+    let Some(y) = row_with_or(&grid.rows, "M  changed.txt  +2 −0") else {
         return false;
     };
-    let Some(x) = col_at_or(grid, y, "changed.txt · +2 −0") else {
+    let Some(x) = col_at_or(grid, y, "M  changed.txt  +2 −0") else {
         return false;
     };
-    (0..11).all(|dx| grid.cell(x + dx, y).bold)
-        && (11..14).all(|dx| grid.cell(x + dx, y).dim)
-        && (14..16).all(|dx| grid.cell(x + dx, y).fg == Colour::Rgb(115, 201, 145))
-        && (17..19).all(|dx| grid.cell(x + dx, y).fg == Colour::Rgb(255, 93, 115))
+    grid.cell(x, y).fg == Colour::Rgb(255, 159, 67)
+        && (3..14).all(|dx| grid.cell(x + dx, y).bold)
+        && (16..18).all(|dx| grid.cell(x + dx, y).fg == Colour::Rgb(115, 201, 145))
+        && (19..21).all(|dx| grid.cell(x + dx, y).fg == Colour::Rgb(255, 93, 115))
 }
 
 #[test]

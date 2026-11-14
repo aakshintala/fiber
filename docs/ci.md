@@ -19,11 +19,23 @@ x86_64, `ubuntu-24.04-arm` for Linux arm64, and a macOS arm64 runner. The
 repository is public, so minutes cost nothing. The account is on GitHub Pro,
 which runs at most 40 jobs at once and at most 5 macOS jobs at once, shared
 by every repository on the account. A pull request runs Linux x86_64 jobs
-alone: `lint` and `test_linux`, plus the two `bug_red` legs when an issue its
-body resolves carries the `bug` label. Draft and ready pull requests select
+(`lint` and `test_linux`, plus `bug_red_linux` on bug pull requests unless
+their body has a complete `## Budget breach` section) and macOS arm64 jobs
+(`bug_red_macos` on the same bug pull requests unless their body has a
+complete `## Budget breach` section, `clippy_macos` when its diff touches a
+file containing `target_os`, and `scripts_self_test_macos` when its diff
+touches `scripts/`; the latter two
+run on the macOS arm64 runner ("On every pull request that changes code")).
+Each macOS job holds one macOS slot against the 5-slot cap while it runs; no
+Linux-side job changes. The scripts job is selected only for pull requests
+with a path under `scripts/`, never on the backstop. A bug pull request with a valid `## Budget breach` section stating a break or
+budget breach skips the bug-red legs, with the exemption message in the
+selection summary. CI checks only that the section and both
+lines are present; reviewers judge the measurements. Draft and ready pull requests select
 the same jobs. The Linux arm64 and macOS arm64 test legs, `stress` and
 `release` run on the backstop, which is a push to `main`. A bug pull request
-is the only pull request that uses a macOS job (`bug_red_macos`). The 40-job cap is the one CI reaches: from 2026-10-07 to
+uses a macOS job (`bug_red_macos`); so does any pull request whose diff
+touches a file containing `target_os` (`clippy_macos`). The 40-job cap is the one CI reaches: from 2026-10-07 to
 2026-10-09 every job that queued for more than 15 minutes waited while 38 or
 more jobs ran, and the macOS cap held jobs back for 85 of 3,250 queued
 minutes. A change that saves jobs, such as fewer mutants shards, shortens the
@@ -32,8 +44,8 @@ queue; one that saves only macOS jobs does not.
 Nightly releases share the backstop pushes' concurrency group (`ci-main` in
 both `.github/workflows/release.yml` and `.github/workflows/ci.yml`). A
 nightly never overlaps a backstop run while either waits on the 5-slot macOS
-cap. The group does not cover the whole cap. Pull-request macOS legs
-(`bug_red_macos`), stable push releases (the `release-push` group), manually
+cap. The group does not cover the whole cap. Pull-request macOS jobs
+(`bug_red_macos` and `clippy_macos`), stable push releases (the `release-push` group), manually
 dispatched workflows, and other repositories on the account still use macOS
 slots beside a nightly.
 
@@ -61,7 +73,11 @@ one of these: the merge verdict is the `CI` check, never the run's
 conclusion.
 The bug-red legs report
 nextest's status to the `bug_red` collector, which is in the verdict's
-`needs`; their raw results are not selection entries. The docs check fails
+`needs`; their raw results are not selection entries. A budget-breach pull
+request may exempt these legs by including an unfenced `## Budget breach`
+section in its body with both `Base:` and `Head:` measurements. Selection
+skips the bug-red legs and collector only for that complete section, and
+writes the exemption message to the selection summary. The docs check fails
 when any other job is missing from `needs`, so a new job, such as a new
 shard, cannot run without gating the merge.
 
@@ -201,6 +217,23 @@ Each job:
   (`docs/testing.md`, "Running tests")
 - reports how many tests ran
 
+When the pull request's diff touches a file containing `target_os`, a second
+job (`clippy_macos`) lints the xtask-selected crates on the macOS arm64
+runner: the workspace lints across all targets with `-D warnings`, clippy
+only, no tests. An empty selection logs and succeeds without running cargo.
+The trigger reads the names-only diff at the head commit, so a pull request
+that moved a gated file still fires it and a deleted file never does; it
+fires on pull requests only, never on the backstop. Its known gap: a
+macOS-only error in a file containing no `target_os` does not trigger the
+job.
+
+When a pull request's names-only diff contains a path under `scripts/`, the
+`scripts_self_test_macos` job runs `scripts/test-script-selftests` on macOS
+arm64 with the runner's system `/bin/bash`. This is the same entry point that
+`scripts/check` uses for its script self-tests. The job triggers only on pull
+requests, never on the backstop; the backstop already runs the macOS test leg.
+The job holds one macOS slot while it runs.
+
 The debug profile sets `panic = "abort"`, as the release profile does, so
 the `fiber` binary that binary-level tests start behaves like the one that
 ships. Cargo ignores the setting when it builds the test harness.
@@ -241,9 +274,14 @@ single-file integration binary keeps `Flaky tests: <binary>`. The retry is nexte
 the `crates/main/tests` binaries, and two report jobs file the issue. The
 read-only `flake_decide` job holds only `contents: read` and `issues: read`:
 it downloads each selected test leg's exact `flaky-tests-<runner>.txt`
-artifact, failing closed on a missing artifact, a false or missing
-per-producer completion marker, or a cancelled or skipped selected leg
-(an empty list with a true marker is a complete empty result), then looks
+artifact, tolerating a missing artifact so the collate can report that leg as
+partial when another selected leg has a readable list. It fails closed on a
+cancelled or skipped selected leg before downloading anything (an empty list
+with a true marker is a complete empty result): a leg whose tests failed but
+whose list was written still feeds the collate, which fails closed only when
+no readable list feeds it: no list at all, or an existing-but-empty list with
+a `false` marker, which does not feed when no other readable list exists. The reporter files for the legs it
+has. It then looks
 up the complete open and closed issues, asks
 `cargo xtask flake-report-events` which issue numbers need event fetches,
 fetches only those endpoints, and runs
@@ -391,17 +429,17 @@ On Linux x86_64 alone:
   match an earlier completed run on the same head, and whose every mutants
   shard in that run names the current merge parent in its job name and
   succeeded with the same shard count, reuses the pass instead of starting
-  shards; `cargo xtask mutants-reuse` decides from the current run's pull
-  request number, head, base, and mutant count. Any lookup failure, head or
+  shards; `cargo xtask plan` decides, with the existing reuse matcher, from the current run's pull request number, head, base, and mutant count, and prints the result. Any lookup failure, head or
   pull request mismatch, a shard naming a different base, partial, cancelled,
   or failed shards, count mismatch, or self-match starts the shards. A reused
   run still lists the diff's mutants in the selection
   summary, and the label rule above is unchanged. Shards start once the Linux x86_64 test job, its own
   job `test_linux` (a job can wait for another job, not one platform's leg of
   it), passes on the head; the arm64 and macOS legs, the `test` job, run in
-  parallel and still gate `CI`. Each shard runs `cargo mutants --baseline=skip
-  --timeout 120`, since the tests it would rerun as a baseline just passed on
-  this head. A systemd user scope caps the run at 12 GiB, leaving 4 GiB of the
+  parallel and still gate `CI`. Each shard runs `cargo mutants --in-place
+  --baseline=skip --timeout 120`, since the tests it would rerun as a baseline
+  just passed on this head. Shards build the test fakes `scripts/check` builds
+  and fail if a scenario log shows a fake was missing. A systemd user scope caps the run at 12 GiB, leaving 4 GiB of the
   runner's 16 GiB for the host. `OOMPolicy=kill` kills the whole scope on an
   out-of-memory event, so the shard fails instead of counting a killed test as
   a caught mutant. If the run exits non-zero, the step prints the mutant in the
@@ -427,7 +465,9 @@ On Linux x86_64 alone:
   reported as a timeout.
 
   A separate workflow runs daily at 04:00 UTC against the scheduled commit,
-  generating mutants across every workspace package. It runs one full-workspace
+  generating mutants across every workspace package. Its shards build the test
+  fakes, run `cargo mutants --in-place`, and fail if a scenario log shows a fake
+  was missing. It runs one full-workspace
   nextest baseline under the `ci` profile, with the same retry as the test job
   (a failed binary-level test retries once), then a list job counts the workspace
   mutants and picks one rotation day's 16 shards, and the shards run once the
@@ -652,8 +692,12 @@ match and every build recompiles the dependencies.
 After the backstop passes on `main`, and in the nightly before it publishes,
 the journey suite drives that commit's release binary through the paths a
 person walks (`docs/testing.md`, "Journeys"). A failure opens an issue, or
-comments on the open one. It never blocks a merge, and it is not part of the
-gate. In the nightly, a failure reports and does not stop the publish.
+comments on the open one. The selector considers at most 20 prior runs, newest first. After two or more consecutive failures of the same
+journey, the comment appends `Streak: <n> consecutive failures since
+<first-sha>.`, counting this run and using the full SHA of the first failing
+commit; incomplete history keeps the plain sighting. It never blocks a merge,
+and it is not part of the gate. In the nightly, a failure reports and does
+not stop the publish.
 
 ## Toolchain
 
@@ -665,6 +709,17 @@ A weekly scheduled job opens a pull request that bumps the pin when a newer
 stable release exists. That pull request passes CI like any other. A lint
 renamed in the new release fails it, because `unknown_lints` is denied
 (`docs/code-quality.md`).
+
+## The model catalog
+
+A workflow runs `cargo xtask models-dev` every night at 03:00 UTC on `main`
+and opens a pull request when a committed model list or
+`providers/models-corrections.toml` changes (`docs/model-routing.md`,
+"What a provider extension declares"). It fetches models.dev's public catalog and needs no secret. Its
+pull request passes CI like any other. When an open pull request from an
+earlier run exists, the workflow updates that branch instead of opening a
+second one. This is the only CI job that fetches over the network outside a
+build's dependencies.
 
 ## Releases
 
@@ -813,7 +868,8 @@ cold-cache rule; Linux is 30, the backstop test job's bound, because the Linux g
 Every `apt-get` step sets a 5-minute `timeout-minutes` and passes the workflow's
 `APT_OPTS` (three retries, 20-second HTTP and HTTPS timeouts), so a silent mirror
 fails the step, not the job. A mirror that trickles bytes never goes silent, so
-the "Install zsh and fish" steps run `scripts/install-shells`. In `ci.yml` and
+the "Install zsh and fish" steps and the release job's "Install musl-tools
+and time" step run `scripts/install-shells`. In `ci.yml` and
 `mutants-scheduled.yml` each of them restores the `.deb` archives for zsh,
 zsh-common, fish, fish-common and xsel, with any dependencies downloaded beside
 them, from an Actions cache. The key holds the runner image (`ImageOS` and
@@ -824,7 +880,9 @@ a dpkg failure fails the step, with no fallback to the network. On a miss each
 download attempt (`apt-get update` and `apt-get install --download-only`) is
 bounded at 90 s and retried after 5 s until it succeeds, apt resuming its
 partial downloads, and the step's 5-minute bound ends the retries. After the
-install passes, a save step stores the archives. Pull requests save this cache
+install passes, a save step stores the archives. The release job keeps its own
+`musl-debs` cache for musl-tools and time, keyed by runner image, architecture
+and package list with the same hit/miss semantics. Pull requests save this cache
 as well as `main`, unlike the build cache. The `release.yml` steps restore no
 cache and always download, with the same retry. The install is not bounded,
 because killing dpkg mid-unpack leaves the dpkg lock held.

@@ -76,7 +76,8 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   tool's. It never rewrites a schema to fit strict mode. A tool is sent with `strict:
   true` only when its schema fits the vendor's strict subset, and with
   `strict: false` otherwise, a built-in tool included (`docs/model-routing.md`,
-  "Protocols and providers").
+  "Protocols and providers"). A model whose data sets `compat.no_strict`
+  sends no `strict` key at all.
 
 ## Before a call runs
 
@@ -205,8 +206,8 @@ by content.
 - A tool that declares no cap is cut at 16 KiB of model-facing content. The
   cut bounds what the model sees: an inner call's result reaches the calling
   script whole — neither the loop's cut nor the read tool's own cut applies
-  on that path. The shell's 1 MiB spill is the one bound that still applies
-  to an inner call ("Shell", "Result and output").
+  on that path. An inner shell call also bypasses the shell's own spill; a
+  direct shell call still spills past 1 MiB ("Shell", "Result and output").
   Image parts do not count toward the cap and are never cut; their limit is
   `docs/model-routing.md`, "Image limits".
   Configuration can override any tool's cap (`docs/configuration.md`). A tool may declare a larger or
@@ -577,7 +578,8 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   the call leaves the OS sandbox and is reviewed exactly as with the
   sandbox off); `detach` (optional; when true the command starts in a new
   session and process group, outside the OS sandbox, and the call returns
-  at once with the process ID and the output-log path, "Background jobs").
+  at once with the job id and output-log path. Stop it with `jobs stop`
+  ("Background jobs").
   `detach` implies unconfined: with `detach` true, `unconfined: false`
   fails with `invalid_arguments`. Fiber never reruns a failed confined call
   outside its sandbox: the model retries explicitly with `unconfined: true`
@@ -721,10 +723,10 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   every group at once.
 - A timeout's receipt says Fiber stopped the whole process group ("Result
   and output").
-- A detached command is never stopped by a timeout, a cancellation, a
-  `jobs stop` or a shutdown: it is not a job, and its group is not on the
-  list a shutdown signals ("Background jobs"). Stopping it is the person's
-  or the model's own `kill`.
+- A detached process outlives its session. A timeout or cancellation of its
+  launch call does not stop it, and shutdown leaves it running. While the
+  session is active, `jobs stop` stops it with the same TERM and KILL
+  sequence as another job ("Background jobs").
 
 ### Result and output
 
@@ -784,11 +786,13 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   where it reports how it finished. The full output is in the
   session's `artifacts/`, and output streams as `tool_call_delta` while the call runs. After a
   move to the background, output goes to the job's output file.
-- Up to 1 MiB of output, the shell holds it, and the loop cuts it and writes
-  the artifact. Past 1 MiB, the shell writes the output, from its first byte,
-  to the call's artifact file in the session's `artifacts/` as it arrives, and
-  holds only the first and the last 8 KiB, or the two ends of a configured cap
-  ("Bounded results"). The file ends with the result's closing lines, such as
+- Up to 1 MiB of direct-call output, the shell holds it, and the loop cuts it
+  and writes the artifact. Past 1 MiB, the shell writes the output, from its
+  first byte, to the call's artifact file in the session's `artifacts/` as it
+  arrives, and holds only the first and the last 8 KiB, or the two ends of a
+  configured cap ("Bounded results"). An inner shell call runs with no shell
+  cap or spill artifact, so its complete output reaches the calling script;
+  the outer result to the model remains bounded ("Bounded results"). The file ends with the result's closing lines, such as
   `Exit code 0.`. The loop writes no second artifact, and the `after_tool`
   hooks get the cut output with the file's `path` and `size`
   (`docs/extensions.md`, "Hooks"). When the file cannot be created or
@@ -1023,9 +1027,23 @@ Settled by
 that ticket's resolution holds the rationale and the rejected alternatives.
 The kinds are `docs/events.md`.
 
-- One object: one `job_id`, one lifecycle, stopped the same way whatever runs
-  inside it. A job is a shell command, a monitor or a delegate
-  (`docs/delegates.md`).
+- The `jobs` registry gives each tracked process one `job_id`. Shell
+  commands, monitors and delegates are jobs (`docs/delegates.md`). The
+  registry also lists detached processes as `detached` entries. You can list
+  or stop a detached entry; `wait` and `write` do not apply to it. Detached
+  entries do not hold the session open. On resume, Fiber restores outstanding
+  detached `job_started` rows before exposing tools. A live group with
+  confirmed identity stays listed, even when its log is missing or is not a
+  regular file; Fiber never opens that log during restoration. A live group
+  with missing or unreadable leader identity stays listed but requires review
+  to stop. Rows without a process-group ID, dead groups, contradicted
+  identities and rows completed later are dropped silently. Restore never
+  signals. An approved stop rechecks identity, sends TERM, escalates after
+  the grace period if needed; a group disappearing during that stop or on its
+  own produces one failed `indeterminate` end. Detached ends stay in the
+  registry but do not send a completion notice or write `job_completed`. A
+  process without a durable `job_started` row is not restored; the unrecorded
+  launch interval before that row is written remains outside resume recovery.
 - The call that starts a job completes in its own turn with a receipt naming
   the `job_id` and the path of the job's output file in the session's
   `artifacts/`. A Fiber delegate's output file is its own `events.jsonl`
@@ -1052,9 +1070,10 @@ The kinds are `docs/events.md`.
   at most 30 seconds. A write with no input waits at least 5 seconds.
   `write` on a job not started with
   `tty` fails with `invalid_arguments`. A `write` call declares `executes`,
-  because typed input can make the program do anything. `jobs` only sees
-  and acts on jobs the calling session started, so a delegate cannot stop its
-  parent's work.
+  because typed input can make the program do anything. Detached entries
+  accept only `list` and `stop`; `wait` and `write` return `unknown_job` for
+  them. `jobs` only sees and acts on processes the calling session started,
+  so a delegate cannot stop its parent's work.
 - Every delivery to the model, a completion or a monitor's batch, passes
   through the `after_tool` hooks first, and so does the job's output file when
   the job ends (`docs/extensions.md`, "Hooks").
@@ -1107,8 +1126,10 @@ The kinds are `docs/events.md`.
   ("Shell", "Stopping a command"), except a Fiber delegate, which shuts down
   as `docs/delegates.md`, "Lifetime", says. If a descendant that escaped the process
   group still holds the output pipe open past the bound, the job ends
-  `failed` with code `indeterminate`, never `completed`. A stopped job ends
-  `cancelled`.
+  `failed` with code `indeterminate`, never `completed`. A detached process
+  writes to its log file, not a pipe, so it ends `indeterminate` when its
+  process group still answers the liveness check past the bound. A stopped
+  job ends `cancelled`.
 - Jobs run under the session's keeper ("The keeper"), so they outlive a crash
   of their session and a resumed session gets their real results. A shutdown
   stops every job (`docs/invocation.md`, "Shutdown").
@@ -1116,8 +1137,10 @@ The kinds are `docs/events.md`.
   run whose model has given its final answer, `close` without `now`, or a delegate
   finishing its task — Fiber wakes the model once with a notice listing the running jobs, telling it to stop the ones it
   does not need and that the rest will be waited for. A process meant to outlive the session must be started with `shell` and `detach: true`. Whatever is still
-  running after that is waited for, whatever its kind, and each completion
-  wakes the model. The session ends when it is idle with no jobs running.
+  running after that is waited for, and each completion wakes the model.
+  Detached entries are not included in the notice or wait, so they do not hold
+  the session open and send no completion notice. The session ends when it is
+  idle with no session jobs running.
   The idle delay never ends a session with jobs running; a session left
   unattended with jobs running gets the jobs check instead
   (`docs/invocation.md`, "Lifecycle").
@@ -1133,14 +1156,18 @@ The kinds are `docs/events.md`.
 - There is no cap on running jobs, except that a session runs at most 10
   delegates at once (`docs/delegates.md`, "Limits"). Parked threads are
   measured in `docs/architecture.md` ("The threads").
-- A detached command is not a job: no `job_id`, no `jobs` entry, no
-  completion notice, no keeper. The call returns at once with the receipt
-  `Started detached. PID 48213. Output: /home/a/.fiber/detached/d_48200_0.log.
-  Fiber will not stop it.`, naming the process ID and the log path. The
-  command keeps running when the session ends; Fiber never stops it, not at
-  a timeout, not at `jobs stop` and not at shutdown ("Shell", "Stopping a
-  command"). The model reads the log with the ordinary `read` tool
-  ("Bounded results").
+- A detached process has a `job_id` and appears in `jobs list` as
+  `detached`. Its durable `job_started` row records the process group and
+  leader start time. The call returns at once with a receipt such as:
+
+  > Started detached. Job j_abc123. Output: /home/a/.fiber/detached/d_48200_0.log. Stop it with `jobs stop j_abc123`.
+
+  `jobs stop` sends TERM, then KILL after the grace period if the group is
+  still alive. A detached entry does not support `wait` or `write`, and its
+  end does not write `job_completed` or wake a turn. The launch call has no
+  timeout; cancelling it or shutting down the session does not stop the
+  process, so it keeps running after the session ends. The model reads the
+  log with the ordinary `read` tool ("Bounded results").
 - A detached call's standard input is `/dev/null`; its standard output and
   standard error go to the log, interleaved in arrival order. Each log lives
   under `$FIBER_HOME/detached/`, named `d_<fiber-pid>_<n>.log` from 0 up,
@@ -1168,6 +1195,12 @@ hub.
   process group does not reach it. It is the parent of every command's
   process group and of every delegate, and it reaps them. It lives
   until its session shuts down or, after a crash, by the rules below.
+  One exception: a resumed session takes the jobs of a keeper that
+  survived the crash but does not become that keeper's parent. The old
+  keeper keeps running those jobs and exits when the last of them has
+  ended and the session has written its end. A command the resumed
+  session starts runs under a fresh keeper that is the session's child,
+  so a session can hold jobs on more than one keeper.
 - **A command that is not yet a job ends with the crash.** When the session
   dies, the keeper stops each command still running as a tool call, as a
   shutdown does. The log already reads that call's outcome as unknown
@@ -1194,9 +1227,12 @@ hub.
 - **A crash hands the log to the keeper.** When its session dies without a
   shutdown, the keeper takes the session's `session.lock` and binds
   `run/<session_id>`, as any lock holder does (`docs/state.md`, "What each
-  part holds"). While it holds the lock it appends to the session's log: a `job_completed`
+  part holds"). While it holds the lock it appends to the session's log: a `keeper_started`
+  when the takeover opens the log and a `keeper_bound` once its socket is bound and
+  listening, then a `job_completed`
   for each job that ends, for a Fiber delegate the `job_completed` its
-  exit gives, and for a delegate on another harness the rule below. It writes no `output_tail`, `notice` or `changed_by`, because it
+  exit gives, and for a delegate on another harness the rule below. The keeper writes
+  both markers only on a crash takeover, never on the normal path. It writes no `output_tail`, `notice` or `changed_by`, because it
   runs no hooks. It writes no file of its own, so the log stays the only
   state of record (`docs/events.md`, "The rule everything else follows
   from").
@@ -1213,6 +1249,7 @@ hub.
   releases the lock and acknowledges. The resumed session takes the lock,
   binds its socket, and keeps the connection to the keeper open as its
   lifeline. The jobs still running are its jobs again, with no `orphaned`.
+  The keeper keeps writing each job's output file until the resumed session holds the lock, then sends that job's output to the session again. The session appends what it receives after the bytes the keeper wrote, so each byte of a job's output is in its file once, in order. A job that ends while the session takes over is ended by the session, which writes its `job_completed`; the keeper exits only after the session has written the last one.
 - **A keeper keeps its binary through `fiber update`,** as a session does
   (`docs/invocation.md`, "Processes"). A resume whose build cannot read the
   keeper's `schema_version` declines with `session_held` and names the
@@ -1228,7 +1265,16 @@ hub.
 - **A keeper that dies leaves its jobs unaccounted for.** If the keeper itself dies before
   a job's `job_completed` is written, the resumed session writes that job
   `orphaned` and touches no process.
-- **A delegate on another harness is kept.** The keeper holds its pipes and
+- **Two keepers that lose their session together keep one.** When a session
+  that holds jobs on an old keeper and a fresh one crashes, both keepers
+  take the log back at once, and only one can hold the lock. Either may win.
+  The winner keeps its jobs and serves the next resume. The other finds the
+  lock held, stops only the commands that were running as tool calls, writes
+  nothing, leaves the socket alone and exits. Its jobs go on running with
+  no keeper, and the next resume writes each of them `orphaned` and touches
+  no process. This is a known limit: such a job is lost to accounting, not
+  to the log.
+- **A delegate on another harness is kept.** Not built yet: see #3904. The keeper holds its pipes and
   writes each line it prints to its output file, as for any job. While the
   session lives, the session reads the lines as they arrive. After a crash,
   a harness written in Lua has each line handed to its `line` in the keeper:
@@ -1641,9 +1687,11 @@ project. Messaging a session's own delegates is `delegate_message`
 
 **`session_list` shows running sessions only.** Each entry has the session's
 id, its name, its workspace, and its parent's id when it is a delegate. A
-session is running when its socket accepts a connection (`docs/invocation.md`, "Processes"). The name, workspace and parent come from
-each session's latest `session_status`, read on a `summary` subscription to
-its socket (`docs/events.md`). The list includes the calling session, marked
+session is running when it answers a `summary` subscription on its socket
+with its latest `session_status` (`docs/events.md`), which is also where its
+name, workspace and parent come from. A socket whose lock a keeper holds is
+no session: the call does not connect to it, so a keeper that kept its jobs
+after a crash is never listed (`docs/invocation.md`, "Processes"). The list includes the calling session, marked
 as itself, so the model can see its own id and name. The tool declares
 `reads`. The call connects to every session's socket at once and waits at most
 2 s in all, for up to 1,000 running sessions (`docs/performance.md`). A session that accepted the connection but
@@ -1668,6 +1716,8 @@ of:
 - `closing`: the target was sent `close` or is exiting (`docs/invocation.md`); a `fiber ask` session is, from its start
 - `message_refused`: the target's `before_message` refused it, with the
   hook's reason (`docs/extensions.md`, "Hooks")
+- `tool_error`: Fiber could not send the message because of a local I/O error
+- `invalid_arguments`: the message's arguments did not fit the tool schema
 - `hook_failed`: the target's `blocking` `before_message` failed
 
 A session may message itself. The message arrives as steering at its own next
@@ -1988,7 +2038,7 @@ its tools are deferred, change only when the preamble is built.
   probe: pass
   spend: 19470 input, 153 output tokens
   ```
-- The other Databricks Claude rows follow their `providers/anthropic` counterparts: set when that row has `deferred_tools`, unset when unset or inconclusive (`databricks-claude-opus-5`); `databricks-claude-opus-5-5` is set from its direct 2026-11-04 probe. Pass-through was proved only on that model; uniform handling across rows is assumed.
+- The other Databricks Claude rows follow their `providers/anthropic` counterparts: set when that row has `deferred_tools`, unset when unset or inconclusive (`databricks-claude-opus-5`); `databricks-claude-opus-5-5` is set from its direct 2026-11-04 probe. Exception: the `claude-sonnet-4-5` / `claude-sonnet-4-5-20250929` Databricks rows do not follow their Anthropic counterparts — those Anthropic rows carry `deferred_tools`, but the Databricks rows don't, because the gateway rejects their deferred load (probed 2026-11-11, #4617). Pass-through was proved only on that model; uniform handling across rows is assumed.
 - Anthropic and OpenAI Responses (gpt-5.4 and later) both defer natively.
   `openai-completions` and `google-generative-ai` do not.
 - On a model without deferral, every tool is declared in full and

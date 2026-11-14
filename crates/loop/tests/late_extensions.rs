@@ -180,6 +180,7 @@ fn late_preparer(calls: &Arc<AtomicUsize>, installed: &Arc<AtomicUsize>) -> r#lo
                 server_failures: Vec::new(),
                 new_prompts: None,
             },
+            extension_failures: Vec::new(),
             hooks: None,
             reviewer: Err(Failure {
                 code: ErrorCode::NoModel,
@@ -564,6 +565,7 @@ fn a_reload_before_the_first_prompt_builds_twice_around_the_late_step() {
                     server_failures: Vec::new(),
                     new_prompts: None,
                 },
+                extension_failures: Vec::new(),
                 hooks: None,
                 reviewer: Err(Failure {
                     code: ErrorCode::NoModel,

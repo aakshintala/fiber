@@ -7,6 +7,33 @@
     {
       "base_url": "https://opencode.ai/zen/v1",
       "compat": {
+        "cache_key_header": "x-opencode-session",
+        "max_tokens": true
+      },
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0,
+        "input": 0,
+        "output": 0
+      },
+      "id": "beam-free",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 131072,
+      "name": "Beam Free",
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/v1",
+      "compat": {
         "cache_key_header": "x-opencode-session"
       },
       "context_window": 1000000,
@@ -51,6 +78,34 @@
       ],
       "max_output_tokens": 128000,
       "name": "Claude Fable 5.1",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session"
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.2,
+        "cache_write": 10,
+        "input": 8,
+        "output": 40
+      },
+      "id": "claude-fable-5-2",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Fable 5.2",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "low",
@@ -319,44 +374,6 @@
           }
         ]
       },
-      "id": "claude-sonnet-4",
-      "input": [
-        "text",
-        "image"
-      ],
-      "max_output_tokens": 64000,
-      "name": "Claude Sonnet 4",
-      "protocol": "anthropic-messages",
-      "thinking_levels": [
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ]
-    },
-    {
-      "base_url": "https://opencode.ai/zen/v1",
-      "compat": {
-        "cache_key_header": "x-opencode-session",
-        "thinking_budget": true
-      },
-      "context_window": 1000000,
-      "cost": {
-        "cache_read": 0.3,
-        "cache_write": 3.75,
-        "input": 3,
-        "output": 15,
-        "tiers": [
-          {
-            "cache_read": 0.6,
-            "cache_write": 7.5,
-            "input": 6,
-            "input_tokens_above": 200000,
-            "output": 22.5
-          }
-        ]
-      },
       "id": "claude-sonnet-4-5",
       "input": [
         "text",
@@ -437,7 +454,7 @@
       },
       "context_window": 1000000,
       "cost": {
-        "cache_read": 0.2,
+        "cache_read": 0.1,
         "cache_write": 2.5,
         "input": 2,
         "output": 10
@@ -466,35 +483,9 @@
       },
       "context_window": 1000000,
       "cost": {
-        "cache_read": 0.028,
-        "input": 0.14,
-        "output": 0.28
-      },
-      "id": "deepseek-v4-flash",
-      "input": [
-        "text"
-      ],
-      "max_output_tokens": 384000,
-      "name": "DeepSeek V4 Flash",
-      "protocol": "openai-completions",
-      "thinking_levels": [
-        "low",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "base_url": "https://opencode.ai/zen/v1",
-      "compat": {
-        "cache_key_header": "x-opencode-session",
-        "max_tokens": true
-      },
-      "context_window": 1000000,
-      "cost": {
         "cache_read": 0.145,
         "input": 1.74,
-        "output": 3.84
+        "output": 3.48
       },
       "id": "deepseek-v4-pro",
       "input": [
@@ -531,7 +522,7 @@
         "image"
       ],
       "max_output_tokens": 384000,
-      "name": "DeepSeek V4.1 Flash",
+      "name": "DeepSeek V4.1 Flash 1017",
       "protocol": "openai-completions",
       "thinking_levels": [
         "off",
@@ -542,6 +533,54 @@
         "xhigh",
         "max"
       ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session",
+        "max_tokens": true
+      },
+      "context_window": 200000,
+      "cost": {
+        "cache_read": 0,
+        "input": 0,
+        "output": 0
+      },
+      "id": "deepseek-v4.1-flash-free",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 32000,
+      "name": "DeepSeek V4.1 Flash Free",
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "off",
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session",
+        "max_tokens": true
+      },
+      "context_window": 262144,
+      "cost": {
+        "cache_read": 0,
+        "input": 0,
+        "output": 0
+      },
+      "id": "flint-40b-free",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 65536,
+      "name": "Flint 40B Free",
+      "protocol": "openai-completions",
+      "thinking_levels": []
     },
     {
       "base_url": "https://opencode.ai/zen/v1",
@@ -665,9 +704,9 @@
       },
       "context_window": 1048576,
       "cost": {
-        "cache_read": 0.15,
-        "input": 1.5,
-        "output": 7.5
+        "cache_read": 0.075,
+        "input": 0.75,
+        "output": 3.75
       },
       "id": "gemini-3.6-flash",
       "input": [
@@ -691,9 +730,9 @@
       },
       "context_window": 1048576,
       "cost": {
-        "cache_read": 0.15,
-        "input": 1.5,
-        "output": 7.5
+        "cache_read": 0.075,
+        "input": 0.75,
+        "output": 3.75
       },
       "id": "gemini-3.7-flash",
       "input": [
@@ -716,9 +755,9 @@
       },
       "context_window": 1048576,
       "cost": {
-        "cache_read": 0.15,
-        "input": 1.5,
-        "output": 7.5
+        "cache_read": 0.075,
+        "input": 0.75,
+        "output": 3.75
       },
       "id": "gemini-3.8-flash",
       "input": [
@@ -727,6 +766,56 @@
       ],
       "max_output_tokens": 65536,
       "name": "Gemini 3.8 Flash",
+      "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session"
+      },
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.1,
+        "input": 2,
+        "output": 10
+      },
+      "id": "gemini-4-argon",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65536,
+      "name": "Gemini 4 Argon",
+      "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session"
+      },
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.1,
+        "input": 2,
+        "output": 10
+      },
+      "id": "gemini-4-carbon",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65536,
+      "name": "Gemini 4 Carbon",
       "protocol": "google-generative-ai",
       "thinking_levels": [
         "low",
@@ -872,6 +961,32 @@
         "medium",
         "high",
         "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session",
+        "max_tokens": true
+      },
+      "context_window": 200000,
+      "cost": {
+        "cache_read": 0,
+        "input": 0,
+        "output": 0
+      },
+      "id": "glm-5.3-flash-free",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 32000,
+      "name": "GLM-5.3-Flash Free",
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "low",
+        "high",
         "max"
       ]
     },
@@ -1418,17 +1533,17 @@
       },
       "context_window": 1050000,
       "cost": {
-        "cache_read": 0.25,
-        "cache_write": 3.125,
-        "input": 2.5,
-        "output": 15,
+        "cache_read": 0.2,
+        "cache_write": 2.5,
+        "input": 2,
+        "output": 12,
         "tiers": [
           {
-            "cache_read": 0.5,
-            "cache_write": 6.25,
-            "input": 5,
+            "cache_read": 0.4,
+            "cache_write": 5,
+            "input": 4,
             "input_tokens_above": 272000,
-            "output": 22.5
+            "output": 18
           }
         ]
       },
@@ -1737,6 +1852,36 @@
         "cache_key_header": "x-opencode-session",
         "max_tokens": true
       },
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0,
+        "cache_write": 0,
+        "input": 0,
+        "output": 0
+      },
+      "id": "inkling-2-small-free",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 131072,
+      "name": "Inkling 2 Small Free",
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session",
+        "max_tokens": true
+      },
       "context_window": 262144,
       "cost": {
         "cache_read": 0.16,
@@ -1799,6 +1944,7 @@
       "context_window": 1048576,
       "cost": {
         "cache_read": 0.3,
+        "cache_write": 3,
         "input": 3,
         "output": 15
       },
@@ -1813,6 +1959,36 @@
       "thinking_levels": [
         "low",
         "high",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session",
+        "max_tokens": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0,
+        "input": 0,
+        "output": 0
+      },
+      "id": "longcat-2.5-free",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 262144,
+      "name": "LongCat 2.5 Free",
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
         "max"
       ]
     },
@@ -1907,6 +2083,34 @@
         "cache_key_header": "x-opencode-session",
         "max_tokens": true
       },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0,
+        "input": 0,
+        "output": 0
+      },
+      "id": "minimax-m3.1-flash-free",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 512000,
+      "name": "MiniMax M3.1 Flash Free",
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session",
+        "max_tokens": true
+      },
       "context_window": 524288,
       "cost": {
         "cache_read": 0.07,
@@ -1924,6 +2128,44 @@
       "thinking_levels": [
         "off",
         "high"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session"
+      },
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.004,
+        "cache_write": 0,
+        "input": 0.1,
+        "output": 0.5,
+        "tiers": [
+          {
+            "cache_read": 0.012,
+            "cache_write": 0,
+            "input": 0.3,
+            "input_tokens_above": 200000,
+            "output": 1.5
+          }
+        ]
+      },
+      "id": "muse-ember-1.0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 270000,
+      "name": "Muse Ember 1.0",
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
       ]
     },
     {
@@ -1979,6 +2221,60 @@
         "high",
         "xhigh",
         "max"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session"
+      },
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.2,
+        "input": 4,
+        "output": 20
+      },
+      "id": "muse-wonder-1.0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 131072,
+      "name": "Muse Wonder",
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://opencode.ai/zen/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session",
+        "max_tokens": true
+      },
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0,
+        "input": 0,
+        "output": 0
+      },
+      "id": "nemotron-3.5-super-vl-free",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 131072,
+      "name": "Nemotron 3.5 Super VL Free",
+      "protocol": "openai-completions",
+      "thinking_levels": [
+        "off",
+        "low",
+        "high"
       ]
     },
     {
@@ -2099,6 +2395,259 @@
       ]
     }
   ],
+  "models_dev": {
+    "pins": {
+      "beam-free": [
+        "compat"
+      ],
+      "claude-fable-5": [
+        "compat"
+      ],
+      "claude-fable-5-1": [
+        "compat"
+      ],
+      "claude-fable-5-2": [
+        "compat"
+      ],
+      "claude-haiku-4-5": [
+        "compat"
+      ],
+      "claude-haiku-5-5": [
+        "compat"
+      ],
+      "claude-opus-4-5": [
+        "compat"
+      ],
+      "claude-opus-4-6": [
+        "compat"
+      ],
+      "claude-opus-4-7": [
+        "compat"
+      ],
+      "claude-opus-4-8": [
+        "compat"
+      ],
+      "claude-opus-5": [
+        "compat"
+      ],
+      "claude-opus-5-5": [
+        "compat"
+      ],
+      "claude-sonnet-4-5": [
+        "compat"
+      ],
+      "claude-sonnet-4-6": [
+        "compat"
+      ],
+      "claude-sonnet-5": [
+        "compat"
+      ],
+      "claude-sonnet-5-5": [
+        "compat"
+      ],
+      "deepseek-v4-pro": [
+        "compat"
+      ],
+      "deepseek-v4.1-flash": [
+        "compat"
+      ],
+      "deepseek-v4.1-flash-free": [
+        "compat"
+      ],
+      "flint-40b-free": [
+        "compat"
+      ],
+      "gemini-3-flash": [
+        "compat"
+      ],
+      "gemini-3.1-pro": [
+        "compat"
+      ],
+      "gemini-3.5-flash": [
+        "compat"
+      ],
+      "gemini-3.5-flash-lite": [
+        "compat"
+      ],
+      "gemini-3.6-flash": [
+        "compat"
+      ],
+      "gemini-3.7-flash": [
+        "compat"
+      ],
+      "gemini-3.8-flash": [
+        "compat"
+      ],
+      "gemini-4-argon": [
+        "compat"
+      ],
+      "gemini-4-carbon": [
+        "compat"
+      ],
+      "glm-5": [
+        "compat"
+      ],
+      "glm-5.1": [
+        "compat"
+      ],
+      "glm-5.2": [
+        "compat"
+      ],
+      "glm-5.3": [
+        "compat"
+      ],
+      "glm-5.3-flash": [
+        "compat"
+      ],
+      "glm-5.3-flash-free": [
+        "compat"
+      ],
+      "gpt-5": [
+        "compat"
+      ],
+      "gpt-5-codex": [
+        "compat"
+      ],
+      "gpt-5-nano": [
+        "compat"
+      ],
+      "gpt-5.1": [
+        "compat"
+      ],
+      "gpt-5.1-codex": [
+        "compat"
+      ],
+      "gpt-5.1-codex-max": [
+        "compat"
+      ],
+      "gpt-5.1-codex-mini": [
+        "compat"
+      ],
+      "gpt-5.2": [
+        "compat"
+      ],
+      "gpt-5.2-codex": [
+        "compat"
+      ],
+      "gpt-5.3-codex": [
+        "compat"
+      ],
+      "gpt-5.3-codex-spark": [
+        "compat"
+      ],
+      "gpt-5.4": [
+        "compat"
+      ],
+      "gpt-5.4-mini": [
+        "compat"
+      ],
+      "gpt-5.4-nano": [
+        "compat"
+      ],
+      "gpt-5.4-pro": [
+        "compat"
+      ],
+      "gpt-5.5": [
+        "compat"
+      ],
+      "gpt-5.5-pro": [
+        "compat"
+      ],
+      "gpt-5.6-luna": [
+        "compat"
+      ],
+      "gpt-5.6-sol": [
+        "compat"
+      ],
+      "gpt-5.6-terra": [
+        "compat"
+      ],
+      "gpt-6-astra": [
+        "compat"
+      ],
+      "gpt-6-luna": [
+        "compat"
+      ],
+      "gpt-6-sol": [
+        "compat"
+      ],
+      "gpt-6.1-sol": [
+        "compat",
+        "extra_body",
+        "web_search"
+      ],
+      "grok-4.5": [
+        "compat"
+      ],
+      "grok-4.6": [
+        "compat"
+      ],
+      "grok-4.7": [
+        "compat"
+      ],
+      "grok-build-0.1": [
+        "compat"
+      ],
+      "inkling-2-small-free": [
+        "compat"
+      ],
+      "kimi-k2.6": [
+        "compat"
+      ],
+      "kimi-k2.7-code": [
+        "compat"
+      ],
+      "kimi-k3": [
+        "compat"
+      ],
+      "longcat-2.5-free": [
+        "compat"
+      ],
+      "minimax-m2.5": [
+        "compat"
+      ],
+      "minimax-m2.7": [
+        "compat"
+      ],
+      "minimax-m3": [
+        "compat"
+      ],
+      "minimax-m3.1-flash-free": [
+        "compat"
+      ],
+      "mistral-large-4": [
+        "compat"
+      ],
+      "muse-ember-1.0": [
+        "compat"
+      ],
+      "muse-spark-1.2": [
+        "compat"
+      ],
+      "muse-spark-1.3": [
+        "compat"
+      ],
+      "muse-wonder-1.0": [
+        "compat"
+      ],
+      "nemotron-3.5-super-vl-free": [
+        "compat"
+      ],
+      "qwen3.5-plus": [
+        "compat"
+      ],
+      "qwen3.6-plus": [
+        "compat"
+      ],
+      "qwen3.8-flash": [
+        "compat"
+      ],
+      "qwen3.8-max": [
+        "compat"
+      ]
+    },
+    "source": "opencode"
+  },
   "name": "opencode-zen",
   "reviewer_model": "muse-spark-1.3"
 }

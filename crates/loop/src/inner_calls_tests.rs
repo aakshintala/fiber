@@ -887,9 +887,7 @@ fn inner_head_only_own_cut_runs_uncapped() {
 }
 
 #[test]
-fn inner_both_ends_tool_runs_as_prepared_without_asking_for_uncapped() {
-    // A both-ends bound keeps its tail: the bypass never asks for an
-    // uncapped form, so the spill that follows the bound stays as it is.
+fn inner_both_ends_tool_rejects_uncapped_form_that_retains_tail() {
     let uncapped = uncap_tool(
         contract::tool::Bound {
             start: usize::MAX / 2,
@@ -910,7 +908,32 @@ fn inner_both_ends_tool_runs_as_prepared_without_asking_for_uncapped() {
         &out,
         &(tool.clone() as Arc<dyn contract::tool::Tool>)
     ));
-    assert!(tool.calls.lock().unwrap().is_empty());
+    assert!(tool.calls.lock().unwrap().contains(&usize::MAX));
+}
+
+#[test]
+fn inner_both_ends_tool_adopts_uncapped_head_only_form() {
+    let uncapped = uncap_tool(
+        contract::tool::Bound {
+            start: usize::MAX,
+            end: 0,
+        },
+        None,
+    );
+    let tool = uncap_tool(
+        contract::tool::Bound {
+            start: 8192,
+            end: 8192,
+        },
+        Some(uncapped.clone() as Arc<dyn contract::tool::Tool>),
+    );
+    let before: Arc<dyn contract::tool::Tool> = tool.clone();
+    let out = super::uncap_head_only(before);
+    assert!(Arc::ptr_eq(
+        &out,
+        &(uncapped as Arc<dyn contract::tool::Tool>)
+    ));
+    assert!(tool.calls.lock().unwrap().contains(&usize::MAX));
 }
 
 #[test]

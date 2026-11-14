@@ -103,9 +103,10 @@ fn loop_with_viewer(
 fn click(lp: &mut Loop<TestBackend>) -> Vec<String> {
     match lp.app.on_click(TargetId::Line(Target::Image(1))) {
         Effect::Send(lines) => lines,
+        Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
         Effect::None
         | Effect::Quit
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::ReadImage(_)
         | Effect::Feedback { .. }
@@ -199,7 +200,10 @@ fn a_click_on_an_image_line_reads_the_file_and_opens_it() {
     let lines = click(&mut lp);
     assert!(lp.hub.send(&lines, &mut lp.app).is_none());
     let id = answer(&theirs);
-    assert_eq!(lp.step(accepted(&id, "Ynl0ZXM="), &idle), None);
+    assert_eq!(
+        (lp.step(accepted(&id, "Ynl0ZXM="), &idle)).expect("event loop result succeeds"),
+        None
+    );
     match completion(&rx, &Deadline::after(MUST_SUCCEED_WITHIN)) {
         Input::Viewed { name, result, .. } => {
             assert_eq!(name, "shot.png");
@@ -248,12 +252,18 @@ fn a_failed_viewer_draws_the_notice() {
     let lines = click(&mut lp);
     assert!(lp.hub.send(&lines, &mut lp.app).is_none());
     let id = answer(&theirs);
-    assert_eq!(lp.step(accepted(&id, "Ynl0ZXM="), &idle), None);
+    assert_eq!(
+        (lp.step(accepted(&id, "Ynl0ZXM="), &idle)).expect("event loop result succeeds"),
+        None
+    );
     // The worker's completion arrives as its own input: stepping it
     // draws the notice.
     let done = completion(&rx, &Deadline::after(MUST_SUCCEED_WITHIN));
     assert!(matches!(done, Input::Viewed { result: Err(_), .. }));
-    assert_eq!(lp.step(done, &idle), None);
+    assert_eq!(
+        (lp.step(done, &idle)).expect("event loop result succeeds"),
+        None
+    );
     assert!(
         lp.app
             .notice()
@@ -361,7 +371,7 @@ fn stepped(
         Ok(ended) => ended,
         Err(err) => panic!("waited {MUST_SUCCEED_WITHIN:?} for the frame: {err}"),
     };
-    assert_eq!(code, None);
+    assert_eq!((code).expect("event loop result succeeds"), None);
     (lp, rx)
 }
 
@@ -524,7 +534,10 @@ fn step_emission(
     let mut tty = tty;
     drain_tty(&mut tty);
     let wait = spawn_read(tty, marker.clone());
-    assert_eq!(lp.step(input, rx), None);
+    assert_eq!(
+        (lp.step(input, rx)).expect("event loop result succeeds"),
+        None
+    );
     match Deadline::after(MUST_SUCCEED_WITHIN).recv(&wait) {
         Ok((mut got, tty)) => {
             // The reader may hold the next write's first bytes past the
@@ -659,21 +672,29 @@ fn detection_replies_land_without_a_frame_wait() {
     assert!(!lp.app.sixel());
     // Other version text names no protocol.
     assert_eq!(
-        lp.step(Input::Bytes(b"\x1bP>|ghostty 1.0\x1b\\".to_vec()), &rx),
+        (lp.step(Input::Bytes(b"\x1bP>|ghostty 1.0\x1b\\".to_vec()), &rx))
+            .expect("event loop result succeeds"),
         None
     );
     assert!(!lp.app.iterm());
     assert_eq!(
-        lp.step(Input::Bytes(b"\x1bP>|iTerm2 3.5.0\x1b\\".to_vec()), &rx),
+        (lp.step(Input::Bytes(b"\x1bP>|iTerm2 3.5.0\x1b\\".to_vec()), &rx))
+            .expect("event loop result succeeds"),
         None
     );
     assert!(lp.app.iterm());
     // The Sixel bit with no measured cell keeps the pixels.
-    assert_eq!(lp.step(Input::Bytes(b"\x1b[?62;4c".to_vec()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(b"\x1b[?62;4c".to_vec()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(!lp.app.sixel());
     // A measured cell inside the bound lets Sixel through.
     lp.app.set_measured_cell(Some((10, 20)));
-    assert_eq!(lp.step(Input::Bytes(b"\x1b[?62;4c".to_vec()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(b"\x1b[?62;4c".to_vec()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(lp.app.sixel());
 }
 
@@ -683,7 +704,10 @@ fn sixel_with_an_out_of_bound_cell_keeps_the_pixels() {
     let (mut lp, _) = super::tests::new_loop(TestBackend::new(60, 12), None);
     let (_, rx) = mpsc::channel();
     lp.app.set_measured_cell(Some((65, 128)));
-    assert_eq!(lp.step(Input::Bytes(b"\x1b[?4c".to_vec()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(b"\x1b[?4c".to_vec()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(!lp.app.sixel());
 }
 
@@ -772,7 +796,10 @@ fn assert_logo_iterm_file(lp: &Loop<TestBackend>, sent: &[u8], transition: &str)
 #[test]
 fn logo_first_frame_draws_pixels() {
     let (mut lp, mut tty, rx) = logo_loop();
-    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(Vec::new()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     let buf = buffer_of(&lp);
     assert!(!buffer_has_placeholder(&buf));
     assert_eq!(buf[(35, 1)].symbol(), "v");
@@ -797,7 +824,10 @@ fn logo_first_frame_draws_pixels() {
 fn logo_without_replies_stays_pixels() {
     let (mut lp, mut tty, rx) = logo_loop();
     for _ in 0..3 {
-        assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+        assert_eq!(
+            (lp.step(Input::Bytes(Vec::new()), &rx)).expect("event loop result succeeds"),
+            None
+        );
     }
     let buf = buffer_of(&lp);
     assert!(!buffer_has_placeholder(&buf));
@@ -816,7 +846,10 @@ fn logo_no_colour_draws_pixels() {
     let (mut lp, mut tty, rx) = logo_loop();
     lp.app.set_iterm();
     lp.app.set_logo_depth(crate::look::Depth::NoColour);
-    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(Vec::new()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     let buf = buffer_of(&lp);
     assert!(!buffer_has_placeholder(&buf));
     assert_eq!(buf[(35, 1)].symbol(), "v");
@@ -869,7 +902,10 @@ fn logo_kitty_swap_transmits_once() {
         );
     }
     // One more frame: no second transmit.
-    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(Vec::new()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     super::tests::flush_kitty(&lp);
     assert!(
         !drain_tty(&mut tty)
@@ -886,11 +922,15 @@ fn logo_kitty_rejection_draws_pixels_without_retry() {
     let (mut lp, tty, rx, _dir) = logo_file_loop();
     lp.app.set_graphics();
     assert_eq!(
-        lp.step(Input::Bytes(b"\x1b_Gi=30;EINVAL\x1b\\".to_vec()), &rx),
+        (lp.step(Input::Bytes(b"\x1b_Gi=30;EINVAL\x1b\\".to_vec()), &rx))
+            .expect("event loop result succeeds"),
         None
     );
     assert!(lp.app.logo_rejected());
-    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(Vec::new()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     let buf = buffer_of(&lp);
     assert!(!buffer_has_placeholder(&buf));
     assert_eq!(buf[(35, 1)].symbol(), "v");
@@ -900,7 +940,10 @@ fn logo_kitty_rejection_draws_pixels_without_retry() {
         "no transmit after a rejection"
     );
     // Another frame with the same tint: still no transmit.
-    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(Vec::new()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     super::tests::flush_kitty(&lp);
     assert!(
         !read_tty(&tty).windows(4).any(|window| window == b"i=30"),
@@ -954,13 +997,14 @@ fn logo_kitty_dead_writer_returns_none() {
     }
     // The logo write still returns None: no quit, no retry.
     assert_eq!(
-        lp.logo_write(
+        (lp.logo_write(
             crate::graphics::logo::Protocol::Kitty,
             crate::graphics::logo::After {
                 bytes: place.into_bytes(),
                 repaint: false,
             }
-        ),
+        ))
+        .expect("event loop result succeeds"),
         None
     );
 }
@@ -1043,8 +1087,14 @@ fn logo_sixel_scales_to_the_measured_cell() {
 fn logo_sixel_scales_to_the_measured_cell_body() {
     let (mut lp, mut tty, rx) = logo_loop();
     lp.app.set_measured_cell(Some((10, 20)));
-    assert_eq!(lp.step(Input::Bytes(b"\x1b[?62;4c".to_vec()), &rx), None);
-    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(b"\x1b[?62;4c".to_vec()), &rx)).expect("event loop result succeeds"),
+        None
+    );
+    assert_eq!(
+        (lp.step(Input::Bytes(Vec::new()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     let sent = drain_tty(&mut tty);
     let sent = String::from_utf8_lossy(&sent);
     assert!(sent.contains("\"1;1;320;80"), "320 by 80: {sent:?}");
@@ -1065,8 +1115,14 @@ fn logo_cell_bound_rows_body() {
     for cell in [None, Some((0, 0)), Some((65, 128)), Some((65535, 65535))] {
         let (mut lp, mut tty, rx) = logo_loop();
         lp.app.set_measured_cell(cell);
-        assert_eq!(lp.step(Input::Bytes(b"\x1b[?4c".to_vec()), &rx), None);
-        assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+        assert_eq!(
+            (lp.step(Input::Bytes(b"\x1b[?4c".to_vec()), &rx)).expect("event loop result succeeds"),
+            None
+        );
+        assert_eq!(
+            (lp.step(Input::Bytes(Vec::new()), &rx)).expect("event loop result succeeds"),
+            None
+        );
         let sent = drain_tty(&mut tty);
         assert!(
             !sent.windows(4).any(|window| window == b"\x1bP0"),
@@ -1086,7 +1142,10 @@ fn logo_cell_bound_rows_body() {
     let sent = String::from_utf8_lossy(&wire);
     assert!(sent.contains("\"1;1;2048;512"), "64 by 128: {sent:?}");
     // A held frame rewrites nothing.
-    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(Vec::new()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(
         !drain_tty(&mut tty)
             .windows(4)
@@ -1142,7 +1201,10 @@ fn logo_leave_home_repaints_then_redraws() {
     );
     assert_logo_iterm_file(&lp, &first, "home before leaving");
     lp.app.attach(contract::SessionId(SESSION.to_owned()));
-    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(Vec::new()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     let mut tty = tty;
     let sent = drain_tty(&mut tty);
     assert!(
@@ -1151,7 +1213,10 @@ fn logo_leave_home_repaints_then_redraws() {
     );
     assert!(!lp.app.on_home(), "the loop left home");
     // Settled on the session, further frames emit nothing.
-    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(Vec::new()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(
         !drain_tty(&mut tty)
             .windows(4)
@@ -1167,7 +1232,10 @@ fn logo_non_home_never_clears() {
     let (mut lp, mut tty, rx) = logo_loop();
     lp.app.attach(contract::SessionId(SESSION.to_owned()));
     for _ in 0..2 {
-        assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+        assert_eq!(
+            (lp.step(Input::Bytes(Vec::new()), &rx)).expect("event loop result succeeds"),
+            None
+        );
     }
     assert!(
         buffer_of(&lp)
@@ -1200,7 +1268,10 @@ fn logo_flat_home_keeps_pixels_then_reemits() {
     assert_logo_iterm_file(&lp, &first, "initial flat-home frame");
     // Flat: pixels, no image, and the rect-gone repaint.
     lp.app.set_flat(true);
-    assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Bytes(Vec::new()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     let mut tty = tty;
     let buf = buffer_of(&lp);
     assert_eq!(buf[(35, 1)].symbol(), "v");

@@ -111,7 +111,11 @@ those.
   `cargo xtask tui-isolation`, `cargo xtask crate-edges`,
   `cargo xtask must-succeed` and
   `cargo xtask dependency-list`. `main` has no library target, so its clippy and nextest take `--bins --tests` in place of
-  `--all-targets`. `log` shares its name with a dependency, so its clippy and
+  `--all-targets`. `--bins --tests` doesn't build `main`'s examples, the jigs
+  its tests run, and a jig older than its sources is refused
+  (`docs/testing/fakes.md`, "Jigs"). So every `main` nextest run here comes
+  after `cargo build -p main --examples`, with the same environment
+  variables. `log` shares its name with a dependency, so its clippy and
   nextest take `-p log@0.0.0`; `cargo fmt` takes plain `-p log`.
 - A crate whose tests read a doc table, such as `contract`, runs its tests
   when that doc changes.
@@ -156,7 +160,9 @@ use is committed under `scripts/`. A one-off script goes in the pull request
 body.
 
 A question about what one layer does with a given input is answered with that
-layer's jig, not a throwaway program (`docs/testing.md`, "Jigs").
+layer's jig, not a throwaway program (`docs/testing.md`, "Jigs"). A committed
+test in that layer's crate that pins the answer also answers it, and no jig
+is built only to ask it.
 
 ## When fixes keep failing
 
@@ -189,7 +195,11 @@ The body says `Resolves #<ticket>` for an unsplit ticket or the last part
 of a split ticket. Earlier parts say `Part of #<ticket>`. A pull request that
 advances a ticket without resolving it, such as a diagnostic, says
 `Refs #<ticket>`; the ticket stays open, and the red-commit rule below does
-not apply. Every pull request
+not apply. A ticket worked as separate part tickets has each part's
+pull request name the parent as `Part of #<parent>`. The last part's
+orchestrator checks the parent's acceptance. When every criterion is met, that
+part's pull request says `Resolves #<parent>`. Otherwise the orchestrator posts
+on the parent what is left. Every pull request
 also says `Doc friction: none` or links each `needs-owner` issue it raised
 ("When a doc should change").
 
@@ -205,7 +215,10 @@ the local check; CI uses `--report` on each platform and `--collect` to make
 the single required check. The squash merge still lands one commit. A pull
 request whose every changed file is a docs file, as "Selection" defines it,
 passes the check with a message saying so: the doc was wrong and the code
-was right, so no test can show the bug.
+was right, so no test can show the bug. A pull request fixing a break or a
+budget breach that only a main-only job can show, such as a release build
+that fails to compile or the release size, states the cause and that job's
+result at base and head in place of a red commit.
 
 A ticket whose defect is in test code, such as a flaky test, or in CI
 configuration (`.github/` or a script only CI runs), carries the `test-only`

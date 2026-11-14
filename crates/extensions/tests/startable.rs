@@ -25,6 +25,7 @@ fn model(window: Option<u64>, levels: &[ThinkingLevel], protocol: Protocol) -> M
         thinking_levels: levels.to_vec(),
         thinking_default: None,
         prompt_addendum: None,
+        omit_reason: None,
     }
 }
 

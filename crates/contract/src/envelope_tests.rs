@@ -43,6 +43,8 @@ fn hub_kind_accessor_preserves_wire_and_reads_the_current_field() {
         ("attention", HubEventKind::Attention),
         ("device_changed", HubEventKind::DeviceChanged),
         ("session_left", HubEventKind::SessionLeft),
+        ("session_deleted", HubEventKind::SessionDeleted),
+        ("session_archived", HubEventKind::SessionArchived),
         ("stream_closed", HubEventKind::StreamClosed),
         ("stream_reopened", HubEventKind::StreamReopened),
         ("command_accepted", HubEventKind::CommandAccepted),

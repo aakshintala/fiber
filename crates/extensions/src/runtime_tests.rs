@@ -31,7 +31,10 @@ fn command(id: &str) -> CommandId {
 
 fn handler(value: Value) -> ProcessInvoke {
     Arc::new(
-        move |_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+        move |_args: Value,
+              _scope: Option<CredentialFor>,
+              _cancel: &dyn Cancel,
+              _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
             Ok(Some(value.clone()))
         },
     )
@@ -40,7 +43,10 @@ fn handler(value: Value) -> ProcessInvoke {
 fn failing(message: &str) -> ProcessInvoke {
     let message = message.to_owned();
     Arc::new(
-        move |_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+        move |_args: Value,
+              _scope: Option<CredentialFor>,
+              _cancel: &dyn Cancel,
+              _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
             Err(Error::Lua {
                 extension: "fiber.test/proc".to_owned(),
                 message: message.clone(),
@@ -214,7 +220,10 @@ fn process_hook_dispatch_applies_decode() {
         command("c2"),
         "run".to_owned(),
         FunctionTarget::Process(Arc::new(
-            |_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| Ok(None),
+            |_args: Value,
+             _scope: Option<CredentialFor>,
+             _cancel: &dyn Cancel,
+             _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| Ok(None),
         )),
     );
     assert!(
@@ -240,7 +249,10 @@ fn process_tool_run_returns_handler_value() {
         command("c2"),
         "run".to_owned(),
         FunctionTarget::Process(Arc::new(
-            |_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| Ok(None),
+            |_args: Value,
+             _scope: Option<CredentialFor>,
+             _cancel: &dyn Cancel,
+             _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| Ok(None),
         )),
     );
     assert_eq!(
@@ -270,6 +282,49 @@ fn process_tool_run_asking_runs_without_runner() {
             .unwrap(),
         Some(json!({"content": "hi"}))
     );
+}
+
+/// A process tool invocation receives the runner owned by its outer call.
+#[test]
+fn process_tool_runner_threading() {
+    struct Runner;
+    impl contract::tool::InnerCalls for Runner {
+        fn run(
+            &self,
+            _extension: &str,
+            _name: &str,
+            _arguments: Value,
+        ) -> Result<Box<contract::events::ToolCallCompleted>, String> {
+            Err("the threading test does not run inner calls".to_owned())
+        }
+    }
+
+    let runtime = runtime();
+    runtime.register_owner("fiber.test/proc", None);
+    let seen: Arc<Mutex<Option<Arc<dyn contract::tool::InnerCalls>>>> = Arc::new(Mutex::new(None));
+    let invoke: ProcessInvoke = {
+        let seen = Arc::clone(&seen);
+        Arc::new(move |_args, _scope, _cancel, inner_calls| {
+            *seen.lock().unwrap() = inner_calls;
+            Ok(Some(json!({"ran": true})))
+        })
+    };
+    let made = runtime.register_function(
+        "fiber.test/proc",
+        command("runner"),
+        "run".to_owned(),
+        FunctionTarget::Process(invoke),
+    );
+    let runner: Arc<dyn contract::tool::InnerCalls> = Arc::new(Runner);
+    let cancel = support::cancel::Token::new();
+    assert_eq!(
+        runtime
+            .tool_run_asking(&made, json!({}), None, &cancel, Some(Arc::clone(&runner)))
+            .unwrap(),
+        Some(json!({"ran": true}))
+    );
+    let carried = seen.lock().unwrap().clone().expect("runner is forwarded");
+    assert!(Arc::ptr_eq(&carried, &runner));
 }
 
 /// Computed callbacks resolve like `run`: an effects function and a search
@@ -412,7 +467,10 @@ fn process_watcher_push_and_drain() {
     let counting: ProcessInvoke = {
         let ran = Arc::clone(&ran);
         Arc::new(
-            move |_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+            move |_args: Value,
+                  _scope: Option<CredentialFor>,
+                  _cancel: &dyn Cancel,
+                  _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
                 ran.store(true, Ordering::SeqCst);
                 Ok(Some(json!({})))
             },
@@ -473,6 +531,203 @@ fn process_command_queue_runs_on_release() {
     assert!(queued.wait().is_err());
 }
 
+/// An admitted process command sends its invocation-anchored inner call,
+/// waits for its answer off the client reader, and publishes the callback's
+/// actual result. A duplicate release cannot invoke it twice.
+#[test]
+fn process_command_runner_delivers_invocation_and_waits_in_flight() {
+    use contract::events::{CallStatus, ToolCallCompleted};
+    use contract::inbox::Delivery;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let runtime = runtime();
+    runtime.register_owner("fiber.test/proc", None);
+    let (delivery_tx, delivery_rx) = std::sync::mpsc::channel();
+    runtime.set_inbox(delivery_tx);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let invocation = {
+        let calls = Arc::clone(&calls);
+        runtime.install_process_handler(
+            "fiber.test/proc",
+            command("registered"),
+            "run",
+            Arc::new(move |_arg, _scope, _cancel, inner_calls| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                inner_calls
+                    .unwrap()
+                    .run("fiber.test/other", "read", json!({}))
+                    .map_err(|message| Error::Lua {
+                        extension: "fiber.test/proc".to_owned(),
+                        message,
+                    })?;
+                Ok(Some(json!("callback-result")))
+            }),
+        )
+    };
+    let queued = Arc::new(
+        runtime
+            .queue_command(&invocation, command("cmd_1"), "go")
+            .unwrap(),
+    );
+    let waiting = Arc::clone(&queued);
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _sent = result_tx.send(waiting.wait());
+    });
+    queued.release();
+    let Delivery::InnerCall(request) = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&delivery_rx, "process command inner delivery")
+    else {
+        panic!("expected inner call");
+    };
+    assert_eq!(request.command, command("cmd_1"));
+    assert_eq!(request.extension, "fiber.test/other");
+    assert_eq!(request.name, "read");
+    (request.taken)();
+    queued.release();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    (request.answer)(Box::new(ToolCallCompleted {
+        status: CallStatus::Completed,
+        content: Vec::new(),
+        reason: None,
+        error: None,
+        process: None,
+        details: None,
+        artifact: None,
+        kept: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        protected_paths: None,
+        provider_item: None,
+        hosts_surfaced: Vec::new(),
+        loaded: None,
+    }));
+    assert_eq!(
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&result_rx, "process command callback result")
+            .unwrap(),
+        json!("callback-result")
+    );
+}
+
+/// Ending a process command wakes a pending host-tool call as an ordinary
+/// cancelled result, while the command wait still receives its real result.
+#[test]
+fn process_command_runner_returns_cancelled_when_callback_ends() {
+    use contract::events::CallStatus;
+    use contract::inbox::Delivery;
+    let runtime = runtime();
+    runtime.register_owner("fiber.test/proc", None);
+    let (delivery_tx, delivery_rx) = std::sync::mpsc::channel();
+    runtime.set_inbox(delivery_tx);
+    let (continue_tx, continue_rx) = std::sync::mpsc::channel::<()>();
+    let continue_rx = Arc::new(Mutex::new(continue_rx));
+    let (call_tx, call_rx) = std::sync::mpsc::channel();
+    let invocation = {
+        let continue_rx = Arc::clone(&continue_rx);
+        runtime.install_process_handler(
+            "fiber.test/proc",
+            command("registered"),
+            "run",
+            Arc::new(move |_, _, _, inner_calls| {
+                let inner_calls = inner_calls.unwrap();
+                let call_tx = call_tx.clone();
+                std::thread::spawn(move || {
+                    let result = inner_calls
+                        .run("fiber.test/other", "read", json!({}))
+                        .unwrap();
+                    let _sent = call_tx.send(result.status);
+                });
+                fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    .recv_or_fail(&continue_rx.lock().unwrap(), "command callback release");
+                Ok(Some(json!("callback-result")))
+            }),
+        )
+    };
+    let queued = Arc::new(
+        runtime
+            .queue_command(&invocation, command("cmd_cancel"), "go")
+            .unwrap(),
+    );
+    let waiting = Arc::clone(&queued);
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _sent = result_tx.send(waiting.wait());
+    });
+    queued.release();
+    let Delivery::InnerCall(request) = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&delivery_rx, "process command cancellation delivery")
+    else {
+        panic!("expected inner call");
+    };
+    (request.taken)();
+    continue_tx.send(()).unwrap();
+    assert_eq!(
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&result_rx, "process command callback result")
+            .unwrap(),
+        json!("callback-result")
+    );
+    assert_eq!(
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&call_rx, "cancelled host-tool result"),
+        CallStatus::Cancelled
+    );
+}
+
+/// Missing or closed session inboxes answer `host.tool` as an ordinary
+/// cancelled result rather than failing the process callback.
+#[test]
+fn process_command_runner_returns_cancelled_without_live_inbox() {
+    use contract::events::CallStatus;
+    for closed in [false, true] {
+        let runtime = runtime();
+        runtime.register_owner("fiber.test/proc", None);
+        if closed {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            runtime.set_inbox(sender);
+            drop(receiver);
+        }
+        let invocation = runtime.install_process_handler(
+            "fiber.test/proc",
+            command("registered"),
+            "run",
+            Arc::new(|_, _, _, inner_calls| {
+                let result = inner_calls
+                    .unwrap()
+                    .run("fiber.test/proc", "read", json!({}))
+                    .map_err(|message| Error::Lua {
+                        extension: "fiber.test/proc".to_owned(),
+                        message,
+                    })?;
+                assert_eq!(result.status, CallStatus::Cancelled);
+                Ok(Some(json!("returned")))
+            }),
+        );
+        let queued = Arc::new(
+            runtime
+                .queue_command(
+                    &invocation,
+                    command(if closed { "closed" } else { "missing" }),
+                    "go",
+                )
+                .unwrap(),
+        );
+        let waiting = Arc::clone(&queued);
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _sent = result_tx.send(waiting.wait());
+        });
+        queued.release();
+        assert_eq!(
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                .recv_or_fail(&result_rx, "process command result without live inbox")
+                .unwrap(),
+            json!("returned")
+        );
+    }
+}
+
 /// A process command that returns nothing still completes: the driver's
 /// return value is ignored (`docs/extensions.md`, "Commands and screens"),
 /// so there is no failure to notice. An error still fails the wait.
@@ -484,7 +739,12 @@ fn process_command_none_answer_completes() {
         "fiber.test/proc",
         command("c1"),
         "run",
-        Arc::new(|_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| Ok(None)),
+        Arc::new(
+            |_args: Value,
+             _scope: Option<CredentialFor>,
+             _cancel: &dyn Cancel,
+             _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| Ok(None),
+        ),
     );
     let queued = runtime.queue_command(&none, command("q"), "go").unwrap();
     queued.release();
@@ -507,7 +767,10 @@ fn process_dispatch_carries_the_invocation_scope() {
             command("c1"),
             "run",
             Arc::new(
-                move |_args: Value, scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+                move |_args: Value,
+                      scope: Option<CredentialFor>,
+                      _cancel: &dyn Cancel,
+                      _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
                     seen.lock().unwrap().push(scope);
                     Ok(Some(json!(true)))
                 },
@@ -543,7 +806,10 @@ fn concurrent_process_dispatches_keep_their_own_scope() {
             command("c1"),
             "run",
             Arc::new(
-                move |_args: Value, scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+                move |_args: Value,
+                      scope: Option<CredentialFor>,
+                      _cancel: &dyn Cancel,
+                      _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
                     let label = match &scope {
                         Some(CredentialFor::Stored(pair)) => pair.label.clone(),
                         Some(CredentialFor::Login(_)) => "login".to_owned(),
@@ -596,7 +862,10 @@ fn process_queued_command_releases_unscoped() {
             command("c1"),
             "run",
             Arc::new(
-                move |_args: Value, scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+                move |_args: Value,
+                      scope: Option<CredentialFor>,
+                      _cancel: &dyn Cancel,
+                      _inner_calls: Option<Arc<dyn contract::tool::InnerCalls>>| {
                     seen.lock().unwrap().push(scope.is_some());
                     Ok(Some(json!(true)))
                 },

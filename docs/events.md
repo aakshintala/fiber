@@ -70,7 +70,7 @@ verdict whatever happened.
 {"kind":"fiber_exited","schema_version":1,"payload":{"error":{"code":"no_model","message":"No model is configured. Set one in a configuration file or pass --model."},"exit_code":1}}
 ```
 
-The hub sends six lines of its own, only on a connection to the hub and
+The hub sends nine lines of its own, only on a connection to the hub and
 never to a log (`docs/invocation.md`, "The hub"). Each carries `kind`, `ts`,
 `schema_version` and `payload`, and no `session_id` in the envelope, since it
 is about the hub or names its session in the payload:
@@ -89,6 +89,18 @@ is about the hub or names its session in the payload:
 - `session_left`, on the feed when a session's process ends: `payload` holds
   `session_id` (string) and `how`, `exited` or `crashed`, a closed set
   (`docs/invocation.md`, "The hub").
+- `keepers`, on the feed when the hub's keeper set changes, and once to every
+  new feed subscriber: `payload` holds `keepers` (array of session ids, in id
+  order), every keeper-held `run/` entry the hub's probe confirms, empty when
+  none.
+- `session_deleted`, on the feed when a session is deleted: `payload` holds
+  `session_id` (string) and `project` (string), the project's key, the name
+  of its `projects/<key>/` directory. It carries no `seq`, and a new
+  subscriber learns nothing about the deleted session.
+- `session_archived`, on the feed when a session is archived: `payload`
+  holds `session_id` (string) and `project` (string), as for
+  `session_deleted`. It carries no `seq`, and a new subscriber learns
+  nothing about the archived session.
 - `stream_closed`, when a running session closes the connection the hub relays
   for a client, as it does when it cannot read its log to serve it: `payload`
   holds `session_id` (string). It carries no `seq`, and comes after every line
@@ -269,8 +281,9 @@ Exactly one of `outer_action_id` and `command_id` is present.
 
 ## Kinds
 
-Fiber's loop emits the kinds below. MCP elicitation and `ask_user` add no kind
-of their own. MCP elicitation, and `ask_user` in a session a person drives,
+Fiber's loop emits the kinds below. On a crash takeover the keeper writes
+`keeper_started` and `keeper_bound` (`docs/tools.md`, "The keeper"). MCP
+elicitation and `ask_user` add no kind of their own. MCP elicitation, and `ask_user` in a session a person drives,
 raise interactions ("Interactions") that every driver answers with `reply`. In
 a session a program drives, `ask_user` ends the turn with `questions` on
 `turn_completed`.
@@ -541,7 +554,7 @@ subscribes, at either level, is sent the latest.
 | `started` | integer | yes | when the session started, as `ts` |
 | `calls` | integer | yes | tool calls the session has made so far |
 | `repeats` | integer | no | how many tool calls in a row, ending with the latest, had the same name and the same arguments; absent when it is 1 |
-| `turns` | integer | no | turns the session has run so far, counted as the usage view counts them (`docs/tui.md`); a client draws no turn count when it is absent |
+| `turns` | integer | no | turns the session has started so far, the running one included; the usage view and the side panel show it (`docs/tui.md`); a client draws no turn count when it is absent |
 | `step` | string | no | after the first tool call: the latest call's tool name, then a space and its subject, such as "read app.rs"; the name alone when the subject is empty or the call has none (`docs/permissions.md`, "What a rule matches") |
 | `git` | object | no | present in a git repository: `branch`, a string, or `null` when HEAD is detached |
 | `context` | object | no | after the first request: `tokens`, the context's size in tokens at the latest request that reported its input tokens, and `window`, the model's context window (integers) |
@@ -731,7 +744,7 @@ Durable. The call's outcome.
 | `provider_item` | any JSON | no | on a call the provider ran, its result block exactly as it arrived, sent back unchanged only to the model that produced it (`docs/tools.md`, "Hosted by the provider"); absent on a call Fiber runs |
 | `hosts_surfaced` | array of strings | no | the hosts the result surfaced, as URLs, which become known in the session (`docs/tools.md`, "What a result carries"); absent when empty |
 | `loaded` | array of strings | no | the tools a search loaded, by name, best first, ties by name; `[]` when it matched nothing; absent on every other result, and when an `after_tool` hook failed (`docs/tools.md`, "Tool search") |
-| `protected_paths` | object | no | on a confined shell call that changed a protected path: `restored` (array of strings, workspace-relative paths restored to the recorded baseline) and `failed` (array of `path` and `message` objects, one per restore that did not succeed); absent when nothing changed (`docs/sandbox.md`, "Protected paths") |
+| `protected_paths` | object | no | on a confined shell call that changed a protected path: `restored` (array of strings, workspace-relative paths restored to the recorded baseline) and `failed` (array of `path` and `message` objects); each failed `path` is workspace-relative. There is one entry per restore that did not succeed; absent when nothing changed (`docs/sandbox.md`, "Protected paths") |
 
 On a successful `read`, `edit` or `write`, `details` carries the reserved
 `file_seen` object beside the tool's own fields: `path`, the file's resolved
@@ -763,7 +776,7 @@ Resume replays the same lines from the same field, so what the person saw
 never depends on who rewrote the text (`docs/sandbox.md`, "Protected paths").
 
 A line whose content a hook changed carries `changed_by`, naming the extensions that took attribution for the change. A change no extension took attribution for carries no `changed_by` key. It appears on
-`tool_call_started` for rewritten arguments, on `permission_resolved` for a reviewed call's decision that has no request and whose arguments a `before_tool` hook rewrote, on `tool_call_completed` for a
+`tool_call_started` for rewritten arguments, on `permission_requested` for the arguments under review, on `permission_resolved` for a reviewed call's decision that has no request and whose arguments a `before_tool` hook rewrote, on `tool_call_completed` for a
 rewritten result, on `job_line` for changed delivery lines, on `delegate_finished`
 for a changed final message, on `job_completed` for a changed completion notice,
 and on a `turn_started` message and `steering_applied` for
@@ -791,6 +804,8 @@ Durable. The envelope's `action_id` is the tool call.
 | `standing_rule` | object | no | on `standing_ask`, the rule that asked: `scope` (`global` or `project`) and `prefix` (string) |
 | `escalation` | object | no | on `review`, why the reviewer handed the call to a person: `cause`, which is `consecutive_blocks`, `session_blocks` or `reviewer_failed`, a closed set; `reason` (string), the reviewer's reason for blocking this call, on the two block causes; `error` (`error`), on `reviewer_failed` |
 | `rule` | object | no | on `review`, the rule an allow can remember: `subject` (string), the call's primary argument as its tool reads it, and `prefix` (string), the widening the tool offers, which `subject` starts with (`docs/permissions.md`, "What a rule matches"). Absent when no rule can match the call |
+| `arguments` | object | no | the arguments under review, when a `before_tool` hook rewrote them |
+| `changed_by` | `changed_by` | no | with `arguments` |
 
 #### `permission_resolved`
 
@@ -936,7 +951,7 @@ none.
 | `extension` | string | no | the extension whose `host.model` made the call |
 | `origin_session_id` | string | no | on a copy, the session whose call it was (`docs/delegates.md`, "Streams"); absent on the session's own calls |
 | `warming` | boolean | no | `true` on a cache-warming refresh (`docs/prompt-cache.md`, "Warming while idle"); absent on every other call |
-| `reviewer` | object | no | on a call the reviewer made: `purpose` (string, a closed set: `stage_1`, `stage_2` or `compaction`, the compaction selection) and `action_id` (string, the tool call under review; absent on `compaction`); absent on every other call. Present on every call the reviewer makes; the envelope's `action_id` stays absent, so an action's usage fold doesn't count the review as the call's own spend |
+| `reviewer` | object | no | on a call the reviewer made: `purpose` (string, a closed set: `stage_1`, the one-word `allow` or `check` request; `stage_2`, the reasoning pass on a call answered `check` (`docs/permissions.md`, "How it runs"); or `compaction`, the compaction selection) and `action_id` (string, the tool call under review; absent on `compaction`); absent on every other call. Present on every call the reviewer makes; the envelope's `action_id` stays absent, so an action's usage fold doesn't count the review as the call's own spend |
 
 #### `quota_noticed`
 
@@ -1223,6 +1238,7 @@ Durable.
 | `servers` | object | yes | `kept`, `restarted`, `started` and `stopped`, each an array of server names |
 | `extensions` | array of strings | yes | the extensions reloaded |
 | `failed` | array | no | each server that failed: `server`, `reason` and `error`, as on `mcp_server_failed` |
+| `extension_failures` | array | no | one entry per failing registration: `provider`, optional `extension` (present exactly when the mirrored notice names one) and `error`; the old list stands |
 
 `reloaded` is written once the new tool set is declared, and `preamble_built`
 follows it. The next model request misses the prompt cache. A reload that
@@ -1389,6 +1405,14 @@ absent when an extension started it.
 | `extension` | string | no | the extension that started it with `host.delegate` |
 | `description` | string | yes | a short description |
 | `output_path` | string | yes | the job's output file |
+| `pgid` | integer | no | the process group id, when known |
+| `start_time` | integer | no | the leader's opaque process start-time identity, when known |
+| `kind` | string | no | `job` or `detached`; absent only on pre-upgrade rows |
+
+A detached entry writes `job_started` with `kind: detached`. Its `pgid` records
+the process group; `start_time` identifies the leader for same-session stop
+checks. When it ends, the registry updates its in-memory row, but the loop writes no
+`job_completed` line and starts no turn.
 
 #### `delegate_started`
 
@@ -1455,7 +1479,7 @@ Durable.
 | `output_tail` | string | no | the tail of its output, capped; absent when a hook changed the completion notice (`notice` holds what the model was sent) |
 | `notice` | string | no | the text the model was sent, when a hook changed or withheld the completion notice |
 | `changed_by` | `changed_by` | no | when a hook changed the completion notice, and named itself |
-| `protected_paths` | object | no | on an adopted shell call that changed a protected path: `restored` (array of strings) and `failed` (array of `path` and `message` objects), as on `tool_call_completed`; absent when nothing changed (`docs/sandbox.md`, "Protected paths") |
+| `protected_paths` | object | no | on an adopted shell call that changed a protected path: `restored` (array of workspace-relative paths) and `failed` (array of `path` and `message` objects). Each failed `path` is workspace-relative, with one entry per restore that did not succeed, as on `tool_call_completed`; absent when nothing changed (`docs/sandbox.md`, "Protected paths") |
 
 #### `jobs_pending_notified`
 
@@ -1491,7 +1515,22 @@ boundaries (`docs/architecture.md`, "One inbox"), so `job_completed` and
 Their position in the log is the delivery point. The exception is a
 `job_completed` the keeper writes while its session is gone, which carries no
 `output_tail`, `notice` or `changed_by`: its delivery point is the next
-turn's `turn_started` (`docs/tools.md`, "The keeper").
+turn's `turn_started` (`docs/tools.md`, "The keeper"). The keeper also
+appends `keeper_started` when its takeover opens the log and `keeper_bound`
+once `bind` and `listen` succeed, only on a crash takeover, never on the
+normal path.
+
+#### `keeper_started`
+
+Durable. The payload is `{}`. The keeper appends it when its takeover opens
+the session's log, before it binds; only on a crash takeover, never on the
+normal path (`docs/tools.md`, "The keeper").
+
+#### `keeper_bound`
+
+Durable. The payload is `{}`. The keeper appends it once `bind` and `listen`
+succeed on its socket; only on a crash takeover, never on the normal path
+(`docs/tools.md`, "The keeper").
 
 ### Command acknowledgements
 
@@ -1517,7 +1556,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `quota` | `quota`, an array ordered by provider name, then credential label, and `notice_at` (number, the session's `quota.notice_at`). Each object has `provider` and `credential` (strings), and either `windows` (a non-empty array in vendor order: `name` and either `percent_used` (number) or `reset: true`, with optional `resets_at` (integer, milliseconds since the epoch) where the provider reports a reset time), `credit` (`remaining` (number) and optional `limit` (number)), or neither when unreachable. `unreachable: true` marks a failed fetch with its last value, or a failed credential read or provider start with no value. Labels that report no quota or have no cached value yet are absent. No age is shown (`docs/tools.md`, "Fetching"). |
 | `credentials` | `provider` (string), the provider a `credential` command would switch now; `credentials`, an array of its credential labels, sorted; `credential` (string, optional), the label it uses now, absent for a scripted session or a provider the session has not used |
 | `credential` | `provider` (string), the provider the switch applies to (`docs/invocation.md`) |
-| `subscribe` | at `full`, `last_seq` (integer), the `seq` of the last line the fold sends before the stream goes live; `result` is absent on an empty log or at `summary` |
+| `subscribe` | at `full`, `last_seq` (integer), the `seq` of the last line the fold sends before the stream goes live; `result` is absent on an empty log or at `summary`; `workspace_gone` (string), the missing workspace or repository path, present only when the hub replays the log of a session whose workspace is gone and cannot be made again (`docs/invocation.md`, "Lifecycle") |
 | `history` | `lines`, an array of the session's durable lines in the range asked for, each a whole line as the log holds it, in `seq` order |
 | `artifact_page` | `text` (string), the page, whole lines from `offset`; `lines` (array of integers), the byte offset in the file where each line of `text` starts; `next` (integer), the byte offset after the page, absent at the end of the file; and `size` (integer), the file's size in bytes |
 | `offered_file` | `text` (string), the file's full UTF-8 text |
@@ -1540,7 +1579,8 @@ Every driver command is answered with exactly one of these, echoing its id
 | `device_login_result` | `path` (string), the stored credential relative to the hub's Fiber home (`docs/invocation.md`, "What the hub speaks") |
 | `directories` | `directories`, an array of strings, the names of the subdirectories the path holds, sorted, and `path` (string), the absolute path listed, `~/` expanded, over the hub (`docs/invocation.md`, "The hub") |
 | `status` | `running` (boolean, always true), `fiber_version` (string), `clients` (integer, the open connections, the asker included) and `variables` (object, as `session_started` carries it: the environment sessions the hub starts now get), over the hub (`docs/invocation.md`, "The hub") |
-| `stop` | `sessions_stopped` (integer, the sessions that confirmed closed), with `sessions` true; `result` is absent without `sessions`, over the hub (`docs/invocation.md`, "The hub") |
+| `stop` | `sessions_stopped` (integer, the sessions that confirmed closed) and `keepers_stopped` (integer, the keepers that confirmed stopped; absent on old hubs and read as zero), with `sessions` true; `result` is absent without `sessions`, over the hub (`docs/invocation.md`, "The hub") |
+| `stop_keepers` | `keepers_stopped` (integer, the keepers that confirmed stopped), over the hub (`docs/invocation.md`, "What the hub speaks") |
 | `placeholder_env` | `values` (object, the hub's captured value by requested placeholder name, absent names omitted, never logged), over the hub (`docs/invocation.md`, "What the hub speaks") |
 | `call` | `value` (any JSON value, absent when the call returns nothing), what the Lua call returns (`docs/extensions.md`, "Process extensions") |
 
@@ -1558,6 +1598,19 @@ A workspace move to the folder the session is already in answers:
 ```json
 {"kind":"command_rejected","session_id":"s_aaaaaaaaaaaaaaaa","ts":0,"schema_version":1,"payload":{"command_id":"c_cd","code":"invalid_arguments","message":"already in that folder"}}
 ```
+
+## Hub feed
+
+#### `keepers`
+
+Ephemeral. The hub feed's keeper set, for a client that counts the keepers
+of gone sessions: every keeper-held `run/` entry the hub's probe confirms,
+in id order, empty when none. Written when the set changes, and once to every
+new feed subscriber; the latest wins.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `keepers` | array of strings | yes | the keeper-held session ids, in id order; empty when none |
 
 ## Resume
 
@@ -1578,8 +1631,9 @@ What the reader can tell about work that was in flight, from the log alone:
 | `shell_command_started`, no `shell_command` | the session ended before the run's end was written: the process died, or the run outlived the shutdown's last drain; Fiber never re-runs it, and nothing from it joins the next turn's input |
 | `tool_call_started`, no `tool_call_completed` | uncertain; Fiber never re-runs it, and the model is told its outcome is unknown, unless a `fiber_exited` with `suspended_on` names an `interaction_requested` with `resumes: true` that call raised: the call was waiting on the person, and resuming runs it again, with no second `tool_call_started`, so it raises the request again |
 | `tool_call_completed` | ran, with its outcome |
-| `job_started`, no `job_completed`, no keeper answers | the job's keeper died, or the session had none; on open Fiber writes `job_completed` with `status: failed` and `error.code: orphaned`, except for a Fiber delegate whose own log's latest run holds `fiber_exited`, which is settled from it |
-| `job_started`, no `job_completed`, the keeper answers | the job is still running under the keeper; the resumed session takes it back (`docs/tools.md`, "The keeper") |
+| non-detached `job_started`, no `job_completed`, no keeper answers | the job's keeper died, or the session had none; on open Fiber writes `job_completed` with `status: failed` and `error.code: orphaned`, except for a Fiber delegate whose own log's latest run holds `fiber_exited`, which is settled from it |
+| non-detached `job_started`, no `job_completed`, the keeper answers | the job is still running under the keeper; the resumed session takes it back (`docs/tools.md`, "The keeper") |
+| detached `job_started`, no later `job_completed` | Fiber restores a live process group with a recorded process-group ID before exposing tools. A contradicted identity, missing ID or dead group is dropped silently; a missing or unreadable leader identity stays listed and requires review to stop. Detached jobs are not orphan-completed, and their in-memory end writes no synthetic `job_completed` or completion notice (`docs/tools.md`, "Background jobs") |
 | `job_completed` written while the session was gone | the keeper wrote it; the model is sent it with the next turn |
 | `turn_started`, no `turn_completed` | the turn was cut short; render what was logged and say so, unless a `fiber_exited` with `suspended_on` follows, in which case the turn resumes with the request raised again |
 | `fiber_started`, no `fiber_exited`, `rewound` or `moved` after it | that process died rather than exited |
@@ -1587,11 +1641,12 @@ What the reader can tell about work that was in flight, from the log alone:
 | `compaction_started`, no `compaction_completed` | the process died during a compaction; the compaction did not take effect, and the model's context is what it was before it |
 
 A resume takes the log back from the keeper before it opens the log
-(`docs/tools.md`, "The keeper"), so a job the keeper ran is either completed in
-the log or still running. On open, Fiber writes `orphaned` only for a job no
-keeper accounts for, and does not touch any process: with no keeper, Fiber
-cannot know whether the job finished or still runs, and the status is not
-`cancelled`.
+(`docs/tools.md`, "The keeper"), so a non-detached job the keeper ran is either
+completed in the log or still running. On open, Fiber writes `orphaned` only
+for a non-detached job no keeper accounts for, and does not touch any process:
+with no keeper, Fiber cannot know whether the job finished or still runs, and
+the status is not `cancelled`. Detached rows are selected separately by their
+`kind` and re-probed; Fiber never writes an orphan completion for them.
 
 Fiber re-runs no call a crash left without a result, even one that only reads.
 The turn it belonged to ended with the crash, so a re-run would answer the

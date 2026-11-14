@@ -4,11 +4,21 @@
 
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::ErrorCode;
 use crate::events::{
     DelegateFinished, DelegateStarted, JobCompleted, JobLine, JobStarted, Outcome,
 };
+
+/// The process group and leader identity of a process a session started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JobIdentity {
+    /// The process group id.
+    pub pgid: u32,
+    /// Opaque start-time token, compared only for equality.
+    pub start_time: u64,
+}
 
 /// What opening a job asks for. The opener supplies [`Stop`]; the registry
 /// mints the id and the output file.
@@ -24,6 +34,10 @@ pub struct Opening {
     /// The job delivers lines to the model: true only for a monitor
     /// (`docs/tools.md`, "Background jobs").
     pub lines: bool,
+    /// Process identity, when the opener owns a spawned child.
+    pub identity: Option<JobIdentity>,
+    /// Recorded output path for a detached process; it has no job output file.
+    pub detached: Option<PathBuf>,
 }
 
 /// Sends one batch of a monitor's lines to the model. The job's drive
@@ -112,6 +126,22 @@ impl fmt::Debug for End {
     }
 }
 
+/// The worktree a run ends, or only reports when resuming.
+#[derive(Debug, Clone)]
+pub struct EndWorktree {
+    /// The worktree directory.
+    pub path: PathBuf,
+    /// The recorded branch.
+    pub branch: String,
+    /// The initial commit, absent on resumed runs.
+    pub base: Option<String>,
+    /// Whether this runner owns removal.
+    pub remove: bool,
+}
+
+/// Inspects, optionally removes, and reports a worktree at run end.
+pub type FinishWorktree = Arc<dyn Fn(EndWorktree) -> crate::events::FinishedWorktree + Send + Sync>;
+
 /// Opens a running job. `jobs::Registry` and test fakes both implement it,
 /// so `tools` can move a command without depending on `jobs`
 /// (`docs/architecture.md`, "The call rules").
@@ -132,6 +162,13 @@ pub trait Jobs: Send + Sync {
     /// Registers a running foreground call. Held weakly: the call holds the
     /// strong reference while it runs in the foreground.
     fn foreground(&self, call: Foreground);
+
+    /// The process identities this session started and can still confirm.
+    // The default body is already `Vec::new()`; replacing it with `vec![]` is equivalent.
+    #[cfg_attr(false, mutants::skip)]
+    fn owned_identities(&self) -> Vec<JobIdentity> {
+        Vec::new()
+    }
 
     /// The jobs still running, in start order. A job's end is sent to the
     /// inbox before this stops listing it, so once a job is gone from here

@@ -12,19 +12,17 @@
 //!   `library_specs` are `name@version` (for `cargo -p`, which resolves a
 //!   bare name against the whole dependency graph and can be ambiguous), and
 //!   `extension_packages` are first-party package directories with cases
-//! - `plan --base REV --mode M --packages "A B" --event E --draft true|false --bug true|false --mutants true|false --mutant-count N`:
+//! - `plan --base REV --mode M --packages "A B" --event E --draft true|false --bug true|false --mutant-count N [--labels "L1 L2" --lookup-ok true|false --head H --run-id R --runs FILE --jobs DIR --pr N]`:
 //!   which CI jobs run, the mutant shards and each shard's time limit,
 //!   as `key=value` lines
+//! - `plan reuse-candidates --runs FILE`: prints unique run IDs from the raw
+//!   Actions runs response, one per line; invalid input is an error
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
 //!   if every selected job passed and every other job was skipped. With the
 //!   `HEAD_FAILURES` file plus the `BASE_LIST`, `BASE_FAILED` and
 //!   `BASE_EXECUTED` files set, a failed `test_linux` leg fails only on the
 //!   tests the head newly broke against the base commit
 //!   (`docs/ci.md`, "On every pull request that changes code").
-//! - `mutants-reuse --pr N --head H --base B --mutant-count C --run-id R --draft true|false --runs FILE --jobs FILE`:
-//!   prints `reuse=true` plus the matched run id and PR-entry head sha when
-//!   an earlier completed run on the same pull request, head and base passed
-//!   every mutants shard, else `reuse=false`
 //! - `ticket`: the resolved issue the pull request body on stdin prints: the
 //!   only one, or with several the first one labelled `bug`, else the first
 //! - `bug-filter FILE...`: the nextest filter and packages for the test files among FILE,
@@ -150,8 +148,10 @@ mod ci_needs;
 mod doc_citations;
 mod docs;
 mod flake_report;
+mod journey_streak;
 mod logo;
 mod models_dev;
+mod models_dev_corrections;
 mod models_dev_table;
 mod must_succeed;
 mod narrating_comments;
@@ -170,6 +170,7 @@ mod ticket;
 mod visibility;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, ExitCode};
@@ -197,6 +198,7 @@ fn run(args: &[String]) -> Result<bool, String> {
         .split_first()
         .ok_or("usage: cargo xtask <command>; see xtask/src/main.rs")?;
     match command.as_str() {
+        "journey-streak" => journey_streak::run(rest),
         "select" => {
             let members = workspace_members()?;
             let selection = select::classify(&changed_files(&flag(rest, "--base")?)?, &members);
@@ -222,6 +224,14 @@ fn run(args: &[String]) -> Result<bool, String> {
             }
             Ok(true)
         }
+        "plan" if rest.first().is_some_and(|arg| arg == "reuse-candidates") => {
+            let candidate_args = rest.get(1..).ok_or("missing reuse-candidates arguments")?;
+            let runs = read(&flag(candidate_args, "--runs")?)?;
+            for id in select::reuse_candidate_ids(&runs).ok_or("invalid runs response")? {
+                println!("{id}");
+            }
+            Ok(true)
+        }
         "plan" => {
             let packages: Vec<String> = flag(rest, "--packages")?
                 .split_whitespace()
@@ -229,20 +239,49 @@ fn run(args: &[String]) -> Result<bool, String> {
                 .collect();
             let draft = flag(rest, "--draft")? == "true";
             let bug = flag(rest, "--bug")? == "true";
-            let mutants = flag(rest, "--mutants")? == "true";
             let mutant_count: u64 = flag(rest, "--mutant-count")?
                 .parse()
                 .map_err(|e| format!("--mutant-count: {e}"))?;
-            let release_paths = release_paths(&flag(rest, "--base")?)?;
+            let base = flag(rest, "--base")?;
+            let release_paths = release_paths(&base)?;
+            let changed_paths = plan_changed_paths(&base)?;
+            let event = flag(rest, "--event")?;
+            let labels: Vec<String> = optional(rest, "--labels")
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect();
+            let reuse = reuse_match_for_plan(rest, &event, draft, mutant_count, &base);
             let plan = select::plan(
                 &flag(rest, "--mode")?,
                 &packages,
-                &flag(rest, "--event")?,
+                &event,
                 draft,
                 bug,
-                mutants,
-                mutant_count,
+                select::MutantPlanInput {
+                    labels,
+                    count: mutant_count,
+                    reuse: reuse.clone(),
+                },
             );
+            let bug_red_was_selected = plan.jobs.get("bug_red") == Some(&true);
+            let body = optional(rest, "--pr-body").unwrap_or_default();
+            let plan = select::plan_with_budget_breach_body(plan, bug, &body);
+            let budget_breach = bug_red_was_selected && plan.jobs.get("bug_red") == Some(&false);
+            if budget_breach && let Some(summary) = std::env::var_os("GITHUB_STEP_SUMMARY") {
+                use std::io::Write;
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(summary)
+                    .map_err(|e| format!("GITHUB_STEP_SUMMARY: {e}"))?;
+                writeln!(
+                    file,
+                    "Budget breach exemption: bug-red legs skipped; reviewers judge Base/Head measurements."
+                )
+                .map_err(|e| format!("GITHUB_STEP_SUMMARY: {e}"))?;
+            }
+            let plan =
+                select::plan_with_changed_paths(plan, event == "pull_request", &changed_paths);
             let shards: Vec<u64> = (0..plan.shards).collect();
             println!(
                 "jobs={}",
@@ -253,7 +292,19 @@ fn run(args: &[String]) -> Result<bool, String> {
                 ))
             );
             println!("shards={}", Value::from(shards));
+            println!("mutants={}", plan.shards > 0);
+            match reuse {
+                Some(matched) => {
+                    println!("reuse=true");
+                    println!("matched_run_id={}", matched.run_id);
+                    println!("matched_pr_head={}", matched.pr_head.0);
+                }
+                None => println!("reuse=false"),
+            }
             println!("shard_total={}", plan.shards);
+            if budget_breach {
+                println!("budget_breach=true");
+            }
             println!(
                 "shard_timeout={}",
                 select::shard_timeout_minutes(mutant_count)
@@ -270,20 +321,6 @@ fn run(args: &[String]) -> Result<bool, String> {
                 "base_skip={}",
                 select::base_rows_skipped(&flag(rest, "--event")?, &release_paths).join(",")
             );
-            Ok(true)
-        }
-        "mutants-reuse" => {
-            let current = reuse_current(rest)?;
-            let runs = read(&flag(rest, "--runs")?)?;
-            let jobs = read(&flag(rest, "--jobs")?)?;
-            match select::matched_reuse(&current, &runs, &jobs) {
-                Some(matched) => {
-                    println!("reuse=true");
-                    println!("matched_run_id={}", matched.run_id);
-                    println!("matched_pr_head={}", matched.pr_head.0);
-                }
-                None => println!("reuse=false"),
-            }
             Ok(true)
         }
         "verdict" => {
@@ -907,26 +944,29 @@ fn read(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
 }
 
-/// The reuse decision's scalar flags for `mutants-reuse`.
-fn reuse_current(args: &[String]) -> Result<select::ReuseCurrent, String> {
-    Ok(select::ReuseCurrent {
-        pr: select::ReusePullRequestNumber(
-            flag(args, "--pr")?
-                .parse()
-                .map_err(|e| format!("--pr: {e}"))?,
-        ),
-        head: select::ReuseCommitSha(flag(args, "--head")?),
-        base: select::ReuseCommitSha(flag(args, "--base")?),
-        mutant_count: flag(args, "--mutant-count")?
-            .parse()
-            .map_err(|e| format!("--mutant-count: {e}"))?,
-        run_id: select::ReuseRunId(
-            flag(args, "--run-id")?
-                .parse()
-                .map_err(|e| format!("--run-id: {e}"))?,
-        ),
-        draft: flag(args, "--draft")? == "true",
-    })
+/// Looks up a reusable mutants pass from optional API output. Any absent or
+/// unreadable input is a failed lookup and returns no match.
+fn reuse_match_for_plan(
+    args: &[String],
+    event: &str,
+    draft: bool,
+    mutant_count: u64,
+    base: &str,
+) -> Option<select::MatchedReuse> {
+    if event != "pull_request" || optional(args, "--lookup-ok").as_deref() != Some("true") {
+        return None;
+    }
+    let current = select::ReuseCurrent {
+        pr: select::ReusePullRequestNumber(optional(args, "--pr")?.parse().ok()?),
+        head: select::ReuseCommitSha(optional(args, "--head")?),
+        base: select::ReuseCommitSha(base.to_owned()),
+        mutant_count,
+        run_id: select::ReuseRunId(optional(args, "--run-id")?.parse().ok()?),
+        draft,
+    };
+    let runs = std::fs::read_to_string(optional(args, "--runs")?).ok()?;
+    let jobs_dir = optional(args, "--jobs")?;
+    select::matched_reuse_files(&current, &runs, Path::new(&jobs_dir))
 }
 
 /// The contents of the file the `name` environment variable points at: `None`
@@ -1007,11 +1047,15 @@ fn git_lines(args: &[&str]) -> Result<Vec<String>, String> {
 
 /// Files that differ from the merge base with `base`, uncommitted and
 /// untracked changes included.
-fn changed_files(base: &str) -> Result<Vec<String>, String> {
-    let merge_base = git_lines(&["merge-base", base, "HEAD"])?
+fn merge_base(base: &str) -> Result<String, String> {
+    git_lines(&["merge-base", base, "HEAD"])?
         .into_iter()
         .next()
-        .ok_or("no merge base")?;
+        .ok_or_else(|| "no merge base".to_owned())
+}
+
+fn changed_files(base: &str) -> Result<Vec<String>, String> {
+    let merge_base = merge_base(base)?;
     let mut files: BTreeSet<String> = git_lines(&["diff", "--name-only", &merge_base])?
         .into_iter()
         .collect();
@@ -1019,15 +1063,42 @@ fn changed_files(base: &str) -> Result<Vec<String>, String> {
     Ok(files.into_iter().collect())
 }
 
+/// The head diff's paths and current contents for the Select trigger rules.
+/// A missing path is a deletion; a path whose contents cannot be read stays
+/// present with no readable content, so it cannot match `target_os`.
+fn plan_changed_paths(base: &str) -> Result<Vec<select::ChangedPath>, String> {
+    let merge_base = merge_base(base)?;
+    let paths = split_nul(&output(
+        "git",
+        &[
+            "diff",
+            "--name-only",
+            "-M",
+            "-z",
+            &format!("{merge_base}..HEAD"),
+        ],
+    )?);
+    Ok(paths
+        .into_iter()
+        .map(|path| {
+            let state = match fs::read(&path) {
+                Ok(contents) => select::PathState::Present(Some(contents)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    select::PathState::Deleted
+                }
+                Err(_) => select::PathState::Present(None),
+            };
+            select::ChangedPath { path, state }
+        })
+        .collect())
+}
+
 /// Paths for the release rule from the merge base with `base`: committed
 /// changes with renames reported as both endpoints, plus untracked files.
 /// Both reads are NUL-delimited, so non-ASCII paths arrive literally,
 /// never git-quoted; a non-UTF-8 path fails with an error, never a skip.
 fn release_paths(base: &str) -> Result<Vec<String>, String> {
-    let merge_base = git_lines(&["merge-base", base, "HEAD"])?
-        .into_iter()
-        .next()
-        .ok_or("no merge base")?;
+    let merge_base = merge_base(base)?;
     let mut files: BTreeSet<String> = BTreeSet::new();
     files.extend(split_nul(&output(
         "git",

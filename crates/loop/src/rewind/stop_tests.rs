@@ -49,6 +49,10 @@ fn started(id: &str, description: &str) -> Event {
         extension: None,
         description: description.into(),
         output_path: "/tmp/out".into(),
+
+        pgid: None,
+        start_time: None,
+        kind: None,
     })
 }
 

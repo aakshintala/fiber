@@ -346,19 +346,17 @@ pub(crate) fn install_picker_provider(setup: &Setup, server: &ProviderServer) {
             ],
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    super::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "fake/alpha-1", "hub": {"idle_exit_ms": 200}, "tui": tui_off()}),
+        &json!({"model": "fake/alpha-1", "model_lists": {"models_dev": false}, "hub": {"idle_exit_ms": 200}, "tui": tui_off()}),
     );
 }
 
@@ -391,17 +389,15 @@ pub(crate) fn provider_full(
             "models": [model]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    super::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
-    let mut config = json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}, "tui": tui_off()});
+        None,
+    );
+    let mut config = json!({"model": "fake/m", "model_lists": {"models_dev": false}, "hub": {"idle_exit_ms": 1000}, "tui": tui_off()});
     for (key, value) in extra_config.as_object().unwrap() {
         if key != "tui" {
             config[key] = value.clone();

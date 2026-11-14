@@ -151,7 +151,7 @@ fn ordinary_package_loads_only_in_a_and_repository_cannot_enable_it_in_b() {
                     .unwrap();
             assert_eq!(
                 global,
-                json!({"model":"fake/m", "extensions":{"acme":{"enabled":false}}})
+                json!({"model":"fake/m", "model_lists":{"models_dev":false}, "extensions":{"acme":{"enabled":false}}})
             );
             assert!(!a.join(".fiber").exists());
             assert!(!b.join(".fiber").exists());
@@ -224,7 +224,7 @@ fn scoped_provider_data_is_available_in_b_despite_the_packages_global_switch() {
                     .unwrap();
             assert_eq!(
                 global,
-                json!({"model":"fake/m", "extensions":{"opencode":{"enabled":false}}})
+                json!({"model":"fake/m", "model_lists":{"models_dev":false}, "extensions":{"opencode":{"enabled":false}}})
             );
             let global_key = command(
                 &setup,

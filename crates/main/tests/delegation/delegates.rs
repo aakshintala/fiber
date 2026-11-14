@@ -31,6 +31,12 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
+use contract::events::{
+    DelegateStarted, Event, EventKind, FiberExited, FiberStarted, FinalMessage, JobStarted, Parent,
+    SessionStarted, Variables, VariablesSource,
+};
+use contract::shapes::{Usage, Worktree};
+use contract::{ActionId, JobId, SessionId};
 use extension_harness::{send, until_session, until_session_close};
 use fakes::{ProviderServer, Request, Response, Watchdog};
 use serde_json::{Value, json};
@@ -11290,4 +11296,242 @@ fn delegate_admission_forked_run_takes_a_message_and_exits_with_a_client_attache
     });
     drop(socket);
     quit(run);
+}
+
+/// A seeded orphan and its exited delegate: the sessions directory holding
+/// both logs, the parent session id, the delegate's job, and the recorded
+/// worktree's canonicalized path and branch.
+struct SeededDelegate {
+    sessions: PathBuf,
+    parent: String,
+    job: String,
+    worktree: String,
+    branch: String,
+}
+
+/// The parent's opening line: this workspace, no parent, no worktree.
+fn seeded_parent_started(workspace: &str) -> Event {
+    Event::SessionStarted(SessionStarted {
+        workspace: workspace.into(),
+        variables: Variables {
+            path: String::new(),
+            names: Vec::new(),
+            source: VariablesSource::Inherited,
+        },
+        parent: None,
+        forked_from: None,
+        rewind: None,
+        worktree: None,
+        supervised: false,
+    })
+}
+
+/// The parent's job line for the delegate spawn: started, never completed.
+fn seeded_job_started(job: &str) -> Event {
+    Event::JobStarted(JobStarted {
+        job_id: JobId(job.into()),
+        tool: Some("delegate_spawn".into()),
+        extension: None,
+        description: "scan".into(),
+        output_path: format!("artifacts/{job}.log"),
+
+        pgid: None,
+        start_time: None,
+        kind: None,
+    })
+}
+
+/// The parent's delegate line: an isolated Fiber delegate on the configured
+/// model, carrying the recorded worktree without its repository, as a
+/// delegate event does.
+fn seeded_delegate_started(job: &str, child: &str, worktree: &str, branch: &str) -> Event {
+    Event::DelegateStarted(DelegateStarted {
+        job_id: JobId(job.into()),
+        delegate_session_id: SessionId(child.into()),
+        harness: "fiber".into(),
+        model: "fake/m".into(),
+        workspace: worktree.into(),
+        worktree: Some(Worktree {
+            path: worktree.into(),
+            branch: branch.into(),
+            repository: None,
+        }),
+        forked_from: None,
+    })
+}
+
+/// The child's opening line: the delegate's own worktree with its path,
+/// branch and repository, parented to the seeding session.
+fn seeded_child_started(
+    worktree: &str,
+    branch: &str,
+    repository: &str,
+    parent: &str,
+    job: &str,
+) -> Event {
+    Event::SessionStarted(SessionStarted {
+        workspace: worktree.into(),
+        variables: Variables {
+            path: String::new(),
+            names: Vec::new(),
+            source: VariablesSource::Inherited,
+        },
+        parent: Some(Parent {
+            session_id: SessionId(parent.into()),
+            delegate_id: JobId(job.into()),
+        }),
+        forked_from: None,
+        rewind: None,
+        worktree: Some(Worktree {
+            path: worktree.into(),
+            branch: branch.into(),
+            repository: Some(repository.into()),
+        }),
+        supervised: false,
+    })
+}
+
+/// The child's clean exit with its final message, as its writer left it.
+fn seeded_child_exit() -> Event {
+    Event::FiberExited(FiberExited {
+        exit_code: 0,
+        usage: Usage::default(),
+        final_message: Some(FinalMessage {
+            final_action_id: ActionId("a_1".into()),
+            text: "seeded finish".into(),
+        }),
+        error: None,
+        suspended_on: None,
+        questions: None,
+    })
+}
+
+/// Stages an orphaned isolated delegate and its exited child on disk: a
+/// repository workspace with a clean linked worktree, a parent log holding
+/// the spawn's start lines and no completion, and a child log ending in a
+/// clean exit. No process runs, so no keeper can complete the job: the
+/// resume settles it from the child's log (`docs/delegates.md`, "Lifetime").
+fn seed_isolated_delegate(setup: &support::Setup) -> SeededDelegate {
+    let workspace = fs::canonicalize(setup.workspace()).unwrap();
+    fakes::git::git(&workspace, &["init", "--quiet"]);
+    fs::write(workspace.join("base.txt"), "parent repository").unwrap();
+    fakes::git::git(&workspace, &["add", "."]);
+    fakes::git::git(&workspace, &["commit", "--quiet", "-m", "base"]);
+    let parent = doors::mint("s_");
+    let child = doors::mint("s_");
+    let job = doors::mint("j_");
+    let branch = format!("fiber/{child}");
+    let raw = setup.root.path().join("wt").to_string_lossy().into_owned();
+    fakes::git::git(&workspace, &["worktree", "add", "-b", &branch, &raw]);
+    let worktree = fs::canonicalize(&raw)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let repository = worktree::project(&workspace).to_string_lossy().into_owned();
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&workspace));
+    let parent_log = log::Log::create(
+        &sessions,
+        SessionId(parent.clone()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    parent_log
+        .append(
+            &seeded_parent_started(&workspace.to_string_lossy()),
+            None,
+            None,
+        )
+        .unwrap();
+    parent_log
+        .append(&seeded_job_started(&job), None, None)
+        .unwrap();
+    parent_log
+        .append(
+            &seeded_delegate_started(&job, &child, &worktree, &branch),
+            None,
+            None,
+        )
+        .unwrap();
+    let child_log = log::Log::create(
+        &sessions,
+        SessionId(child.clone()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    child_log
+        .append(
+            &seeded_child_started(&worktree, &branch, &repository, &parent, &job),
+            None,
+            None,
+        )
+        .unwrap();
+    child_log
+        .append(
+            &Event::FiberStarted(FiberStarted {
+                version: "0.0.0".into(),
+                resumed: false,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    child_log.append(&seeded_child_exit(), None, None).unwrap();
+    // Both locks release before the resume starts, so its first pass finds
+    // them free.
+    drop(parent_log);
+    drop(child_log);
+    SeededDelegate {
+        sessions,
+        parent,
+        job,
+        worktree,
+        branch,
+    }
+}
+
+#[test]
+fn a_resumed_parent_settles_a_seeded_isolated_delegate() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let seeded = seed_isolated_delegate(&setup);
+    // No keeper ever ran, so nothing could have completed the job: the log
+    // holds the spawn's start lines and no completion.
+    let staged = log::read(&seeded.sessions.join(&seeded.parent)).unwrap();
+    assert!(
+        staged
+            .iter()
+            .all(|line| line.kind() != EventKind::JobCompleted),
+        "the staged parent holds no completion"
+    );
+    // The resume settles the child's recorded exit: the settled finish
+    // reports the recorded worktree's path and branch with the shared
+    // inspection's dirty bit, and the paired completion carries the clean
+    // exit. The settle reports only, so the worktree directory still stands
+    // after the resume (`docs/delegates.md`, "Worktrees"). Every wait below
+    // rides the one setup deadline (`docs/testing.md`, "Waits and timeouts").
+    let mut resumed = Running::start(&setup, &seeded.parent, &["--resume"]);
+    let settled = resumed.wait_line("the settled finish", |line| {
+        line["kind"] == "delegate_finished" && line["payload"]["job_id"] == seeded.job
+    });
+    let finished = settled.last().unwrap();
+    assert_eq!(finished["payload"]["worktree"]["path"], seeded.worktree);
+    assert_eq!(finished["payload"]["worktree"]["branch"], seeded.branch);
+    assert_eq!(finished["payload"]["text"], "seeded finish");
+    assert_eq!(finished["payload"]["worktree"]["dirty"], false);
+    let completed = resumed.wait_line("the settled completion", |line| {
+        line["kind"] == "job_completed" && line["payload"]["job_id"] == seeded.job
+    });
+    let completed = completed.last().unwrap();
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert!(
+        Path::new(&seeded.worktree).exists(),
+        "the settle reports only: the worktree stands"
+    );
+    let client = resumed.connect(&setup);
+    support::subscribe_direct(&client);
+    close_now(&client);
+    let _tail = support::until_close(&client);
+    drop(client);
+    let (status, _, stderr) = resumed.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
 }

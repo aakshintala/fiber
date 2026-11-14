@@ -24,6 +24,8 @@ use support::{Setup, TRUECOLOUR};
 const ATTENTION: Colour = Colour::Rgb(255, 159, 67);
 const INFO: Colour = Colour::Rgb(125, 211, 252);
 const SURFACE: Colour = Colour::Rgb(26, 26, 34);
+/// The dark page: the panel tint (`docs/tui.md`, "Themes").
+const PAGE: Colour = Colour::Rgb(12, 12, 17);
 
 /// The working line's spinner frames (`docs/tui.md`, "The working line").
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -266,14 +268,14 @@ fn box_around(text: &[String], y: u16, x: u16) -> Option<(u16, u16, u16, u16)> {
 
 /// The box's fill: every text row between its edges is surface background
 /// edge to edge, and both edge runs are the surface colour over the
-/// surrounding background (`docs/tui.md`, "The input box", "Look").
+/// page's panel tint (`docs/tui.md`, "The input box", "Look").
 fn assert_fill(grid: &Grid, y: u16, x: u16, what: &str) {
     let (top, bottom, left, right) = box_around(&grid.rows, y, x).expect(what);
     for edge in [top, bottom] {
         for x in left..=right {
             let cell = grid.cell(x, edge);
             assert_eq!(cell.fg, SURFACE, "{what} edge ({x}, {edge})");
-            assert_eq!(cell.bg, Colour::Default, "{what} edge ({x}, {edge})");
+            assert_eq!(cell.bg, PAGE, "{what} edge ({x}, {edge})");
         }
     }
     for row in top + 1..bottom {

@@ -742,8 +742,8 @@ fn up_and_down_stop_at_the_ends() {
     press(&mut queue, Key::Down, 5);
     assert_eq!(answer(&mut queue)["args"]["decision"], "deny");
     queue.fold(&offering(S_A, "r_2"));
-    press(&mut queue, Key::Down, 5);
-    press(&mut queue, Key::Up, 2);
+    press(&mut queue, Key::Down, 4);
+    press(&mut queue, Key::Up, 3);
     assert_eq!(answer(&mut queue)["args"]["remember"]["scope"], "session");
     queue.fold(&offering(S_A, "r_3"));
     press(&mut queue, Key::Down, 1);
@@ -1103,6 +1103,14 @@ mod through_the_app {
                 assert_eq!(lines.len(), 1);
                 lines.into_iter().next().unwrap_or_default()
             }
+            Effect::SendTracked(sents) => {
+                assert_eq!(sents.len(), 1);
+                sents
+                    .into_iter()
+                    .next()
+                    .map(|sent| sent.line)
+                    .unwrap_or_default()
+            }
             Effect::None
             | Effect::Quit
             | Effect::ListFiles
@@ -1111,7 +1119,7 @@ mod through_the_app {
             | Effect::FindPause { .. }
             | Effect::Search { .. }
             | Effect::Editor { .. }
-            | Effect::Exit(_)
+            | Effect::ExitTracked(_)
             | Effect::Copy(_)
             | Effect::OpenLink(_)
             | Effect::OpenFile(_) => {
@@ -1683,4 +1691,382 @@ fn queue_fold_reads_requests_through_the_borrowed_decoder() {
     ] {
         assert!(panel(&folded(&[line])).is_empty(), "no panel opens");
     }
+}
+
+/// A standing ask on `prefix` whose request carries the rewrite `keys`
+/// (`arguments` and/or `changed_by`) beside the request id. The builders
+/// send raw JSON payloads, so the request decodes before the card reads
+/// the new keys.
+fn rewrite_ask(
+    session: &str,
+    action: &str,
+    id: &str,
+    prefix: &str,
+    rewrite: serde_json::Value,
+) -> contract::Envelope {
+    let mut keys = serde_json::json!({"step": "standing_ask",
+        "standing_rule": {"scope": "global", "prefix": prefix}});
+    if let (Some(into), Some(from)) = (keys.as_object_mut(), rewrite.as_object()) {
+        into.extend(from.clone());
+    }
+    request(session, action, id, keys)
+}
+
+/// A read of `path` the guard rewrote to `rewritten`, named by
+/// `changed_by`.
+fn rewritten_read(
+    path: &str,
+    rewritten: &str,
+    changed_by: serde_json::Value,
+) -> Vec<contract::Envelope> {
+    vec![
+        call(S_A, "a_1", "read", serde_json::json!({"path": path})),
+        rewrite_ask(
+            S_A,
+            "a_1",
+            "r_1",
+            "read",
+            serde_json::json!({"arguments": {"path": rewritten}, "changed_by": changed_by}),
+        ),
+    ]
+}
+
+/// No dim run on the tool row.
+fn no_tool_mark(shown: &Panel) {
+    assert!(
+        shown
+            .marks
+            .iter()
+            .all(|mark| mark.line != 1 || mark.style != dim_style()),
+        "no dim mark on the tool row, in {:?}",
+        shown.marks
+    );
+}
+
+#[test]
+fn an_approval_rewrite_shows_the_rewritten_summary() {
+    let queue = folded(&rewritten_read(
+        "a.txt",
+        "b.txt",
+        serde_json::json!(["fiber.test/guard"]),
+    ));
+    let shown = rendered(&queue);
+    let facts = "runs a command · asked by the global rule read";
+    assert_eq!(
+        shown.lines,
+        vec![
+            header_text(1, 1, S_A),
+            "read b.txt · via fiber.test/guard".to_owned(),
+            facts.to_owned(),
+            String::new(),
+            "▸ 1 Allow once".to_owned(),
+            "  2 Deny  type to add feedback".to_owned(),
+            String::new(),
+            HINT.to_owned(),
+        ]
+    );
+    assert!(!shown.alert);
+    assert_eq!(shown.caret, None);
+    assert_eq!(
+        shown.marks,
+        vec![
+            mark(0, 0..15, head_style()),
+            mark(0, 15..37, session_style()),
+            mark(0, 64..81, dim_style()),
+            mark(1, 0..4, tool_style()),
+            mark(1, 5..10, bold_style()),
+            mark(1, 10..34, dim_style()),
+            mark(2, 0..facts.len(), dim_style()),
+            mark(4, 0..4, focus_style()),
+            mark(4, 4..5, dim_style()),
+            mark(4, 6..16, bold_style()),
+            mark(5, 2..3, dim_style()),
+            mark(5, 8..30, dim_style()),
+            mark(7, 0..HINT.len(), dim_style()),
+        ]
+    );
+}
+
+#[test]
+fn an_approval_rewrite_ends_the_tool_row_with_the_dim_via_names() {
+    let queue = folded(&rewritten_read(
+        "a.txt",
+        "b.txt",
+        serde_json::json!(["fiber.test/guard"]),
+    ));
+    let shown = rendered(&queue);
+    let line = "read b.txt · via fiber.test/guard";
+    assert_eq!(shown.lines[1], line);
+    assert!(
+        shown.marks.contains(&mark(1, 0..4, tool_style())),
+        "the bold tool, in {:?}",
+        shown.marks
+    );
+    assert!(
+        shown.marks.contains(&mark(1, 5..10, bold_style())),
+        "the bold rewritten summary, in {:?}",
+        shown.marks
+    );
+    assert!(
+        shown.marks.contains(&mark(1, 10..line.len(), dim_style())),
+        "the dim via mark ending the row, in {:?}",
+        shown.marks
+    );
+}
+
+#[test]
+fn an_approval_rewrite_without_changed_by_draws_no_mark() {
+    for rewrite in [
+        serde_json::json!({"arguments": {"path": "b.txt"}}),
+        serde_json::json!({"arguments": {"path": "b.txt"}, "changed_by": []}),
+    ] {
+        let queue = folded(&[
+            call(S_A, "a_1", "read", serde_json::json!({"path": "a.txt"})),
+            rewrite_ask(S_A, "a_1", "r_1", "read", rewrite),
+        ]);
+        let shown = rendered(&queue);
+        assert_eq!(shown.lines[1], "read b.txt");
+        no_tool_mark(&shown);
+    }
+}
+
+#[test]
+fn an_approval_rewrite_changed_by_without_arguments_changes_nothing() {
+    let queue = folded(&[
+        call(S_A, "a_1", "read", serde_json::json!({"path": "a.txt"})),
+        rewrite_ask(
+            S_A,
+            "a_1",
+            "r_1",
+            "read",
+            serde_json::json!({"changed_by": ["fiber.test/guard"]}),
+        ),
+    ]);
+    let shown = rendered(&queue);
+    assert_eq!(shown.lines[1], "read a.txt");
+    no_tool_mark(&shown);
+}
+
+#[test]
+fn an_approval_rewrite_old_request_without_keys_shows_the_requested_summary() {
+    let queue = folded(&[
+        call(S_A, "a_1", "read", serde_json::json!({"path": "a.txt"})),
+        standing_ask(S_A, "a_1", "r_1", "read"),
+    ]);
+    let shown = rendered(&queue);
+    assert_eq!(shown.lines[1], "read a.txt");
+    no_tool_mark(&shown);
+}
+
+#[test]
+fn an_approval_rewrite_reraise_replaces_the_rewrite_and_keeps_typed_text() {
+    let mut queue = folded(&rewritten_read(
+        "a.txt",
+        "b.txt",
+        serde_json::json!(["fiber.test/guard"]),
+    ));
+    for ch in "note".chars() {
+        press(&mut queue, Key::Char(ch), 1);
+    }
+    queue.fold(&rewrite_ask(
+        S_A,
+        "a_1",
+        "r_1",
+        "read",
+        serde_json::json!({"arguments": {"path": "c.txt"}, "changed_by": ["fiber.test/other"]}),
+    ));
+    let shown = rendered(&queue);
+    assert_eq!(shown.lines[1], "read c.txt · via fiber.test/other");
+    assert!(
+        shown
+            .marks
+            .contains(&mark(1, 10..shown.lines[1].len(), dim_style())),
+        "the latest names, in {:?}",
+        shown.marks
+    );
+    assert_eq!(row(&queue, 5), "▸ 2 Deny  note");
+}
+
+#[test]
+fn an_approval_rewrite_reraise_without_keys_restores_the_requested_summary() {
+    let mut queue = folded(&rewritten_read(
+        "a.txt",
+        "b.txt",
+        serde_json::json!(["fiber.test/guard"]),
+    ));
+    for ch in "note".chars() {
+        press(&mut queue, Key::Char(ch), 1);
+    }
+    queue.fold(&standing_ask(S_A, "a_1", "r_1", "read"));
+    let shown = rendered(&queue);
+    assert_eq!(shown.lines[1], "read a.txt");
+    no_tool_mark(&shown);
+    assert_eq!(row(&queue, 5), "▸ 2 Deny  note");
+}
+
+#[test]
+fn an_approval_rewrite_without_a_requested_call_draws_no_tool_row() {
+    let queue = folded(&[rewrite_ask(
+        S_A,
+        "a_1",
+        "r_1",
+        "read",
+        serde_json::json!({"arguments": {"path": "b.txt"}, "changed_by": ["fiber.test/guard"]}),
+    )]);
+    let shown = rendered(&queue);
+    assert_eq!(
+        shown.lines[1],
+        "runs a command · asked by the global rule read"
+    );
+}
+
+#[test]
+fn an_approval_rewrite_refolds_identically_live_and_on_replay() {
+    let lines = [
+        call(S_A, "a_1", "read", serde_json::json!({"path": "a.txt"})),
+        rewrite_ask(
+            S_A,
+            "a_1",
+            "r_1",
+            "read",
+            serde_json::json!({"arguments": {"path": "b.txt"}, "changed_by": ["fiber.test/guard"]}),
+        ),
+        rewrite_ask(
+            S_A,
+            "a_1",
+            "r_1",
+            "read",
+            serde_json::json!({"arguments": {"path": "c.txt"}, "changed_by": ["fiber.test/other"]}),
+        ),
+    ];
+    let live = folded(&lines);
+    let mut replay = Queue::default();
+    for line in &lines {
+        replay.fold(line);
+    }
+    assert_eq!(rendered(&live), rendered(&replay));
+}
+
+#[test]
+fn an_approval_reraise_rebuilds_request_fields_and_resets_a_gone_choice() {
+    let first = review(
+        S_A,
+        "r_1",
+        serde_json::json!({"rule": {"subject": "npm test --watch", "prefix": "npm test"},
+            "paths": ["a/b"], "effects": ["reads"]}),
+    );
+    let mut queue = folded(&[first]);
+    assert_eq!(
+        row(&queue, 1),
+        "reads files · a/b · no rule allows this call"
+    );
+    for ch in "note".chars() {
+        press(&mut queue, Key::Char(ch), 1);
+    }
+    // From deny back to the session remember choice; feedback stays.
+    press(&mut queue, Key::Up, 2);
+    assert!(
+        row(&queue, 4).starts_with("▸"),
+        "on session, in {}",
+        row(&queue, 4)
+    );
+    queue.fold(&review(
+        S_A,
+        "r_1",
+        serde_json::json!({"paths": ["c/d"], "effects": ["writes"], "reversible": false}),
+    ));
+    let shown = rendered(&queue);
+    assert_eq!(
+        shown.lines[1], "writes files · c/d · no rule allows this call",
+        "the re-raise's effects and paths win"
+    );
+    assert!(
+        shown.lines.iter().all(|line| !line.contains("npm test")),
+        "the gone rule offers no remembering rows, in {:?}",
+        shown.lines
+    );
+    assert_eq!(
+        shown.lines.len(),
+        7,
+        "two choices after the rule goes, in {:?}",
+        shown.lines
+    );
+    assert_eq!(shown.lines[3], "▸ 1 Allow once", "reset to the default");
+    assert_eq!(shown.lines[4], "  2 Deny  note", "typed feedback stays");
+    assert!(
+        shown.lines[0].contains("irreversible"),
+        "the re-raise's reversibility wins, in {}",
+        shown.lines[0]
+    );
+    // A resume whose hook changes the paths and the rule offers only the
+    // new rule's remember choices, keeping the typed feedback.
+    queue.fold(&review(
+        S_A,
+        "r_1",
+        serde_json::json!({"rule": {"subject": "npm run build --watch", "prefix": "npm run build"},
+            "paths": ["e/f"], "effects": ["reads"], "reversible": true}),
+    ));
+    let shown = rendered(&queue);
+    assert_eq!(
+        shown.lines[1], "reads files · e/f · no rule allows this call",
+        "the re-raise's effects and paths win"
+    );
+    assert!(
+        shown.lines.iter().all(|line| !line.contains("npm test")),
+        "the gone rule offers no remembering rows, in {:?}",
+        shown.lines
+    );
+    assert_eq!(
+        shown.lines.len(),
+        9,
+        "four choices with the new rule, in {:?}",
+        shown.lines
+    );
+    assert_eq!(shown.lines[3], "▸ 1 Allow once", "reset to the default");
+    assert_eq!(
+        shown.lines[4], "  2 Allow for this session npm run build *",
+        "only the new rule's session choice"
+    );
+    assert_eq!(
+        shown.lines[5], "  3 Always allow in this project npm run build *",
+        "only the new rule's project choice"
+    );
+    assert_eq!(shown.lines[6], "  4 Deny  note", "typed feedback stays");
+    assert!(
+        !shown.lines[0].contains("irreversible"),
+        "the re-raise's reversibility wins, in {}",
+        shown.lines[0]
+    );
+}
+
+#[test]
+fn an_approval_rewrite_keeps_the_dim_mark_after_a_long_summary() {
+    let long = "a/very/long/path/that/keeps/going/on/and/on/file.txt";
+    let queue = folded(&rewritten_read(
+        "a.txt",
+        long,
+        serde_json::json!(["fiber.test/guard"]),
+    ));
+    let shown = rendered(&queue);
+    let line = format!("read {long} · via fiber.test/guard");
+    assert_eq!(shown.lines[1], line);
+    assert!(
+        shown.marks.contains(&mark(1, 0..4, tool_style())),
+        "the bold tool, in {:?}",
+        shown.marks
+    );
+    assert!(
+        shown
+            .marks
+            .contains(&mark(1, 5..5 + long.len(), bold_style())),
+        "the bold rewritten summary, in {:?}",
+        shown.marks
+    );
+    assert!(
+        shown
+            .marks
+            .contains(&mark(1, 5 + long.len()..line.len(), dim_style())),
+        "the dim via mark ending the row, in {:?}",
+        shown.marks
+    );
 }

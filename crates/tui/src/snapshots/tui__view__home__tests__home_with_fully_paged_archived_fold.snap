@@ -1,0 +1,29 @@
+---
+source: crates/tui/src/view/../home_view_tests.rs
+assertion_line: 579
+expression: frame
+---
+▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
+▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀   0.0.1
+▀▄ █       █   ████  █▀▀▀▀ █ ▀▄    no live sessions
+▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █
+
+w +  0 live · $0.00
+  exited · 1
+   ○ old work                                       s_aaaaaaaaaaaaaaaa · $0.00 ✕
+  archived · 51
+   ○ filed 00                                         s_0000000000000000 · $0.00
+   ○ filed 01                                         s_0000000000000001 · $0.00
+   ○ filed 02                                         s_0000000000000002 · $0.00
+   ○ filed 03                                         s_0000000000000003 · $0.00
+   ○ filed 04                                         s_0000000000000004 · $0.00
+   ○ filed 05                                         s_0000000000000005 · $0.00
+   ○ filed 06                                         s_0000000000000006 · $0.00
+   ○ filed 07                                         s_0000000000000007 · $0.00
+   ○ filed 08                                         s_0000000000000008 · $0.00
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ › /? for shortcuts
+▌
+▌ [w]  [no model]  [thinking: default]  Enter starts a session
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓

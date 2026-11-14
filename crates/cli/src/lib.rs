@@ -239,43 +239,79 @@ fn fail(e: Failure) -> i32 {
 }
 
 /// Maps a command result to its exit code through the one error branch.
-fn finish<E: Into<Failure>>(result: Result<(), E>) -> i32 {
+fn finish<E: Into<CliError>>(result: Result<(), E>) -> i32 {
     finish_code(result.map(|()| 0))
 }
 
 /// Maps an integer command result to its exit code: the value on success,
 /// the failure's code once printed on error.
-fn finish_code<E: Into<Failure>>(result: Result<i32, E>) -> i32 {
-    match result {
+fn finish_code<E: Into<CliError>>(result: Result<i32, E>) -> i32 {
+    match result.map_err(Into::into) {
         Ok(code) => code,
-        Err(e) => fail(e.into()),
+        Err(error) => {
+            if let CliError::StandardOutput(source) | CliError::DoctorReport(source) = &error {
+                match doors::stdout_write_exit_code(source) {
+                    0 => 0,
+                    _ => fail(error.into()),
+                }
+            } else {
+                fail(error.into())
+            }
+        }
     }
 }
 
 /// Writes one line to `out`: the line plus one line feed. A write failure
 /// is the shared standard-output failure, for the caller to propagate or
 /// ignore as it already did.
-fn write_line(out: &mut dyn Write, line: &str) -> Result<(), Failure> {
-    writeln!(out, "{line}")
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))
+#[allow(
+    clippy::result_large_err,
+    reason = "keep the typed stdout error and its original io::Error by value until shared finalization"
+)]
+fn write_line(out: &mut dyn Write, line: &str) -> Result<(), CliError> {
+    writeln!(out, "{line}").map_err(CliError::StandardOutput)
 }
 
 /// Runs `run` with Fiber home and the current directory, mapping any
 /// failure to its exit code.
-fn with_dirs<E: Into<Failure>>(run: impl FnOnce(&Path, &Path) -> Result<(), E>) -> i32 {
+fn with_dirs<E: Into<CliError>>(run: impl FnOnce(&Path, &Path) -> Result<(), E>) -> i32 {
     with_dirs_code(|home, workspace| run(home, workspace).map(|()| 0))
 }
 
 /// Runs `run` with Fiber home and the current directory, keeping its
 /// integer success code and mapping any failure to its exit code. Home
 /// is read before the current directory, as each wrapper did.
-fn with_dirs_code<E: Into<Failure>>(run: impl FnOnce(&Path, &Path) -> Result<i32, E>) -> i32 {
-    let ran = ::config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
-        .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            run(&home, &workspace).map_err(Into::into)
-        });
+fn with_dirs_code<E: Into<CliError>>(run: impl FnOnce(&Path, &Path) -> Result<i32, E>) -> i32 {
+    let ran = match ::config::fiber_home_from_env() {
+        Ok(home) => match std::env::current_dir() {
+            Ok(workspace) => run(&home, &workspace).map_err(Into::into),
+            Err(error) => Err(CliError::Forwarded(failed(
+                ErrorCode::IoFailed,
+                format!("the current directory: {error}"),
+            ))),
+        },
+        Err(error) => Err(CliError::Forwarded(failed(error.code(), error))),
+    };
     finish_code(ran)
+}
+
+#[cfg(test)]
+mod stdout_write_tests {
+    use super::{CliError, finish_code};
+
+    #[test]
+    fn finish_code_quiets_only_broken_pipe_for_both_stdout_errors() {
+        for error in [
+            CliError::StandardOutput(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+            CliError::DoctorReport(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+        ] {
+            assert_eq!(finish_code(Err::<i32, _>(error)), 0);
+        }
+        for error in [
+            CliError::StandardOutput(std::io::Error::other("full disk")),
+            CliError::DoctorReport(std::io::Error::other("full disk")),
+        ] {
+            assert_eq!(finish_code(Err::<i32, _>(error)), 1);
+        }
+    }
 }

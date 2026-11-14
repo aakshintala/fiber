@@ -572,6 +572,34 @@ fn repaint_clears_the_backend_and_invalidates_the_frame() {
     );
 }
 
+#[test]
+fn repaint_clears_fixed_area_without_querying_cursor_position() {
+    let mut screen =
+        Screen::new(Calls::default(), 40, 10).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut app = App::new(std::path::PathBuf::from("/w"));
+    app.set_size(40, 10);
+    screen
+        .draw_with(&mut app, None, render)
+        .unwrap_or_else(|err| panic!("draw: {err}"));
+    screen
+        .repaint()
+        .unwrap_or_else(|err| panic!("repaint: {err}"));
+    screen
+        .draw_with(&mut app, None, render)
+        .unwrap_or_else(|err| panic!("redraw: {err}"));
+    let calls = &screen.terminal.backend().inner.0;
+    assert!(calls.iter().any(|call| call == "clear All"), "{calls:?}");
+    assert!(!calls.iter().any(|call| call == "get"), "{calls:?}");
+    assert!(
+        calls
+            .iter()
+            .filter(|call| call.starts_with("draw "))
+            .count()
+            >= 2,
+        "{calls:?}"
+    );
+}
+
 /// A backend recording the cells it receives in order: the draw-order
 /// tests assert the cell order (`docs/tui.md`, "Wide variation-selector
 /// cells"), not which call carried each cell.

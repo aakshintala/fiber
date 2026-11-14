@@ -1810,6 +1810,8 @@ fn setup_terminal_run_prints_other_notices_but_no_model_unconfigured() {
     let segment = child_segment(&stderr, "### case notices\n");
     let lines: Vec<&str> = segment.lines().collect();
     // The invalid notice prints once, and the first question follows it.
+    // The load reports each `model_invalid` once per reason
+    // (`docs/model-routing.md`, "Model discovery").
     assert_eq!(segment.matches("bad/m1").count(), 1, "{segment:?}");
     assert!(lines[0].contains("bad/m1"), "{segment:?}");
     assert!(lines[0].contains("context_window"), "{segment:?}");

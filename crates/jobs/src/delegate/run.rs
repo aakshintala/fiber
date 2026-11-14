@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use contract::clock::{Clock, Wake};
 use contract::diag::{Op, Timing, TimingName};
 use contract::events::{EventKind, FiberExited};
-use contract::jobs::Stop;
+use contract::jobs::{EndWorktree, FinishWorktree, Stop};
 use contract::shapes::Usage;
 use contract::{Envelope, JobId, PreSessionExit, SessionId};
 use rustix::process::Signal;
@@ -110,6 +110,8 @@ fn classify_job_kind(kind: EventKind) -> Option<JobEventKind> {
         | Kind::DelegateFinished
         | Kind::JobCompleted
         | Kind::JobsPendingNotified
+        | Kind::KeeperStarted
+        | Kind::KeeperBound
         | Kind::CommandAccepted
         | Kind::CommandRejected
         | Kind::Unknown(_) => None,
@@ -139,17 +141,14 @@ pub enum Watched {
     Closed,
 }
 
-/// The worktree a run ends, or only reports when resuming.
-#[derive(Debug, Clone)]
-pub struct EndWorktree {
-    /// The worktree directory.
-    pub path: PathBuf,
-    /// The recorded branch.
-    pub branch: String,
-    /// The initial commit, absent on resumed runs.
-    pub base: Option<String>,
-    /// Whether this runner owns removal.
-    pub remove: bool,
+/// Reads the identity recorded with every process job started by a delegate.
+pub(crate) fn process_identity(pid: u32) -> io::Result<contract::jobs::JobIdentity> {
+    let start_time = support::group::start_time(pid)
+        .ok_or_else(|| io::Error::other("cannot read child start time"))?;
+    Ok(contract::jobs::JobIdentity {
+        pgid: pid,
+        start_time,
+    })
 }
 
 /// A shared, idempotent release of the parent's worktree lock.
@@ -190,10 +189,6 @@ pub type CreateWorktree = Arc<
         + Send
         + Sync,
 >;
-
-/// Inspects, optionally removes, and reports a worktree at run end.
-pub type FinishWorktree =
-    Arc<dyn Fn(EndWorktree) -> contract::events::FinishedWorktree + Send + Sync>;
 
 pub(crate) struct WorktreeRun {
     pub(crate) end: EndWorktree,

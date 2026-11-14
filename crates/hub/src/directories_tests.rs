@@ -299,6 +299,7 @@ fn directories_over_serve_accepts_home_and_rejects_relative() {
                 || {
                     Ok(Settings {
                         idle_exit,
+                        keep_exited: 10,
                         level: log::diag::Level::Info,
                         port: None,
                     })
@@ -309,6 +310,7 @@ fn directories_over_serve_accepts_home_and_rejects_relative() {
                 serve_clock,
                 environments,
                 Arc::new(crate::fake::FakeMachine::default()),
+                None,
             );
             done_tx.send(result).unwrap_or(());
         }

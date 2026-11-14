@@ -5,14 +5,19 @@ use super::super::commands::Rows;
 use super::super::commands::commands_testkit::{
     SESSION, answer_commands, answer_rows, attached, connected, enter, fold_file_answer, key, now,
     paste_image, paths, reloaded, remote_search_app, route_file_answer, selected, sent,
-    session_line, shown, table_lines, turn_starts, type_any, type_text,
+    session_line, shown, table_lines, turn_starts, turn_starts_with, type_any, type_text,
 };
 use crate::app::{App, Effect};
+use crate::ext::{
+    Decision, Input as RendererInput, RawSpan, Renderer, SessionCtx, SessionVersion, TuiCommand,
+};
 use crate::home::Launch;
 use crate::keys::{Edit, Key};
 use contract::ErrorCode;
 use serde_json::{Value, json};
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
 #[test]
@@ -90,11 +95,6 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
     );
     let mut app = connected();
     type_text(&mut app, "/");
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
-    assert_eq!(selected(&app), table.first().cloned());
-    app.on_key(Key::Down, now());
-    assert_eq!(selected(&app), table.get(1).cloned());
-    app.on_key(Key::Up, now());
     assert_eq!(selected(&app), table.first().cloned());
     // Down to the last row in view: the window has not moved.
     for _ in 1..shown_rows {
@@ -114,8 +114,8 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
         Some(shown_rows - 1)
     );
     assert_eq!(shown(&app).first(), table.get(1));
-    // Down clamps at the last row.
-    for _ in 0..table.len() {
+    // Down wraps at the last row.
+    for _ in 0..table.len() - shown_rows - 1 {
         app.on_key(Key::Down, now());
     }
     assert_eq!(selected(&app), table.last().cloned());
@@ -123,6 +123,26 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
     assert_eq!(selected(&app), table.get(table.len() - 2).cloned());
     // The draft is untouched by moving.
     assert_eq!(app.draft(), "/");
+}
+
+#[test]
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
+fn slash_arrows_wrap_and_render_the_selected_row() {
+    let table = table_lines();
+    let mut app = connected();
+    type_text(&mut app, "/");
+    app.on_key(Key::Up, now());
+    assert_eq!(selected(&app), table.last().cloned());
+    let completions = app.completions().expect("the panel stays open");
+    assert_eq!(
+        completions.start + completions.selected.expect("the last row is selected"),
+        table.len() - 1
+    );
+    assert!(shown(&app).contains(table.last().unwrap()));
+    app.on_key(Key::Down, now());
+    assert_eq!(selected(&app), table.first().cloned());
+    let completions = app.completions().expect("the panel stays open");
+    assert_eq!(completions.start + completions.selected.unwrap(), 0);
 }
 
 #[test]
@@ -611,6 +631,9 @@ fn an_empty_slash_list_shows_no_matches() {
     assert_eq!(completions.selected, None);
     assert_eq!(completions.lines(), ["no matches"]);
     assert!(matches!(completions.rows, Rows::Message(_)));
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.completions().expect("panel remains").selected, None);
 }
 
 /// The structured `@` panel: the windowed paths and the query behind
@@ -1093,8 +1116,10 @@ fn closing_the_panels_leaves_the_next_slash_panel_able_to_open() {
     let mut app = attached();
     type_text(&mut app, "/");
     // The panel asks the hub for the project's prompt history.
-    assert!(matches!(app.on_key(Key::CtrlR, now()), Effect::Send(lines)
-            if lines.iter().any(|line| line.contains("prompt_history"))));
+    assert!(
+        matches!(app.on_key(Key::CtrlR, now()), Effect::SendTracked(sents)
+            if sents.iter().any(|sent| sent.line.contains("prompt_history")))
+    );
     assert!(app.search_panel().is_some());
     app.close_completion_panels();
     assert!(app.search_panel().is_some());
@@ -1154,4 +1179,379 @@ fn reset_session_forgets_the_commands_tag() {
     app.reset_session();
     assert_eq!(app.outbox.waiting(&id), None);
     assert!(app.completion.commands_id.is_none());
+}
+
+/// A renderer serving canned TUI commands: the adapter's rows as the
+/// terminal sees them.
+#[derive(Debug)]
+struct TuiServing {
+    commands: RefCell<Vec<TuiCommand>>,
+}
+
+impl TuiServing {
+    fn serving(commands: Vec<TuiCommand>) -> Self {
+        Self {
+            commands: RefCell::new(commands),
+        }
+    }
+}
+
+impl Renderer for TuiServing {
+    fn name(&self) -> &str {
+        "tui-serving"
+    }
+
+    fn fills(&self, _slot: &str) -> bool {
+        false
+    }
+
+    fn render(
+        &self,
+        _ctx: &SessionCtx,
+        _slot: &str,
+        _input: &RendererInput<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&RendererInput<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> Decision {
+        Decision::NotForSession {
+            extension: String::new(),
+            tui_version: String::new(),
+            half: SessionVersion::Unseen,
+        }
+    }
+
+    fn tui_commands(&self, _ctx: &SessionCtx) -> Vec<TuiCommand> {
+        self.commands.borrow().clone()
+    }
+}
+
+/// A TUI command row for `name` from `extension`.
+fn tui_cmd(name: &str, extension: &str) -> TuiCommand {
+    TuiCommand {
+        name: name.to_owned(),
+        description: format!("Runs {name}."),
+        extension: extension.to_owned(),
+    }
+}
+
+/// The `/` list's names in order.
+fn slash_names(app: &App) -> Vec<String> {
+    app.completion
+        .slash_rows
+        .iter()
+        .map(|row| row.name.clone())
+        .collect()
+}
+
+/// Whether a `command_conflict` notice names every name in `names`.
+fn has_conflict(app: &App, names: &[&str]) -> bool {
+    app.notices().iter().any(|notice| {
+        matches!(notice, crate::app::NoticeLine::Notice { code, text, .. }
+            if *code == ErrorCode::CommandConflict && names.iter().all(|name| text.contains(name)))
+    })
+}
+
+#[test]
+fn command_tui_rows_follow_session_rows() {
+    let mut app = attached();
+    app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+        "ledger-diff",
+        "acme",
+    )])));
+    answer_commands(&mut app, &["tdd"]);
+    let names = slash_names(&app);
+    let table = crate::slash::rows(&[]);
+    // `docs/tui.md`, "Slash commands": the `/` list shows built-in commands in this order; the rest of the list is the session's answer, then the one TUI list (`docs/extensions.md`, "Commands and screens").
+    assert_eq!(names.len(), table.len() + 2);
+    assert_eq!(
+        names.iter().map(String::as_str).collect::<Vec<_>>()[..table.len()],
+        table
+            .iter()
+            .map(|row| row.name.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(&names[table.len()..], ["tdd", "ledger-diff"]);
+    let rows = &app.completion.slash_rows;
+    assert_eq!(rows[table.len()].tag, "skill");
+    assert!(!rows[table.len()].extension);
+    assert_eq!(rows[table.len() + 1].tag, "acme");
+    assert!(rows[table.len() + 1].extension);
+}
+
+#[test]
+fn command_extension_clash_keeps_no_row() {
+    let mut app = attached();
+    app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+        "deploy", "other",
+    )])));
+    let id = answer_rows(
+        &mut app,
+        json!([
+            {"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true},
+            {"name": "tdd", "description": "Runs tdd.", "tag": "skill"},
+        ]),
+    );
+    assert_eq!(app.outbox.waiting(&id), None);
+    // An extension-marked session row sharing a TUI name keeps no row on either side.
+    assert!(!slash_names(&app).contains(&"deploy".to_owned()));
+    assert!(slash_names(&app).contains(&"tdd".to_owned()));
+    assert_eq!(app.completion.tui_conflicts, ["deploy".to_owned()].into());
+    // `docs/extensions.md`, "Commands and screens": a name registered twice gets one `notice` naming both, once until `/reload`.
+    assert!(has_conflict(&app, &["deploy", "acme", "other"]));
+    let before = app
+        .notices()
+        .iter()
+        .filter(|notice| {
+            matches!(notice, crate::app::NoticeLine::Notice { code, .. } if *code == ErrorCode::CommandConflict)
+        })
+        .count();
+    assert_eq!(before, 1);
+    let answer = session_line(
+        "command_accepted",
+        json!({"command_id": "c_late", "result": {"commands": [
+            {"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true}]}}),
+    );
+    assert!(app.on_line(answer).is_empty());
+    let after = app
+        .notices()
+        .iter()
+        .filter(|notice| {
+            matches!(notice, crate::app::NoticeLine::Notice { code, .. } if *code == ErrorCode::CommandConflict)
+        })
+        .count();
+    assert_eq!(after, 1, "a stale answer adds no second notice");
+}
+
+#[test]
+fn command_conflict_recurrence_notices_once_per_contender_set() {
+    fn conflict_count(app: &App) -> usize {
+        app.notices()
+            .iter()
+            .filter(|notice| {
+                matches!(notice, crate::app::NoticeLine::Notice { code, .. } if *code == ErrorCode::CommandConflict)
+            })
+            .count()
+    }
+    fn deploy_row(tag: &str) -> Value {
+        json!({"name": "deploy", "description": "Deploys.", "tag": tag, "extension": true})
+    }
+    let mut app = attached();
+    app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+        "deploy", "other",
+    )])));
+    answer_rows(&mut app, json!([deploy_row("acme")]));
+    // `docs/tui.md`, "When two extensions want one slot": one notice for each slot and set of contenders until `/reload`.
+    assert_eq!(conflict_count(&app), 1);
+    assert!(has_conflict(&app, &["deploy", "acme", "other"]));
+    // The clash disappears without a reload: no row returns, and no new notice follows.
+    turn_starts_with(&mut app, json!([]));
+    assert!(app.completion.tui_conflicts.is_empty());
+    assert_eq!(conflict_count(&app), 1);
+    // The clash returns with the same owners and no reload in between: still one notice total.
+    turn_starts_with(&mut app, json!([deploy_row("acme")]));
+    assert_eq!(conflict_count(&app), 1);
+    // The clash returns with changed owners: one notice per contender set.
+    app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+        "deploy", "third",
+    )])));
+    assert_eq!(conflict_count(&app), 2);
+    assert!(has_conflict(&app, &["deploy", "acme", "third"]));
+}
+
+#[test]
+fn command_conflict_reload_renotices_same_contenders() {
+    fn conflict_count(app: &App) -> usize {
+        app.notices()
+            .iter()
+            .filter(|notice| {
+                matches!(notice, crate::app::NoticeLine::Notice { code, .. } if *code == ErrorCode::CommandConflict)
+            })
+            .count()
+    }
+    fn deploy_row(tag: &str) -> Value {
+        json!({"name": "deploy", "description": "Deploys.", "tag": tag, "extension": true})
+    }
+    let mut app = attached();
+    app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+        "deploy", "other",
+    )])));
+    answer_rows(&mut app, json!([deploy_row("acme")]));
+    // `docs/tui.md`, "When two extensions want one slot": one notice for each slot and set of contenders until `/reload`.
+    assert_eq!(conflict_count(&app), 1);
+    // Dismiss the stacked row so a re-notice can stack again: the
+    // test never sweeps, so nothing joins the run's seen set.
+    let ids: Vec<usize> = app
+        .notices()
+        .iter()
+        .filter_map(|notice| match notice {
+            crate::app::NoticeLine::Notice { id, .. } => Some(*id),
+            crate::app::NoticeLine::More(_) => None,
+        })
+        .collect();
+    for id in ids {
+        app.dismiss_notice(id);
+    }
+    assert_eq!(conflict_count(&app), 0);
+    // A reload clears the dedupe before re-merging, so the same clash
+    // notices again: the reload's refresh re-merges the stale answer.
+    let asked = app.on_line(reloaded(SESSION));
+    assert_eq!(asked.len(), 1);
+    assert_eq!(conflict_count(&app), 1);
+    assert!(has_conflict(&app, &["deploy", "acme", "other"]));
+    // The re-queried answer resolves against the same TUI rows without a
+    // second notice.
+    let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    let answer = session_line(
+        "command_accepted",
+        json!({"command_id": asked["id"], "result": {"commands": [deploy_row("acme")]}}),
+    );
+    assert!(app.on_line(answer).is_empty());
+    assert_eq!(conflict_count(&app), 1);
+}
+
+#[test]
+fn command_tui_name_shadows_skill_template_and_prompt_rows() {
+    for tag in ["skill", "template", "github"] {
+        let mut app = attached();
+        app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+            "review", "acme",
+        )])));
+        answer_rows(
+            &mut app,
+            json!([{"name": "review", "description": "Reviews.", "tag": tag}]),
+        );
+        // One row per name (`docs/extensions.md`, "Commands and screens"): the TUI row stays, the shadowed row is left out with no notice.
+        let matching: Vec<&crate::slash::Row> = app
+            .completion
+            .slash_rows
+            .iter()
+            .filter(|row| row.name == "review")
+            .collect();
+        assert_eq!(matching.len(), 1, "{tag}");
+        assert_eq!(matching[0].tag, "acme", "{tag}");
+        assert!(matching[0].extension, "{tag}");
+        assert!(app.completion.tui_conflicts.is_empty(), "{tag}");
+        assert!(!has_conflict(&app, &["review"]), "{tag}");
+    }
+}
+
+#[test]
+fn command_renamed_finals_list_side_by_side() {
+    let mut app = attached();
+    app.install_renderer(Rc::new(TuiServing::serving(vec![
+        tui_cmd("ledger-a", "a"),
+        tui_cmd("ledger-diff", "b"),
+    ])));
+    answer_commands(&mut app, &[]);
+    // Distinct finals coexist: a rename resolving a clash restores exactly one row per name.
+    let names = slash_names(&app);
+    assert!(names.contains(&"ledger-a".to_owned()));
+    assert!(names.contains(&"ledger-diff".to_owned()));
+    assert!(app.completion.tui_conflicts.is_empty());
+    assert!(!has_conflict(&app, &["ledger"]));
+}
+
+#[test]
+fn command_install_refresh_shows_tui_rows_on_home() {
+    let mut app = connected();
+    app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+        "ledger-diff",
+        "acme",
+    )])));
+    // Home lists the installed TUI commands with no session answer.
+    type_text(&mut app, "/led");
+    assert_eq!(shown(&app), ["/ledger-diff  Runs ledger-diff.  acme"]);
+}
+
+#[test]
+fn command_tui_rows_persist_across_reset_session() {
+    let mut app = attached();
+    app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+        "ledger-diff",
+        "acme",
+    )])));
+    answer_commands(&mut app, &["tdd"]);
+    assert!(slash_names(&app).contains(&"tdd".to_owned()));
+    app.reset_session();
+    // Home keeps the TUI rows while the session rows go with the session.
+    let names = slash_names(&app);
+    assert!(!names.contains(&"tdd".to_owned()));
+    assert!(names.contains(&"ledger-diff".to_owned()));
+    assert!(app.completion.extensions.is_empty());
+    assert_eq!(app.completion.tui_commands.len(), 1);
+}
+
+/// A renderer gating its command to home: a version-gated command the
+/// session excludes, while home holds every loaded winner.
+#[derive(Debug)]
+struct HomeGated;
+
+impl Renderer for HomeGated {
+    fn name(&self) -> &str {
+        "home-gated"
+    }
+
+    fn fills(&self, _slot: &str) -> bool {
+        false
+    }
+
+    fn render(
+        &self,
+        _ctx: &SessionCtx,
+        _slot: &str,
+        _input: &RendererInput<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&RendererInput<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> Decision {
+        Decision::NotForSession {
+            extension: String::new(),
+            tui_version: String::new(),
+            half: SessionVersion::Unseen,
+        }
+    }
+
+    fn tui_commands(&self, ctx: &SessionCtx) -> Vec<TuiCommand> {
+        if ctx.session_id.is_none() {
+            vec![tui_cmd("ledger-diff", "acme")]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+#[test]
+fn command_session_gated_exclusion_returns_at_home_after_reset() {
+    let mut app = attached();
+    app.install_renderer(Rc::new(HomeGated));
+    // The session gates the command out: no TUI row on the session.
+    assert!(!slash_names(&app).contains(&"ledger-diff".to_owned()));
+    assert!(app.completion.tui_commands.is_empty());
+    answer_commands(&mut app, &["tdd"]);
+    assert!(slash_names(&app).contains(&"tdd".to_owned()));
+    app.reset_session();
+    // Home holds every loaded winner: the gated command lists again.
+    let names = slash_names(&app);
+    assert!(!names.contains(&"tdd".to_owned()));
+    assert!(names.contains(&"ledger-diff".to_owned()));
+    assert_eq!(app.completion.tui_commands.len(), 1);
+}
+
+#[test]
+fn command_stale_answer_resurrects_nothing() {
+    let mut app = attached();
+    app.install_renderer(Rc::new(TuiServing::serving(vec![tui_cmd(
+        "ledger-diff",
+        "acme",
+    )])));
+    answer_commands(&mut app, &["tdd"]);
+    let before = slash_names(&app);
+    let stale = session_line(
+        "command_accepted",
+        json!({"command_id": "c_stale", "result": {"commands": [
+            {"name": "old", "description": "Old.", "tag": "skill"}]}}),
+    );
+    assert!(app.on_line(stale).is_empty());
+    // Only the latest `commands` sent fills the list: a stale answer changes nothing.
+    assert_eq!(slash_names(&app), before);
+    assert!(!slash_names(&app).contains(&"old".to_owned()));
 }

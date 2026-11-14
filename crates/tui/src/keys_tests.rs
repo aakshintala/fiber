@@ -364,6 +364,19 @@ fn alt_arrows_in_their_csi_form() {
 }
 
 #[test]
+fn shift_arrows_in_their_csi_form() {
+    // Split across reads, the sequence is held and still parses.
+    assert_eq!(
+        feed_strokes(&[b"\x1b[1;", b"2A"]),
+        vec![modified(Code::Up, Mods::SHIFT)]
+    );
+    assert_eq!(
+        feed_strokes(&[b"\x1b[1;2", b"B"]),
+        vec![modified(Code::Down, Mods::SHIFT)]
+    );
+}
+
+#[test]
 fn esc_then_an_arrow_in_one_read_is_the_alt_arrow() {
     assert_eq!(
         feed_all(&[b"\x1b\x1b[", b"A"]),
@@ -967,8 +980,10 @@ fn named_strokes() -> Vec<(&'static str, Option<Event>)> {
         ("end", key(Key::End)),
         ("up", key(Key::Up)),
         ("alt+up", key(Key::AltUp)),
+        ("shift+up", key(Key::ShiftUp)),
         ("down", key(Key::Down)),
         ("alt+down", key(Key::AltDown)),
+        ("shift+down", key(Key::ShiftDown)),
         ("left", edit(Edit::Left)),
         ("right", edit(Edit::Right)),
         ("alt+left", edit(Edit::WordLeft)),
@@ -982,6 +997,7 @@ fn named_strokes() -> Vec<(&'static str, Option<Event>)> {
         ("super+left", edit(Edit::LineStart)),
         ("super+right", edit(Edit::LineEnd)),
         ("delete", edit(Edit::Delete)),
+        ("shift+backspace", edit(Edit::Delete)),
         ("f1", key(Key::F1)),
         ("ctrl+c", key(Key::CtrlC)),
         ("ctrl+o", key(Key::CtrlO)),
@@ -1087,8 +1103,8 @@ fn default_event_matches_the_parity_table() {
         (modified(Code::Char('+'), ctrl), None),
         // `ESC 0x08` reads as Ctrl+Alt+H, which no binding uses.
         (modified(Code::Char('h'), ctrl | alt), None),
-        (modified(Code::Up, shift), None),
-        (modified(Code::Down, shift), None),
+        (modified(Code::Up, shift), key(Key::ShiftUp)),
+        (modified(Code::Down, shift), key(Key::ShiftDown)),
         (modified(Code::Left, shift), None),
         (modified(Code::Left, alt | ctrl), None),
         (modified(Code::Right, alt | super_), None),
@@ -1097,7 +1113,10 @@ fn default_event_matches_the_parity_table() {
         (modified(Code::Enter, ctrl), None),
         (modified(Code::Enter, super_), None),
         (modified(Code::Esc, shift), None),
-        (modified(Code::Backspace, shift), None),
+        (
+            modified(Code::Backspace, shift),
+            Some(Event::Edit(Edit::Delete)),
+        ),
         (
             modified(Code::Backspace, ctrl),
             Some(Event::Edit(Edit::DeleteWord)),
@@ -1608,4 +1627,48 @@ fn device_attributes_sixel_bit() {
             "{bytes:?} names sixel {sixel}"
         );
     }
+}
+
+/// Feeds `chunks` in order with the kitty flags pushed, returning the
+/// strokes before `default_event` maps them.
+fn feed_flagged_strokes(chunks: &[&[u8]]) -> Vec<Stroke> {
+    let mut parser = Parser::default();
+    parser.set_kitty();
+    let mut out = Vec::new();
+    for chunk in chunks {
+        for event in parser.feed(chunk) {
+            if let Event::Stroke(stroke) = event {
+                out.push(stroke);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn kitty_shift_enter_decodes_with_and_without_the_flag() {
+    let shift = Mods::SHIFT;
+    // `CSI 13;2u` reads as shift+enter whether or not the flags are
+    // pushed: decode is unconditional, and detection gates only whether
+    // the terminal sends these bytes.
+    for chunks in [vec![b"\x1b[13;2u".as_slice()], vec![b"\x1b[13;", b"2u"]] {
+        assert_eq!(
+            feed_strokes(&chunks),
+            vec![modified(Code::Enter, shift)],
+            "{chunks:?}"
+        );
+        assert_eq!(
+            feed_flagged_strokes(&chunks),
+            vec![modified(Code::Enter, shift)],
+            "{chunks:?}"
+        );
+    }
+}
+
+#[test]
+fn kitty_legacy_enter_still_decodes_without_the_protocol() {
+    // The fallback key needs no protocol: carriage return reads as
+    // Enter with and without the pushed flags.
+    assert_eq!(feed_strokes(&[b"\r"]), vec![plain(Code::Enter)]);
+    assert_eq!(feed_flagged_strokes(&[b"\r"]), vec![plain(Code::Enter)]);
 }

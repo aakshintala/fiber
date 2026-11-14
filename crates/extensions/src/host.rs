@@ -31,6 +31,7 @@ pub(crate) mod failure;
 pub(crate) mod fs;
 mod log;
 pub(crate) mod model;
+pub(crate) mod resolve;
 pub(crate) mod script;
 mod settings;
 pub(crate) mod state;
@@ -77,7 +78,7 @@ pub(crate) struct HostContext {
 /// coroutine with the reply (`docs/extensions.md`, "How an extension runs").
 /// Every host call that waits yields the tag and its
 /// kind, as [`Request`] lists.
-const HTTP: &str = r#"
+pub(crate) const HTTP: &str = r#"
 local host, tag, failure = ...
 function host.http(opts)
   if type(opts) ~= "table" or type(opts.url) ~= "string" then
@@ -897,6 +898,20 @@ pub(crate) fn duration_ms(elapsed: Duration) -> u64 {
     elapsed.as_millis().try_into().unwrap_or(u64::MAX)
 }
 
+pub(crate) const MEMORY_CAP_ERROR_KEY: &str = "fiber.memory_cap_error";
+pub(crate) const MEMORY_CAP_ERROR: &str = "Lua memory cap exceeded";
+
+/// Sets the VM's memory cap and registers the error string used if an
+/// oversized tool outcome cannot be converted into Lua values.
+pub(crate) fn install_memory_cap(
+    lua: &Lua,
+    memory_cap: usize,
+    error_key: &str,
+) -> mlua::Result<()> {
+    lua.set_memory_limit(memory_cap)?;
+    lua.set_named_registry_value(error_key, lua.create_string(MEMORY_CAP_ERROR)?)
+}
+
 /// The values `coroutine.yield` returns to the host call that yielded: its
 /// result, or nil, the failure's code and its message, or nil and the
 /// message of an error in the calling code. `clock` is what a held
@@ -931,7 +946,18 @@ pub(crate) fn resume_values(
         ])),
         // A `host.tool` outcome is one table; an error in the calling
         // code is nil with the string the Lua half raises.
-        Reply::Tool(Ok(outcome)) => Ok(MultiValue::from_vec(vec![to_lua(lua, &outcome)?])),
+        Reply::Tool(Ok(outcome)) => match to_lua(lua, &outcome) {
+            Ok(value) => Ok(MultiValue::from_vec(vec![value])),
+            // The oversized result may leave too little Lua memory to construct this error.
+            Err(mlua::Error::MemoryError(_)) => {
+                let message = lua.named_registry_value(MEMORY_CAP_ERROR_KEY)?;
+                Ok(MultiValue::from_vec(vec![
+                    LuaValue::Nil,
+                    LuaValue::String(message),
+                ]))
+            }
+            Err(error) => Err(error),
+        },
         Reply::Tool(Err(message)) => Ok(MultiValue::from_vec(vec![
             LuaValue::Nil,
             LuaValue::String(lua.create_string(message)?),

@@ -74,8 +74,8 @@ impl Drop for Unreported {
     }
 }
 
-/// The jobs one session started. `open` is the only way in; `list`, `wait`
-/// and `stop` are what the `jobs` tool calls.
+/// The jobs one session started or took over. `open` and `restore` are the
+/// ways in; `list`, `wait` and `stop` are what the `jobs` tool calls.
 pub struct Registry {
     artifacts: PathBuf,
     clock: Arc<dyn Clock>,
@@ -248,8 +248,16 @@ impl Registry {
         };
         let mut inner = lock(&self.inner);
         let id = mint_id();
-        let path = self.artifacts.join(format!("{id}.log"));
-        let file = match File::create(&path) {
+        let detached = opening.detached.is_some();
+        let path = opening
+            .detached
+            .clone()
+            .unwrap_or_else(|| self.artifacts.join(format!("{id}.log")));
+        let file = match if detached {
+            std::fs::OpenOptions::new().append(true).open(&path)
+        } else {
+            File::create(&path)
+        } {
             Ok(file) => file,
             Err(source) => return Err(OpenError { path, source }),
         };
@@ -259,7 +267,18 @@ impl Registry {
             tool: Some(opening.tool),
             extension: None,
             description: opening.description,
-            output_path: format!("artifacts/{id}.log"),
+            output_path: if detached {
+                path.to_string_lossy().into_owned()
+            } else {
+                format!("artifacts/{id}.log")
+            },
+            pgid: opening.identity.map(|identity| identity.pgid),
+            start_time: opening.identity.map(|identity| identity.start_time),
+            kind: Some(if detached {
+                contract::events::JobKind::Detached
+            } else {
+                contract::events::JobKind::Job
+            }),
         };
         let lines = opening.lines.then(|| {
             let registry = Weak::clone(&self.me);
@@ -295,10 +314,232 @@ impl Registry {
         })
     }
 
+    /// Restores a detached job under the `job_started` the session log
+    /// already holds. The recorded output path is retained without opening
+    /// or validating it; the detached process writes the log. No start event
+    /// is written and no id is minted.
+    pub fn restore_detached(&self, started: JobStarted, stop: Stop) -> Result<Opened, OpenError> {
+        let path = PathBuf::from(&started.output_path);
+        if started.kind != Some(contract::events::JobKind::Detached) {
+            return Err(OpenError {
+                path: path.clone(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "the job is not detached",
+                ),
+            });
+        }
+        let Some(registry) = self.me.upgrade() else {
+            return Err(OpenError {
+                path,
+                source: std::io::Error::other("the registry is gone"),
+            });
+        };
+        let mut inner = lock(&self.inner);
+        if inner
+            .jobs
+            .iter()
+            .any(|job| job.started.job_id == started.job_id)
+        {
+            return Err(OpenError {
+                path,
+                source: std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "the job is already recorded",
+                ),
+            });
+        }
+        // Restored detached supervisors never use this ordinary-job file
+        // handle. Opening the recorded output here could block on a FIFO or
+        // follow a symlink, so keep the handle unrelated to that path.
+        let file = File::open("/dev/null").map_err(|source| OpenError {
+            path: path.clone(),
+            source,
+        })?;
+        let job_id = started.job_id.clone();
+        let end = End(Box::new(move |completed| {
+            registry.finish_run(
+                1,
+                JobCompleted {
+                    job_id,
+                    ..completed
+                },
+                None,
+            )
+        }));
+        inner.jobs.push(Job::running(
+            started.clone(),
+            path.clone(),
+            Arc::from(stop.0),
+            None,
+            None,
+        ));
+        Ok(Opened {
+            started,
+            path,
+            file,
+            end,
+            emit: Arc::clone(&self.emit),
+            lines: None,
+        })
+    }
+
+    /// Replays the session log and restores outstanding detached groups whose
+    /// process identity still matches. Invalid or absent rows are silently
+    /// omitted; restoration never signals a group.
+    pub fn restore_detached_rows<I, E, F, T>(&self, lines: I, mut parts: F) -> Vec<(Opened, T)>
+    where
+        I: IntoIterator<Item = Result<contract::Envelope, E>>,
+        F: FnMut(u32) -> (Stop, T),
+    {
+        use contract::events::{Event, EventKind, JobKind};
+        use std::collections::{HashMap, HashSet};
+
+        let mut outstanding = HashMap::<JobId, JobStarted>::new();
+        let mut order = Vec::new();
+        let mut present = HashSet::new();
+        for line in lines {
+            let Ok(line) = line else { continue };
+            if line.kind() == EventKind::JobStarted {
+                let Ok(Some(Event::JobStarted(started))) = Event::from_envelope(&line) else {
+                    continue;
+                };
+                if started.kind == Some(JobKind::Detached) {
+                    let id = started.job_id.clone();
+                    if present.insert(id.clone()) {
+                        order.push(id.clone());
+                    }
+                    outstanding.insert(id, started);
+                }
+            } else if line.kind() == EventKind::JobCompleted {
+                let Ok(Some(Event::JobCompleted(ended))) = Event::from_envelope(&line) else {
+                    continue;
+                };
+                outstanding.remove(&ended.job_id);
+                present.remove(&ended.job_id);
+            }
+        }
+
+        order
+            .into_iter()
+            .filter_map(|id| {
+                let started = outstanding.remove(&id)?;
+                let pgid = started
+                    .pgid
+                    .filter(|pgid| !support::group::refused(*pgid))?;
+                if !support::group::alive(pgid) {
+                    return None;
+                }
+                if let (Some(expected), Some(actual)) =
+                    (started.start_time, support::group::start_time(pgid))
+                    && expected != actual
+                {
+                    return None;
+                }
+                let (stop, tracking) = parts(pgid);
+                self.restore_detached(started, stop)
+                    .ok()
+                    .map(|opened| (opened, tracking))
+            })
+            .collect()
+    }
+
+    /// Records a job a keeper handed over, under the `job_started` the log
+    /// already holds: no id is minted, no line is written and the output
+    /// file is not created or truncated. The file must exist under this
+    /// registry's artifacts and is opened for appending, so what the keeper
+    /// wrote stays and the session adds after it. The job's [`Stop`] and
+    /// [`Input`] are the owner's; its [`End`] reports once like any job's.
+    /// A path that is not `artifacts/<file>`, a missing or unopenable file
+    /// and a job already recorded each return [`OpenError`] and record
+    /// nothing.
+    pub fn restore(
+        &self,
+        started: JobStarted,
+        stop: Stop,
+        input: Option<contract::jobs::Input>,
+        lines: bool,
+    ) -> Result<Opened, OpenError> {
+        let Some(registry) = self.me.upgrade() else {
+            return Err(OpenError {
+                path: self.artifacts.clone(),
+                source: std::io::Error::other("the registry is gone"),
+            });
+        };
+        let invalid = |source: &str| OpenError {
+            path: PathBuf::from(&started.output_path),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidInput, source.to_owned()),
+        };
+        let mut parts = Path::new(&started.output_path).components();
+        let name = match (parts.next(), parts.next(), parts.next()) {
+            (
+                Some(std::path::Component::Normal(dir)),
+                Some(std::path::Component::Normal(name)),
+                None,
+            ) if dir == "artifacts" => name.to_owned(),
+            _ => return Err(invalid("a job's output file is artifacts/<file>")),
+        };
+        let path = self.artifacts.join(name);
+        let mut inner = lock(&self.inner);
+        if inner
+            .jobs
+            .iter()
+            .any(|job| job.started.job_id == started.job_id)
+        {
+            return Err(OpenError {
+                path,
+                source: std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "the job is already recorded",
+                ),
+            });
+        }
+        let file = match std::fs::OpenOptions::new().append(true).open(&path) {
+            Ok(file) => file,
+            Err(source) => return Err(OpenError { path, source }),
+        };
+        let feed = lines.then(|| {
+            let registry = Weak::clone(&self.me);
+            Lines(Box::new(move |line| {
+                if let Some(registry) = registry.upgrade() {
+                    registry.send_line(line);
+                }
+            }))
+        });
+        let unreported = Unreported {
+            job_id: started.job_id.clone(),
+            run: 1,
+            registry: Some(registry),
+            delegate: false,
+        };
+        let end = End(Box::new(move |completed| {
+            unreported.report(completed, None)
+        }));
+        inner.jobs.push(Job::running(
+            started.clone(),
+            path.clone(),
+            Arc::from(stop.0),
+            input.map(|input| Arc::from(input.0)),
+            None,
+        ));
+        Ok(Opened {
+            started,
+            path,
+            file,
+            end,
+            emit: Arc::clone(&self.emit),
+            lines: feed,
+        })
+    }
+
     /// Records a running Fiber delegate under `job_id`, without creating
     /// an output file: the child writes its own log at `output_path`.
     /// Only `delegate_spawn` or `delegate_fork` opens one. The id is minted up front with
     /// [`mint_job_id`], so the spawn and the record name the same job.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the process identity belongs with the started job record"
+    )]
     pub(crate) fn open_started(
         self: &Arc<Self>,
         job_id: JobId,
@@ -306,6 +547,7 @@ impl Registry {
         description: String,
         output_path: String,
         stop: Stop,
+        identity: contract::jobs::JobIdentity,
         delegate: DelegateStarted,
     ) -> (JobStarted, Unreported) {
         let started = JobStarted {
@@ -314,6 +556,10 @@ impl Registry {
             extension: None,
             description,
             output_path: output_path.clone(),
+
+            pgid: Some(identity.pgid),
+            start_time: Some(identity.start_time),
+            kind: Some(contract::events::JobKind::Job),
         };
         let finish = Unreported {
             job_id: job_id.clone(),
@@ -417,6 +663,10 @@ impl Registry {
 
     /// Records an extension-owned delegate and sends its start under the
     /// same lock, before a reader can see it in the running list.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the process identity belongs with the started job record"
+    )]
     pub(crate) fn open_extension_started(
         self: &Arc<Self>,
         job_id: JobId,
@@ -424,6 +674,7 @@ impl Registry {
         description: String,
         output_path: String,
         stop: Stop,
+        identity: contract::jobs::JobIdentity,
         delegate: DelegateStarted,
     ) -> Unreported {
         let started = JobStarted {
@@ -432,6 +683,10 @@ impl Registry {
             extension: Some(extension),
             description,
             output_path: output_path.clone(),
+
+            pgid: Some(identity.pgid),
+            start_time: Some(identity.start_time),
+            kind: Some(contract::events::JobKind::Job),
         };
         let finish = Unreported {
             job_id,
@@ -501,6 +756,32 @@ impl Registry {
             .any(|job| job.started.job_id.0 == id)
     }
 
+    /// Whether this id names a detached process rather than a job.
+    pub(crate) fn is_detached(&self, id: &str) -> bool {
+        lock(&self.inner).jobs.iter().any(|job| {
+            job.started.job_id.0 == id
+                && job.started.kind == Some(contract::events::JobKind::Detached)
+        })
+    }
+
+    /// Whether stopping this detached entry needs review because its process
+    /// identity cannot be confirmed. A contradicted or dead identity is gone.
+    pub(crate) fn stop_needs_review(&self, id: &str) -> bool {
+        let started = {
+            let inner = lock(&self.inner);
+            let Some(job) = inner.jobs.iter().find(|job| job.started.job_id.0 == id) else {
+                return false;
+            };
+            if job.started.kind != Some(contract::events::JobKind::Detached)
+                || !matches!(job.phase, Phase::Running)
+            {
+                return false;
+            }
+            job.started.clone()
+        };
+        matches!(detached_identity(&started), IdentityState::Review)
+    }
+
     /// Blocks until `id`'s current run ends, `timeout_ms` passes, or
     /// `cancel` fires. Each call reads the run once and answers that
     /// run's final state, whatever run is current by then. A job that has
@@ -540,7 +821,29 @@ impl Registry {
         self: &Arc<Self>,
         id: &str,
         cancel: &dyn Cancel,
+        execute_approved: bool,
     ) -> Result<Answer, StopError> {
+        let started = {
+            let inner = lock(&self.inner);
+            inner
+                .jobs
+                .iter()
+                .find(|job| {
+                    job.started.job_id.0 == id
+                        && job.started.kind == Some(contract::events::JobKind::Detached)
+                        && matches!(job.phase, Phase::Running)
+                })
+                .map(|job| job.started.clone())
+        };
+        if let Some(started) = started {
+            match detached_identity(&started) {
+                IdentityState::Gone => return Err(StopError::NotRunning),
+                IdentityState::Review if !execute_approved => {
+                    return Err(StopError::NotRunning);
+                }
+                IdentityState::Confirmed | IdentityState::Review => {}
+            }
+        }
         let (stop, run) = self.send_stop(id)?;
         if let Some(stop) = stop {
             stop();
@@ -688,6 +991,30 @@ impl Wake for Registry {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdentityState {
+    Confirmed,
+    Review,
+    Gone,
+}
+
+fn detached_identity(started: &JobStarted) -> IdentityState {
+    let (Some(pgid), Some(start_time)) = (started.pgid, started.start_time) else {
+        return IdentityState::Review;
+    };
+    if !support::group::alive(pgid) {
+        return IdentityState::Gone;
+    }
+    if !support::group::pid_alive(pgid) {
+        return IdentityState::Review;
+    }
+    match support::group::start_time(pgid) {
+        Some(actual) if actual == start_time => IdentityState::Confirmed,
+        Some(_) => IdentityState::Gone,
+        None => IdentityState::Review,
+    }
+}
+
 fn timed_out(clock: &dyn Clock, until: Option<Instant>) -> bool {
     until.is_some_and(|until| clock.now() >= until)
 }
@@ -711,12 +1038,21 @@ pub(crate) fn mint_job_id() -> JobId {
 /// separator go together: anything else keeps its recorded path, and
 /// only a missing log is evidence of one.
 fn entry_text(job: &Job) -> String {
-    let mut line = format!(
-        "{} {} {}",
-        job.started.job_id.0,
-        phase_word(&job.phase),
-        job.started.description,
-    );
+    let mut line = if job.started.kind == Some(contract::events::JobKind::Detached) {
+        format!(
+            "{} detached {} {}",
+            job.started.job_id.0,
+            phase_word(&job.phase),
+            job.started.description,
+        )
+    } else {
+        format!(
+            "{} {} {}",
+            job.started.job_id.0,
+            phase_word(&job.phase),
+            job.started.description,
+        )
+    };
     let failure = match (&job.phase, &job.delegate) {
         (Phase::Ended(completed), Some(started)) if started.harness == "fiber" => {
             completed.error.as_ref()
@@ -939,7 +1275,21 @@ impl contract::jobs::Jobs for Registry {
             .jobs
             .iter()
             .filter(|job| matches!(job.phase, Phase::Running))
+            .filter(|job| job.started.kind != Some(contract::events::JobKind::Detached))
             .map(|job| job.started.job_id.clone())
+            .collect()
+    }
+
+    fn owned_identities(&self) -> Vec<contract::jobs::JobIdentity> {
+        lock(&self.inner)
+            .jobs
+            .iter()
+            .filter_map(|job| {
+                Some(contract::jobs::JobIdentity {
+                    pgid: job.started.pgid?,
+                    start_time: job.started.start_time?,
+                })
+            })
             .collect()
     }
 

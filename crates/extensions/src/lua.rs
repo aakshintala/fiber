@@ -46,6 +46,21 @@ pub(crate) const LOAD_TIMEOUT: Duration = Duration::from_secs(2);
 // `docs/extensions.md`, "How an extension runs".
 const GRACE: Duration = Duration::from_secs(1);
 
+/// The transfer bound of a focus `host.http` request: the declared request
+/// timeout or the time left to the callback's abandon point, whichever is
+/// shorter, computed when the request starts (`docs/extensions.md`, "How
+/// an extension runs"). Overflow-safe: a deadline past what the grace
+/// adds to still caps at the declared timeout, and a start past the
+/// abandon point fails fast at zero.
+pub(crate) fn http_bound(declared: Duration, deadline: Instant, now: Instant) -> Duration {
+    declared.min(
+        deadline
+            .checked_add(GRACE)
+            .map(|abandon| abandon.saturating_duration_since(now))
+            .unwrap_or(Duration::MAX),
+    )
+}
+
 /// Instructions between two looks at the clock while a deadline is ahead.
 pub(super) const CHECK_EVERY: u32 = 1000;
 
@@ -1186,7 +1201,7 @@ fn timeout_ms(timeout: Duration) -> u64 {
 }
 
 pub(crate) mod asks;
-mod command_calls;
+pub(crate) mod command_calls;
 mod declared;
 mod delegates;
 mod errors;

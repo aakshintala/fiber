@@ -14,6 +14,7 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 
 - A delegate is an agent session a session starts to do part of the work. It
   runs Fiber or another harness, such as Claude Code or cursor-agent.
+  Another harness is not built yet: see #545.
 - Every delegate is a job. It gets a receipt, an output file, a wake on
   completion, and is listed, waited for and stopped with `jobs`. A delegate
   always runs in the background; no call blocks until a delegate finishes. A
@@ -29,7 +30,7 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 - Every other harness is an extension: data plus Lua, as a provider is. What it
   declares is [Harness extensions](#harness-extensions).
 - Fiber ships the Claude Code and cursor-agent harnesses. codex and others
-  follow, unless adding them is trivial.
+  follow, unless adding them is trivial. Not built yet: see #545 and #546.
 - A harness loads whatever the person configured for it: their hooks,
   plugins, skills, MCP servers, instructions and memory. Fiber passes only the
   flags that drive the program.
@@ -291,9 +292,10 @@ final message, any questions, usage totals and worktree state. Their keys are
   `usage_recorded` lines it is missing.
 - Before marking a delegate job orphaned, the resumed parent reads its
   session log. When the log's latest run holds `fiber_exited`, the parent
-  settles the job from it: its exit code, its outcome and its final message,
-  as a live finish would. Only a delegate whose log's latest run has no
-  `fiber_exited` is marked orphaned. Shell jobs are unchanged.
+  settles the job from it: its exit code, its outcome, its final message
+  and, for an isolated delegate, its worktree, as a live finish would.
+  Only a delegate whose log's latest run has no `fiber_exited` is marked
+  orphaned. Shell jobs are unchanged.
 - A crash of any kind in a delegate, in Rust or in Lua's C code, ends that
   delegate `failed` and nothing else.
 
@@ -314,6 +316,9 @@ path is `invalid_arguments` and a git failure is `io_failed`.
   to lose, or any with `--force` (`docs/invocation.md`, "Deleting and
   pruning").
 - `delegate_finished` reports the path, the branch and whether it is dirty.
+  On a settled finish the `dirty` read is taken at settle time, which is
+  later than the live path's: it may describe a worktree that has since
+  changed or been removed.
 - A resume goes back into the kept worktree, or gets a fresh one from the
   current HEAD if it was removed. It reads the delegate's worktree record and
   run boundary from the delegate's project, including when `workspace` selected
@@ -391,6 +396,8 @@ path is `invalid_arguments` and a git failure is `io_failed`.
 
 ## Harness extensions
 
+**Not built yet: see #545.**
+
 Settled by
 [Harness extensions: running another agent as a delegate](https://github.com/aakshintala/fiber/issues/77);
 that ticket's resolution holds the probes and the rejected alternatives.
@@ -460,6 +467,8 @@ As Lua, none of which runs on a model request:
 
 ### Delegates on another harness
 
+**Not built yet: see #545 and #547.**
+
 A delegate on another harness has no socket of its own, so its parent stands
 in for it in session messaging (`docs/tools.md`, "Messaging other sessions"):
 
@@ -509,6 +518,8 @@ session messages directly and the parent would drop out of the path.
 
 ### Claude Code
 
+**Not built yet: see #545.**
+
 | What | How |
 |---|---|
 | Start | `claude -p --output-format stream-json --verbose --input-format stream-json --session-id <uuid> --model <model> --effort <effort> --permission-mode auto` |
@@ -540,6 +551,8 @@ Probed on Claude Code 2.1.284:
   The value with an API key was not probed.
 
 ### cursor-agent
+
+**Not built yet: see #546.**
 
 | What | How |
 |---|---|

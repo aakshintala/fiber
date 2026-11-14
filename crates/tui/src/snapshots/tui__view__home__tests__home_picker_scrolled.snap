@@ -9,7 +9,7 @@ expression: "screen(&app, 80, 24)"
 
 repo0 +  9 live · $0  Workspaces
 ⌥1 ● fix the parser                                                WORKING  0s ✕
-    s_00000000000000    /w
+    s_00000000000000  › /w
 ⌥2 ● fix the parser     /repo0                                     WORKING  0s ✕
     s_00000000000000    /repo1
 ⌥3 ● fix the parser     /repo2                                     WORKING  0s ✕
@@ -18,11 +18,11 @@ repo0 +  9 live · $0  Workspaces
     s_00000000000000    /repo5
 ⌥5 ● fix the parser     /repo6                                     WORKING  0s ✕
     s_00000000000000    /repo7
-⌥6 ● fix the parser   › /repo8                                     WORKING  0s ✕
+⌥6 ● fix the parser     /repo8                                     WORKING  0s ✕
     s_00000000000000
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  ↑↓ move · Enter open · Esc closes     ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █? for shortcuts
 ▌                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▌ [w]  [no model]  [thinking: default]  Enter starts a session
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-Enter opens the focused session, or starts one from the box · ↑↓ move · Delete s
+Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓

@@ -1,0 +1,8 @@
+# Cited corrections to the generated model lists (`docs/model-routing.md`,
+# "What a provider extension declares"): `cargo xtask models-dev` applies
+# each entry after the per-package table and deletes an entry once
+# models.dev agrees with it. Each entry names the vendor page that says
+# so (`source`) and the models.dev pull request fixing it upstream
+# (`upstream`). Only `name`, `protocol`, `context_window`,
+# `max_output_tokens`, `input` and `cost` may be overridden; every other
+# field comes from the per-package table alone.

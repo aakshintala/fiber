@@ -6,7 +6,7 @@ use super::super::super::{App, Effect};
 use super::State;
 use crate::app::testkit::{hello, home_with, sent};
 use crate::home::{Launch, Spot};
-use crate::keys::{Button, Key, Mouse, MouseKind};
+use crate::keys::{Button, Edit, Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::{Pointer, TargetId};
 use contract::SessionId;
@@ -256,10 +256,22 @@ fn deletes(lines: &[Value]) -> Vec<Value> {
 /// Confirms the open question, returning the raw lines going out.
 fn confirm(app: &mut App) -> Vec<String> {
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
-        panic!("Enter confirms");
-    };
-    lines
+    match app.on_key(Key::Enter, now) {
+        Effect::Send(lines) => lines,
+        Effect::SendTracked(sents) => sents.into_iter().map(|sent| sent.line).collect(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::ExitTracked(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => panic!("Enter confirms"),
+    }
 }
 
 /// Answers the discovery for `sessions` held by `held`, and confirms.
@@ -1290,7 +1302,7 @@ fn delete_accepted_goes_home_with_a_fresh_page() {
     assert!(
         lines
             .iter()
-            .any(|line| line["command"] == "recent" && line.get("args").is_none()),
+            .any(|line| line["command"] == "recent" && line.get("args") == Some(&json!({}))),
         "the unscoped page refreshes: {lines:?}"
     );
     assert!(
@@ -1394,7 +1406,13 @@ fn cancelling_does_not_turn_a_later_row_delete_into_a_stop() {
     app.on_line(left(A, "exited"));
     app.go_home();
     let key = app.home.sessions.row(&SessionId(A.to_owned())).unwrap().key;
-    assert_eq!(app.home_click(Spot::Stop(key)), Effect::None);
+    // The delete question opens with the Delete key: the row's ✕
+    // archives an exited row.
+    app.focus = Some(TargetId::Home(Spot::Entry(key)));
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
+    // The Stop click set no focus: clear it so the rest of the flow
+    // matches, since a stale home focus would steer later keys.
+    app.focus = None;
     assert!(frame(&app).contains("Delete session"));
     let lines = sent(app.on_key(Key::Enter, fakes::clock::FakeClock::new().now()));
     // The session-list delete sends one delete and no stops
@@ -1517,7 +1535,13 @@ fn another_rows_delete_answer_does_not_finish_the_command() {
     app.on_line(left(B, "exited"));
     app.go_home();
     let key = app.home.sessions.row(&SessionId(B.to_owned())).unwrap().key;
-    app.home_click(Spot::Stop(key));
+    // The delete question opens with the Delete key: the row's ✕
+    // archives an exited row.
+    app.focus = Some(TargetId::Home(Spot::Entry(key)));
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
+    // The Stop click set no focus: clear it so the rest of the flow
+    // matches, since a stale home focus would steer later keys.
+    app.focus = None;
     let old = confirm(&mut app);
     let old: Value = serde_json::from_str(&old[0]).unwrap();
     app.on_key(Key::Esc, fakes::clock::FakeClock::new().now());
@@ -2520,4 +2544,72 @@ fn the_second_commands_close_ids_are_its_stop_tags() {
         .to_owned();
     assert_eq!(generation(&app), 2);
     assert_eq!(app.delete_waiting_close_ids(), Some(vec![close_id]));
+}
+
+#[test]
+fn a_failed_delete_fold_settles_by_its_carried_id() {
+    let mut app = attached();
+    let _raw = asked(&mut app, &[A], &[A]);
+    // The exit lands: the delete goes out with the confirmed set, its
+    // id paired at the mixer.
+    let lines: Vec<String> = app.on_line(left(A, "exited"));
+    assert_eq!(lines.len(), 1);
+    let carried: String = serde_json::from_str::<Value>(&lines[0])
+        .ok()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .expect("delete id");
+    // Tamper with the delete's JSON id, then pair the tampered line as
+    // a builder whose line and id diverge would: settlement must follow
+    // the carried id, never the line's JSON.
+    let tampered = lines[0].replacen(&carried, "c_tampered", 1);
+    assert_ne!(tampered, lines[0]);
+    app.outbox
+        .note_hub_sent(&contract::CommandId(carried), &tampered);
+    app.write_failed(&[tampered]);
+    let texts: Vec<String> = app
+        .notices()
+        .into_iter()
+        .map(|line| match line {
+            crate::app::NoticeLine::Notice { text, .. } => text,
+            crate::app::NoticeLine::More(count) => format!("{count} more"),
+        })
+        .collect();
+    assert!(
+        texts.iter().any(|text| text == "Delete status unknown"),
+        "{texts:?}"
+    );
+}
+
+#[test]
+fn a_failed_delete_confirm_settles_by_its_carried_id() {
+    let mut app = attached();
+    // The question confirms with nothing held: the delete goes out
+    // tracked, and the delete waits for its answer.
+    let lines = asked(&mut app, &[A], &[]);
+    assert_eq!(lines.len(), 1);
+    let carried: String = serde_json::from_str::<Value>(&lines[0])
+        .ok()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .expect("delete id");
+    // Tamper with the delete's JSON id: the failure must settle by the
+    // carried id, never by parsing the tampered line.
+    let tampered = lines[0].replacen(&carried, "c_tampered", 1);
+    assert_ne!(tampered, lines[0]);
+    let sent = crate::app::Sent {
+        id: contract::CommandId(carried),
+        line: tampered,
+    };
+    app.write_failed_tracked(std::slice::from_ref(&sent));
+    let texts: Vec<String> = app
+        .notices()
+        .into_iter()
+        .map(|line| match line {
+            crate::app::NoticeLine::Notice { text, .. } => text,
+            crate::app::NoticeLine::More(count) => format!("{count} more"),
+        })
+        .collect();
+    assert!(
+        texts.iter().any(|text| text == "Delete status unknown"),
+        "{texts:?}"
+    );
 }

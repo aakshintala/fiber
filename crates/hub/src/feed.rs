@@ -42,13 +42,92 @@ use support::lock;
 
 use crate::attention::{Attention, Seen};
 use crate::connection::{Hub, Refused, accept_result, reject, send as send_line};
-use crate::recent::{self, Left, PageError, RecentRow};
+use crate::recent::{self, Left, RecentRow};
 use crate::relay::valid_session_id;
 use crate::tick::Tick;
 
 mod fanout;
 mod settle;
 use settle::Settle;
+
+/// Answers `recent` after opportunistic archiving, using one loaded index
+/// snapshot for selection, cursor lookup, page and total.
+pub(crate) fn recent_for_hub(
+    hub: &Hub,
+    args: &Map<String, Value>,
+) -> Result<Option<Value>, Refused> {
+    let (before, project, archived) = parse_recent_args(args)?;
+    let raw_snapshot = recent::read_all(&hub.home);
+    let newest_snapshot = recent::newest_first(raw_snapshot.clone());
+    let running: BTreeSet<String> = lock(&hub.feed.state)
+        .entries
+        .iter()
+        .filter(|(_, entry)| matches!(entry, Entry::Running(_)))
+        .map(|(id, _)| id.clone())
+        .collect();
+    let candidates = recent::archive_candidates(
+        &newest_snapshot,
+        project,
+        hub.keep_exited,
+        &running,
+        |workspace| std::fs::metadata(workspace).map(|_| ()),
+    );
+    let pre_archive = recent::listed_from_rows(&hub.home, raw_snapshot.clone(), project);
+    let mut snapshot = newest_snapshot;
+    for candidate in snapshot.clone() {
+        if candidates.contains(&candidate.session_id) {
+            crate::archive::try_archive_into_snapshot(hub, &candidate, &mut snapshot);
+        }
+    }
+    let rows = recent::listed_from_rows(&hub.home, snapshot.into_iter().rev().collect(), project);
+    let answer = if archived {
+        recent::page_from_rows(rows, before, &running, true)
+    } else {
+        let suffix_start = match before {
+            None => 0,
+            Some(before) => match pre_archive
+                .iter()
+                .position(|row| row.session_id.0 == before && !row.archived)
+            {
+                Some(index) => index + 1,
+                None => {
+                    return Err(Refused {
+                        code: ErrorCode::InvalidArguments,
+                        message: "`before` names no session in the list.".to_owned(),
+                    });
+                }
+            },
+        };
+        let post_archive: std::collections::BTreeMap<_, _> = rows
+            .into_iter()
+            .map(|row| (row.session_id.clone(), row))
+            .collect();
+        let total = post_archive
+            .values()
+            .filter(|row| !row.archived && !running.contains(&row.session_id.0))
+            .count();
+        let page = pre_archive
+            .into_iter()
+            .skip(suffix_start)
+            .filter_map(|row| {
+                post_archive
+                    .get(&row.session_id)
+                    .filter(|row| !row.archived)
+                    .cloned()
+            })
+            .filter(|row| !running.contains(&row.session_id.0))
+            .take(recent::RECENT_PAGE)
+            .collect();
+        Ok((page, total))
+    };
+    match answer {
+        Ok((rows, total)) => Ok(Some(serde_json::json!({"sessions": rows, "total": total}))),
+        Err(recent::PageError::UnknownBefore) => Err(Refused {
+            code: ErrorCode::InvalidArguments,
+            message: "`before` names no session in the list.".to_owned(),
+        }),
+    }
+}
 
 /// The bound, for tests: production capacity lives in [`spawn_writer`].
 #[cfg(test)]
@@ -88,6 +167,9 @@ pub(crate) struct Feed {
     /// set once by the hub serving it: the rejoin sweep collects resumed
     /// sessions there. Never under the state lock.
     pub(crate) on_scan: OnceLock<ScanHook>,
+    /// The keepers of gone sessions on this hub's machine, probed each
+    /// scan: `None` counts none. Set once by the hub serving it.
+    pub(crate) probe: OnceLock<Arc<dyn crate::KeeperProbe>>,
     /// Tests only: parks the listing thread between its `done()` check and
     /// its park in `wait_for`, so the test lands a change inside that
     /// window: no outside seam lands a change deterministically there,
@@ -109,6 +191,9 @@ pub(super) struct SettlePause {
 struct State {
     stopped: bool,
     entries: BTreeMap<String, Entry>,
+    /// The keepers of gone sessions the probe confirmed, in id order:
+    /// published as one `keepers` line on change and in every snapshot.
+    keepers: Vec<SessionId>,
     /// Sessions with a live summary connection: the stream to shut, and
     /// the stop that ends its reader.
     tracked: BTreeMap<String, Tracked>,
@@ -135,6 +220,25 @@ impl State {
             .filter(|id| !self.tracked.contains_key(*id) && !self.delegates.contains(*id))
             .cloned()
             .collect()
+    }
+}
+
+/// Why the feed forgot a session: what the broadcast line names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Forgotten {
+    /// Its directory was deleted.
+    Deleted,
+    /// It was archived.
+    Archived,
+}
+
+impl Forgotten {
+    /// The hub line kind for this removal.
+    fn kind(self) -> HubEventKind {
+        match self {
+            Forgotten::Deleted => HubEventKind::SessionDeleted,
+            Forgotten::Archived => HubEventKind::SessionArchived,
+        }
     }
 }
 
@@ -177,6 +281,7 @@ impl Feed {
             scanner: Mutex::new(None),
             on_rewound: OnceLock::new(),
             on_scan: OnceLock::new(),
+            probe: OnceLock::new(),
             #[cfg(test)]
             settle_pause: Mutex::new(None),
         }
@@ -277,8 +382,9 @@ impl Feed {
 
     /// The current snapshot as one line: every left session's last
     /// status and its `session_left`, then every running one's status,
-    /// each group in map order. One queue item however many sessions it
-    /// holds, never truncated: an oversized snapshot still subscribes.
+    /// each group in map order, then the `keepers` line, always, even
+    /// empty. One queue item however many sessions it holds, never
+    /// truncated: an oversized snapshot still subscribes.
     fn snapshot(&self, state: &State) -> Line {
         let mut bytes = Vec::new();
         for (id, entry) in &state.entries {
@@ -292,6 +398,7 @@ impl Feed {
                 bytes.extend_from_slice(&status.line);
             }
         }
+        bytes.extend_from_slice(&self.keepers_line(&state.keepers));
         Arc::from(bytes)
     }
 
@@ -351,9 +458,25 @@ impl Feed {
         }
     }
 
-    /// Drops any entry for `session`: its directory was deleted.
-    pub(crate) fn forget(&self, session: &str) {
-        lock(&self.state).entries.remove(session);
+    /// Drops a deleted or archived session's entry and tells every
+    /// subscriber: the row is already gone, so the terminal drops its
+    /// row and re-asks that project's counts. One line per call names
+    /// the session and its project, under the same state guard as the
+    /// removal, so a subscriber never sees the line for an entry that
+    /// comes back. After `stop` the fanout is emptied and a late call
+    /// removes only.
+    pub(crate) fn forget(&self, session: &str, project: &str, kind: Forgotten) {
+        let mut state = lock(&self.state);
+        if state.stopped {
+            return;
+        }
+        state.entries.remove(session);
+        let line = self.forgot_line(session, project, kind);
+        let closers = state.fanout.broadcast(&line);
+        drop(state);
+        // Shut outside the state lock, as the status and left paths do:
+        // a shutdown unblocks a writer holding its mutex.
+        close_connections(closers, UnixStream::shutdown);
         self.attention.forget(session);
     }
 
@@ -375,25 +498,9 @@ impl Feed {
     /// `recent`: a page of exited sessions, newest first. With
     /// `archived`, only archived sessions; without it, archived sessions
     /// are left out.
+    #[cfg(test)]
     pub(crate) fn recent(&self, args: &Map<String, Value>) -> Result<Option<Value>, Refused> {
-        let text = |key: &str| match args.get(key) {
-            None => Ok(None),
-            Some(Value::String(value)) => Ok(Some(value.as_str())),
-            Some(_) => Err(invalid()),
-        };
-        let before = text("before")?;
-        let project = text("project")?;
-        let archived = match args.get("archived") {
-            None => false,
-            Some(Value::Bool(wanted)) => *wanted,
-            Some(_) => return Err(invalid()),
-        };
-        if args
-            .keys()
-            .any(|key| key != "before" && key != "project" && key != "archived")
-        {
-            return Err(invalid());
-        }
+        let (before, project, archived) = parse_recent_args(args)?;
         let running = lock(&self.state)
             .entries
             .iter()
@@ -404,7 +511,7 @@ impl Feed {
             Ok((rows, total)) => Ok(Some(
                 serde_json::json!({ "sessions": rows, "total": total }),
             )),
-            Err(PageError::UnknownBefore) => Err(Refused {
+            Err(recent::PageError::UnknownBefore) => Err(Refused {
                 code: ErrorCode::InvalidArguments,
                 message: "`before` names no session in the list.".to_owned(),
             }),
@@ -434,8 +541,15 @@ impl Feed {
     }
 
     /// Connects to every session socket in `run/` not already followed,
-    /// and joins the threads that have ended.
+    /// joins the threads that have ended, and recounts the keepers of
+    /// gone sessions. The probe runs with no locks held; the set swaps
+    /// under the state lock and publishes on change.
     fn scan(self: &Arc<Self>) {
+        let keepers = self
+            .probe
+            .get()
+            .map(|probe| probe.keepers(&self.home, Arc::clone(&self.clock)))
+            .unwrap_or_default();
         let names: BTreeSet<String> = fs::read_dir(self.home.join("run"))
             .map(|dir| {
                 dir.filter_map(Result::ok)
@@ -461,9 +575,31 @@ impl Feed {
             self.follow(id);
         }
         self.scanned();
+        self.set_keepers(keepers);
         if let Some(on_scan) = self.on_scan.get() {
             on_scan(&names);
         }
+    }
+
+    /// Swaps in the probe's keeper set: on change, every subscriber gets
+    /// the whole set as one `keepers` line, through the `session_left`
+    /// fanout path. The probe ran with no locks held; the swap and the
+    /// queue hold the state lock only.
+    fn set_keepers(&self, keepers: Vec<SessionId>) {
+        if lock(&self.state).stopped {
+            return;
+        }
+        let line = self.keepers_line(&keepers);
+        let mut state = lock(&self.state);
+        if state.stopped || state.keepers == keepers {
+            return;
+        }
+        state.keepers = keepers;
+        let closers = state.fanout.broadcast(&line);
+        drop(state);
+        // Shut outside the state lock, as the status and left paths do:
+        // a shutdown unblocks a writer holding its mutex.
+        close_connections(closers, UnixStream::shutdown);
     }
 
     fn directory(&self, id: &str) -> Option<(String, PathBuf)> {
@@ -734,6 +870,44 @@ impl Feed {
         recent::append(&self.home, &row).unwrap_or(());
     }
 
+    /// A `keepers` hub line: the whole current set in id order, empty
+    /// when none. Ephemeral: a later set replaces it.
+    fn keepers_line(&self, keepers: &[SessionId]) -> Line {
+        let mut payload = Map::new();
+        payload.insert(
+            "keepers".to_owned(),
+            Value::Array(
+                keepers
+                    .iter()
+                    .map(|id| Value::String(id.0.clone()))
+                    .collect(),
+            ),
+        );
+        let line = HubLine {
+            kind: HubEventKind::Keepers,
+            ts: wall_ms(self.clock.wall()),
+            schema_version: SCHEMA_VERSION,
+            payload,
+        };
+        to_line(&line)
+    }
+
+    /// A `session_deleted` or `session_archived` hub line for `id` in
+    /// `project`: ephemeral, carrying no `seq`, so a new subscriber
+    /// learns nothing about a session that is already gone.
+    fn forgot_line(&self, id: &str, project: &str, kind: Forgotten) -> Line {
+        let mut payload = Map::new();
+        payload.insert("session_id".to_owned(), Value::String(id.to_owned()));
+        payload.insert("project".to_owned(), Value::String(project.to_owned()));
+        let line = HubLine {
+            kind: kind.kind(),
+            ts: wall_ms(self.clock.wall()),
+            schema_version: SCHEMA_VERSION,
+            payload,
+        };
+        to_line(&line)
+    }
+
     /// A `session_left` hub line for `id`.
     fn left_line(&self, id: &str, how: Left) -> Line {
         let mut payload = Map::new();
@@ -850,6 +1024,30 @@ fn status_line(row: &RecentRow, payload: &SessionStatus) -> Line {
         seq: None,
         payload,
     })
+}
+
+fn parse_recent_args(
+    args: &Map<String, Value>,
+) -> Result<(Option<&str>, Option<&str>, bool), Refused> {
+    let text = |key: &str| match args.get(key) {
+        None => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.as_str())),
+        Some(_) => Err(invalid()),
+    };
+    let before = text("before")?;
+    let project = text("project")?;
+    let archived = match args.get("archived") {
+        None => false,
+        Some(Value::Bool(wanted)) => *wanted,
+        Some(_) => return Err(invalid()),
+    };
+    if args
+        .keys()
+        .any(|key| key != "before" && key != "project" && key != "archived")
+    {
+        return Err(invalid());
+    }
+    Ok((before, project, archived))
 }
 
 pub(crate) fn invalid() -> Refused {

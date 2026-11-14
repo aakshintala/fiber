@@ -12,6 +12,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use crate::extension_harness::{send, until_session, until_session_close};
 use crate::support;
 
 use std::os::unix::fs::PermissionsExt;
@@ -99,16 +100,14 @@ fn process_with(setup: &Setup, short: &str, extra: &Value, plan: &Value) {
             "process": process,
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// A valid `fiber.tool` spec with `run`, as JSON.
@@ -135,6 +134,305 @@ fn hook_spec() -> Value {
 /// A valid `fiber.watch` spec with `run`, as JSON.
 fn watcher_spec() -> Value {
     json!({"timeout": 5000, "run": true})
+}
+
+/// Registers a command. Its callback calls `host.tool`
+/// twice in sequence and records each returned value before replying.
+fn command_tool_plan(first: &str, second: &str) -> Value {
+    let host_tool = |id: &str, marker: &str| {
+        vec![
+            json!({"send": {"id": id, "command": "call", "args": {
+                "call": "host.tool", "args": ["read", {"path": "note.txt"}],
+                "request_id": {"$ref": "req.payload.request_id"}
+            }}}),
+            json!({"write_file": {"path": marker, "value": {"stage": "sent"}}}),
+            json!({"read_until": {"path": "payload.command_id", "equals": id}}),
+            json!({"write_file": {"path": marker, "value": {"$ref": "last"}}}),
+        ]
+    };
+    let mut command_callback = vec![
+        json!({"send": {"id": "command-starting", "command": "call", "args": {
+            "call": "host.status", "args": ["starting"], "request_id": {"$ref": "req.payload.request_id"}
+        }}}),
+        json!({"read_until": {"path": "payload.command_id", "equals": "command-starting"}}),
+    ];
+    command_callback.extend(host_tool("inner-1", first));
+    command_callback.extend(host_tool("inner-2", second));
+    command_callback.push(
+        json!({"send": {"id": "status-call", "command": "call", "args": {
+            "call": "host.status", "args": ["both-returned"],
+            "request_id": {"$ref": "req.payload.request_id"}
+        }}}),
+    );
+    command_callback
+        .push(json!({"read_until": {"path": "payload.command_id", "equals": "status-call"}}));
+    command_callback.push(
+        json!({"send": {"id": "command-result", "command": "reply", "args": {
+            "request_id": {"$ref": "req.payload.request_id"}, "result": "both-returned"
+        }}}),
+    );
+    let callback = Value::Array(command_callback);
+    let serve = json!([
+        {"read": {"as": "req"}},
+        {"if": {"path": "req.kind", "equals": "extension_request", "then": callback}}
+    ]);
+    let mut plan = vec![json!({"read": {"as": "hello"}})];
+    for action in register(
+        "fiber.command",
+        "command-reg",
+        json!(["exercise", {"timeout": 5000, "run": true}]),
+    )
+    .as_array()
+    .unwrap()
+    {
+        plan.push(action.clone());
+    }
+    plan.push(json!({"send": {"id": "ready", "command": "ready"}}));
+    plan.push(json!({"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready"}}}}));
+    plan.push(json!({"loop": serve}));
+    Value::Array(plan)
+}
+
+/// Asserts one ordered pair and includes the documentation line that promises it.
+fn assert_event_precedes(
+    events: &[Value],
+    before: impl Fn(&Value) -> bool,
+    after: impl Fn(&Value) -> bool,
+    promise: &str,
+) {
+    let before = events
+        .iter()
+        .position(before)
+        .unwrap_or_else(|| panic!("{promise}: the earlier event is missing ({events:?})"));
+    let after = events
+        .iter()
+        .position(after)
+        .unwrap_or_else(|| panic!("{promise}: the later event is missing ({events:?})"));
+    assert!(before < after, "{promise}: {events:?}");
+}
+
+/// An idle process command can make two sequential inner calls. Each call
+/// is anchored to the admitted driver invocation and logs the documented
+/// per-call event triplet.
+#[test]
+fn process_command_host_tool_runs_alone_while_idle() {
+    let setup = Setup::new();
+    std::fs::write(setup.workspace().join("note.txt"), "read\n").unwrap();
+    let first = setup.workspace().join("first.json");
+    let second = setup.workspace().join("second.json");
+    process_with(
+        &setup,
+        "command-tool",
+        &json!({}),
+        &command_tool_plan(first.to_str().unwrap(), second.to_str().unwrap()),
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(
+        &client,
+        r#"{"id":"cmd","command":"command","args":{"name":"exercise"}}"#,
+    );
+    let events = until_session(&client, "process command inner calls", |line| {
+        line["kind"] == "extension_ui"
+            && line["payload"]["extension"] == "fiber.test/command-tool"
+            && line["payload"]["status"] == "both-returned"
+    });
+    assert_eq!(events.last().unwrap()["payload"]["status"], "both-returned");
+    for marker in [&first, &second] {
+        let answer: Value = serde_json::from_slice(&std::fs::read(marker).unwrap()).unwrap();
+        assert_eq!(answer["kind"], "command_accepted");
+        assert_eq!(answer["payload"]["result"]["value"]["status"], "completed");
+    }
+    let inner: Vec<_> = events
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_requested")
+        .collect();
+    assert_eq!(
+        inner.len(),
+        2,
+        "command_tool_plan sends two host.tool calls; `docs/extensions.md`, `Running a tool`, says each inner call is logged as a call of its own"
+    );
+    for line in &inner {
+        assert_eq!(
+            line["payload"]["ran_by"],
+            json!({"extension":"fiber.test/command-tool", "command_id":"cmd"})
+        );
+    }
+    let action_ids: Vec<_> = inner
+        .iter()
+        .map(|line| line["action_id"].as_str().unwrap())
+        .collect();
+    for action in action_ids {
+        let matching: Vec<_> = events
+            .iter()
+            .filter(|line| line["action_id"] == action)
+            .collect();
+        let kinds = matching
+            .iter()
+            .map(|line| line["kind"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            [
+                "tool_call_requested",
+                "tool_call_started",
+                "tool_call_completed"
+            ],
+            "`docs/extensions.md`, `Running a tool`: each inner call is logged as its own requested, started and completed triplet"
+        );
+        let action = matching[0]["action_id"].as_str().unwrap();
+        assert_event_precedes(
+            &events,
+            |line| line["action_id"] == action && line["kind"] == "tool_call_requested",
+            |line| line["action_id"] == action && line["kind"] == "tool_call_started",
+            "`docs/extensions.md`, `Running a tool`: the tool call is requested before it starts",
+        );
+        assert_event_precedes(
+            &events,
+            |line| line["action_id"] == action && line["kind"] == "tool_call_started",
+            |line| line["action_id"] == action && line["kind"] == "tool_call_completed",
+            "`docs/extensions.md`, `Running a tool`: the call completes after it starts",
+        );
+    }
+    assert_event_precedes(
+        &events,
+        |line| line["action_id"] == inner[0]["action_id"] && line["kind"] == "tool_call_completed",
+        |line| line["action_id"] == inner[1]["action_id"] && line["kind"] == "tool_call_requested",
+        "`docs/extensions.md`, `Commands and screens`: inner calls run in the order they arrived",
+    );
+    send(&client, r#"{"id":"close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+/// While the turn waits for permission, a process command cannot start its
+/// inner call. Resolving the interaction lets it run at the next step boundary.
+#[test]
+fn process_command_inner_call_waits_behind_interaction_until_step_boundary() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "approval-call",
+            "shell",
+            &json!({"command": "echo hi"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    std::fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    std::fs::write(setup.workspace().join("note.txt"), "read\n").unwrap();
+    let first = setup.workspace().join("first.json");
+    let second = setup.workspace().join("second.json");
+    process_with(
+        &setup,
+        "command-turn-boundary",
+        &json!({}),
+        &command_tool_plan(first.to_str().unwrap(), second.to_str().unwrap()),
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"subscribe","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(
+        &client,
+        r#"{"id":"prompt","command":"prompt","args":{"content":[{"type":"text","text":"run it"}]}}"#,
+    );
+    let asked = until_session(&client, "the pending permission", |line| {
+        line["kind"] == "permission_requested"
+    });
+    let permission = asked.last().unwrap()["payload"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    send(
+        &client,
+        r#"{"id":"command","command":"command","args":{"name":"exercise"}}"#,
+    );
+    let started = until_session(
+        &client,
+        "the command to reach its first host.tool",
+        |line| {
+            line["kind"] == "extension_ui"
+                && line["payload"]["extension"] == "fiber.test/command-turn-boundary"
+                && line["payload"]["status"] == "starting"
+        },
+    );
+    let sent_marker = first.clone();
+    fakes::wait_until("the fake to send host.tool", setup.deadline, move || {
+        std::fs::read(&sent_marker)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .is_some_and(|value| value["stage"] == "sent")
+    });
+    send(
+        &client,
+        &format!(
+            r#"{{"id":"permission-reply","command":"reply","args":{{"request_id":"{permission}","decision":"allow"}}}}"#
+        ),
+    );
+    let done = until_session(&client, "the resolved turn", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let mut stream = [asked, started, done].concat();
+    if !stream.iter().any(|line| {
+        line["kind"] == "extension_ui"
+            && line["payload"]["extension"] == "fiber.test/command-turn-boundary"
+            && line["payload"]["status"] == "both-returned"
+    }) {
+        stream.extend(until_session(
+            &client,
+            "the process command result",
+            |line| {
+                line["kind"] == "extension_ui"
+                    && line["payload"]["extension"] == "fiber.test/command-turn-boundary"
+                    && line["payload"]["status"] == "both-returned"
+            },
+        ));
+    }
+    let inner_request = |line: &Value| {
+        line["kind"] == "tool_call_requested"
+            && line["payload"]["ran_by"]["extension"] == "fiber.test/command-turn-boundary"
+    };
+    let boundary_promise = "`docs/extensions.md`, `Commands and screens`: a step waiting on an interaction leaves the command inner call queued, and it starts at the next step boundary";
+    assert_event_precedes(
+        &stream,
+        |line| line["kind"] == "permission_resolved",
+        inner_request,
+        boundary_promise,
+    );
+    assert_event_precedes(
+        &stream,
+        inner_request,
+        |line| line["kind"] == "turn_completed",
+        boundary_promise,
+    );
+    let inner = stream.iter().position(inner_request).unwrap();
+    assert_eq!(stream[inner]["payload"]["ran_by"]["command_id"], "command");
+    send(&client, r#"{"id":"close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
 }
 
 /// Sends one registration call, then waits for its answer.

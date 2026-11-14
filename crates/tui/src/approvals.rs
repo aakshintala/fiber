@@ -57,6 +57,10 @@ struct Request {
 
 /// What a request asks: an approval, a question form or a one-question
 /// interaction.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the queue holds a few requests; boxing its approval arm would add indirection on every fold and key press"
+)]
 #[derive(Debug, Clone)]
 enum Ask {
     Approval(Approval),
@@ -138,6 +142,36 @@ pub(crate) enum PanelKey {
     Answer,
     /// Decline the shown question: Esc, or "Chat about this".
     Decline,
+}
+
+/// The main argument, never JSON: raw text that was not JSON shows as
+/// the model sent it.
+fn main_argument(name: &str, arguments: &Value) -> String {
+    match arguments {
+        Value::String(text) => crate::text::controls_to_space(text),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
+            crate::text::controls_to_space(&format::summary(name, arguments))
+        }
+    }
+}
+
+/// The card's tool row for `asked`: the rewrite when it carries
+/// arguments, else the requested summary. `changed_by` without arguments
+/// changes nothing; an empty list draws no mark.
+fn retargeted(
+    requested: &Option<(String, String)>,
+    asked: &PermissionRequested,
+) -> (Option<(String, String)>, Vec<String>) {
+    match (&asked.arguments, requested) {
+        (Some(arguments), Some((tool, _))) => {
+            let summary = main_argument(tool, &Value::Object(arguments.clone()));
+            (
+                Some((tool.clone(), summary)),
+                asked.changed_by.clone().unwrap_or_default(),
+            )
+        }
+        _ => (requested.clone(), Vec::new()),
+    }
 }
 
 /// The approval queue and the panel's place in it.
@@ -398,19 +432,7 @@ impl Queue {
                     action,
                     crate::app::read_ref::<ToolCallRequested>(&envelope.payload),
                 ) {
-                    // The main argument, never JSON: raw text that was not
-                    // JSON shows as the model sent it.
-                    let summary = match &call.arguments {
-                        Value::String(text) => crate::text::controls_to_space(text),
-                        Value::Null
-                        | Value::Bool(_)
-                        | Value::Number(_)
-                        | Value::Array(_)
-                        | Value::Object(_) => crate::text::controls_to_space(&format::summary(
-                            &call.name,
-                            &call.arguments,
-                        )),
-                    };
+                    let summary = main_argument(&call.name, &call.arguments);
                     self.calls
                         .insert((session.0.clone(), action), (call.name, summary));
                 }
@@ -420,10 +442,30 @@ impl Queue {
                 else {
                     return;
                 };
-                self.queue(session, asked.request_id.0, false, |calls| {
-                    let call = action.and_then(|action| calls.remove(&(session.0.clone(), action)));
+                let call = action
+                    .clone()
+                    .and_then(|action| self.calls.remove(&(session.0.clone(), action)));
+                let key = (session.0.clone(), asked.request_id.0.clone());
+                if let Some(request) = self
+                    .requests
+                    .iter_mut()
+                    .find(|request| request.key() == key)
+                    && let Ask::Approval(approval) = &mut request.ask
+                {
+                    // A re-raise: every request-derived field comes from the
+                    // latest raise, and a raise without a rewrite restores
+                    // the kept requested summary. What the person typed
+                    // stays.
+                    approval.reraise(call, &asked);
+                    return;
+                }
+                let request_id = asked.request_id.0.clone();
+                self.queue(session, request_id, false, |_| {
+                    let (display, changed_by) = retargeted(&call, &asked);
                     Ask::Approval(Approval {
-                        call,
+                        call: display,
+                        requested: call,
+                        changed_by,
                         reversible: asked.declared.reversible,
                         effects: asked.declared.effects.clone(),
                         paths: asked
@@ -559,6 +601,8 @@ impl Queue {
             | EventKind::DelegateFinished
             | EventKind::JobCompleted
             | EventKind::JobsPendingNotified
+            | EventKind::KeeperStarted
+            | EventKind::KeeperBound
             | EventKind::CommandAccepted
             | EventKind::CommandRejected
             | EventKind::Unknown(_) => {}
@@ -566,8 +610,10 @@ impl Queue {
     }
 
     /// Queues the request `request_id` from `session`, made by `ask` from
-    /// the calls seen, and surfaces it. A request already queued, such as a
-    /// interaction raised again on resume, keeps what the person typed.
+    /// the calls seen, and surfaces it. A request already queued, such as
+    /// an interaction raised again on resume, keeps what the person typed.
+    /// A re-raised approval never reaches this: the fold updates its card
+    /// in place, keeping the typed state and showing the latest raise.
     fn queue(
         &mut self,
         session: &SessionId,

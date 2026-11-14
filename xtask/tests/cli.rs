@@ -351,6 +351,8 @@ fn select_fails_without_a_base() {
     assert!(out.starts_with("xtask: git merge-base"), "{out}");
 }
 
+/// `docs/ci.md`, "On every pull request that changes code": CI plans one
+/// shard per 15 mutants, rounded up, so 40 mutants produce three shards.
 #[test]
 fn plan_prints_the_jobs_and_shards() {
     let dir = workspace();
@@ -377,7 +379,7 @@ fn plan_prints_the_jobs_and_shards() {
     assert_eq!(code, 0);
     assert_eq!(
         out,
-        "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"release\":false,\"stress\":false,\"test\":false,\"test_linux\":true}\nshards=[0,1,2]\nshard_total=3\nshard_timeout=40\nten_turns=false\nbase_skip=\n"
+        "jobs={\"bug_red\":true,\"clippy_macos\":false,\"lint\":true,\"mutants\":true,\"release\":false,\"scripts_self_test_macos\":false,\"stress\":false,\"test\":false,\"test_linux\":true}\nshards=[0,1,2]\nmutants=true\nreuse=false\nshard_total=3\nshard_timeout=40\nten_turns=false\nbase_skip=\n"
     );
     let bad = [
         "plan",
@@ -394,6 +396,355 @@ fn plan_prints_the_jobs_and_shards() {
     let mut not_a_count = args.to_vec();
     *not_a_count.last_mut().unwrap() = "many";
     assert_eq!(xtask(&dir, &not_a_count, &[], "").0, 2);
+}
+
+#[test]
+fn plan_reuse_candidates_prints_unique_ids_in_source_order() {
+    let dir = workspace();
+    dir.write(
+        "runs.json",
+        r#"{"workflow_runs":[{"id":7},{"id":8},{"id":7},{"id":"bad"}]}"#,
+    );
+    let args = ["plan", "reuse-candidates", "--runs", "runs.json"];
+    let (code, out) = xtask(&dir, &args, &[], "");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "7\n8\n");
+}
+
+#[test]
+fn plan_reuses_a_matching_pull_request_run_and_prints_its_identity() {
+    let dir = workspace();
+    let base = common::git(&dir, &["rev-parse", "main"]);
+    let runs = serde_json::json!({
+        "workflow_runs": [{
+            "id": 7,
+            "head_sha": "abc123",
+            "status": "completed",
+            "pull_requests": [{
+                "number": 3899,
+                "head": { "sha": "abc123" },
+                "base": { "sha": base },
+            }],
+        }]
+    });
+    let jobs_dir = dir.path().join("jobs");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    let shard_jobs: Vec<_> = (0..3)
+        .map(|i| {
+            serde_json::json!({
+                "name": format!("Mutants (shard {i}, base {base})"),
+                "conclusion": "success",
+            })
+        })
+        .collect();
+    let first_page = serde_json::json!({"jobs": [shard_jobs[0].clone()]});
+    let second_page = serde_json::json!({"jobs": [shard_jobs[1].clone(), shard_jobs[2].clone()]});
+    dir.write("runs.json", &runs.to_string());
+    dir.write("jobs/7.json", &format!("{}\n{}\n", first_page, second_page));
+    let args = vec![
+        "plan",
+        "--base",
+        &base,
+        "--mode",
+        "crates",
+        "--packages",
+        "a",
+        "--event",
+        "pull_request",
+        "--draft",
+        "false",
+        "--bug",
+        "false",
+        "--mutant-count",
+        "40",
+        "--lookup-ok",
+        "true",
+        "--head",
+        "abc123",
+        "--run-id",
+        "100",
+        "--pr",
+        "3899",
+        "--runs",
+        "runs.json",
+        "--jobs",
+        "jobs",
+    ];
+    let (code, out) = xtask(&dir, &args, &[], "");
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("mutants=false\n"), "{out}");
+    assert!(
+        out.contains("reuse=true\nmatched_run_id=7\nmatched_pr_head=abc123\n"),
+        "{out}"
+    );
+
+    let mut failed_lookup = args.clone();
+    let runs_arg = failed_lookup
+        .iter()
+        .position(|arg| *arg == "--runs")
+        .unwrap();
+    failed_lookup[runs_arg + 1] = "missing-runs.json";
+    let (code, out) = xtask(&dir, &failed_lookup, &[], "");
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("mutants=true\n"), "{out}");
+    assert!(out.contains("shards=[0,1,2]\n"), "{out}");
+    assert!(out.contains("reuse=false\n"), "{out}");
+
+    let mut unsuccessful_lookup = args.clone();
+    let lookup_arg = unsuccessful_lookup
+        .iter()
+        .position(|arg| *arg == "--lookup-ok")
+        .unwrap();
+    unsuccessful_lookup[lookup_arg + 1] = "false";
+    let (code, out) = xtask(&dir, &unsuccessful_lookup, &[], "");
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("mutants=true\n"), "{out}");
+    assert!(out.contains("shards=[0,1,2]\n"), "{out}");
+    assert!(out.contains("reuse=false\n"), "{out}");
+
+    std::fs::remove_file(dir.path().join("jobs/7.json")).unwrap();
+    let (code, out) = xtask(&dir, &args, &[], "");
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("mutants=true\n"), "{out}");
+    assert!(out.contains("shards=[0,1,2]\n"), "{out}");
+
+    dir.write("jobs/7.json", "{not json}\n");
+    let (code, out) = xtask(&dir, &args, &[], "");
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("mutants=true\n"), "{out}");
+    assert!(out.contains("shards=[0,1,2]\n"), "{out}");
+}
+
+#[test]
+fn plan_reports_budget_breach_exemption_and_preserves_mutant_selection() {
+    let dir = workspace();
+    git(&dir, &["checkout", "-q", "-b", "pr"]);
+    dir.write("scripts/test-plan.sh", "#!/bin/sh\n");
+    git(&dir, &["add", "scripts/test-plan.sh"]);
+    git(&dir, &["commit", "-qm", "change script path"]);
+    let summary = dir.path().join("summary.md");
+    std::fs::write(&summary, "").unwrap();
+    let summary_path = summary.to_str().unwrap();
+    let args = [
+        "plan",
+        "--base",
+        "main",
+        "--mode",
+        "crates",
+        "--packages",
+        "a b",
+        "--event",
+        "pull_request",
+        "--draft",
+        "false",
+        "--bug",
+        "true",
+        "--mutant-count",
+        "40",
+        "--pr-body",
+        "## Budget breach\nCause\nBase: 10 bytes\nHead: 12 bytes",
+    ];
+    let (code, out) = xtask(&dir, &args, &[("GITHUB_STEP_SUMMARY", summary_path)], "");
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("budget_breach=true\n"), "{out}");
+    assert!(out.contains("jobs={\"bug_red\":false"), "{out}");
+    assert!(out.contains("\"scripts_self_test_macos\":true"), "{out}");
+    assert!(out.contains("\"mutants\":true"), "{out}");
+    // `docs/ci.md`, "On every pull request that changes code": CI plans one
+    // shard per 15 mutants, rounded up; 40 mutants therefore produce three.
+    assert!(out.contains("shards=[0,1,2]\n"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(&summary).unwrap(),
+        "Budget breach exemption: bug-red legs skipped; reviewers judge Base/Head measurements.\n"
+    );
+
+    std::fs::write(&summary, "").unwrap();
+    let (code, ordinary) = xtask(
+        &dir,
+        &args[..args.len() - 2],
+        &[("GITHUB_STEP_SUMMARY", summary_path)],
+        "",
+    );
+    assert_eq!(code, 0, "{ordinary}");
+    assert!(!ordinary.contains("budget_breach="), "{ordinary}");
+    assert!(ordinary.contains("jobs={\"bug_red\":true"), "{ordinary}");
+    assert_eq!(std::fs::read_to_string(&summary).unwrap(), "");
+
+    std::fs::write(&summary, "").unwrap();
+    let mut non_bug = args.to_vec();
+    non_bug[12] = "false";
+    let (code, non_bug_out) = xtask(&dir, &non_bug, &[("GITHUB_STEP_SUMMARY", summary_path)], "");
+    assert_eq!(code, 0, "{non_bug_out}");
+    assert!(!non_bug_out.contains("budget_breach="), "{non_bug_out}");
+    assert!(
+        non_bug_out.contains("jobs={\"bug_red\":false"),
+        "{non_bug_out}"
+    );
+    assert!(non_bug_out.contains("\"mutants\":true"), "{non_bug_out}");
+    assert!(non_bug_out.contains("shards=[0,1,2]\n"), "{non_bug_out}");
+    assert_eq!(std::fs::read_to_string(&summary).unwrap(), "");
+
+    let (code, unset_summary) = xtask_without(&dir, &args, &[], &["GITHUB_STEP_SUMMARY"], "");
+    assert_eq!(code, 0, "{unset_summary}");
+    assert!(
+        unset_summary.contains("budget_breach=true\n"),
+        "{unset_summary}"
+    );
+
+    let mut push = args.to_vec();
+    push[8] = "push";
+    let (code, push_out) = xtask(&dir, &push, &[("GITHUB_STEP_SUMMARY", summary_path)], "");
+    assert_eq!(code, 0, "{push_out}");
+    assert!(!push_out.contains("budget_breach="), "{push_out}");
+    assert!(
+        push_out.contains("\"scripts_self_test_macos\":false"),
+        "{push_out}"
+    );
+    assert!(!push_out.contains("jobs={\"bug_red\":true"), "{push_out}");
+    assert_eq!(std::fs::read_to_string(&summary).unwrap(), "");
+}
+
+#[test]
+fn plan_does_not_select_scripts_job_for_deleted_script_path() {
+    let dir = workspace();
+    std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+    dir.write("scripts/probe", "#!/bin/sh\n");
+    git(&dir, &["add", "-f", "scripts/probe"]);
+    git(&dir, &["commit", "-qm", "base probe"]);
+    git(&dir, &["switch", "-qc", "pr"]);
+    git(&dir, &["rm", "scripts/probe"]);
+    git(&dir, &["commit", "-qm", "delete probe"]);
+    let args = [
+        "plan",
+        "--base",
+        "main",
+        "--mode",
+        "docs",
+        "--packages",
+        "",
+        "--event",
+        "pull_request",
+        "--draft",
+        "false",
+        "--bug",
+        "false",
+        "--mutants",
+        "false",
+        "--mutant-count",
+        "0",
+    ];
+    let (code, out) = xtask(&dir, &args, &[], "");
+    assert_eq!(code, 0, "{out}");
+    let jobs: serde_json::Value = serde_json::from_str(
+        out.lines()
+            .next()
+            .and_then(|line| line.strip_prefix("jobs="))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(jobs["scripts_self_test_macos"], false);
+}
+
+#[test]
+fn plan_keeps_unreadable_script_path_present() {
+    let dir = workspace();
+    std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+    dir.write("scripts/probe", "#!/bin/sh\n");
+    git(&dir, &["add", "-f", "scripts/probe"]);
+    git(&dir, &["commit", "-qm", "base probe"]);
+    git(&dir, &["switch", "-qc", "pr"]);
+    dir.write("scripts/probe", "#!/bin/sh\n# changed\n");
+    git(&dir, &["add", "scripts/probe"]);
+    git(&dir, &["commit", "-qm", "change probe"]);
+    std::fs::remove_file(dir.path().join("scripts/probe")).unwrap();
+    std::fs::create_dir_all(dir.path().join("scripts/probe")).unwrap();
+    let args = [
+        "plan",
+        "--base",
+        "main",
+        "--mode",
+        "docs",
+        "--packages",
+        "",
+        "--event",
+        "pull_request",
+        "--draft",
+        "false",
+        "--bug",
+        "false",
+        "--mutants",
+        "false",
+        "--mutant-count",
+        "0",
+    ];
+    let (code, out) = xtask(&dir, &args, &[], "");
+    assert_eq!(code, 0, "{out}");
+    let jobs: serde_json::Value = serde_json::from_str(
+        out.lines()
+            .next()
+            .and_then(|line| line.strip_prefix("jobs="))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(jobs["scripts_self_test_macos"], true);
+}
+
+#[test]
+fn plan_uses_rename_detected_head_diff_paths_for_scripts_job() {
+    let args = [
+        "plan",
+        "--base",
+        "main",
+        "--mode",
+        "docs",
+        "--packages",
+        "",
+        "--event",
+        "pull_request",
+        "--draft",
+        "false",
+        "--bug",
+        "false",
+        "--mutants",
+        "false",
+        "--mutant-count",
+        "0",
+    ];
+    for (source, destination, expected) in [
+        ("src/probe", "scripts/probe", true),
+        ("scripts/probe", "other/probe", false),
+    ] {
+        let dir = workspace();
+        if source.starts_with("scripts/") {
+            std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+        }
+        dir.write(source, "#!/bin/sh\n");
+        git(&dir, &["add", "-f", source]);
+        git(&dir, &["commit", "-qm", "base probe"]);
+        git(&dir, &["switch", "-qc", "pr"]);
+        if destination.starts_with("scripts/") {
+            std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+        }
+        if destination.starts_with("other/") {
+            std::fs::create_dir_all(dir.path().join("other")).unwrap();
+        }
+        git(&dir, &["config", "diff.renames", "false"]);
+        git(&dir, &["mv", source, destination]);
+        git(&dir, &["commit", "-qm", "move probe"]);
+        let (code, out) = xtask(&dir, &args, &[], "");
+        assert_eq!(code, 0, "{out}");
+        let jobs: serde_json::Value = serde_json::from_str(
+            out.lines()
+                .next()
+                .and_then(|line| line.strip_prefix("jobs="))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            jobs["scripts_self_test_macos"], expected,
+            "{source} -> {destination}"
+        );
+    }
 }
 
 /// `HOME` and `TMPDIR` point at the temp dir, so a test that runs `git`
@@ -1281,7 +1632,7 @@ fn pr_plan_args(base: &str) -> Vec<&str> {
         "--bug",
         "false",
         "--mutants",
-        "false",
+        "true",
         "--mutant-count",
         "0",
     ]
@@ -2505,6 +2856,81 @@ fn flake_classify_missing_flags_and_unreadable_files_are_errors() {
 }
 
 #[test]
+fn journey_streak_cli_dispatches_input_output() {
+    let dir = TempDir::new("journey-streak-cli");
+    let input = r#"[{"databaseId":2,"event":"push","headBranch":"main","conclusion":"failure"}]"#;
+    let (code, output) = xtask(&dir, &["journey-streak", "select"], &[], input);
+    assert_eq!(code, 0);
+    assert_eq!(output.trim(), "2");
+
+    let current = dir.path().join("current.txt");
+    let runs = dir.path().join("runs.json");
+    let history = dir.path().join("history");
+    let prior = history.join("1");
+    std::fs::create_dir_all(&prior).unwrap();
+    std::fs::write(&current, "qa\n").unwrap();
+    std::fs::write(&runs, r#"[{"databaseId":2,"headSha":"0123456789abcdef0123456789abcdef01234567","event":"push","headBranch":"main","conclusion":"failure"},{"databaseId":1,"headSha":"abcdef0123456789abcdef0123456789abcdef01","event":"push","headBranch":"main","conclusion":"failure"}]"#).unwrap();
+    std::fs::write(
+        prior.join("view.json"),
+        r#"{"jobs":[{"name":"Journey suite on the release binary","conclusion":"failure"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(prior.join("journey-failures.txt"), "qa\n").unwrap();
+    let output_path = dir.path().join("streaks.json");
+    let (code, output) = xtask(
+        &dir,
+        &[
+            "journey-streak",
+            "compute",
+            "--current-id",
+            "2",
+            "--current-sha",
+            "0123456789abcdef0123456789abcdef01234567",
+            "--failures",
+            current.to_str().unwrap(),
+            "--runs",
+            runs.to_str().unwrap(),
+            "--history-dir",
+            history.to_str().unwrap(),
+            "--output",
+            output_path.to_str().unwrap(),
+        ],
+        &[],
+        "",
+    );
+    assert_eq!(code, 0, "{output}");
+    assert_eq!(
+        std::fs::read_to_string(&output_path).unwrap(),
+        r#"{"qa":{"count":2,"first_sha":"abcdef0123456789abcdef0123456789abcdef01"}}"#
+    );
+    std::fs::write(&runs, "[]").unwrap();
+    let current_only_output = dir.path().join("current-only.json");
+    let (code, output) = xtask(
+        &dir,
+        &[
+            "journey-streak",
+            "compute",
+            "--current-id",
+            "2",
+            "--current-sha",
+            "0123456789abcdef0123456789abcdef01234567",
+            "--failures",
+            current.to_str().unwrap(),
+            "--runs",
+            runs.to_str().unwrap(),
+            "--history-dir",
+            history.to_str().unwrap(),
+            "--output",
+            current_only_output.to_str().unwrap(),
+        ],
+        &[],
+        "",
+    );
+    assert_eq!(code, 0, "{output}");
+    assert!(!current_only_output.exists());
+}
+
+#[test]
 fn an_unknown_or_missing_command_is_an_error() {
     let dir = TempDir::new("xtask-unknown");
     assert_eq!(
@@ -2616,138 +3042,6 @@ fn stale_wait_ratchet_fails_an_unlisted_site_and_passes_at_its_maximum() {
         "crates/main/tests/a.rs 1\n",
     );
     assert_eq!((code, out.as_str()), (0, "stale-wait-ratchet: ok\n"));
-}
-
-/// Runs `mutants-reuse` in `dir` against two JSON fixture files.
-fn mutants_reuse(dir: &TempDir, runs: &str, jobs: &str) -> (i32, String) {
-    dir.write("runs.json", runs);
-    dir.write("jobs.json", jobs);
-    xtask(
-        dir,
-        &[
-            "mutants-reuse",
-            "--pr",
-            "3899",
-            "--head",
-            "abc123",
-            "--base",
-            "def456",
-            "--mutant-count",
-            "40",
-            "--run-id",
-            "100",
-            "--draft",
-            "false",
-            "--runs",
-            "runs.json",
-            "--jobs",
-            "jobs.json",
-        ],
-        &[],
-        "",
-    )
-}
-
-/// One completed candidate run on the same pull request, head and base.
-// debt: reuse_candidate duplicates xtask/src/select/reuse_tests.rs candidate (same candidate-run
-// JSON shape), ceiling: two builders, upgrade trigger: a third candidate-run fixture or a fence
-// that allows a shared xtask fixture module merges both into one builder.
-fn reuse_candidate(id: u64) -> serde_json::Value {
-    serde_json::json!({
-        "id": id,
-        "head_sha": "abc123",
-        "status": "completed",
-        "pull_requests": [{
-            "number": 3899,
-            "head": { "sha": "abc123" },
-            "base": { "sha": "def456" },
-        }],
-    })
-}
-
-// debt: reuse_shards duplicates xtask/src/select/reuse_tests.rs shard (same "Mutants (shard {index})"
-// JSON), ceiling: two builders, upgrade trigger: a third shard-job fixture or a fence that allows
-// a shared xtask fixture module merges both into one builder.
-fn reuse_shards(total: usize, conclusion: &str) -> serde_json::Value {
-    serde_json::Value::Array(
-        (0..total)
-            .map(|index| {
-                serde_json::json!({ "name": format!("Mutants (shard {index}, base def456)"), "conclusion": conclusion })
-            })
-            .collect(),
-    )
-}
-
-#[test]
-fn mutants_reuse_missing_runs_file_errors() {
-    let dir = workspace();
-    dir.write("jobs.json", "{}");
-    let (code, out) = xtask(
-        &dir,
-        &[
-            "mutants-reuse",
-            "--pr",
-            "3899",
-            "--head",
-            "abc123",
-            "--base",
-            "def456",
-            "--mutant-count",
-            "40",
-            "--run-id",
-            "100",
-            "--draft",
-            "false",
-            "--runs",
-            "runs.json",
-            "--jobs",
-            "jobs.json",
-        ],
-        &[],
-        "",
-    );
-    assert_eq!(code, 2);
-    assert!(out.contains("runs.json"), "{out}");
-}
-
-#[test]
-fn mutants_reuse_malformed_runs_json_prints_false() {
-    let dir = workspace();
-    assert_eq!(
-        mutants_reuse(&dir, "not json", "{}"),
-        (0, "reuse=false\n".to_owned())
-    );
-}
-
-#[test]
-fn mutants_reuse_matching_fixture_prints_true() {
-    // 40 mutants derive a 3-shard total, and the candidate passed exactly
-    // those three shards; the match also prints the matched run id and
-    // PR-entry head sha for the select log
-    // (`docs/ci.md`, "On every pull request that changes code").
-    let dir = workspace();
-    let runs = serde_json::json!({ "workflow_runs": [reuse_candidate(7)] }).to_string();
-    let jobs = serde_json::json!({ "7": reuse_shards(3, "success") }).to_string();
-    assert_eq!(
-        mutants_reuse(&dir, &runs, &jobs),
-        (
-            0,
-            "reuse=true\nmatched_run_id=7\nmatched_pr_head=abc123\n".to_owned()
-        )
-    );
-}
-
-#[test]
-fn mutants_reuse_shard_count_mismatch_prints_false() {
-    // Four successful shards against a derived 3-shard total reuses nothing
-    // (`docs/ci.md`, "On every pull request that changes code").
-    let dir = workspace();
-    let runs = serde_json::json!({ "workflow_runs": [reuse_candidate(7)] }).to_string();
-    let jobs = serde_json::json!({ "7": reuse_shards(4, "success") }).to_string();
-    assert_eq!(
-        mutants_reuse(&dir, &runs, &jobs),
-        (0, "reuse=false\n".to_owned())
-    );
 }
 
 #[test]

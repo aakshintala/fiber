@@ -727,6 +727,27 @@ fn compat_flags_and_extra_fields_come_from_model_data_only() {
     assert_eq!(sent_body(&server, 2)["max_completion_tokens"], 4096);
 }
 
+/// A `compat.max_tokens` endpoint sends the output limit as `max_tokens`
+/// with no `max_completion_tokens`: the Databricks open-weight route
+/// rejects the latter with a 400. The endpoint below carries the flag, the
+/// shape `entry_for` builds for those services once the catalog row's
+/// `provider_type` is neither `OPENAI` nor `GEMINI_ENTERPRISE`.
+#[test]
+fn a_max_tokens_endpoint_sends_the_limit_as_max_tokens() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut endpoint = endpoint(&server);
+    endpoint.compat = Compat {
+        max_tokens: true,
+        ..Compat::default()
+    };
+    endpoint.max_output_tokens = Some(4096);
+    let req = request();
+    send(endpoint, &req);
+    let body = sent_body(&server, 0);
+    assert_eq!(body["max_tokens"], 4096);
+    assert_eq!(body.get("max_completion_tokens"), None);
+}
+
 #[test]
 fn the_output_limit_never_exceeds_the_models_limit() {
     let server =
@@ -1244,6 +1265,7 @@ fn compat_flags_are_read_from_the_models_data_and_unset_when_absent() {
             cache_key_field: Some("session_id".into()),
             thinking_budget: false,
             bearer: false,
+            no_strict: false,
             bedrock_invoke: false,
             vertex_raw_predict: false,
             cache_point: false,
@@ -2486,7 +2508,7 @@ fn an_opencode_go_completions_request_sends_store_false() {
     // The endpoint's compat comes from the generated opencode-go file's
     // completions entry, not from a hand-set flag, so the capture fails
     // when the table stops declaring store:false there.
-    let model = generated_opencode_go_model("deepseek-v4-flash");
+    let model = generated_opencode_go_model("beam-free");
     assert_eq!(model["protocol"], "openai-completions");
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let endpoint = Endpoint {
@@ -2618,6 +2640,255 @@ fn sent_arguments(arguments: Value) -> String {
         .as_str()
         .unwrap()
         .to_owned()
+}
+
+/// A gateway serving Gemini over `openai-completions` returns each tool
+/// call's `extra_content` on the call. Decode keeps it verbatim on a carrier
+/// `Reasoning` immediately before that call; when one call's deltas carry
+/// several, the last wins.
+#[test]
+fn tool_call_extra_content_decodes_to_a_carrier_before_its_call() {
+    let overwritten = json!({"google": {"thought_signature": "sig-old"}});
+    let first = json!({"google": {"thought_signature": "sig-1"}});
+    let second = json!({"other": {"blob": [1, 2]}});
+    let call = |index: u64, id: &str, extra: Value| {
+        chunk(
+            json!({"tool_calls": [{"index": index, "id": id, "type": "function",
+                "function": {"name": "f", "arguments": "{}"},
+                "extra_content": extra}]}),
+            None,
+        )
+    };
+    let again = |index: u64, extra: Value| {
+        chunk(
+            json!({"tool_calls": [{"index": index, "extra_content": extra}]}),
+            None,
+        )
+    };
+    let reply = decoded(&stream(&[
+        call(0, "c1", overwritten),
+        again(0, first.clone()),
+        call(1, "c2", second.clone()),
+        chunk(json!({}), Some("tool_calls")),
+    ]))
+    .0
+    .unwrap();
+    // Carrier-before-call order, call order and counts
+    // (`docs/model-routing.md`, "openai-completions facts").
+    assert_eq!(
+        reply.actions,
+        [
+            ReplyAction::Reasoning(ReasoningCompleted {
+                text: String::new(),
+                provider_item: Some(json!({"extra_content": first})),
+            }),
+            ReplyAction::ToolCall(ToolCallRequested {
+                name: "f".into(),
+                arguments: json!({}),
+                provider_id: Some(ProviderCallId("c1".into())),
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            }),
+            ReplyAction::Reasoning(ReasoningCompleted {
+                text: String::new(),
+                provider_item: Some(json!({"extra_content": second})),
+            }),
+            ReplyAction::ToolCall(ToolCallRequested {
+                name: "f".into(),
+                arguments: json!({}),
+                provider_id: Some(ProviderCallId("c2".into())),
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            }),
+        ]
+    );
+}
+
+/// Under `compat.gemini`, each carrier `Reasoning` replays its
+/// `extra_content` back on its own tool call, byte-identical, with no
+/// cross-attach between the two calls.
+#[test]
+fn tool_call_extra_content_replays_on_its_own_call() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let endpoint = gemini_endpoint(&server);
+    let model = endpoint.reference();
+    let first = json!({"google": {"thought_signature": "sig-1"}});
+    let second = json!({"other": {"blob": [1, 2]}});
+    let carrier = |extra: Value| Input::Reasoning {
+        model: model.clone(),
+        text: String::new(),
+        provider_item: Some(json!({"extra_content": extra})),
+    };
+    let call = |id: &str| Input::ToolCall {
+        action_id: ActionId(id.into()),
+        model: model.clone(),
+        call: ToolCallRequested {
+            name: "get_weather".into(),
+            arguments: json!({"city": "Paris"}),
+            provider_id: None,
+            repair: None,
+            ran_by: None,
+            provider_item: None,
+        },
+    };
+    let mut req = request();
+    req.conversation = vec![
+        carrier(first.clone()),
+        call("a_1"),
+        carrier(second.clone()),
+        call("a_2"),
+    ]
+    .into();
+    send(endpoint, &req);
+    let body = sent_body(&server, 0);
+    // Per-call pairing, call order and count
+    // (`docs/model-routing.md`, "openai-completions facts").
+    assert_eq!(
+        body["messages"][1]["tool_calls"],
+        json!([
+            {"id": "a_1", "type": "function",
+             "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"},
+             "extra_content": first},
+            {"id": "a_2", "type": "function",
+             "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"},
+             "extra_content": second},
+        ])
+    );
+}
+
+/// Without `compat.gemini`, a gemini-turn conversation sends no
+/// `extra_content`: the carrier never merges into a message and nothing
+/// attaches to a call.
+#[test]
+fn tool_call_extra_content_is_absent_without_the_gemini_flag() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let model = endpoint(&server).reference();
+    let extra = json!({"google": {"thought_signature": "sig-1"}});
+    let mut req = request();
+    req.conversation = vec![
+        Input::Reasoning {
+            model: model.clone(),
+            text: String::new(),
+            provider_item: Some(json!({"extra_content": extra})),
+        },
+        Input::ToolCall {
+            action_id: ActionId("a_1".into()),
+            model: model.clone(),
+            call: ToolCallRequested {
+                name: "get_weather".into(),
+                arguments: json!({"city": "Paris"}),
+                provider_id: None,
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+        },
+    ]
+    .into();
+    send(endpoint(&server), &req);
+    let body = sent_body(&server, 0);
+    assert!(!body.to_string().contains("extra_content"), "{body}");
+    // Single call, still exactly one entry with no `extra_content`
+    // (`docs/model-routing.md`, "openai-completions facts").
+    assert_eq!(
+        body["messages"][1]["tool_calls"],
+        json!([
+            {"id": "a_1", "type": "function",
+             "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"}},
+        ])
+    );
+}
+
+/// A carrier with no following own call leaves no trace on a `compat.gemini`
+/// request: a later user turn and a foreign-model call both clear it, and a
+/// trailing orphan is dropped.
+#[test]
+fn tool_call_extra_content_orphan_and_foreign_call_leave_no_trace() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let endpoint = gemini_endpoint(&server);
+    let model = endpoint.reference();
+    let extra = json!({"google": {"thought_signature": "sig-1"}});
+    let carrier = || Input::Reasoning {
+        model: model.clone(),
+        text: String::new(),
+        provider_item: Some(json!({"extra_content": extra})),
+    };
+    let mut req = request();
+    req.conversation = vec![
+        carrier(),
+        Input::User {
+            text: "hi".into(),
+            images: Vec::new(),
+        },
+        carrier(),
+        Input::ToolCall {
+            action_id: ActionId("a_9".into()),
+            model: "another/model".into(),
+            call: ToolCallRequested {
+                name: "get_weather".into(),
+                arguments: json!({"city": "Paris"}),
+                provider_id: None,
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+        },
+        carrier(),
+    ]
+    .into();
+    send(endpoint, &req);
+    let body = sent_body(&server, 0);
+    assert!(!body.to_string().contains("extra_content"), "{body}");
+}
+
+/// Only a bare `{"extra_content": ...}` carrier is held for replay: a wider
+/// object still merges into the assistant message, and a foreign-model
+/// carrier never merges.
+#[test]
+fn tool_call_extra_content_carrier_must_be_bare_and_own_model() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let endpoint = gemini_endpoint(&server);
+    let model = endpoint.reference();
+    let extra = json!({"google": {"thought_signature": "sig-1"}});
+    let mut req = request();
+    req.conversation = vec![
+        Input::Reasoning {
+            model: model.clone(),
+            text: "thoughts".into(),
+            provider_item: Some(json!({"extra_content": extra, "note": "kept"})),
+        },
+        Input::Reasoning {
+            model: "another/model".into(),
+            text: String::new(),
+            provider_item: Some(json!({"extra_content": extra})),
+        },
+        Input::ToolCall {
+            action_id: ActionId("a_1".into()),
+            model: model.clone(),
+            call: ToolCallRequested {
+                name: "get_weather".into(),
+                arguments: json!({"city": "Paris"}),
+                provider_id: None,
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+        },
+    ]
+    .into();
+    send(endpoint, &req);
+    let body = sent_body(&server, 0);
+    // Wider object merged, foreign carrier dropped, one bare call
+    // (`docs/model-routing.md`, "openai-completions facts").
+    assert_eq!(
+        body["messages"][1],
+        json!({"role": "assistant", "extra_content": extra, "note": "kept",
+            "tool_calls": [{"id": "a_1", "type": "function",
+                "function": {"name": "get_weather",
+                    "arguments": "{\"city\":\"Paris\"}"}}]})
+    );
 }
 
 #[test]

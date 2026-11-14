@@ -23,7 +23,7 @@ use fakes::Deadline;
 use fakes::NoLock;
 use serde_json::{Value, json};
 
-use super::{ModelLists, ModelListsError, model_lists, roles_of};
+use super::{ModelLists, ModelListsError, model_lists, model_lists_with_fetch, roles_of};
 
 /// Fiber home and a workspace in a temporary directory, removed on drop.
 struct Setup {
@@ -199,6 +199,45 @@ fn age_cache(setup: &Setup, name: &str, ago: Duration) {
         .unwrap();
 }
 
+fn age_models_dev_cache(setup: &Setup, ago: Duration) {
+    let clock = fakes::clock::FakeClock::new();
+    let file = config::models_dev_cache_file(&setup.home()).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(file)
+        .unwrap()
+        .set_modified(clock.wall() - ago)
+        .unwrap();
+}
+
+fn add_models_dev_metadata(setup: &Setup, extension: &str, provider: &str) {
+    let path = setup
+        .home()
+        .join("extensions")
+        .join(extension)
+        .join("providers")
+        .join(format!("{provider}.json"));
+    let mut file: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    file["models_dev"] = json!({"source": provider, "pins": {}});
+    std::fs::write(path, file.to_string()).unwrap();
+}
+
+fn catalog_fetch(
+    response: Value,
+) -> (
+    extensions::models_dev::Fetch,
+    Arc<std::sync::Mutex<Vec<String>>>,
+) {
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&calls);
+    let bytes = serde_json::to_vec(&response).unwrap();
+    let fetch: extensions::models_dev::Fetch = Arc::new(move |url| {
+        recorded.lock().unwrap().push(url.to_owned());
+        Ok(bytes.clone())
+    });
+    (fetch, calls)
+}
+
 /// The listed models and notices: the [`Notice`]s `model_lists` read,
 /// without the picker's entries.
 struct Listed {
@@ -257,6 +296,179 @@ fn bounded(
             }
         },
     )
+}
+
+#[test]
+fn models_dev_deprecated_models_are_filtered_from_cached_and_refreshed_lists() {
+    let setup = Setup::new("fiber-models-dev-deprecated");
+    setup.install_data(
+        "acme-ext",
+        "acme",
+        &["retired", "active", "unknown"],
+        &json!({}),
+    );
+    add_models_dev_metadata(&setup, "acme-ext", "acme");
+    setup.write_config(&json!({"model_lists":{"refresh_after":"60s"}}));
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"acme":{"retired":{"status":"deprecated"},"active":{"status":"active"}}}"#,
+    )
+    .unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let home = setup.home();
+    let load = installed(&home, &clock);
+    let fetch = catalog_fetch(json!({
+        "acme": {
+            "retired": {"status": "deprecated"},
+            "active": {"status": "active"}
+        }
+    }))
+    .0;
+
+    for read in [ModelLists::Cached, ModelLists::Refresh { check_age: false }] {
+        let result = model_lists_with_fetch(
+            &setup.home(),
+            &setup.workspace(),
+            read,
+            &load,
+            &fakes::children::grouped_output,
+            &*clock,
+            &fetch,
+        )
+        .unwrap();
+        let listed = listed(result);
+        assert!(
+            !listed.models.iter().any(|model| model == "acme/retired"),
+            "read {read:?} returned {:?}",
+            listed.models
+        );
+        assert!(listed.models.iter().any(|model| model == "acme/active"));
+        assert!(listed.models.iter().any(|model| model == "acme/unknown"));
+    }
+}
+
+#[test]
+fn models_dev_stale_read_refreshes_only_past_the_age_boundary() {
+    for (age, expected_calls, expected_context) in [
+        (Duration::from_secs(59), 0, 150),
+        (Duration::from_secs(60), 0, 150),
+        (Duration::from_secs(61), 1, 200),
+    ] {
+        let setup = Setup::new("fiber-models-dev-age");
+        setup.install_data("acme-ext", "acme", &["m"], &json!({}));
+        add_models_dev_metadata(&setup, "acme-ext", "acme");
+        setup.write_config(&json!({"model_lists":{"refresh_after":"60s"}}));
+        config::write_models_dev(
+            &setup.home(),
+            br#"{"acme":{"m":{"limit":{"context":150}}}}"#,
+        )
+        .unwrap();
+        age_models_dev_cache(&setup, age);
+        let clock = fakes::clock::FakeClock::new();
+        let (fetch, calls) = catalog_fetch(json!({
+            "acme": {"m": {"limit": {"context": 200}}}
+        }));
+        let home = setup.home();
+        let load = installed(&home, &clock);
+
+        let (providers, _, _) = model_lists_with_fetch(
+            &setup.home(),
+            &setup.workspace(),
+            ModelLists::Refresh { check_age: true },
+            &load,
+            &fakes::children::grouped_output,
+            &*clock,
+            &fetch,
+        )
+        .unwrap();
+
+        assert_eq!(calls.lock().unwrap().len(), expected_calls);
+        assert_eq!(
+            providers.get("acme").unwrap().models[0].context_window,
+            Some(expected_context)
+        );
+    }
+}
+
+#[test]
+fn models_dev_cached_never_fetches_and_forced_read_does() {
+    let setup = Setup::new("fiber-models-dev-forced");
+    setup.install_data("acme-ext", "acme", &["m"], &json!({}));
+    add_models_dev_metadata(&setup, "acme-ext", "acme");
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"acme":{"m":{"limit":{"context":150}}}}"#,
+    )
+    .unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let home = setup.home();
+    let (fetch, calls) = catalog_fetch(json!({
+        "acme": {"m": {"limit": {"context": 200}}}
+    }));
+    let load = installed(&home, &clock);
+
+    let (cached, _, _) = model_lists_with_fetch(
+        &setup.home(),
+        &setup.workspace(),
+        ModelLists::Cached,
+        &load,
+        &fakes::children::grouped_output,
+        &*clock,
+        &fetch,
+    )
+    .unwrap();
+    assert_eq!(calls.lock().unwrap().len(), 0);
+    assert_eq!(
+        cached.get("acme").unwrap().models[0].context_window,
+        Some(150)
+    );
+
+    let (forced, _, _) = model_lists_with_fetch(
+        &setup.home(),
+        &setup.workspace(),
+        ModelLists::Refresh { check_age: false },
+        &load,
+        &fakes::children::grouped_output,
+        &*clock,
+        &fetch,
+    )
+    .unwrap();
+    assert_eq!(calls.lock().unwrap().len(), 1);
+    assert_eq!(
+        forced.get("acme").unwrap().models[0].context_window,
+        Some(200)
+    );
+}
+
+#[test]
+fn models_dev_disabled_stale_read_does_not_fetch_or_replace_generated_values() {
+    let setup = Setup::new("fiber-models-dev-disabled");
+    setup.install_data("acme-ext", "acme", &["m"], &json!({}));
+    add_models_dev_metadata(&setup, "acme-ext", "acme");
+    setup.write_config(&json!({"model_lists":{"models_dev":false}}));
+    let clock = fakes::clock::FakeClock::new();
+    let home = setup.home();
+    let (fetch, calls) = catalog_fetch(json!({
+        "acme": {"m": {"limit": {"context": 200}}}
+    }));
+    let load = installed(&home, &clock);
+
+    let (providers, _, _) = model_lists_with_fetch(
+        &setup.home(),
+        &setup.workspace(),
+        ModelLists::Refresh { check_age: true },
+        &load,
+        &fakes::children::grouped_output,
+        &*clock,
+        &fetch,
+    )
+    .unwrap();
+
+    assert_eq!(calls.lock().unwrap().len(), 0);
+    assert_eq!(
+        providers.get("acme").unwrap().models[0].context_window,
+        Some(1000)
+    );
 }
 
 #[test]
@@ -602,6 +814,8 @@ fn a_held_providers_cached_invalid_model_is_not_reported_twice() {
         .unwrap(),
     );
     assert!(catalogue.models.is_empty());
+    // The load reports each `model_invalid` once per reason
+    // (`docs/model-routing.md`, "Model discovery").
     assert!(
         catalogue
             .notices
@@ -1067,6 +1281,8 @@ fn model_lists_apart_returns_the_placeholder_notices_beside_the_others() {
     install_placeholder(&setup, "acme-ext", "acme", HUB_ENV_HOST);
     // A cached model with no context window: a `model_invalid` notice
     // from the cached admission, before the placeholder fill.
+    // The load reports each `model_invalid` once per reason
+    // (`docs/model-routing.md`, "Model discovery").
     setup.install_data("bad-ext", "bad", &["m1"], &json!({}));
     config::write_model_cache(
         &setup.home(),
@@ -1092,6 +1308,8 @@ fn model_lists_apart_returns_the_placeholder_notices_beside_the_others() {
         .unwrap()
     };
     let (_providers, _config, others, unconfigured) = read();
+    // The load reports each `model_invalid` once per reason
+    // (`docs/model-routing.md`, "Model discovery").
     assert_eq!(others.len(), 1, "{others:?}");
     assert!(others[0].message.contains("bad/m1"), "{others:?}");
     assert!(others[0].message.contains("context_window"), "{others:?}");
@@ -1434,6 +1652,8 @@ fn a_lookup_with_no_search_lists_only_credentialed_providers() {
     setup.install_data("bare-ext", "bare", &["b1"], &json!({}));
     config::delete_credential(&setup.home(), "bare", "default").unwrap();
     // An invalid cached model stays a notice beside the listed rows.
+    // The load reports each `model_invalid` once per reason
+    // (`docs/model-routing.md`, "Model discovery").
     setup.install_data("bad-ext", "bad", &["m1"], &json!({}));
     config::write_model_cache(
         &setup.home(),
@@ -1448,6 +1668,8 @@ fn a_lookup_with_no_search_lists_only_credentialed_providers() {
     .unwrap();
     let catalogue = cached_list(&setup);
     assert_eq!(references(&catalogue), ["acme/m1"]);
+    // The load reports each `model_invalid` once per reason
+    // (`docs/model-routing.md`, "Model discovery").
     assert_eq!(catalogue.notices.len(), 1, "{:?}", catalogue.notices);
     assert!(catalogue.notices[0].message.contains("bad/m1"));
 }

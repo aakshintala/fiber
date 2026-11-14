@@ -3913,7 +3913,7 @@ fn process_watcher_uses_the_session_clock() {
         "fiber.test/proc",
         ProcessCommandId("register-watch".to_owned()),
         "run",
-        Arc::new(|_args, _scope, _cancel| Ok(Some(json!(null)))),
+        Arc::new(|_args, _scope, _cancel, _inner_calls| Ok(Some(json!(null)))),
     );
     let offered = runtime
         .push_watcher(&watcher, json!({"kind": "notice"}), None)
@@ -3940,7 +3940,9 @@ fn process_check_hook_refuses_the_tool() {
     package.registry().unwrap().set_handler(
         &ProcessCommandId("c1".to_owned()),
         "run",
-        Arc::new(|_args, _scope, _cancel| Ok(Some(json!({"refuse": "process check refused"})))),
+        Arc::new(|_args, _scope, _cancel, _inner_calls| {
+            Ok(Some(json!({"refuse": "process check refused"})))
+        }),
     );
     let mut chain = super::chain::Builder::default();
     assert!(session.admit_process(

@@ -73,11 +73,16 @@ pub(crate) struct Hub {
     /// The injected clock, for `ts`, `start`'s deadline and the idle wait.
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) diag: log::diag::Diag,
+    /// Exited sessions retained per project before automatic archival.
+    pub(crate) keep_exited: usize,
     /// The feed `feed`, `dismiss` and `recent` answer from.
     pub(crate) feed: Arc<Feed>,
     /// Pending pairing codes and authenticated connections.
     pub(crate) pairing: crate::pairing::Pairing,
     pub(crate) machine: Option<Arc<dyn crate::Machine>>,
+    /// The keepers of gone sessions on this hub's machine, for the feed
+    /// and `stop_keepers`: `None` probes nothing and counts none.
+    pub(crate) keeper_probe: Option<Arc<dyn crate::KeeperProbe>>,
     next_client: AtomicU64,
     /// The open connections and the idle timer, under one lock.
     conns: Mutex<Conns>,
@@ -326,9 +331,11 @@ impl Hub {
             starter,
             clock,
             diag,
+            keep_exited: 10,
             feed,
             pairing: crate::pairing::Pairing::new(),
             machine: None,
+            keeper_probe: None,
             next_client: AtomicU64::new(0),
             stop: AtomicBool::new(false),
             sessions_stopping: AtomicBool::new(false),
@@ -400,9 +407,21 @@ impl Hub {
         self
     }
 
+    /// The configured per-project retention count for exited sessions.
+    pub(crate) fn with_keep_exited(mut self, keep_exited: usize) -> Self {
+        self.keep_exited = keep_exited;
+        self
+    }
+
     /// Supplies configuration on this hub's machine.
     pub(crate) fn with_machine(mut self, machine: Arc<dyn crate::Machine>) -> Self {
         self.machine = Some(machine);
+        self
+    }
+
+    /// Supplies the keepers of gone sessions on this hub's machine.
+    pub(crate) fn with_keeper_probe(mut self, probe: Arc<dyn crate::KeeperProbe>) -> Self {
+        self.keeper_probe = Some(probe);
         self
     }
 
@@ -1115,6 +1134,7 @@ fn on_command(
             crate::environment::refresh(hub, &line.args),
         ),
         "stop" => on_stop(&line.id, &line.args, hub, writer, web),
+        "stop_keepers" => on_stop_keepers(&line.id, &line.args, hub, writer, web),
         "prompt_history" => answer(
             writer,
             hub,
@@ -1123,7 +1143,12 @@ fn on_command(
         ),
         "feed" => on_feed(&line.id, &line.args, hub, writer, closer, &mut remote.fed),
         "dismiss" => answer(writer, hub, &line.id, hub.feed.dismiss(&line.args)),
-        "recent" => answer(writer, hub, &line.id, hub.feed.recent(&line.args)),
+        "recent" => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::feed::recent_for_hub(hub, &line.args),
+        ),
         "sessions" => {
             // The hub's own writer and clock travel as one pair, and only
             // at debug: at info no callable is built and no stamp is taken.
@@ -1132,13 +1157,7 @@ fn on_command(
                 writer,
                 hub,
                 &line.id,
-                crate::sessions::answer(
-                    &hub.feed,
-                    &hub.home,
-                    &line.args,
-                    hub.clock.as_ref(),
-                    timing.as_ref(),
-                ),
+                crate::sessions::answer(hub, &line.args, hub.clock.as_ref(), timing.as_ref()),
             )
         }
         "archive" => answer(
@@ -1425,10 +1444,13 @@ fn on_stop(
         }
         crate::sessions_stop::Outcome::Listed {
             confirmed,
+            keepers,
             unconfirmed,
-        } if unconfirmed.is_empty() => {
+            unconfirmed_keepers,
+        } if unconfirmed.is_empty() && unconfirmed_keepers.is_empty() => {
             let result = CommandResult::Stop {
                 sessions_stopped: confirmed.len(),
+                keepers_stopped: keepers.len(),
             };
             let result = serde_json::to_value(&result).unwrap_or(Value::Null);
             match web {
@@ -1443,9 +1465,11 @@ fn on_stop(
         }
         crate::sessions_stop::Outcome::Listed {
             confirmed: _,
+            keepers: _,
             unconfirmed,
+            unconfirmed_keepers,
         } => {
-            let message = unconfirmed_message(&unconfirmed);
+            let message = unconfirmed_message(&unconfirmed, &unconfirmed_keepers);
             match web {
                 Some(web) => drain_web(
                     hub,
@@ -1461,6 +1485,102 @@ fn on_stop(
     hub.request_stop();
     drop(_answering);
     hub.tick.wake();
+}
+
+/// Answers `stop_keepers` (`docs/invocation.md`, "What the hub
+/// speaks"): stops exactly the named keepers through their stop,
+/// bounded, and answers how many confirmed — without closing any
+/// session and without exiting. An unknown key, a wrong type, an
+/// explicit null or an empty array is refused `invalid_arguments`; a
+/// keeper that answers the verify is left running and reported; one
+/// whose socket is gone is skipped. The command stores nothing, so the
+/// hub keeps running and keeps admitting binds after answering.
+fn on_stop_keepers(
+    id: &CommandId,
+    args: &Map<String, Value>,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    web: Option<&Arc<crate::port::Web>>,
+) {
+    let ids = match stop_keepers_ids(args) {
+        Ok(ids) => ids,
+        Err(()) => {
+            reject(
+                writer,
+                hub,
+                Some(id),
+                &ErrorCode::InvalidArguments,
+                "The arguments do not fit this command.",
+            );
+            return;
+        }
+    };
+    let _answering = Answering::take(hub);
+    let outcome = crate::sessions_stop::stop_keepers(hub, &ids);
+    if hub.stop_requested() {
+        #[cfg(test)]
+        if let Some(hook) = lock(&hub.before_abort_answer).take() {
+            hook();
+        }
+    }
+    if !outcome.live.is_empty() || !outcome.unconfirmed.is_empty() {
+        let message = unconfirmed_message(&outcome.live, &outcome.unconfirmed);
+        match web {
+            Some(web) => drain_web(
+                hub,
+                writer,
+                web,
+                HubEventKind::CommandRejected,
+                rejection(Some(id), &ErrorCode::IoFailed, &message),
+            ),
+            None => reject(writer, hub, Some(id), &ErrorCode::IoFailed, &message),
+        }
+    } else {
+        let result = CommandResult::StopKeepers {
+            keepers_stopped: outcome.confirmed.len(),
+        };
+        let result = serde_json::to_value(&result).unwrap_or(Value::Null);
+        match web {
+            Some(web) => {
+                let mut payload =
+                    Map::from_iter([("command_id".to_owned(), Value::String(id.0.clone()))]);
+                payload.insert("result".to_owned(), result);
+                drain_web(hub, writer, web, HubEventKind::CommandAccepted, payload);
+            }
+            None => accept_result(writer, hub, id, result),
+        }
+    }
+    drop(_answering);
+    hub.tick.wake();
+}
+
+/// The `keepers` request: exactly one `keepers` key holding a nonempty
+/// array of session ids. An explicit null, a wrong type, an unknown
+/// key, an empty array or an id no session socket can have is `Err`:
+/// the caller refuses it `invalid_arguments` and the hub keeps
+/// running. There is no bare form: unlike `stop`, no hub-exit default
+/// waits behind it.
+fn stop_keepers_ids(args: &Map<String, Value>) -> Result<Vec<SessionId>, ()> {
+    if args.len() != 1 {
+        return Err(());
+    }
+    let Some(Value::Array(keepers)) = args.get("keepers") else {
+        return Err(());
+    };
+    if keepers.is_empty() {
+        return Err(());
+    }
+    let mut ids = Vec::new();
+    for keeper in keepers {
+        let Value::String(id) = keeper else {
+            return Err(());
+        };
+        if !crate::relay::valid_session_id(id) {
+            return Err(());
+        }
+        ids.push(SessionId(id.clone()));
+    }
+    Ok(ids)
 }
 
 /// The `sessions` request: `None` when absent (a bare stop), `Some`
@@ -1484,20 +1604,34 @@ fn stop_sessions(args: &Map<String, Value>) -> Result<Option<bool>, ()> {
 }
 
 /// What a partial sessions stop tells the asker: `io_failed` naming each
-/// session unconfirmed at the bound or the abort, in id order.
-fn unconfirmed_message(unconfirmed: &[SessionId]) -> String {
+/// session unconfirmed at the bound or the abort, in id order, with each
+/// unconfirmed keeper appended after a semicolon, in id order. With no
+/// session unconfirmed, the keepers take the leading part in the same
+/// singular/plural shape.
+fn unconfirmed_message(unconfirmed: &[SessionId], keepers: &[SessionId]) -> String {
     let ids: Vec<&str> = unconfirmed.iter().map(|id| id.0.as_str()).collect();
-    match ids.as_slice() {
+    let held: Vec<&str> = keepers.iter().map(|id| id.0.as_str()).collect();
+    if ids.is_empty() {
+        return match held.as_slice() {
+            [only] => format!("Keeper {only} is still running."),
+            _ => format!("Keepers {} are still running.", held.join(", ")),
+        };
+    }
+    let sessions = match ids.as_slice() {
         [only] => format!("Session {only} is still running."),
         _ => format!("Sessions {} are still running.", ids.join(", ")),
+    };
+    match held.as_slice() {
+        [] => sessions,
+        [only] => format!("{sessions}; keeper {only} still running."),
+        _ => format!("{sessions}; keepers {} still running.", held.join(", ")),
     }
 }
 
-/// A `stop` with `sessions` now answering: the Signal arm aborts the
-/// loop only while one is held, and waits only for its flush. Held from
-/// before the `sessions_stopping` store until after the answer and, on
-/// a websocket, its drain barrier: the drop's wake ends the arm's flush
-/// wait.
+/// A `stop` with `sessions`, or a `stop_keepers`, now answering: the
+/// Signal arm aborts the loop only while one is held, and waits only
+/// for its flush. Held across the answer and, on a websocket, its
+/// drain barrier: the drop's wake ends the arm's flush wait.
 struct Answering<'a> {
     hub: &'a Hub,
 }

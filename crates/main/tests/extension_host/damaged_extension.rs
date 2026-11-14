@@ -58,6 +58,10 @@ impl Setup {
             root: fakes::TempDir::under(std::path::Path::new("/tmp"), "fiber-ext-damaged"),
         };
         fs::create_dir_all(setup.home()).unwrap();
+        support::write_json(
+            &setup.home().join("config.json"),
+            &json!({"model_lists": {"models_dev": false}}),
+        );
         setup.damaged_extension_source("healthy", "acme");
         setup.damaged_extension_source("broken", BROKEN);
         setup.damaged_extension_source("fresh", "example.com/acme/fresh");

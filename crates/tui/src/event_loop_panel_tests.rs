@@ -58,7 +58,10 @@ fn focus_and_stale_keypress_send_quota_through_the_loop() {
         });
         lp.hub.store(ours);
         let events = lp.parser.feed(bytes);
-        assert_eq!(lp.handle_events(events), None);
+        assert_eq!(
+            (lp.handle_events(events)).expect("event loop result succeeds"),
+            None
+        );
         lp.hub.hang_up();
         let text = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv_or_fail(&rx, "the loop's quota command");
@@ -126,15 +129,15 @@ fn the_wheel_over_the_panel_scrolls_it_in_the_loop() {
         .unwrap_or_else(|| panic!("a panel"));
     feed(&mut lp, vec![wheel(panel.x + 5, panel.y + 10)]);
     assert_eq!(lp.app.panel_state().scroll(), 3);
-    // Six more wheels past the Session card's fifteen rows and the
-    // blank row: the widget's third line sits first (the two new card
+    // Six more wheels past the Session card's fourteen rows and the
+    // blank row: the widget's fourth line sits first (the two new card
     // rows moved the title from 16 to 18, so 21 skips it with the two
     // lines above).
     for _ in 0..6 {
         feed(&mut lp, vec![wheel(panel.x + 5, panel.y + 10)]);
     }
     assert_eq!(lp.app.panel_state().scroll(), 21);
-    assert!(shown(&lp).contains("line 02"), "{}", shown(&lp));
+    assert!(shown(&lp).contains("line 03"), "{}", shown(&lp));
     assert!(!shown(&lp).contains("line 00"), "{}", shown(&lp));
     assert!(!shown(&lp).contains("plan · tasks"), "{}", shown(&lp));
 }

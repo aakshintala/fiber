@@ -326,28 +326,64 @@ impl hub::DeviceLogin for DeviceLogin {
         self.login.cancel();
     }
 }
+impl hub::KeeperProbe for Seam {
+    fn keepers(&self, home: &Path, clock: Arc<dyn Clock>) -> Vec<contract::SessionId> {
+        // The feed counts keepers, and the `stop_keepers` command stops
+        // them, through the one classifier: only keeper-or-gone sockets
+        // a keeper still holds read as keepers, in id order. A session
+        // that died as the probe landed reads keeper-or-gone but holds
+        // no lock, so the check below leaves it out.
+        match doors::classify_sockets(home, Arc::clone(&clock)) {
+            Ok(probed) => probed
+                .into_iter()
+                .filter_map(|(id, class)| {
+                    if !matches!(class, doors::SocketClass::KeeperOrGone) {
+                        return None;
+                    }
+                    keeper_held(home, &id).then_some(id)
+                })
+                .collect(),
+            Err(error) => {
+                log::diag::Diag::new(home, log::diag::Process::Hub, log::diag::Level::Info, clock)
+                    .line(
+                        log::diag::Severity::Warn,
+                        None,
+                        "keepers_unreadable",
+                        &format!("keeper probe of {} failed: {error}", home.display()),
+                    );
+                Vec::new()
+            }
+        }
+    }
+}
+
+/// Whether `id`'s session log is keeper-held: the same lock the hub's
+/// stop split reads, so the feed publishes only ids a keeper still
+/// holds and `/close all` never counts a socket its session left
+/// behind.
+fn keeper_held(home: &Path, id: &contract::SessionId) -> bool {
+    log::find_session(home, id).is_some_and(|(_, dir)| {
+        log::lock_label(&dir).is_some_and(|label| label.starts_with("keeper "))
+    })
+}
+
 impl hub::Machine for Seam {
     fn import(
         &self,
         home: &Path,
-        source: Option<&str>,
+        source: Option<config::ImportSource>,
         clock: Arc<dyn Clock>,
     ) -> Result<Option<Value>, Failure> {
-        // The hub already refused anything but the two; this names
-        // them again so the seam never misroutes a source.
+        // The hub already refused anything but the two, and the type
+        // carries only the two: every source routes, so no refusal arm
+        // remains.
         let sources: &[config::ImportSource] = match source {
             None => &[
                 config::ImportSource::ClaudeCode,
                 config::ImportSource::Codex,
             ],
-            Some("claude-code") => &[config::ImportSource::ClaudeCode],
-            Some("codex") => &[config::ImportSource::Codex],
-            Some(_) => {
-                return Err(failure(
-                    ErrorCode::InvalidArguments,
-                    "`source` must be `claude-code` or `codex`.",
-                ));
-            }
+            Some(config::ImportSource::ClaudeCode) => &[config::ImportSource::ClaudeCode],
+            Some(config::ImportSource::Codex) => &[config::ImportSource::Codex],
         };
         // The ports the driver would print, minus the printing: each
         // source's report extended into one answer, a failed source
@@ -486,7 +522,7 @@ impl hub::Machine for Seam {
             }
             "login_targets" => {
                 a.shape(&[], &[])?;
-                json!({"targets":self.login_targets().map_err(from_view)?.into_iter().map(|t|json!({"name":t.name,"kind":match t.kind{LoginKind::Key=>"key",LoginKind::Browser=>"browser",LoginKind::Secret=>"secret"}})).collect::<Vec<_>>()})
+                json!({"targets":self.login_targets().map_err(from_view)?.into_iter().map(|t|{let mut value=Map::from_iter([("name".to_owned(),json!(t.name)),("kind".to_owned(),json!(match t.kind{LoginKind::Key=>"key",LoginKind::Browser=>"browser",LoginKind::Secret=>"secret"}))]);if let Some(label)=t.label{drop(value.insert("label".to_owned(),json!(label)));}Value::Object(value)}).collect::<Vec<_>>()})
             }
             "logout_rows" => {
                 a.shape(&[], &[])?;

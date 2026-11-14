@@ -22,6 +22,7 @@ mod delegates;
 mod hub_command;
 mod keeper;
 mod keeper_child;
+mod keeper_restore;
 mod late_emit;
 mod launch;
 mod mcp_servers;
@@ -78,6 +79,9 @@ mod test_support;
 #[cfg(test)]
 #[path = "timing_tests.rs"]
 mod timing_tests;
+#[cfg(test)]
+#[path = "tui_silent_exit_tests.rs"]
+mod tui_silent_exit_tests;
 
 use std::fmt::Display;
 use std::io::{self, IsTerminal, Write};
@@ -572,6 +576,19 @@ fn fail(e: Failure) -> i32 {
     // A closed stderr leaves nobody to tell.
     writeln!(io::stderr(), "fiber: {}", e.message).unwrap_or(());
     doors::exit_code(&e)
+}
+
+/// Reports a TUI-controlled non-zero status without changing signal exits.
+fn tui_exit(code: i32, stderr: &mut impl Write) -> i32 {
+    if code == 0 || matches!(code, 129 | 130 | 143) {
+        return code;
+    }
+    writeln!(
+        stderr,
+        "fiber: terminal could not continue (TUI exit status {code})"
+    )
+    .unwrap_or(());
+    code
 }
 
 /// The signal registration an entry point runs: its [`read_signals::Register`].
@@ -1320,9 +1337,9 @@ fn terminal(
         Arc::clone(&diag),
         startup,
     ) {
-        Ok(code) => code,
+        Ok(code) => tui_exit(code, &mut io::stderr()),
         Err(error) => {
-            let failure = failed(error.code(), error.to_string());
+            let failure = tui_failure(error);
             // The terminal never started: one `error` line in
             // `logs/tui-<pid>.log` keeps the failure diagnosable, as a
             // startup failure does (`docs/state.md`, "What each part holds").
@@ -1479,7 +1496,30 @@ fn failed(code: ErrorCode, e: impl Display) -> Failure {
     failure(code, e.to_string())
 }
 
+fn tui_failure(error: ::tui::Error) -> Failure {
+    failed(error.code(), error)
+}
+
 fn ask_failed(e: Failure) -> i32 {
     startup_log::record(&e, Arc::new(clock::System));
     doors::exit_before_session(e, &mut io::stdout(), &mut io::stderr())
+}
+
+#[cfg(test)]
+mod tui_exit_cause_tests {
+    use super::{fail, tui_failure};
+
+    #[test]
+    fn terminal_tui_error_prints_cause_and_returns_failure() {
+        let error = ::tui::Error::LoopExit(std::io::Error::other(
+            "terminal: could not draw the screen: broken pipe",
+        ));
+        let failure = tui_failure(error);
+        assert_eq!(
+            failure.message,
+            "terminal: could not draw the screen: broken pipe"
+        );
+
+        assert_eq!(fail(failure), 1);
+    }
 }

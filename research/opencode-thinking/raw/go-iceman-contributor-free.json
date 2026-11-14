@@ -1,0 +1,342 @@
+{
+ "route": "go",
+ "protocol": "completions",
+ "model": "iceman-contributor-free",
+ "base": "https://opencode.ai/zen/go",
+ "levels": [
+  {
+   "level": "off",
+   "status": 400,
+   "elapsed_s": 0.73,
+   "request": {
+    "model": "iceman-contributor-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "none"
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Upstream request failed: [invalid_request_error] Model 'iceman-contributor-free' does not support reasoning_effort='none'; supported values: low, medium, high, xhigh."
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 400,
+   "elapsed_s": 0.72,
+   "request": {
+    "model": "iceman-contributor-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "minimal"
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Upstream request failed: [invalid_request_error] Model 'iceman-contributor-free' does not support reasoning_effort='minimal'; supported values: low, medium, high, xhigh."
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 200,
+   "elapsed_s": 2.05,
+   "request": {
+    "model": "iceman-contributor-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "low"
+   },
+   "response": {
+    "id": "chatcmpl-ef95a7b647cb4f79ba0a38a210417532",
+    "object": "chat.completion",
+    "created": 1794423510,
+    "model": "iceman-contributor-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning_details": [
+        {
+         "type": "reasoning.encrypted",
+         "data": "o2d2ZXJzaW9uAW5lbmNyeXB0ZWRfZGVrc4GiZmtla19pZHhAYjU4ZGRlMjkwNDZjYTU5NjM5MTBmM2JmYjUwYTlhZDRhMGVkYTNjMmNjZDg3MGYzMjMxNTE3ZDA3YzlmZTU3Nm1lbmNyeXB0ZWRfZGVrWQEAmcnHmXKNjNQmJb-d9oSHPeC6LBSKOwKbKMFeikfG7SZUjdZsKgGikh8bHbM5WSUxEmzlJMkfJLpZQf4lmhuF6rwQw6-BJV899qx5lQBhL_iIB98O6kxpBNJZ7LooEPpRNrnfkYwlnmLgmq_myQb_9aQgjBIvnZRsWkkToBNhfV5QUNFdwCZsaaJbNEb3KH10o1xbNszDKADZEtZdh9HwavIYueM2SvMlGbL-ZW9xUIS0ZojUi1GuTsttsy77WcbYA-CCNQHXaxvGL_8rXRWXM_-6XKhMZ8Mo4lfqIwAz0pz0PfNdBdmweAPXhKedEb0hCC7IVZHNXNuI6VHUCsV3G3FlbmNyeXB0ZWRfY29udGVudFhkZ0FBQUFBQnE5THJXWC10bDgtOHY4SGFyTzVKcHAyUkZjeG83MFRDeE53WW9iQjRQNzE2bFUwc1NpV3hxa3RvdnlOMFZIYUt1NmR6RnZ5X1hpWGcyNkhfNmprR1NOZ3NjNWc9PQ==",
+         "format": "nested-reasoning-summary"
+        }
+       ],
+       "tool_calls": [],
+       "annotations": null
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 27,
+     "completion_tokens": 13,
+     "total_tokens": 40,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 1
+     },
+     "cost": 0,
+     "opencode": {
+      "billing_source": "go-plus",
+      "list_cost": 0,
+      "allowance": 0,
+      "tokens": {
+       "input": 27,
+       "output": 13,
+       "reasoning": 1,
+       "cache_read": 0,
+       "cache_write_5m": 0,
+       "cache_write_1h": 0
+      }
+     }
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 200,
+   "elapsed_s": 1.54,
+   "request": {
+    "model": "iceman-contributor-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "medium"
+   },
+   "response": {
+    "id": "chatcmpl-e5bb0bc088194e61b43233dd30be967c",
+    "object": "chat.completion",
+    "created": 1794423512,
+    "model": "iceman-contributor-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning_details": [
+        {
+         "type": "reasoning.encrypted",
+         "data": "o2d2ZXJzaW9uAW5lbmNyeXB0ZWRfZGVrc4GiZmtla19pZHhAYjU4ZGRlMjkwNDZjYTU5NjM5MTBmM2JmYjUwYTlhZDRhMGVkYTNjMmNjZDg3MGYzMjMxNTE3ZDA3YzlmZTU3Nm1lbmNyeXB0ZWRfZGVrWQEAsbEpPHssrsy-D1D_nwjaww8irsMryssfYAjwV5OjgCYuEu9WxPa1sVS-3Rrb4cuX6dt3TBs7LzBECBZXI8UEsvbcBdQmCI47QtFzy3O4MVX0sfch7bvqbxl6cd7GG-TFUHU7oV2OePdcxxZ__YedFYP_ccBulgexTz1s-reRghUvKolLZ7gdORiDVft1tAPfQiiEK75B5NWtJ4T5-WJHicIi-_sSoKtNgbB0fEo0zuE4hAPeHB7quUf9rxf2hIjUoQ3O-xH12xet_aWDeQZ4vfFuldQ3jF1y4kcBswMoKUNfZGpc4kEDYNBJDf_lpXKZoLlfqZUyngvwVDxMM6sbAnFlbmNyeXB0ZWRfY29udGVudFhkZ0FBQUFBQnE5THJZMG1hd25Rako0amhkNG1QUmI1M3JFTzNzVjJvZjlPSElRWEdQX1A3VmUxblpweHpXTV9sb3gxRnh4bHJ6ZHlOYXNFVk4yb1J3YzFVRHg1S29YREdCUWc9PQ==",
+         "format": "nested-reasoning-summary"
+        }
+       ],
+       "tool_calls": [],
+       "annotations": null
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 28,
+     "completion_tokens": 13,
+     "total_tokens": 41,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 1
+     },
+     "cost": 0,
+     "opencode": {
+      "billing_source": "go-plus",
+      "list_cost": 0,
+      "allowance": 0,
+      "tokens": {
+       "input": 28,
+       "output": 13,
+       "reasoning": 1,
+       "cache_read": 0,
+       "cache_write_5m": 0,
+       "cache_write_1h": 0
+      }
+     }
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 200,
+   "elapsed_s": 1.64,
+   "request": {
+    "model": "iceman-contributor-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "high"
+   },
+   "response": {
+    "id": "chatcmpl-7e87e6e37bb84efb8a3c84239ab1cdb1",
+    "object": "chat.completion",
+    "created": 1794423513,
+    "model": "iceman-contributor-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning_details": [
+        {
+         "type": "reasoning.encrypted",
+         "data": "o2d2ZXJzaW9uAW5lbmNyeXB0ZWRfZGVrc4GiZmtla19pZHhAYjU4ZGRlMjkwNDZjYTU5NjM5MTBmM2JmYjUwYTlhZDRhMGVkYTNjMmNjZDg3MGYzMjMxNTE3ZDA3YzlmZTU3Nm1lbmNyeXB0ZWRfZGVrWQEAAX-fdBdXlW6OzJucxd83VWaX50CGi6nPAPqNsixL-ubuGjyLy1t0-RQdHHUVKIlTkxzbE7X_O12Sl-xZbYE2y6m0yZqmmTXVByRzNxARU6aWDDJ2ZPSSoODBww9JBWK_9on7HUq1N6u7xVI-QnrkYpAAT3jCJgdDFKN70d60Y5vVNz1r2k_yEKnLeuZDAwOz5GRQqKiASAzO1vTar6aEsMccsaEWwrZBsCvXAKgvC9hd-pkUyEoCTBT0FFG24jPExUYmGK62gpMn9aa6NNx6zBzKudqE0YKOWz8fh1-zPXpZYMefEIQV_tyktaZpxH4xhw9Pdb6zFljNDMxbaiFfl3FlbmNyeXB0ZWRfY29udGVudFhkZ0FBQUFBQnE5THJaWXNCM1J3UnltUG5DRGEzS3Fobi1KbW5ZeXdReVlmZ0diRkJBdmFxVU1FOFZ0YjJabHg3TzdhNEM0bHNsaFp1UkxXeHE2R1JuZi1LTFM1UVJZTi1NSVE9PQ==",
+         "format": "nested-reasoning-summary"
+        }
+       ],
+       "tool_calls": [],
+       "annotations": null
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 28,
+     "completion_tokens": 13,
+     "total_tokens": 41,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 1
+     },
+     "cost": 0,
+     "opencode": {
+      "billing_source": "go-plus",
+      "list_cost": 0,
+      "allowance": 0,
+      "tokens": {
+       "input": 28,
+       "output": 13,
+       "reasoning": 1,
+       "cache_read": 0,
+       "cache_write_5m": 0,
+       "cache_write_1h": 0
+      }
+     }
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 200,
+   "elapsed_s": 1.55,
+   "request": {
+    "model": "iceman-contributor-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "xhigh"
+   },
+   "response": {
+    "id": "chatcmpl-d1a4327ff2a14e1eb4f3d6132db48cf2",
+    "object": "chat.completion",
+    "created": 1794423515,
+    "model": "iceman-contributor-free",
+    "choices": [
+     {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+       "role": "assistant",
+       "content": "ok",
+       "refusal": null,
+       "reasoning_details": [
+        {
+         "type": "reasoning.encrypted",
+         "data": "o2d2ZXJzaW9uAW5lbmNyeXB0ZWRfZGVrc4GiZmtla19pZHhAYjU4ZGRlMjkwNDZjYTU5NjM5MTBmM2JmYjUwYTlhZDRhMGVkYTNjMmNjZDg3MGYzMjMxNTE3ZDA3YzlmZTU3Nm1lbmNyeXB0ZWRfZGVrWQEArqi4qmV9oV4k-hGSz9HRiODufDc7B13lIJLjm39GpOCscqFOHT2f9-N0SfG5oW6mn0HAKM5B9UqEYrbetlKn8s0d75wKElg-_XjNqfribrYjxiSYk26IHVEV060alrEIbtN2Taui3bhTGr0UsHIRylyj6KYLy9zvQ6b2X5jJK641Rl-aAyLtSrfNxhMUh2dacKLbnu14zYficmXGubGbfVsB5igFaUC9DdGeq6WKD2OZlI9duRM3poSGhkQH-ysDF6EfPtxjjMjaqK3glwTBdv7DvyH_Hvd4gNar4Ok1oKXJ2qXBURn9oBEurli417Me95MwEtJ-XnxUMbB7Ln4ngHFlbmNyeXB0ZWRfY29udGVudFhkZ0FBQUFBQnE5THJiZGtIZ3lRU1dGdDY1ZzllLUxxTVFDVDU4d3dsMDlld1ZUdnNzRTdCODhqdGl1Yy12RW5xTzctaVZqTHg5MUkxdU95c0Q0UlhvVnVYaktGOTVHRFNVeWc9PQ==",
+         "format": "nested-reasoning-summary"
+        }
+       ],
+       "tool_calls": [],
+       "annotations": null
+      }
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 28,
+     "completion_tokens": 13,
+     "total_tokens": 41,
+     "prompt_tokens_details": {
+      "cached_tokens": 0
+     },
+     "completion_tokens_details": {
+      "reasoning_tokens": 1
+     },
+     "cost": 0,
+     "opencode": {
+      "billing_source": "go-plus",
+      "list_cost": 0,
+      "allowance": 0,
+      "tokens": {
+       "input": 28,
+       "output": 13,
+       "reasoning": 1,
+       "cache_read": 0,
+       "cache_write_5m": 0,
+       "cache_write_1h": 0
+      }
+     }
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 400,
+   "elapsed_s": 0.63,
+   "request": {
+    "model": "iceman-contributor-free",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with the single word: ok"
+     }
+    ],
+    "max_tokens": 64,
+    "reasoning_effort": "max"
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Upstream request failed: [invalid_request_error] Model 'iceman-contributor-free' does not support reasoning_effort='max'; supported values: low, medium, high, xhigh."
+    }
+   }
+  }
+ ]
+}

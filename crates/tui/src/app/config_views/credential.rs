@@ -95,6 +95,8 @@ impl Picker {
             | Key::CtrlF
             | Key::AltUp
             | Key::AltDown
+            | Key::ShiftUp
+            | Key::ShiftDown
             | Key::AltX
             | Key::AltP
             | Key::AltR
@@ -199,6 +201,7 @@ impl Picker {
             command: "/credential".to_owned(),
             rows,
             list: self.list,
+            gutter_mark: ratatui::style::Style::default(),
             below: vec![below],
             field: None,
             footer: "↑↓ move · Enter choose · Ctrl+S this session · Esc close".to_owned(),
@@ -500,6 +503,8 @@ impl App {
             | EventKind::DelegateFinished
             | EventKind::JobCompleted
             | EventKind::JobsPendingNotified
+            | EventKind::KeeperStarted
+            | EventKind::KeeperBound
             | EventKind::Unknown(_) => {}
         }
         Vec::new()

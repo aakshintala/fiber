@@ -125,9 +125,15 @@ fn commands(lines: Vec<String>) -> Vec<Value> {
 fn directories_of(effect: &Effect) -> Vec<(String, String)> {
     match effect {
         Effect::Send(lines) => sent_directories(lines),
+        Effect::SendTracked(sents) => sent_directories(
+            &sents
+                .iter()
+                .map(|sent| sent.line.clone())
+                .collect::<Vec<_>>(),
+        ),
         Effect::None
         | Effect::Quit
-        | Effect::Exit(_)
+        | Effect::ExitTracked(_)
         | Effect::ListFiles
         | Effect::Search { .. }
         | Effect::Editor { .. }
@@ -393,7 +399,7 @@ fn remote_sentinel_is_only_a_hub_row_and_uses_hub_git() {
             chips(&app).iter().any(|chip| chip.contains("worktree")),
             git
         );
-        assert_eq!(app.start_args()["workspace"], "/sentinel/launch-dir");
+        assert_eq!(app.start_args().unwrap().workspace, "/sentinel/launch-dir");
     }
 }
 
@@ -477,7 +483,8 @@ fn slash_sends_one_directories_and_enter_waits_for_its_answer() {
 }
 
 #[test]
-fn arrows_walk_completions_then_recents_and_clamp() {
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
+fn arrows_walk_completions_then_recents_and_wrap() {
     let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/");
@@ -488,13 +495,35 @@ fn arrows_walk_completions_then_recents_and_clamp() {
     assert_eq!(key(&mut app, Key::Down), Effect::None);
     assert_eq!(focused(&app), Some("/w".to_owned()));
     assert_eq!(key(&mut app, Key::Down), Effect::None);
+    assert_eq!(focused(&app), Some("a1".to_owned()));
+    assert_eq!(key(&mut app, Key::Up), Effect::None);
     assert_eq!(focused(&app), Some("/w".to_owned()));
     assert_eq!(key(&mut app, Key::Up), Effect::None);
     assert_eq!(focused(&app), Some("a2".to_owned()));
     assert_eq!(key(&mut app, Key::Up), Effect::None);
     assert_eq!(focused(&app), Some("a1".to_owned()));
     assert_eq!(key(&mut app, Key::Up), Effect::None);
-    assert_eq!(focused(&app), Some("a1".to_owned()));
+    assert_eq!(focused(&app), Some("/w".to_owned()));
+}
+
+// Non-typing Up wraps within the recent workspaces (`docs/tui.md`, "Swapped views").
+#[test]
+fn non_typing_picker_up_wraps_from_first_and_middle_recent() {
+    let mut app = home_with(80, 24, launch());
+    for (id, path) in [("one", "/one"), ("two", "/two")] {
+        app.on_line(live(id, id, path));
+    }
+    open(&mut app);
+    assert_eq!(recents(&app), ["/w", "/one", "/two"]);
+
+    assert_eq!(key(&mut app, Key::Up), Effect::None);
+    assert_eq!(focused(&app), Some("/two".to_owned()));
+    assert_eq!(key(&mut app, Key::Down), Effect::None);
+    assert_eq!(focused(&app), Some("/w".to_owned()));
+    assert_eq!(key(&mut app, Key::Down), Effect::None);
+    assert_eq!(focused(&app), Some("/one".to_owned()));
+    assert_eq!(key(&mut app, Key::Up), Effect::None);
+    assert_eq!(focused(&app), Some("/w".to_owned()));
 }
 
 #[test]
@@ -510,11 +539,12 @@ fn enter_on_a_completion_chooses_it_for_the_next_start() {
     for ch in "hi".chars() {
         key(&mut app, Key::Char(ch));
     }
-    let Effect::Send(lines) = key(&mut app, Key::Enter) else {
+    let Effect::SendTracked(sents) = key(&mut app, Key::Enter) else {
         panic!("Enter sends the start");
     };
-    assert_eq!(lines.len(), 1);
-    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+    assert_eq!(sents.len(), 1);
+    let line: Value =
+        serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("start: {err}"));
     assert_eq!(line["command"], "start");
     assert_eq!(line["args"]["workspace"], "/a1");
 }
@@ -1256,18 +1286,13 @@ fn empty_values_carry_no_workspace() {
         App::new(Some(PathBuf::from("/w"))).workspace(),
         Some(PathBuf::from("/w"))
     );
-    // A default launch names an empty local directory: also none, with
-    // no workspace key in the start arguments.
+    // A default launch names an empty local directory: no start, so
+    // the hub is never asked to refuse a missing workspace.
     let mut app = App::new(None);
     app.set_home(Launch::default());
     assert_eq!(app.workspace(), None);
     assert_eq!(app.home_workspace(), None);
-    assert!(
-        !app.start_args()
-            .as_object()
-            .unwrap_or_else(|| panic!("start args are an object"))
-            .contains_key("workspace")
-    );
+    assert_eq!(app.start_args(), None);
     // An unreadable status row carries an empty workspace: it yields
     // none, so it never becomes a recent or the workspace in use.
     let mut app = remote();
@@ -1296,6 +1321,15 @@ fn an_empty_choice_clears_the_pick_and_enter_reopens_the_picker() {
     // (`docs/tui.md`, "Home") instead of starting.
     key(&mut app, Key::Enter);
     assert!(picker_open(&app));
+}
+
+#[test]
+fn start_args_is_none_without_a_workspace() {
+    // Neither the picker nor the launch names a workspace: no `start`
+    // goes out, keeping the draft as the link-down path does.
+    let mut app = App::new(None);
+    app.set_home(Launch::default());
+    assert_eq!(app.start_args(), None);
 }
 
 /// With no local workspace nothing reads the working directory: the
@@ -1528,4 +1562,37 @@ fn a_stale_directories_tag_does_not_fold_into_a_reopened_picker() {
     // The reopened picker's own ask still folds.
     answer(&mut app, &second[0].0, &["fresh"], "/w");
     assert_eq!(completions(&app), ["fresh".to_owned()]);
+}
+
+#[test]
+fn a_failed_directories_ask_settles_by_its_carried_id() {
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    // A close the quit question asked: its resume line must survive a
+    // failure the close never rode.
+    app.park_closing(contract::SessionId("s_9".to_owned()), "c_close".to_owned());
+    // Typing queues the picker's ask, paired as built: each keystroke
+    // sends what it queued.
+    let mut lines = Vec::new();
+    for ch in "/a".chars() {
+        if let Effect::Send(sent) = key(&mut app, Key::Char(ch)) {
+            lines.extend(sent);
+        }
+    }
+    assert!(!lines.is_empty());
+    let carried: String = serde_json::from_str::<Value>(&lines[0])
+        .ok()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .expect("directories id");
+    // Tamper with the ask's JSON id, then pair the tampered line as a
+    // builder whose line and id diverge would: settlement must follow
+    // the carried id, never the line's JSON.
+    let tampered = lines[0].replacen(&carried, "c_close", 1);
+    assert_ne!(tampered, lines[0]);
+    app.outbox
+        .note_hub_sent(&contract::CommandId(carried), &tampered);
+    let mut failed = lines;
+    failed[0] = tampered;
+    app.write_failed(&failed);
+    assert!(app.closing_sessions().contains(&"s_9".to_owned()));
 }

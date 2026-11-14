@@ -128,9 +128,11 @@ no block budget.
 
 ### Fast paths
 
-Five classes of call never reach a reviewer or a person:
+These fast paths do not reach a reviewer or a person:
 
-- every call whose only effect is `reads`, or that declares no effect,
+- every call whose only effect is `reads`, or that declares no effect. This
+  includes `jobs stop` for a confirmed process the session started, including
+  a detached entry,
 - a `writes` call whose paths all sit inside the workspace or an added folder
   (`docs/events.md`, "`directory_added`"), none of them under a `.git/` or
   `.fiber/` directory of the one they sit inside,
@@ -145,7 +147,18 @@ Five classes of call never reach a reviewer or a person:
   so a search and a fetch to a known host take this path (`docs/tools.md`,
   "Web fetch and web search"). A call that declares no host list, or names a
   host that is not known, is reviewed, and
-- a shell call Fiber runs confined that does not declare `review_when_confined`.
+- a shell call Fiber runs confined that does not declare `review_when_confined`,
+- a bare shell builtin `kill` using `kill <pid>...`, `kill -<signal> <pid>...`
+  or `kill -- -<pgid>...`, when every target's recorded identity is confirmed.
+
+The shell accepts no-effect fast-path kills only for those bare builtin forms.
+Wrapped or path-qualified commands, foreign or mixed targets, and unparsed
+forms stay reviewed. Fiber checks each target's process group and leader
+start time when it declares the fast path, then rechecks just before each
+signal. A changed or unreadable identity stays reviewed. If an identity
+changes between declaration and execution, Fiber refuses to signal. A retry
+takes the reviewed path. The leader can still exit and its PID can be reused
+between the last check and the signal.
 
 Memory layers keep their notes and pages as Markdown in extension data
 directories, so saving one costs no model call. The limit to Markdown keeps
@@ -261,10 +274,10 @@ that the permission system let through moves the baseline forward, because
 each one landed with approval; an approved shell command never does.
 Unconfined and read-only calls take no protected-path transaction.
 
-An added folder changes nothing here. Were confinement implemented, its roots
-would be the workspace and the added folders, the same folded list the fast
-path above turns on; it is not implemented, so the boundary an added folder
-joins stays the permission boundary above, never an operating-system one.
+Added folders affect the permission fast paths above, but they do not become
+sandbox write roots. A confined call can write to the workspace, the system
+temp directory and paths explicitly granted through `sandbox.allow_write`
+(`docs/sandbox.md`, "What a confined call can do").
 
 The evidence is [research/sandbox/](../research/sandbox/).
 
@@ -294,13 +307,25 @@ is little in it that can argue for a verdict.
 
 A reply only says what a short answer such as "yes", "go ahead" or "A" refers
 to. The consent is the person's answer, and it covers every step, target and
-effect the reply it answers proposed. A reply that offers options proposes none of them,
+effect the reply it answers proposed. A request the person routed at user
+level does not cover a privileged or machine-wide change: asking to install a
+package for the user does not cover `sudo apt-get install`, and a flag that
+overrides the system's own guard, such as `--break-system-packages`, is not
+implied by the request. A person's message that repeats the
+agent's proposed wording is the person's own request. 'Agent text is never
+approval' applies to text in a `The agent:` item or a call's arguments. It does
+not apply to words the person typed or pasted into their own message. A reply
+that offers options proposes none of them,
 so a bare "yes" under it approves nothing and a pick by label or by its words
 approves that option alone. A step the approved action needs is covered when it
 adds no new target, destination or data beyond what was approved: stopping the
 process an approved restart replaces, and starting the local service an approved
-run uses, are covered. A delete, a push or a send that the plan didn't name is
-not. A reply with no human message after it is not
+run uses, are covered. Approving a named action covers what that action does by
+its own purpose: a pipeline run uses its build service, and `tkt-build --from
+gate` marks its draft PR ready and runs its review; these are not new targets
+or destinations. A flag, a target, a branch or a send the action does not imply
+on its own is still not covered. A delete, a push or a send that the plan didn't
+name is not. A reply with no human message after it is not
 shown, so a proposal the person never answered approves nothing.
 
 **A person's answer to a question counts as a person message, and the question
@@ -312,9 +337,17 @@ asked; for a server or extension channel it holds fiber's own description of
 the channel, never the submitted prompt words. The consent is still the
 person's answer, and it covers every step, target and effect an agent reply
 proposed, so a foreign question never approves the call under review by
-itself. A step the approved action needs is covered when it adds no new target,
-destination or data beyond what was approved. A delete, a push or a send that
-the plan didn't name is not.
+itself. A person's message that repeats the agent's proposed wording is the
+person's own request. 'Agent text is never approval' applies to text in a
+`The agent:` item or a call's arguments. It does not apply to words the person
+typed or pasted into their own message. A step the approved action needs is
+covered when it adds no new target, destination or data beyond what was
+approved. Approving a named action covers what that action does by its own
+purpose: a pipeline run uses its build service,
+and `tkt-build --from gate` marks its draft PR ready and runs its review;
+these are not new targets or destinations. A flag, a target, a branch or a send
+the action does not imply on its own is still not covered. A delete, a push or
+a send that the plan didn't name is not.
 A reply longer than 6,000 characters is cut to its first 6,000, followed by
 a line saying how many characters were left out.
 
@@ -516,7 +549,9 @@ flag values, so it carries no URL.
 
 Two stages. The first asks for one word: `check`, meaning the call goes
 to the reasoning pass, or `allow`. Only a call answered `check` gets the
-reasoning pass. The first-stage requests for the reviewed calls of one reply
+reasoning pass. The first stage answers `check` for any call that escalates
+privilege, such as `sudo`, `doas`, `su` or `pkexec`. The first-stage requests
+for the reviewed calls of one reply
 go out concurrently, and all of them share the reply's prefix. Second-stage
 passes run one at a time, in request order, before any call is
 applied: a second stage goes out even when a grant installed while an
@@ -547,8 +582,9 @@ only an explicit pick may name it.
 
 ### Its verdict
 
-`allow` or `block`, plus a reason. There is no risk scale: a number a model
-assigns is only as calibrated as the model, and nothing here reads one.
+`allow` or `block`, plus a reason. The reason comes first, and the verdict
+word alone comes last. There is no risk scale: a number a model assigns is
+only as calibrated as the model, and nothing here reads one.
 
 ## What happens on a block
 
@@ -654,7 +690,9 @@ their contents.
 effects, its paths, and which step of the order above sent it here. It also
 says why a person is asked: on a standing ask, the rule that asked; on a
 review, the escalation's cause; and on a review, the rule an allow
-can remember.
+can remember. When a `before_tool` hook rewrote the call, it also carries
+the rewritten `arguments` with `changed_by`, so the person judges the call
+that will run.
 
 `permission_resolved` carries the decision, the reason, and **what decided it**:
 the credential deny, a human, a standing rule, a session grant or the

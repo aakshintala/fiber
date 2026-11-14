@@ -205,7 +205,9 @@ fn attach_bounded_live_events_stay_within_k_while_the_fold_is_held() {
         .name("attach-run".to_owned())
         .spawn(move || {
             pause::install(reached_tx, release);
-            let code = lp.run(&rx);
+            let code = lp
+                .run(&rx)
+                .expect("loop completes without terminal failure");
             done_tx.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -693,8 +695,12 @@ fn routed_loop_wait_lends_one_queue_then_parks_or_reconnects_at_the_bound() {
         let (done, result) = mpsc::channel();
         std::thread::spawn(move || {
             done.send(worker.ask(
-                "configure",
-                json!({"operation":"settings"}),
+                contract::commands::hub::HubCommand::Configure(
+                    contract::commands::hub::Configure {
+                        operation: "settings".into(),
+                        arguments: serde_json::Map::new(),
+                    },
+                ),
                 crate::remote::Caller::Loop,
             ))
             .unwrap();
@@ -748,8 +754,14 @@ fn routed_loop_wait_lends_one_queue_then_parks_or_reconnects_at_the_bound() {
                 let initial = terminal.app.on_line(Line::Hub(hello()));
                 let initial: serde_json::Value = serde_json::from_str(&initial[0]).unwrap();
                 assert_eq!(initial["command"], "feed");
-                assert_eq!(terminal.handle(Input::Disconnected), None);
-                assert_eq!(terminal.handle(connected), None);
+                assert_eq!(
+                    (terminal.handle(Input::Disconnected)).expect("event loop result succeeds"),
+                    None
+                );
+                assert_eq!(
+                    (terminal.handle(connected)).expect("event loop result succeeds"),
+                    None
+                );
                 handled.send(()).unwrap();
             });
             assert_eq!(
@@ -2371,7 +2383,9 @@ fn reopened_history(older_ending: bool) {
     let (done_tx, done) = mpsc::channel();
     std::thread::spawn(move || {
         pause::install_page_zero(b"\x1b[6~", page_zero_tx);
-        let code = lp.run(&rx);
+        let code = lp
+            .run(&rx)
+            .expect("loop completes without terminal failure");
         done_tx.send((code, lp)).unwrap_or(());
     });
     for input in super::to_the_top() {
@@ -2508,7 +2522,9 @@ fn a_history_waits_for_the_opening_pass_at_the_opening_window() {
         let (done_tx, done) = mpsc::channel();
         std::thread::spawn(move || {
             pause::install(reached_tx, release);
-            let code = lp.run(&rx);
+            let code = lp
+                .run(&rx)
+                .expect("loop completes without terminal failure");
             done_tx.send((code, lp)).unwrap_or(());
         });
         Deadline::after(DEADLINE).recv_or_fail(&reached, "chunk one to wait");
@@ -2608,7 +2624,9 @@ fn attach_stash_peak_at_the_ten_mib_fixture() {
             .name("attach-run".to_owned())
             .spawn(move || {
                 pause::install(reached_tx, release);
-                let code = lp.run(&rx);
+                let code = lp
+                    .run(&rx)
+                    .expect("loop completes without terminal failure");
                 done_tx.send((code, lp)).unwrap_or(());
             })
             .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -2920,7 +2938,7 @@ fn the_raise_is_written_after_the_frame_draws() {
         .send(())
         .unwrap_or_else(|err| panic!("release: {err}"));
     let (mut lp, out) = first.join().unwrap_or_else(|_| panic!("the worker"));
-    assert_eq!(out, None);
+    assert_eq!((out).expect("event loop result succeeds"), None);
     drop(tx1);
     let lines: Vec<serde_json::Value> = seen
         .iter()
@@ -3022,7 +3040,11 @@ fn the_raise_is_written_after_the_frame_draws() {
     let raise: serde_json::Value = serde_json::from_str(&raise).unwrap_or_default();
     assert_eq!(raise["command"], "subscribe");
     assert_eq!(raise["args"], json!({"level": "full"}));
-    assert_eq!(worker.join().unwrap_or_else(|_| panic!("the worker")), None);
+    assert_eq!(
+        (worker.join().unwrap_or_else(|_| panic!("the worker")))
+            .expect("event loop result succeeds"),
+        None
+    );
 }
 
 // The open's tail read: the scripted hub, the loop it drives, and the
@@ -3062,6 +3084,13 @@ enum History {
     Drop,
     /// Answers the first read's window, rejects the rest with the message.
     FailSecond(&'static str),
+    /// Serves the first window, then delivers a target-session
+    /// `stream_reopened` during the second wait and keeps serving: the
+    /// reopened answer abandons the read, and what follows it is late.
+    ReopenSecond,
+    /// Serves the pre-frame windows, rejects the first count-phase read
+    /// with the message.
+    FailCount(&'static str),
 }
 
 /// The loop an open's tail read drives: the recording backend's frames,
@@ -3111,7 +3140,7 @@ fn tail_open(
     history: History,
     extra: Vec<serde_json::Value>,
 ) -> TailOpen {
-    tail_open_prepared(log, full, history, extra, |_| {})
+    tail_open_prepared(log, full, history, extra, |_| {}, |_| {})
 }
 
 fn tail_open_prepared(
@@ -3120,6 +3149,7 @@ fn tail_open_prepared(
     history: History,
     extra: Vec<serde_json::Value>,
     prepare: impl FnOnce(&mut crate::app::App),
+    after_connected: impl FnOnce(&mut crate::app::App),
 ) -> TailOpen {
     use std::sync::Mutex;
     let mut app = crate::app::App::new(std::path::PathBuf::from("/w"));
@@ -3344,6 +3374,29 @@ fn tail_open_prepared(
                                 &id,
                                 json!({"lines": doors_window(&log, &command["args"])}),
                             )),
+                            History::ReopenSecond if reads == 1 => write(session_ack(
+                                &id,
+                                json!({"lines": doors_window(&log, &command["args"])}),
+                            )),
+                            History::ReopenSecond => {
+                                // The reopening lands mid-read: the tail
+                                // abandons without a notice, and the
+                                // window served after it is late.
+                                write(json!({"kind": "stream_reopened", "ts": 0,
+                                    "schema_version": contract::SCHEMA_VERSION,
+                                    "payload": {"session_id": "s_aaaaaaaaaaaaaaaa"}}));
+                                write(session_ack(
+                                    &id,
+                                    json!({"lines": doors_window(&log, &command["args"])}),
+                                ));
+                            }
+                            History::FailCount(message) if reads > 2 => {
+                                write(session_rejected(&id, message));
+                            }
+                            History::FailCount(_) => write(session_ack(
+                                &id,
+                                json!({"lines": doors_window(&log, &command["args"])}),
+                            )),
                         }
                     }
                     _ => write(hub_ack(&id, json!({}))),
@@ -3353,23 +3406,38 @@ fn tail_open_prepared(
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     let wait = Deadline::after(DEADLINE);
-    assert_eq!(lp.step(Input::Connected(ours, hello()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Connected(ours, hello()), &rx)).expect("event loop result succeeds"),
+        None
+    );
+    // The launch clear ran with `Connected`: a seed landing now
+    // survives to the ended install, while `prepare` ran before it.
+    after_connected(&mut lp.app);
     // The hub answers feed and recent: neither frame reads yet.
     for what in ["the feed answer", "the recent answer"] {
         let input = wait.recv_or_fail(&rx, what);
-        assert_eq!(lp.step(input, &rx), None);
+        assert_eq!(
+            (lp.step(input, &rx)).expect("event loop result succeeds"),
+            None
+        );
     }
     // Summary acceptance releases commands and starts the tail read.
     // Its commands reply can be stashed while the read awaits history.
     let summary = wait.recv_or_fail(&rx, "the summary subscribe answer");
-    assert_eq!(lp.step(summary, &rx), None);
+    assert_eq!(
+        (lp.step(summary, &rx)).expect("event loop result succeeds"),
+        None
+    );
     let commands = lp
         .hub
         .pop_stashed()
         .unwrap_or_else(|| panic!("the stashed commands reply"));
     assert!(matches!(&commands, Input::Hub(Line::Session(envelope))
         if envelope.payload.get("result").is_some_and(|result| result.get("commands").is_some())));
-    assert_eq!(lp.step(commands, &rx), None);
+    assert_eq!(
+        (lp.step(commands, &rx)).expect("event loop result succeeds"),
+        None
+    );
     if want_full && !want_drop {
         wait.recv_or_fail(&full_seen, "the hub to read the raise");
     }
@@ -3522,6 +3590,7 @@ fn tail_speculation_failure_survives_replay_and_reaches_actual_app_drain_once() 
                 contract::clock::Clock::now(&*fakes::clock::FakeClock::new()),
             );
         },
+        |_| {},
     );
     assert!(
         !fake.calls.borrow().is_empty(),
@@ -3615,6 +3684,7 @@ fn tail_speculation_notice_survives_replay_and_reaches_durable_drain_once() {
                 contract::clock::Clock::now(&*fakes::clock::FakeClock::new()),
             );
         },
+        |_| {},
     );
     open.lp.app.drawn(&[]);
     let notices = open.lp.app.notices();
@@ -3676,12 +3746,23 @@ fn a_history_rejection_shows_the_notice_and_still_raises() {
     let log = super::compaction_log(3, "the last reply");
     let open = tail_open(log, Full::Accepted, History::Reject("boom"), Vec::new());
     assert_eq!(open.lp.app.notice(), Some("Could not load history: boom"));
+    assert_eq!(
+        open.lp.app.pages().index().total(),
+        0,
+        // docs/tui.md ("History and paging"): a rejected tail read installs nothing.
+        "the fresh screen stays empty"
+    );
     let levels: Vec<String> = seen_commands(&open)
         .into_iter()
         .filter(|(command, _)| command == "subscribe")
         .map(|(_, level)| level)
         .collect();
     assert_eq!(levels, ["summary".to_owned(), "full".to_owned()]);
+    let drawn = frames(&open);
+    let frame = drawn.last().unwrap_or_else(|| panic!("a frame"));
+    // docs/testing.md ("What a change ships with"): a bug seen on screen gets a screen test.
+    // docs/testing/screens.md ("Screens"): the in-memory screen is the surface.
+    assert!(!frame.contains("the last reply"), "{frame}");
 }
 
 /// A reopening during the read abandons it and still raises: the live
@@ -3696,12 +3777,277 @@ fn a_reopening_during_the_read_abandons_it_and_still_raises() {
     let open = tail_open(log, Full::Accepted, History::Windows, vec![reopened]);
     assert!(open.lp.app.pass_open(), "the reopening holds the pass");
     assert_eq!(open.lp.app.notice(), None);
+    assert_eq!(
+        open.lp.app.pages().index().total(),
+        0,
+        // docs/tui.md ("History and paging"): an abandoned tail read installs nothing.
+        "the fresh screen stays empty"
+    );
     let levels: Vec<String> = seen_commands(&open)
         .into_iter()
         .filter(|(command, _)| command == "subscribe")
         .map(|(_, level)| level)
         .collect();
     assert_eq!(levels, ["summary".to_owned(), "full".to_owned()]);
+    let drawn = frames(&open);
+    let frame = drawn.last().unwrap_or_else(|| panic!("a frame"));
+    // docs/testing.md ("What a change ships with"): a bug seen on screen gets a screen test.
+    // docs/testing/screens.md ("Screens"): the in-memory screen is the surface.
+    assert!(!frame.contains("the last reply"), "{frame}");
+}
+
+/// The seeded transcript an ended install must keep: one driver turn
+/// with a text no log below uses, plus its page total folded fresh.
+fn seeded_screen() -> (Vec<contract::Envelope>, usize) {
+    let seed = super::compaction_log(1, "the seeded reply holds quails");
+    let mut pages = crate::window::Pages::new(60);
+    for envelope in &seed {
+        pages.apply(envelope);
+    }
+    let total = pages.index().total();
+    assert!(total > 0, "the seed draws");
+    (seed, total)
+}
+
+/// A rejected second window installs nothing: the tail ends as failed
+/// with the answer's message, the kept screen stays, and the raise
+/// still goes out over it.
+#[test]
+fn a_rejected_second_window_installs_nothing() {
+    let log = usage_log();
+    assert!(log.len() > 256, "two windows");
+    let (seed, total) = seeded_screen();
+    let open = tail_open_prepared(
+        log,
+        Full::Accepted,
+        History::FailSecond("boom"),
+        Vec::new(),
+        |_| {},
+        |app| crate::app::testkit::seed_after_launch(app, &seed),
+    );
+    assert_eq!(open.lp.app.notice(), Some("Could not load history: boom"));
+    assert_eq!(
+        open.lp.app.pages().index().total(),
+        total,
+        // docs/tui.md ("History and paging"): a rejected tail read installs nothing.
+        "the kept screen stays"
+    );
+    let rows: Vec<String> = open
+        .lp
+        .app
+        .lines()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert!(
+        rows.iter().any(|row| row.contains("quails")),
+        "the seed stays: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("second")),
+        "no partial-prefix row shows: {rows:?}"
+    );
+    assert!(
+        seen_commands(&open)
+            .iter()
+            .any(|(command, level)| command == "subscribe" && level == "full"),
+        // docs/tui.md ("History and paging"): the raise still goes out.
+        "the raise"
+    );
+    let drawn = frames(&open);
+    let frame = drawn.last().unwrap_or_else(|| panic!("a frame"));
+    // docs/testing.md ("What a change ships with"): a bug seen on screen gets a screen test.
+    // docs/testing/screens.md ("Screens"): the in-memory screen is the surface.
+    assert!(frame.contains("quails"), "{frame}");
+    assert!(!frame.contains("second"), "{frame}");
+}
+
+/// A reopened second window abandons without installing: the live
+/// `stream_reopened` ends the tail with no notice, the kept screen
+/// stays, the pass stays open, and the raise still goes out.
+#[test]
+fn a_reopened_second_window_abandons_without_installing() {
+    let log = usage_log();
+    assert!(log.len() > 256, "two windows");
+    let (seed, total) = seeded_screen();
+    let open = tail_open_prepared(
+        log,
+        Full::Accepted,
+        History::ReopenSecond,
+        Vec::new(),
+        |_| {},
+        |app| crate::app::testkit::seed_after_launch(app, &seed),
+    );
+    assert!(open.lp.app.pass_open(), "the reopening holds the pass");
+    assert_eq!(open.lp.app.notice(), None);
+    assert_eq!(
+        open.lp.app.pages().index().total(),
+        total,
+        // docs/tui.md ("History and paging"): an abandoned tail read installs nothing.
+        "the kept screen stays"
+    );
+    let rows: Vec<String> = open
+        .lp
+        .app
+        .lines()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert!(
+        rows.iter().any(|row| row.contains("quails")),
+        "the seed stays: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("second")),
+        "no partial-prefix row shows: {rows:?}"
+    );
+    assert!(
+        seen_commands(&open)
+            .iter()
+            .any(|(command, level)| command == "subscribe" && level == "full"),
+        // docs/tui.md ("History and paging"): the raise still goes out.
+        "the raise"
+    );
+    let drawn = frames(&open);
+    let frame = drawn.last().unwrap_or_else(|| panic!("a frame"));
+    // docs/testing.md ("What a change ships with"): a bug seen on screen gets a screen test.
+    // docs/testing/screens.md ("Screens"): the in-memory screen is the surface.
+    assert!(frame.contains("quails"), "{frame}");
+    assert!(!frame.contains("second"), "{frame}");
+}
+
+/// A rejected count folds nothing: the tail installs its preview, the
+/// count's rejection drops without folding, the preview stays, and the
+/// raise still goes out with the notice.
+#[test]
+fn a_rejected_count_folds_nothing() {
+    const ROOT: &str = "s_arrrrrrrrrrrrrr";
+    const CHILD: &str = "s_aaaaaaaaaaaaaaaa";
+    let mut root_seq = 1u64;
+    let mut ancestor = vec![started(ROOT, None)];
+    ancestor.extend(segment_turns(ROOT, "root reply", 100, 2, &mut root_seq));
+    let point = root_seq - 1;
+    // The own run fills the display in one window: the install's
+    // preview holds the whole window, and the base count fold carries
+    // its first turn start above, so the red total moves by its rows.
+    let mut child = vec![started(CHILD, Some((ROOT, point)))];
+    // `started` holds seq zero, so the next line takes one.
+    let mut child_seq = 1u64;
+    for turn in 0..4 {
+        let message = format!("a_m{turn}");
+        let prompt = if turn == 0 {
+            "the count prompt holds thrashers"
+        } else {
+            "prompt"
+        };
+        push_line(
+            &mut child,
+            &mut child_seq,
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": prompt}]}]}),
+        );
+        push_line(&mut child, &mut child_seq, "step_started", None, json!({}));
+        push_line(
+            &mut child,
+            &mut child_seq,
+            "assistant_message_started",
+            Some(&message),
+            json!({}),
+        );
+        push_line(
+            &mut child,
+            &mut child_seq,
+            "text_completed",
+            Some(&message),
+            json!({"text": "the count preview holds quokkas"}),
+        );
+        push_line(
+            &mut child,
+            &mut child_seq,
+            "assistant_message_completed",
+            Some(&message),
+            json!({"outcome": "completed"}),
+        );
+        push_line(
+            &mut child,
+            &mut child_seq,
+            "turn_completed",
+            None,
+            json!({"outcome": "completed"}),
+        );
+    }
+    while child.len() < 257 {
+        push_line(
+            &mut child,
+            &mut child_seq,
+            "usage_recorded",
+            Some("a_m0"),
+            usage_payload(),
+        );
+    }
+    assert_eq!(child.len(), 257, "one window with the trailer first");
+    let open = tail_open_prepared(
+        child.clone(),
+        Full::Accepted,
+        History::FailCount("boom"),
+        Vec::new(),
+        |_| {},
+        |_| {},
+    );
+    assert_eq!(open.lp.app.notice(), Some("Could not load history: boom"));
+    // The installed preview is the window past its first turn start: the
+    // lone trailer text never belongs to it.
+    let window = &child[child.len() - 256..];
+    let at = window
+        .iter()
+        .position(|line| line.kind == EventKind::TurnStarted)
+        .unwrap_or_else(|| panic!("a turn start in the window"));
+    let mut preview = crate::window::Pages::new(60);
+    for envelope in &window[at..] {
+        preview.apply(envelope);
+    }
+    let total = preview.index().total();
+    assert!(total > 0, "the preview draws");
+    assert_eq!(
+        open.lp.app.pages().index().total(),
+        total,
+        // docs/tui.md ("History and paging"): a rejected count read installs nothing.
+        "the installed preview stays"
+    );
+    let rows: Vec<String> = open
+        .lp
+        .app
+        .lines()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert!(
+        rows.iter().any(|row| row.contains("quokkas")),
+        "the preview stays: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("thrashers")),
+        "the trailer prompt stays: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("root reply")),
+        "no ancestor row shows: {rows:?}"
+    );
+    assert!(
+        seen_commands(&open)
+            .iter()
+            .any(|(command, level)| command == "subscribe" && level == "full"),
+        // docs/tui.md ("History and paging"): the raise still goes out.
+        "the raise"
+    );
+    let drawn = frames(&open);
+    let frame = drawn.last().unwrap_or_else(|| panic!("a frame"));
+    // docs/testing.md ("What a change ships with"): a bug seen on screen gets a screen test.
+    // docs/testing/screens.md ("Screens"): the in-memory screen is the surface.
+    assert!(frame.contains("quokkas"), "{frame}");
+    assert!(!frame.contains("thrashers"), "{frame}");
 }
 
 /// A lost connection during the read ends everything: the link drops,
@@ -3745,7 +4091,10 @@ fn an_empty_log_draws_no_history_and_raises() {
     );
     let wait = Deadline::after(DEADLINE);
     let ack = wait.recv_or_fail(&open.rx, "the raise's ack");
-    assert_eq!(open.lp.step(ack, &open.rx), None);
+    assert_eq!(
+        (open.lp.step(ack, &open.rx)).expect("event loop result succeeds"),
+        None
+    );
     assert!(!open.lp.app.pass_open());
     assert_eq!(open.lp.app.take_raise(), None);
 }
@@ -3770,7 +4119,10 @@ fn the_tail_read_stashes_other_inputs_and_replays_them_in_order() {
     );
     assert!(open.lp.hub.answer_stash_peak() <= 3);
     drop(open.tx);
-    assert_eq!(open.lp.run(&open.rx), 0);
+    assert_eq!(
+        (open.lp.run(&open.rx)).expect("event loop result succeeds"),
+        0
+    );
     let texts: Vec<String> = open
         .lp
         .app
@@ -3840,6 +4192,7 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
         History::Windows,
         Vec::new(),
         |app| app.set_size(60, 14),
+        |_| {},
     );
     let first = frames(&open)
         .pop()
@@ -3886,7 +4239,9 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
     let (done_tx, done) = mpsc::channel();
     std::thread::spawn(move || {
         pause::report_ends(ended_tx, release);
-        let code = lp.run(&rx);
+        let code = lp
+            .run(&rx)
+            .expect("loop completes without terminal failure");
         done_tx.send((code, lp)).unwrap_or(());
     });
     let mut taken = Vec::new();
@@ -4087,7 +4442,9 @@ fn a_gated_redundant_ack_shifts_the_middle_batch() {
     let (done_tx, done) = mpsc::channel();
     std::thread::spawn(move || {
         pause::report_ends(ended_tx, release);
-        let code = lp.run(&rx);
+        let code = lp
+            .run(&rx)
+            .expect("loop completes without terminal failure");
         done_tx.send((code, lp)).unwrap_or(());
     });
     let mut taken = Vec::new();
@@ -4187,7 +4544,10 @@ fn a_preview_survives_the_pass_and_lands_with_the_whole_session() {
         whole.apply(envelope);
     }
     drop(open.tx);
-    assert_eq!(open.lp.run(&open.rx), 0);
+    assert_eq!(
+        (open.lp.run(&open.rx)).expect("event loop result succeeds"),
+        0
+    );
     assert_eq!(open.lp.app.pages().index().total(), whole.index().total());
     assert!(!open.lp.app.pass_open());
     assert_eq!(open.lp.app.take_raise(), None);
@@ -4303,31 +4663,57 @@ fn usage_log() -> Vec<contract::Envelope> {
     log
 }
 
-/// A failed read keeps the preview and drops the partial fold: the
-/// second read rejected, the screen holds the first answer's lines with
-/// the refusal, and the raise still goes out.
+/// A failed read installs nothing and keeps the notice: the second
+/// read rejected, the kept screen stays with the refusal, and the raise
+/// still goes out over it.
 #[test]
-fn a_failed_read_keeps_the_preview_and_drops_the_partial_fold() {
+fn a_failed_read_installs_nothing_and_keeps_the_notice() {
     let log = usage_log();
-    assert!(log.len() > 256);
-    let first: Vec<contract::Envelope> = log[log.len() - 256..].to_vec();
-    let open = tail_open(log, Full::Accepted, History::FailSecond("boom"), Vec::new());
+    assert!(log.len() > 256, "two windows");
+    let (seed, total) = seeded_screen();
+    let open = tail_open_prepared(
+        log,
+        Full::Accepted,
+        History::FailSecond("boom"),
+        Vec::new(),
+        |_| {},
+        |app| crate::app::testkit::seed_after_launch(app, &seed),
+    );
     assert_eq!(open.lp.app.notice(), Some("Could not load history: boom"));
-    let mut installed = crate::window::Pages::new(60);
-    for envelope in &first {
-        installed.apply(envelope);
-    }
-    assert!(installed.index().total() > 0);
     assert_eq!(
         open.lp.app.pages().index().total(),
-        installed.index().total()
+        total,
+        // docs/tui.md ("History and paging"): a rejected tail read installs nothing.
+        "the kept screen stays"
+    );
+    let rows: Vec<String> = open
+        .lp
+        .app
+        .lines()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert!(
+        rows.iter().any(|row| row.contains("quails")),
+        "the seed stays: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("second")),
+        "no partial-prefix row shows: {rows:?}"
     );
     assert!(
         seen_commands(&open)
             .iter()
             .any(|(command, level)| command == "subscribe" && level == "full"),
+        // docs/tui.md ("History and paging"): the raise still goes out.
         "the raise"
     );
+    let drawn = frames(&open);
+    let frame = drawn.last().unwrap_or_else(|| panic!("a frame"));
+    // docs/testing.md ("What a change ships with"): a bug seen on screen gets a screen test.
+    // docs/testing/screens.md ("Screens"): the in-memory screen is the surface.
+    assert!(frame.contains("quails"), "{frame}");
+    assert!(!frame.contains("second"), "{frame}");
 }
 
 /// An attached app at 60x12 with the hub up and the session live: lines
@@ -4530,7 +4916,10 @@ fn a_reconnect_to_the_session_on_screen_reads_nothing_and_keeps_its_place() {
         "the tail read goes out"
     );
     drop(open.tx);
-    assert_eq!(open.lp.run(&open.rx), 0);
+    assert_eq!(
+        (open.lp.run(&open.rx)).expect("event loop result succeeds"),
+        0
+    );
     let screen = rendered(&open.lp.app);
     assert!(screen.contains("quokkas"), "{screen}");
     assert!(!screen.contains("turn 0"), "{screen}");
@@ -4637,7 +5026,10 @@ fn a_held_reconnect_replay_leaves_one_job_card() {
     let wait = Deadline::after(DEADLINE);
     for _ in 0..log.len() + 1 {
         let input = wait.recv_or_fail(&open.rx, "the replay");
-        assert_eq!(open.lp.step(input, &open.rx), None);
+        assert_eq!(
+            (open.lp.step(input, &open.rx)).expect("event loop result succeeds"),
+            None
+        );
     }
     assert!(!open.lp.app.pass_open());
     assert_eq!(rendered(&held).matches("task 1").count(), 1);
@@ -5054,7 +5446,10 @@ fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
         }
     };
     let (tx, rx) = mpsc::channel();
-    assert_eq!(lp.step(Input::Connected(ours, hello()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Connected(ours, hello()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     let mut seen = Vec::new();
     for _ in 0..3 {
         seen.push(socket_line(&mut reader).unwrap_or_else(|| panic!("an open line")));
@@ -5191,7 +5586,7 @@ fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
         "the raise follows the root-filled frame"
     );
     let (lp, out) = worker.join().unwrap_or_else(|_| panic!("the worker"));
-    assert_eq!(out, None);
+    assert_eq!((out).expect("event loop result succeeds"), None);
     let mut joint = crate::window::Pages::new(60);
     for line in ancestor.iter().chain(&child) {
         joint.apply(line);
@@ -5285,7 +5680,10 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
         }
     };
     let (tx, rx) = mpsc::channel();
-    assert_eq!(lp.step(Input::Connected(ours, hello()), &rx), None);
+    assert_eq!(
+        (lp.step(Input::Connected(ours, hello()), &rx)).expect("event loop result succeeds"),
+        None
+    );
     // The launch open's lines: feed, recent and the summary subscribe.
     let mut seen = Vec::new();
     for _ in 0..3 {
@@ -5424,7 +5822,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
         "the raise follows the count"
     );
     let (lp, out) = worker.join().unwrap_or_else(|_| panic!("the worker"));
-    assert_eq!(out, None);
+    assert_eq!((out).expect("event loop result succeeds"), None);
     // The ancestor count is included: the joint total spans the chain,
     // and the ancestor stays paged under its own session.
     let mut joint = crate::window::Pages::new(60);
@@ -6234,7 +6632,11 @@ fn attach_spans_are_emitted_at_a_reopened_install_draw() {
         .unwrap_or_else(|err| panic!("queue the reopening: {err}"));
     }
     drop(tx);
-    assert_eq!(lp.frame_inner(&rx), None, "the reopened install draws");
+    assert_eq!(
+        (lp.frame_inner(&rx)).expect("event loop result succeeds"),
+        None,
+        "the reopened install draws"
+    );
 
     let path = home
         .path()
@@ -6518,7 +6920,10 @@ mod attach_span_tests {
         lp.timing.start_attach_wait();
         lp.attached_frame = lp.timing.attached_frame();
         let (_tx, rx) = mpsc::channel();
-        assert_eq!(lp.frame_inner(&rx), None);
+        assert_eq!(
+            (lp.frame_inner(&rx)).expect("event loop result succeeds"),
+            None
+        );
         assert!(attach_op_lines(home.path()).is_empty());
         lp.timing.discard_attach_spans();
         crate::timing::discard(lp.attached_frame.take());
@@ -6566,7 +6971,10 @@ mod attach_span_tests {
         // Buffered answers stay queued; any read past them fails fast
         // as lost instead of hanging the frame.
         drop(tx);
-        assert_eq!(lp.frame_inner(&rx), None);
+        assert_eq!(
+            (lp.frame_inner(&rx)).expect("event loop result succeeds"),
+            None
+        );
         let lines = attach_op_lines(home.path());
         let ops: Vec<&str> = lines
             .iter()
@@ -6632,7 +7040,11 @@ mod attach_span_tests {
             // The frame's later count read sees the closed channel and
             // returns as lost, after the attached-history draw emitted.
             drop(tx);
-            assert_eq!(worker.join().unwrap(), None, "the rejected history draws");
+            assert_eq!(
+                (worker.join().unwrap()).expect("event loop result succeeds"),
+                None,
+                "the rejected history draws"
+            );
         });
         let lines = attach_op_lines(home.path());
         let ops: Vec<&str> = lines
@@ -7008,7 +7420,9 @@ fn drive_exited_replay(hold_first_answer: bool) -> ExitedReplay {
     std::thread::Builder::new()
         .name("attach-run".to_owned())
         .spawn(move || {
-            let code = lp.run(&rx);
+            let code = lp
+                .run(&rx)
+                .expect("loop completes without terminal failure");
             done_tx.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -7308,7 +7722,9 @@ fn failed_resume_keeps_draft_and_loop() {
     std::thread::Builder::new()
         .name("attach-run".to_owned())
         .spawn(move || {
-            let code = lp.run(&rx);
+            let code = lp
+                .run(&rx)
+                .expect("loop completes without terminal failure");
             done_tx
                 .send((code, lp))
                 .unwrap_or_else(|err| panic!("send: {err}"));

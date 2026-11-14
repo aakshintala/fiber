@@ -1525,6 +1525,11 @@ impl SessionExtensions {
             .push(notice(code, message.clone(), Some(name)));
     }
 
+    /// Fiber home, which anchors the catalog cache and extension data directories.
+    pub(crate) fn home(&self) -> &Path {
+        &self.home
+    }
+
     /// One provider per `fiber.provider` registration, in provider-name
     /// order: the extension's name beside its provider.
     pub fn lua_providers(&self) -> &[(String, Arc<LuaProvider>)] {
@@ -1700,18 +1705,22 @@ impl SessionExtensions {
     /// nothing, so released or removed ids never run. Runs on whatever
     /// thread appended the line, before the watcher fan-out below.
     fn observe_delegate(&self, event: &Event) {
-        if let Event::DelegateFinished(finished) = event {
-            for extension in &self.lua {
-                if extension.hub().hold_delegate_finish(finished) {
-                    break;
-                }
-            }
+        let routed = if let Event::DelegateFinished(finished) = event {
+            self.lua
+                .iter()
+                .any(|extension| extension.hub().hold_delegate_finish(finished))
         } else if let Event::JobCompleted(completed) = event {
-            for extension in &self.lua {
-                if extension
+            self.lua.iter().any(|extension| {
+                extension
                     .hub()
                     .push_delegate_run(extension.name(), completed)
-                {
+            })
+        } else {
+            return;
+        };
+        if !routed {
+            for extension in &self.processes {
+                if extension.owner.observe_delegate(event) {
                     break;
                 }
             }
@@ -2461,6 +2470,7 @@ impl Hooks for SessionExtensions {
         // flushes what ended before the first one. The guard drops before
         // the sweep, so a concurrent late start never waits on this lock.
         *lock(&self.inbox) = Some(inbox.clone());
+        self.runtime.set_inbox(inbox.clone());
         // Collected under the weak-map lock and released before handing the
         // sender over, deduped so a shared VM is handed it once.
         for extension in self.attached_vms() {

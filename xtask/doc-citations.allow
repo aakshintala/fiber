@@ -2,10 +2,7 @@
 # Printed by `cargo xtask doc-citations --print`; check-docs fails what this file does not list.
 crates/cli/src/stop.rs	1	docs/invocation.md`, "Stopping\n//! everything"
 crates/contract/src/events_tests.rs	1	docs/events.md:1121
-crates/contract/src/inbox.rs	1	docs/invocation.md`, "Shell"
 crates/contract/src/keeper_tests.rs	1	docs/tools.md, "The keeper"
-crates/doors/src/shell.rs	1	docs/invocation.md`, "Shell"
-crates/doors/tests/socket.rs	5	docs/invocation.md:462
 crates/hub/src/connection.rs	1	docs/invocation.md`, "`rewind`\n    /// starts a new session process"
 crates/hub/src/lib.rs	1	docs/invocation.md`, "`rewind` starts a new session\n    /// process"
 crates/hub/src/lib_tests.rs	1	docs/state.md`, "Diagnostic logs"
@@ -42,20 +39,15 @@ crates/jobs/src/keeper_tests.rs	1	docs/events.md, "Writing"
 crates/jobs/src/keeper_tests.rs	19	docs/tools.md, "The keeper"
 crates/log/src/write.rs	2	docs/events.md`, "Conventions"
 crates/log/src/write.rs	1	docs/testing.md`, "a test of how much work something does counts the\n/// work"
-crates/loop/Cargo.toml	1	docs/architecture.md, "The call rules"
-crates/loop/Cargo.toml	1	docs/testing.md, "Jigs"
 crates/loop/src/conversation_tests.rs	18	docs/compaction.md, "What the model sees after a compaction"
-crates/loop/src/inbox/queue_tests.rs	1	docs/invocation.md, "Lifecycle"
-crates/loop/src/inbox/queue_tests.rs	1	docs/mcp.md, "Servers, their state and the per-server commands"
-crates/loop/src/jobs_tests.rs	1	docs/delegates.md, "Events"
-crates/loop/src/jobs_tests.rs	1	docs/events.md, "Session and turn"
-crates/loop/src/jobs_tests.rs	1	docs/loop.md, "Starting a turn"
-crates/loop/src/offer.rs	2	docs/extensions.md`, "Offering"
 crates/loop/src/resume.rs	1	docs/extensions.md`, "`before_tool`"
 crates/loop/src/status.rs	1	docs/prompt-cache.md`, "Reload"
-crates/tools/src/shell/command.rs	1	docs/code-quality.md, "Unsafe"
 crates/tools/src/shell/hosted_tests.rs	1	docs/tools.md, "Stopping a command"
 crates/tools/src/shell/hosted_tests.rs	1	docs/tools.md, "The keeper"
+crates/tui/src/settings_view_tests.rs	1	docs/tui.md:1108-1109
+crates/tui/src/settings_view_tests.rs	1	docs/tui.md:1123-1124
+crates/tui/src/settings_view_tests.rs	2	docs/tui.md:666-667
+crates/tui/src/swapped_tests.rs	2	docs/tui.md:666-667
 xtask/src/rules_tests.rs	2	docs/architecture.md:6
 xtask/src/rules_tests.rs	4	docs/architecture.md:7
 xtask/src/rules_tests.rs	2	docs/architecture.md:8

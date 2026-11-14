@@ -543,6 +543,24 @@ fn parts_inner(
         &launch,
     )?;
     startup_notices.extend(notices);
+    let catalog = extensions::models_dev::apply(
+        &home,
+        config::models_dev_enabled(&config),
+        Some(config::refresh_after(&config)),
+        clock.wall(),
+        &mut providers,
+    );
+    startup_notices.extend(catalog.notices);
+    let model_deprecations = Arc::new(extensions::models_dev::ModelDeprecations::new(
+        catalog.deprecated,
+    ));
+    #[cfg(not(test))]
+    let catalog_fetch = extensions::models_dev::live_fetch();
+    #[cfg(test)]
+    let catalog_fetch: extensions::models_dev::Fetch =
+        Arc::new(|_| Err("network disabled in tests".to_owned()));
+    let _detached_catalog_refresh =
+        start_catalog_refresh(home.clone(), &config, clock.wall(), catalog_fetch);
     scripted::prepare(&mut providers, &config, recorded);
     let owners = (extensions.lua_providers().iter())
         .map(|(extension, lua)| (lua.name().to_owned(), extension.clone()))
@@ -572,6 +590,9 @@ fn parts_inner(
         &extensions,
         &launch,
     )?;
+    if let Some(notice) = model_deprecations.notice_for(&model.reference()) {
+        startup_notices.push(notice);
+    }
     let context_window = settle(
         settings::context_window(model.model, &model.reference()),
         &extensions,
@@ -752,7 +773,8 @@ fn parts_inner(
         loaded,
         loader,
         reads,
-    );
+    )
+    .deprecations(Arc::clone(&model_deprecations));
     // The model's provider file loads at its credential read; other
     // provider files wait for their own first use.
     // The session log's path is set by the caller, which mints the session
@@ -858,6 +880,21 @@ fn parts_inner(
     })
 }
 
+fn start_catalog_refresh(
+    home: PathBuf,
+    config: &Config,
+    now: std::time::SystemTime,
+    fetch: extensions::models_dev::Fetch,
+) -> Option<std::thread::JoinHandle<()>> {
+    extensions::models_dev::spawn_if_due(
+        home,
+        config::models_dev_enabled(config),
+        Some(config::refresh_after(config)),
+        now,
+        fetch,
+    )
+}
+
 pub(crate) fn reload_inputs(
     config: &Config,
     home: &std::path::Path,
@@ -958,3 +995,7 @@ pub(crate) fn choose_reviewer(
         chosen.observe,
     ))
 }
+
+#[cfg(test)]
+#[path = "parts_tests.rs"]
+mod tests;

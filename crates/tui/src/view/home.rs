@@ -321,6 +321,7 @@ fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
                 .push(Span::styled(format!("  exited · {count}"), dim)),
             ListLine::Exited {
                 key,
+                stop,
                 glyph,
                 name,
                 id,
@@ -329,6 +330,7 @@ fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
                 age,
             } => {
                 row.spot = Some(Spot::Entry(*key));
+                row.stop = *stop;
                 row.left
                     .push(Span::styled(format!("   {glyph} {name}"), dim));
                 let mut segments = vec![id.clone()];
@@ -345,6 +347,11 @@ fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
                 row.spot = Some(Spot::More(*key));
                 row.left
                     .push(Span::styled(format!("     … {count} more"), dim));
+            }
+            ListLine::ArchivedHead { key, count } => {
+                row.spot = Some(Spot::Archived(*key));
+                row.left
+                    .push(Span::styled(format!("  archived · {count}"), dim));
             }
         }
         rows.push(row);
@@ -956,7 +963,7 @@ pub(super) fn render(
                 lift_hover(buf, target.rect);
             } else if !matches!(
                 id,
-                TargetId::Home(Spot::Entry(_) | Spot::Stop(_) | Spot::More(_))
+                TargetId::Home(Spot::Entry(_) | Spot::Stop(_) | Spot::More(_) | Spot::Archived(_))
             ) {
                 buf.set_style(target.rect, FOCUS_STYLE);
             }

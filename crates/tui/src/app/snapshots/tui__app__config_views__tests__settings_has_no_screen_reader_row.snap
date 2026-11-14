@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/app/config_views_tests.rs
+expression: text
+---
+ Settings  /settings                                                 Esc returns
+Changes save automatically
+
+ Appearance   Notifications   Models   Permissions   Sessions   Advanced
+
+› compaction.tokens  400k tokens
+
+  tui.theme          Default
+
+  Key bindings       Open /keys ›
+
+
+
+
+
+
+
+
+
+
+
+About compaction.tokens.
+compaction.tokens · using the default · changing compaction.tokens needs a reloa
+←→ tab · / search · Enter change · Tab layer · Delete reset

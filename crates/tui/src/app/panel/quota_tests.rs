@@ -7,6 +7,7 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use crate::app::items::testkit::{SESSION, commands, home, live, session_line};
+use crate::app::testkit::sent;
 use crate::app::{App, Link};
 use crate::link::Line;
 
@@ -265,30 +266,6 @@ fn no_queries_without_a_card_session_or_live_link() {
     assert!(app.quota_focus().is_none());
     app.outbox.link = Link::Up;
     first(&mut app);
-}
-
-// debt: two `sent` copies, move this helper to `app::items::testkit` when that path
-// is in the writing fence.
-/// The command lines an effect sends, parsed.
-fn sent(effect: crate::app::Effect) -> Vec<Value> {
-    match effect {
-        crate::app::Effect::Send(lines) => lines
-            .iter()
-            .map(|line| serde_json::from_str(line).unwrap_or_default())
-            .collect(),
-        crate::app::Effect::None
-        | crate::app::Effect::Quit
-        | crate::app::Effect::ListFiles
-        | crate::app::Effect::ReadImage(_)
-        | crate::app::Effect::Feedback { .. }
-        | crate::app::Effect::FindPause { .. }
-        | crate::app::Effect::Search { .. }
-        | crate::app::Effect::Editor { .. }
-        | crate::app::Effect::Exit(_)
-        | crate::app::Effect::Copy(_)
-        | crate::app::Effect::OpenLink(_)
-        | crate::app::Effect::OpenFile(_) => Vec::new(),
-    }
 }
 
 #[test]

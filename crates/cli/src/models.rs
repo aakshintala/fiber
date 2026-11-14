@@ -55,6 +55,14 @@ fn stale_lists(
     now: SystemTime,
 ) -> Vec<String> {
     let mut stale = Vec::new();
+    if extensions::models_dev::should_fetch(
+        home,
+        config::models_dev_enabled(config),
+        Some(max_age),
+        now,
+    ) {
+        stale.push(MODELS_DEV_REFRESH.to_owned());
+    }
     for name in providers.switched_on(config) {
         let Some(_lua) = providers.lua(name) else {
             continue;
@@ -71,6 +79,8 @@ fn stale_lists(
 }
 
 /// What `fiber models` says when no provider is installed.
+const MODELS_DEV_REFRESH: &str = "models.dev";
+
 const NO_PROVIDER: &str =
     "No provider is installed. Run `fiber extension install <name>` to install one.";
 
@@ -213,6 +223,16 @@ fn run(
     // and the process environment serves, as before.
     let lookup = crate::hub_env::placeholder_lookup(home, &providers, clock.as_ref());
     notices.extend(providers.add_session(&extensions, &config, run, &lookup));
+    let catalog = extensions::models_dev::apply(
+        home,
+        config::models_dev_enabled(&config),
+        Some(config::refresh_after(&config)),
+        clock.wall(),
+        &mut providers,
+    );
+    let filter_notices = catalog.retain_listed(&mut providers);
+    notices.extend(catalog.notices);
+    notices.extend(filter_notices);
     // Only switched-on providers list: the presence gate drops the rest
     // before the host fill, so no per-model group leaks through for them.
     providers.retain_credentialed(&config);
@@ -312,7 +332,7 @@ fn run(
     if json {
         for row in &rows {
             let line = serde_json::to_string(row).map_err(CliError::ModelRow)?;
-            write_line(out, &line).map_err(CliError::from)?;
+            write_line(out, &line)?;
         }
         return Ok(());
     }
@@ -321,7 +341,7 @@ fn run(
         return Ok(());
     }
     for line in &text_lines(&rows) {
-        write_line(out, line).map_err(CliError::from)?;
+        write_line(out, line)?;
     }
     Ok(())
 }
@@ -410,6 +430,30 @@ fn refresh_run(
     locks: Arc<dyn PathLock>,
     run: config::Runner<'_>,
 ) {
+    let fetch = default_models_dev_fetch();
+    refresh_run_with_fetch(home, workspace, names, clock, locks, run, &fetch);
+}
+
+fn default_models_dev_fetch() -> extensions::models_dev::Fetch {
+    #[cfg(not(test))]
+    {
+        extensions::models_dev::live_fetch()
+    }
+    #[cfg(test)]
+    {
+        Arc::new(|_| Err("network disabled in tests".to_owned()))
+    }
+}
+
+fn refresh_run_with_fetch(
+    home: &Path,
+    workspace: &Path,
+    names: &[String],
+    clock: Arc<dyn Clock>,
+    locks: Arc<dyn PathLock>,
+    run: config::Runner<'_>,
+    fetch: &extensions::models_dev::Fetch,
+) {
     if let Ok((providers, config, set, _)) =
         providers_config_and_set(home, workspace, Arc::clone(&clock))
     {
@@ -431,6 +475,13 @@ fn refresh_run(
             &config,
             run,
             clock.as_ref(),
+        );
+        extensions::models_dev::refresh_if_due(
+            home,
+            config::models_dev_enabled(&config),
+            Some(config::refresh_after(&config)),
+            clock.wall(),
+            fetch,
         );
     }
 }

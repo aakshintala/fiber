@@ -36,6 +36,8 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "sessions",
             "args": {"project": "p", "active": false, "archived": false}}),
         json!({"id": "c", "command": "archive", "args": {"session": "s_1"}}),
+        json!({"id": "c", "command": "import", "args": {"source": "codex"}}),
+        json!({"id": "c", "command": "import", "args": {}}),
         json!({"id": "c", "command": "start", "args": {"workspace": "/w", "model": "m",
             "overrides": ["a=b"], "worktree": true,
             "content": [{"type": "text", "text": "t"}]}}),
@@ -80,6 +82,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "refresh", "args": {}}),
         json!({"id": "c", "command": "stop", "args": {}}),
         json!({"id": "c", "command": "stop", "args": {"sessions": true}}),
+        json!({"id": "c", "command": "stop_keepers", "args": {"keepers": ["s_1", "s_2"]}}),
         json!({"id": "c", "command": "placeholder_env",
             "args": {"names": ["DATABRICKS_HOST"]}}),
         json!({"id": "c", "command": "pairing_code", "args": {"device": "d"}}),
@@ -351,6 +354,55 @@ fn stop_reads_sessions_and_refuses_anything_else() {
     assert_eq!(
         serde_json::to_value(&absent).unwrap(),
         json!({"id": "c", "command": "stop", "args": {}})
+    );
+}
+
+#[test]
+fn stop_keepers_reads_id_arrays_and_refuses_anything_else() {
+    let kept = ["s_1", "s_2"].map(|id| SessionId(id.into()));
+    for (args, expected) in [
+        (
+            r#"{"keepers":["s_1","s_2"]}"#,
+            Ok(HubCommand::StopKeepers(StopKeepers {
+                keepers: kept.to_vec(),
+            })),
+        ),
+        (r#"{}"#, Err(())),
+        (r#"{"keepers":null}"#, Err(())),
+        (r#"{"keepers":"s_1"}"#, Err(())),
+        (r#"{"keepers":[1]}"#, Err(())),
+        (r#"{"keepers":[]}"#, Err(())),
+        (r#"{"keepers":["s_1"],"future":1}"#, Err(())),
+        (r#"{"future":1}"#, Err(())),
+    ] {
+        let sample = serde_json::json!({
+            "id": "c",
+            "command": "stop_keepers",
+            "args": serde_json::from_str::<Value>(args).unwrap(),
+        });
+        match expected {
+            Ok(command) => assert_eq!(
+                serde_json::from_value::<HubCommandLine>(sample.clone())
+                    .unwrap_or_else(|e| panic!("{sample}: {e}"))
+                    .command,
+                command,
+                "{sample}"
+            ),
+            Err(()) => assert!(
+                serde_json::from_value::<HubCommandLine>(sample.clone()).is_err(),
+                "{sample}"
+            ),
+        }
+    }
+    let full = HubCommandLine {
+        id: CommandId("c".into()),
+        command: HubCommand::StopKeepers(StopKeepers {
+            keepers: kept.to_vec(),
+        }),
+    };
+    assert_eq!(
+        serde_json::to_value(&full).unwrap(),
+        json!({"id": "c", "command": "stop_keepers", "args": {"keepers": ["s_1", "s_2"]}})
     );
 }
 

@@ -5,7 +5,8 @@
 //! connection closed straight after its answer.
 
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Write};
+use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -47,6 +48,174 @@ pub fn session_entries(home: &Path) -> io::Result<Vec<SessionId>> {
         .collect();
     names.sort();
     Ok(names)
+}
+
+/// How one `run/` entry answered the probe: the hub counts keepers
+/// through this, and stops them through the same exchange.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketClass {
+    /// Answered the subscribe write: a live session.
+    Session,
+    /// Accepted, then EOF or reset before any line: a keeper, or a
+    /// session that died as the probe landed (a stop write then decides:
+    /// it fails on a gone socket and stops a keeper).
+    KeeperOrGone,
+    /// Refused or absent, the subscribe write failed, or the accept
+    /// never answered within its [`PROBE_DEADLINE`] share: nothing to
+    /// count or stop.
+    Gone,
+}
+
+/// How long one entry's opening exchange (connect, subscribe write,
+/// first read) may take on the passed clock: a socket that accepts and
+/// never answers within its share reads as [`SocketClass::Gone`], never
+/// counted. The scanner thread's own wait, never the serving thread's.
+pub(crate) const PROBE_DEADLINE: Duration = Duration::from_secs(2);
+
+/// Classifies every `run/` entry over one opening exchange each, on the
+/// passed clock: `session_entries` listed (so `hub` never appears),
+/// each probed with one connect, one summary subscribe write and one
+/// first-line read inside its own [`PROBE_DEADLINE`]. A refused or
+/// absent connect, a failed subscribe write, and an accept that never
+/// answers within its share are `Gone`.
+pub fn classify_sockets(
+    home: &Path,
+    clock: Arc<dyn Clock>,
+) -> io::Result<Vec<(SessionId, SocketClass)>> {
+    let run = config::run_dir(home);
+    let entries = session_entries(home)?;
+    Ok(entries
+        .into_iter()
+        .map(|id| {
+            let class = probe_socket(&run.join(&id.0), &id, &clock);
+            (id, class)
+        })
+        .collect())
+}
+
+/// Whether a queued connect failed: the wait ran out or the deferred
+/// error says so. Exempt: AF_UNIX connects never return EINPROGRESS on
+/// Linux, so no test stages the wait (as in
+/// `hub::sessions_stop::transport::start_connect`).
+#[cfg_attr(false, mutants::skip)]
+fn connect_failed(fd: BorrowedFd, clock: &Arc<dyn Clock>, deadline: Instant) -> bool {
+    if !crate::hub::wait_ready(fd, PollFlags::OUT, &**clock, deadline, &mut || {}) {
+        return true;
+    }
+    !matches!(rustix::net::sockopt::socket_error(fd), Ok(Ok(())))
+}
+
+/// One entry's probe: the exchange shares one [`PROBE_DEADLINE`] on the
+/// passed clock. A refused-or-absent connect is gone, as is a failed
+/// subscribe write (a session gone since the listing); EOF or reset
+/// before any line is keeper-or-gone; any first line is a live
+/// session's answer; an accept still silent past the bound is gone.
+fn probe_socket(path: &Path, id: &SessionId, clock: &Arc<dyn Clock>) -> SocketClass {
+    use rustix::net::SocketAddrUnix;
+
+    let deadline = clock.now() + PROBE_DEADLINE;
+    let fd = match crate::hub::nonblocking_socket() {
+        Ok(fd) => fd,
+        Err(_) => return SocketClass::Gone,
+    };
+    let addr = match SocketAddrUnix::new(path) {
+        Ok(addr) => addr,
+        Err(_) => return SocketClass::Gone,
+    };
+    match rustix::net::connect(&fd, &addr) {
+        Ok(()) => {}
+        Err(rustix::io::Errno::INPROGRESS) => {
+            if connect_failed(fd.as_fd(), clock, deadline) {
+                return SocketClass::Gone;
+            }
+        }
+        Err(_) => return SocketClass::Gone,
+    }
+    let mut stream = UnixStream::from(fd);
+    let subscribed = crate::attach::send(
+        &mut stream,
+        id,
+        &CommandLine {
+            id: contract::CommandId(crate::mint("c_")),
+            command: Command::Subscribe(SubscribeArgs {
+                level: SubscribeLevel::Summary,
+                credential: None,
+            }),
+        },
+    );
+    if subscribed.is_err() {
+        return SocketClass::Gone;
+    }
+    let mut reader = std::io::BufReader::new(stream);
+    // Bytes stay in `pending` across readiness waits; see `probe_line`.
+    let mut pending: Vec<u8> = Vec::new();
+    loop {
+        match probe_line(&mut reader, &mut pending) {
+            Ok(Some(_)) => return SocketClass::Session,
+            Ok(None) => return SocketClass::KeeperOrGone,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if !crate::hub::wait_ready(
+                    reader.get_ref().as_fd(),
+                    PollFlags::IN,
+                    &**clock,
+                    deadline,
+                    &mut || {},
+                ) {
+                    return SocketClass::Gone;
+                }
+            }
+            Err(_) => return SocketClass::KeeperOrGone,
+        }
+    }
+}
+
+/// One line for the probe, accumulated across readiness waits: bytes
+/// the socket yields stay in `pending`, so a mid-drain `WouldBlock`
+/// never loses the head the way a fresh `read_line` would. Reports
+/// what `support::framing::read_line` would whenever the bytes arrive,
+/// however many waits that takes: a complete or partial-final line as
+/// `Some`, a clean EOF as `None`, past-the-cap as `InvalidData`.
+// Exempt: which chunk trips the cap and whether a tail is partial
+// needs chunking control no test can force, as in the hub's
+// `read_ack`; the `WouldBlock` guard in the loop above stays
+// mutant-covered by the overlong tests.
+#[cfg_attr(false, mutants::skip)]
+fn probe_line(
+    reader: &mut std::io::BufReader<std::os::unix::net::UnixStream>,
+    pending: &mut Vec<u8>,
+) -> io::Result<Option<Vec<u8>>> {
+    loop {
+        match reader.fill_buf() {
+            Ok([]) => {
+                if pending.is_empty() {
+                    return Ok(None);
+                }
+                return Ok(Some(std::mem::take(pending)));
+            }
+            Ok(buf) => {
+                if pending.len() + buf.len() > MAX_LINE {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "a line is longer than its cap",
+                    ));
+                }
+                if let Some(end) = buf.iter().position(|byte| *byte == b'\n') {
+                    // `end` is a position inside `buf`: the slice cannot
+                    // miss.
+                    #[allow(clippy::indexing_slicing, reason = "position() stays within buf")]
+                    let head = &buf[..end];
+                    pending.extend_from_slice(head);
+                    reader.consume(end + 1);
+                    return Ok(Some(std::mem::take(pending)));
+                }
+                let chunk = buf.to_vec();
+                reader.consume(chunk.len());
+                pending.extend_from_slice(&chunk);
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 /// The account's session sockets, queried afresh on each call.

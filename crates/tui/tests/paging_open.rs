@@ -32,16 +32,23 @@ const JIG_DEADLINE: Duration = Duration::from_secs(50);
 
 /// The built `paging` example beside this test binary
 /// (`target/<profile>/examples/paging`), wrapped so no path reference to
-/// it can reach an exec site: the only use is the hard-link source in
-/// [`Jig::new`], so the type exposes that link operation and nothing else —
-/// no `&Path`, no `AsRef<Path>`. The test starts no cargo and waits on no
-/// build lock.
+/// it can reach an exec site: its uses are the hard-link source and the
+/// freshness-checked warm in [`Jig::new`], so the type exposes those two
+/// operations and nothing else — no `&Path`, no `AsRef<Path>`. The test
+/// starts no cargo and waits on no build lock.
 struct ColdJigSource(PathBuf);
 
 impl ColdJigSource {
     /// Links the built example to `link` and reports link errors.
     fn hard_link(&self, link: &Path) -> std::io::Result<()> {
         std::fs::hard_link(&self.0, link)
+    }
+
+    /// Warms the built example at its own path: the freshness check reads
+    /// the dep-info beside the built binary, and the run absorbs the
+    /// first-exec stall for the inode the link will share.
+    fn warm(&self) {
+        fakes::WarmedJig::warm(self.0.clone(), &["--bogus"], 2);
     }
 }
 
@@ -80,15 +87,20 @@ impl Jig {
         // Cargo's per-target temporary directory, which is on the target
         // directory's filesystem, in a directory named after the test's
         // directory.
+        let source = example_path();
+        // The freshness check reads the dep-info beside the built example,
+        // so the built path warms first; the link below has no dep-info
+        // beside it and would warm unchecked.
+        source.warm();
         let name = dir.path().file_name().unwrap();
         let bin = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
         std::fs::create_dir_all(&bin).unwrap();
         let link = bin.join("paging");
-        if let Err(err) = example_path().hard_link(&link) {
+        if let Err(err) = source.hard_link(&link) {
             panic!("hard-linking `paging` to {}: {err}", link.display());
         }
-        // The hard link shares the example's inode, so one warm-up covers both
-        // the built example and the link; it stalls here, not in the exchange.
+        // The hard link shares the example's inode, so the stall is already
+        // absorbed; this warm keeps the stall guarantee for the exec path.
         let exe = fakes::WarmedJig::warm(link, &["--bogus"], 2);
         Self { dir, bin, exe }
     }

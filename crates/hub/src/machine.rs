@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use contract::SessionId;
 use contract::clock::Clock;
+use contract::commands::ImportSource;
 use contract::commands::hub::PruneExpect;
 use contract::shapes::Failure;
 use serde::{Deserialize, Serialize};
@@ -40,7 +41,7 @@ pub trait Machine: Send + Sync {
     fn import(
         &self,
         home: &Path,
-        source: Option<&str>,
+        source: Option<ImportSource>,
         clock: Arc<dyn Clock>,
     ) -> Result<Option<Value>, Failure>;
     /// Reads a configuration view's file and its version.
@@ -92,6 +93,16 @@ pub trait Machine: Send + Sync {
                      + Send
              ),
     ) -> Result<PruneOutcome, Failure>;
+}
+
+/// The keepers of gone sessions on the hub's machine, for `/close all`
+/// and `fiber stop`: the hub's feed counts them and its `stop_keepers`
+/// command stops them. One classifier lives behind this trait, the same
+/// pattern as the hub's configuration reads, so `hub` gains no `doors`
+/// edge. The ids come in id order; the count is their length.
+pub trait KeeperProbe: Send + Sync {
+    /// The keepers of gone sessions under `home`'s `run/`, in id order.
+    fn keepers(&self, home: &Path, clock: Arc<dyn Clock>) -> Vec<SessionId>;
 }
 
 /// What a `prune` run answers: the preview lines and items for a dry
@@ -170,11 +181,19 @@ pub(crate) fn on_import(hub: &Hub, args: &Map<String, Value>) -> Result<Option<V
     if args.keys().any(|key| key != "source") {
         return Err(invalid());
     }
+    // The hub never builds `ImportArgs`: the raw map parses through the
+    // contract enum, so a null, a non-string or an unknown name is refused
+    // `invalid_arguments` naming the two sources.
     let source = match args.get("source") {
         None => None,
-        Some(Value::String(source)) if source == "claude-code" || source == "codex" => {
-            Some(source.as_str())
-        }
+        Some(Value::String(name)) => Some(
+            serde_json::from_value::<ImportSource>(Value::String(name.clone())).map_err(|_| {
+                Refused {
+                    code: contract::ErrorCode::InvalidArguments,
+                    message: "`source` must be `claude-code` or `codex`.".to_owned(),
+                }
+            })?,
+        ),
         Some(_) => {
             return Err(Refused {
                 code: contract::ErrorCode::InvalidArguments,

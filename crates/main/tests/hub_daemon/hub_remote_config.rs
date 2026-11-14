@@ -161,16 +161,14 @@ fn provider(setup: &Setup) {
         &source.join("providers/acme.json"),
         &json!({"name":"acme","models":[{"id":"m","protocol":"openai-responses","base_url":"http://x/v1","context_window":1000}]}),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 fn configure(client: &mut Ws, setup: &Setup, args: Value) -> Value {

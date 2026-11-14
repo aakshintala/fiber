@@ -158,10 +158,15 @@ codes! {
     MessageRefused = "message_refused",
     /// A bare model id matches models of two or more installed providers.
     ModelAmbiguous = "model_ambiguous",
+    /// A session ran a model marked deprecated by models.dev.
+    ModelDeprecated = "model_deprecated",
     /// A model's `extra_body` names a field Fiber builds, or its
     /// `web_search` names a type its protocol does not read, so the model is
     /// left out of the model list.
     ModelInvalid = "model_invalid",
+    /// A provider's discovery found a model and left it out on purpose;
+    /// the message names the model and the provider's reason.
+    ModelOmitted = "model_omitted",
     /// The provider does not know the model.
     ModelNotFound = "model_not_found",
     /// A model's base URL names a per-account host whose setting has no

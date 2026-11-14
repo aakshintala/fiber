@@ -4,14 +4,15 @@
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use config::{Config, ModelData, ProviderData, Source};
 use contract::ErrorCode;
-use contract::events::Notice;
+use contract::events::{ExtensionFailure, Notice};
+use contract::shapes::Failure;
 
 use crate::git::short_name;
 use crate::{API, Error, LuaProvider, ModelsArg, SessionExtensions};
@@ -52,10 +53,20 @@ pub struct Providers {
     /// The extension whose data or `models()` supplied each provider's
     /// current models, by provider name.
     extension_of: BTreeMap<String, String>,
+    /// Each `models()` discovery failure since the last
+    /// [`Providers::take_discovery_failures`] drain, in registration
+    /// order: one entry per failing registration, each mirroring its
+    /// per-entry notice.
+    discovery_failures: Vec<ExtensionFailure>,
     /// Each provider's models' addendum texts, by provider name then
     /// model id: read with the data that declared them and replaced
     /// together with it.
     addenda: BTreeMap<String, BTreeMap<String, String>>,
+    /// Every notice each admission emitted, by provider name, in emission
+    /// order. Later admissions match only `model_invalid` and
+    /// `model_omitted` against the reported count and suppress at most
+    /// that many (`docs/model-routing.md`, "Model discovery").
+    reported_notices: BTreeMap<String, Vec<(ErrorCode, String)>>,
     /// One Lua provider per `fiber.provider` registration, by provider
     /// name: what signs its requests and refreshes its token.
     lua: BTreeMap<String, Arc<LuaProvider>>,
@@ -107,6 +118,44 @@ impl Model<'_> {
     pub fn reference(&self) -> String {
         format!("{}/{}", self.provider.name, self.model.id)
     }
+}
+
+/// Drains every entry a provider marked for deliberate omission into one
+/// `model_omitted` notice per entry, in model order, leaving kept models
+/// unchanged. Runs before [`leave_out_invalid`] at every call site, so a
+/// marked entry is never validated: an omission draws no `model_invalid`
+/// for whatever its declaration holds. The reason comes verbatim from the
+/// mark, without duplicating its terminal punctuation; parsing already
+/// rejects an empty one.
+pub fn leave_out_omitted(
+    provider: &str,
+    extension: &str,
+    models: &mut Vec<ModelData>,
+) -> Vec<Notice> {
+    let mut notices = Vec::new();
+    let mut kept = Vec::new();
+    for model in models.drain(..) {
+        match model.omit_reason.as_deref() {
+            Some(reason) => {
+                let end = if reason.trim_end().ends_with(['.', '!', '?']) {
+                    ""
+                } else {
+                    "."
+                };
+                notices.push(Notice {
+                    code: ErrorCode::ModelOmitted,
+                    message: format!(
+                        "The model `{provider}/{}` was left out of the model list: {reason}{end}",
+                        model.id
+                    ),
+                    extension: Some(extension.to_owned()),
+                });
+            }
+            None => kept.push(model),
+        }
+    }
+    *models = kept;
+    notices
 }
 
 /// Removes every model that declares no `context_window`, whose `web_search`
@@ -267,6 +316,10 @@ impl<'a> Found<'a> {
     }
 }
 
+fn is_reported(code: &ErrorCode) -> bool {
+    matches!(code, ErrorCode::ModelInvalid | ErrorCode::ModelOmitted)
+}
+
 impl Providers {
     /// A typed model reference without any `:<level>` suffix, and the level
     /// the suffix named, if any: the single strip of a `:<level>` suffix both
@@ -286,7 +339,12 @@ impl Providers {
     /// numbers. Each damaged directory leaves one `extension_failed`
     /// notice naming it and the fix, before the healthy entries' notices.
     pub fn load(home: &Path) -> Result<(Self, Vec<Notice>), Error> {
-        Self::load_with(home, |_: &str| true, &crate::RepositorySet::default())
+        Self::load_with(
+            home,
+            |_: &str| true,
+            &crate::RepositorySet::default(),
+            false,
+        )
     }
 
     /// Reads the installed providers enabled by the effective configuration.
@@ -303,6 +361,7 @@ impl Providers {
             home,
             |name: &str| crate::is_enabled(config, name),
             &crate::RepositorySet::default(),
+            config::models_dev_enabled(config),
         )
     }
 
@@ -322,6 +381,7 @@ impl Providers {
             home,
             |name: &str| crate::is_enabled(config, name),
             repository,
+            config::models_dev_enabled(config),
         )
     }
 
@@ -333,7 +393,7 @@ impl Providers {
         home: &Path,
         repository: &crate::RepositorySet,
     ) -> Result<(Self, Vec<Notice>), Error> {
-        Self::load_with(home, |_: &str| true, repository)
+        Self::load_with(home, |_: &str| true, repository, false)
     }
 
     /// Reads the provider table an install will put in place before committing.
@@ -372,13 +432,14 @@ impl Providers {
             ));
         }
         candidates.sort_by(|(a, _), (b, _)| a.key.cmp(&b.key));
-        Self::load_candidates(home, candidates, notices, &|_| true)
+        Self::load_candidates(home, candidates, notices, &|_| true, false)
     }
 
     fn load_with(
         home: &Path,
         enabled: impl Fn(&str) -> bool,
         repository: &crate::RepositorySet,
+        models_dev_enabled: bool,
     ) -> Result<(Self, Vec<Notice>), Error> {
         let entries = crate::installed::read_entries(home)?;
         let mut notices = Vec::new();
@@ -409,6 +470,7 @@ impl Providers {
             merged.into_iter().map(|candidate| (candidate, false)),
             notices,
             &enabled,
+            models_dev_enabled,
         )
     }
 
@@ -417,6 +479,7 @@ impl Providers {
         candidates: impl IntoIterator<Item = (crate::repository::Candidate, bool)>,
         mut notices: Vec<Notice>,
         enabled: &dyn Fn(&str) -> bool,
+        models_dev_enabled: bool,
     ) -> Result<(Self, Vec<Notice>), Error> {
         let mut providers = Self::default();
         for (candidate, staged) in candidates {
@@ -510,10 +573,20 @@ impl Providers {
             for mut data in datas {
                 // The cached `models()` list stands in for the data file's
                 // until the refresh returns; a copy that is no list is no copy.
+                // The load reports each invalid declaration and marked entry;
+                // later admissions on this registry suppress only reports it
+                // has already emitted (`docs/model-routing.md`, "Model discovery").
                 if let Some(cached) = config::read_model_cache(home, &data.name)? {
                     data.models = cached;
                 }
-                notices.extend(providers.admit(&data.name, &manifest.name, &mut data.models));
+                let admitted = providers.admit(
+                    &data.name,
+                    &manifest.name,
+                    &mut data.models,
+                    Some((home, dir.clone(), models_dev_enabled)),
+                );
+                providers.record_notices(&data.name, &admitted);
+                notices.extend(admitted);
                 // One extension's addenda are read into a local buffer
                 // against its own directory, and inserted only when every
                 // one of its files succeeds: a bad addendum leaves out all
@@ -572,13 +645,30 @@ impl Providers {
         }
     }
 
-    /// Leaves out the models `extension` may not serve: first the invalid
-    /// ones, then the ones whose `base_url` the manifest's entry for
-    /// `provider` does not list. A missing entry admits no model. Every
-    /// extension-supplied model list passes through here before entering
-    /// the registry; only the built-in scripted provider's model does not.
-    fn admit(&self, provider: &str, extension: &str, models: &mut Vec<ModelData>) -> Vec<Notice> {
-        let mut notices = leave_out_invalid(provider, extension, models);
+    /// Leaves out the models `extension` may not serve: first the
+    /// deliberately omitted ones, then the invalid ones, then the ones
+    /// whose `base_url` the manifest's entry for `provider` does not list.
+    /// A missing entry admits no model. Every extension-supplied model
+    /// list passes through here before entering the registry; only the
+    /// built-in scripted provider's model does not.
+    fn admit(
+        &self,
+        provider: &str,
+        extension: &str,
+        models: &mut Vec<ModelData>,
+        catalog: Option<(&Path, PathBuf, bool)>,
+    ) -> Vec<Notice> {
+        if let Some((home, extension_dir, enabled)) = catalog {
+            *models = crate::models_dev::merge_admission(
+                home,
+                &extension_dir,
+                provider,
+                std::mem::take(models),
+                enabled,
+            );
+        }
+        let mut notices = leave_out_omitted(provider, extension, models);
+        notices.extend(leave_out_invalid(provider, extension, models));
         let empty = Vec::new();
         let listed = self
             .declared
@@ -620,9 +710,24 @@ impl Providers {
         }
         let mut notices = Vec::new();
         for (extension, provider) in extensions.lua_providers() {
-            notices.extend(self.add_lua(extension, provider, config, run, env));
+            notices.extend(self.add_lua_inner(
+                extension,
+                provider,
+                config,
+                run,
+                env,
+                Some(extensions.home()),
+            ));
         }
         notices
+    }
+
+    /// Each `models()` discovery failure `add_lua` recorded since the
+    /// last drain, one entry per failing registration with no dedupe,
+    /// each mirroring its per-entry notice. The drain runs once per
+    /// rebuild, so a second call cannot double-report.
+    pub fn take_discovery_failures(&mut self) -> Vec<ExtensionFailure> {
+        std::mem::take(&mut self.discovery_failures)
     }
 
     /// The installed providers' names, sorted.
@@ -700,10 +805,12 @@ impl Providers {
     /// models from it, with one `extension_failed` notice naming the
     /// extension. The provider is kept either way, for its signer, token
     /// and cost lookup. A provider that did not register `models` only
-    /// has its handle kept: no `models()` call and no notice. A provider
-    /// named `scripted` is left out whole, handle and all, with one
-    /// `extension_failed` notice naming `scripted` as reserved: the name
-    /// belongs to the built-in provider.
+    /// has its handle kept: no `models()` call and no notice. Omissions
+    /// and invalid declarations already reported on this registry are
+    /// suppressed on later admissions (`docs/model-routing.md`, "Model
+    /// discovery"). A provider named `scripted` is left out whole, handle
+    /// and all, with one `extension_failed` notice naming `scripted` as
+    /// reserved: the name belongs to the built-in provider.
     pub fn add_lua(
         &mut self,
         extension: &str,
@@ -711,6 +818,18 @@ impl Providers {
         config: &Config,
         run: config::Runner<'_>,
         env: &dyn Fn(&str) -> Option<String>,
+    ) -> Vec<Notice> {
+        self.add_lua_inner(extension, provider, config, run, env, None)
+    }
+
+    fn add_lua_inner(
+        &mut self,
+        extension: &str,
+        provider: &Arc<LuaProvider>,
+        config: &Config,
+        run: config::Runner<'_>,
+        env: &dyn Fn(&str) -> Option<String>,
+        home: Option<&Path>,
     ) -> Vec<Notice> {
         let name = provider.name().to_owned();
         if name == scripted::SCRIPTED {
@@ -772,6 +891,18 @@ impl Providers {
         let mut models = match provider.models(&arg) {
             Ok(models) => models,
             Err(e) => {
+                // The programmatic record mirrors the notice below: the
+                // notice path keeps working as it does now.
+                self.discovery_failures.push(ExtensionFailure {
+                    provider: name.clone(),
+                    extension: Some(extension.to_owned()),
+                    error: Failure {
+                        code: e.code(),
+                        message: e.to_string(),
+                        retry_after_ms: None,
+                        provider: None,
+                    },
+                });
                 return vec![Notice {
                     code: e.code(),
                     message: e.to_string(),
@@ -779,7 +910,12 @@ impl Providers {
                 }];
             }
         };
-        let notices = self.admit(&name, extension, &mut models);
+        let catalog = home.and_then(|home| {
+            self.provider_source_dir(extension)
+                .map(|dir| (home, dir, config::models_dev_enabled(config)))
+        });
+        let admitted = self.admit(&name, extension, &mut models, catalog);
+        let notices = self.filter_recorded(&name, admitted);
         // The addenda resolve against the Lua extension's package
         // directory, replacing the data file's with the final models.
         let addenda = match read_addenda(provider.dir(), &models) {
@@ -792,6 +928,7 @@ impl Providers {
                 }];
             }
         };
+        self.record_notices(&name, &notices);
         match self.by_name.get_mut(&name) {
             Some(data) => {
                 data.models = models;
@@ -1086,12 +1223,50 @@ impl Providers {
             .find(|(_, entries)| entries.contains_key(name))
             .map(|(extension, _)| extension.clone())?;
         let mut models = models;
-        let notices = self.admit(name, &owner, &mut models);
+        let admitted = self.admit(name, &owner, &mut models, None);
+        let notices = self.suppress_recorded(name, admitted);
         let mut data = self.data(name);
         data.models = models;
         self.by_name.insert(name.to_owned(), data);
         self.extension_of.insert(name.to_owned(), owner);
         Some(notices)
+    }
+
+    /// Drops identical invalid or omitted notices already reported for this
+    /// provider. A repeated admission reports no new notices unless it has
+    /// excess entries.
+    fn filter_recorded(&self, name: &str, notices: Vec<Notice>) -> Vec<Notice> {
+        let mut pending = self.reported_notices.get(name).cloned().unwrap_or_default();
+        notices
+            .into_iter()
+            .filter(|notice| {
+                if !is_reported(&notice.code) {
+                    return true;
+                }
+                let identity = (notice.code.clone(), notice.message.clone());
+                if let Some(position) = pending.iter().position(|entry| entry == &identity) {
+                    pending.swap_remove(position);
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect()
+    }
+
+    fn suppress_recorded(&mut self, name: &str, notices: Vec<Notice>) -> Vec<Notice> {
+        let notices = self.filter_recorded(name, notices);
+        self.record_notices(name, &notices);
+        notices
+    }
+
+    fn record_notices(&mut self, name: &str, notices: &[Notice]) {
+        let recorded = self.reported_notices.entry(name.to_owned()).or_default();
+        recorded.extend(
+            notices
+                .iter()
+                .map(|notice| (notice.code.clone(), notice.message.clone())),
+        );
     }
 
     /// Replaces the models held under `name` with a background refresh's
@@ -1100,7 +1275,8 @@ impl Providers {
     /// which no installed package may register. The extension checked
     /// against is the first in name order whose manifest declares `name`;
     /// with none, every model is left out, `name` standing in as the
-    /// extension in the notice, and no owner is recorded.
+    /// extension in the notice, and no owner is recorded. Repeated
+    /// invalid or omitted notices are suppressed on this registry.
     pub fn set_models(&mut self, name: &str, models: Vec<ModelData>) -> Vec<Notice> {
         if name == scripted::SCRIPTED {
             return Vec::new();
@@ -1112,11 +1288,13 @@ impl Providers {
             .map(|(extension, _)| extension.clone());
         let mut models = models;
         let Some(owner) = owner else {
-            let mut notices = leave_out_invalid(name, name, &mut models);
+            let mut notices = leave_out_omitted(name, name, &mut models);
+            notices.extend(leave_out_invalid(name, name, &mut models));
             notices.extend(declared::leave_out_unlisted(name, name, &[], &mut models));
-            return notices;
+            return self.suppress_recorded(name, notices);
         };
-        let notices = self.admit(name, &owner, &mut models);
+        let admitted = self.admit(name, &owner, &mut models, None);
+        let notices = self.suppress_recorded(name, admitted);
         match self.by_name.get_mut(name) {
             Some(data) => data.models = models,
             None => {

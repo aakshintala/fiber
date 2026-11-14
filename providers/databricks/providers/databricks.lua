@@ -6,7 +6,9 @@
 -- `claude-` name, is `anthropic-messages` at the Claude URL with
 -- `compat.bearer`; one holding the Responses API is `openai-responses`;
 -- the rest are `openai-completions`, the only protocol that writes
--- `reasoning_effort`. A service ending `-image`, or matching an
+-- `reasoning_effort`. A service whose catalog row's `provider_type` is
+-- neither `OPENAI` nor `GEMINI_ENTERPRISE` takes `compat.max_tokens`, since
+-- those open-weight routes reject `max_completion_tokens`. A service ending `-image`, or matching an
 -- `image_generation` row, is left out, as is one with no window: a model
 -- without one is left out with `model_invalid` (docs/model-routing.md,
 -- "What a provider extension declares"). A kept service whose bare name no
@@ -301,12 +303,13 @@ local function has_api(apis, want)
   return false
 end
 
--- The Claude models whose entries defer tools: a Databricks Claude row
--- carries `deferred_tools` exactly when its model's Anthropic row does, as
--- gateway pass-through to Anthropic was probed on
--- `databricks-claude-opus-5-5`; `claude-opus-5` stays out because its
--- Anthropic row carries no such flag. A model key missing here reads as no
--- deferral, and non-Claude entries never carry the field.
+-- The Claude models whose entries defer tools: the set records what the
+-- Databricks gateway accepts per model, probed per row. A model key
+-- missing here reads as no deferral, and non-Claude entries never carry
+-- the field. `claude-opus-5` stays out because its Anthropic row carries
+-- no such flag, and the `claude-sonnet-4-5` rows stay out because the
+-- gateway rejects their deferred load. The other rows follow their
+-- `providers/anthropic` counterparts.
 local DEFERRED_CLAUDE = {
   ["claude-fable-5"] = true,
   ["claude-fable-5-1"] = true,
@@ -319,11 +322,16 @@ local DEFERRED_CLAUDE = {
   ["claude-opus-4-7"] = true,
   ["claude-opus-4-8"] = true,
   ["claude-opus-5-5"] = true,
-  ["claude-sonnet-4-5"] = true,
-  ["claude-sonnet-4-5-20250929"] = true,
   ["claude-sonnet-4-6"] = true,
   ["claude-sonnet-5"] = true,
   ["claude-sonnet-5-5"] = true,
+}
+
+-- The Claude models whose entries carry `compat.no_strict`: the Databricks
+-- gateway rejects the `strict` key on these models, even as `false`, so
+-- their tools are sent without it.
+local NO_STRICT_CLAUDE = {
+  ["claude-opus-4-1"] = true,
 }
 
 -- The entry for one model service, or nil to leave it out: kept only when
@@ -382,9 +390,23 @@ local function entry_for(service, catalog, image_keys, thinking)
     if DEFERRED_CLAUDE[model_key(bare)] then
       entry.deferred_tools = true
     end
+    if NO_STRICT_CLAUDE[model_key(bare)] then
+      entry.compat.no_strict = true
+    end
   end
   if gemini then
     entry.compat = { gemini = true }
+  end
+  -- Open-weight chat services reject `max_completion_tokens` with a 400,
+  -- so a row whose `provider_type` is neither `OPENAI` nor
+  -- `GEMINI_ENTERPRISE` takes `compat.max_tokens`, set on the entry built
+  -- above, never replacing its table. The flag is inert on the other
+  -- protocols, which never read it.
+  if type(row) == "table" and type(row.provider_type) == "string"
+    and row.provider_type ~= "OPENAI" and row.provider_type ~= "GEMINI_ENTERPRISE"
+  then
+    entry.compat = entry.compat or {}
+    entry.compat.max_tokens = true
   end
   local vision = type(row) == "table"
     and type(row.capabilities) == "table"
@@ -472,6 +494,8 @@ fiber.provider("databricks", {
           if endpoint_keys[model_key(bare)] then
             list[#list + 1] = entry
           else
+            entry.omit_reason = "no serving endpoint with a matching name"
+            list[#list + 1] = entry
             omitted[#omitted + 1] = entry.id
           end
         end

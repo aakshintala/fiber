@@ -4,18 +4,12 @@
 
 use std::time::{Duration, Instant};
 
-use contract::JobId;
 use contract::clock::Clock;
 use contract::events::JobLine;
 use contract::jobs::{Lines, Stop};
+use contract::{JobId, MONITOR_DELIVERY_LIMIT as DELIVERY_LIMIT, MONITOR_LINE_LIMIT as LINE_LIMIT};
 
 use super::output::{Shared, lock};
-
-/// A line keeps this many characters.
-const LINE_LIMIT: usize = 500;
-
-/// A delivery keeps this many characters.
-const DELIVERY_LIMIT: usize = 3_000;
 
 /// The budget holds at most this many deliveries.
 const BUDGET: u64 = 10;
@@ -212,11 +206,18 @@ impl Feed {
             .as_mut()
             .map(std::mem::take)
             .unwrap_or_default();
-        let lines = self.splitter.take(&fresh);
+        self.deliver(&fresh, clock.now(), running);
+    }
+
+    /// Delivers the complete lines `fresh` finishes as one batch, or drops
+    /// it. A job whose output arrives as frames, not in a shared buffer,
+    /// feeds each burst of them here, as `pass` feeds the drive thread's.
+    pub(super) fn deliver(&mut self, fresh: &[u8], now: Instant, running: bool) {
+        let lines = self.splitter.take(fresh);
         if lines.is_empty() {
             return;
         }
-        if self.offer(batch(&lines), clock.now()) && running && !self.flooded {
+        if self.offer(batch(&lines), now) && running && !self.flooded {
             self.flooded = true;
             (self.stop.0)();
         }
@@ -227,8 +228,14 @@ impl Feed {
     /// from it.
     pub(super) fn finish(&mut self, shared: &Shared, clock: &dyn Clock) {
         self.pass(shared, clock, false);
+        self.end(clock.now());
+    }
+
+    /// The monitor ended and its last bytes were delivered: the incomplete
+    /// last line goes out under the budget, then any suppressed count.
+    pub(super) fn end(&mut self, now: Instant) {
         if let Some(rest) = self.splitter.flush() {
-            self.offer(batch(&[rest]), clock.now());
+            self.offer(batch(&[rest]), now);
         }
         if let Some(suppressed) = self.budget.take_suppressed() {
             self.send(String::new(), Some(suppressed));

@@ -40,7 +40,11 @@ fn claude_person(person: &Path) {
     }
 }
 
-fn import(seam: &Seam, person: &Path, source: Option<&str>) -> Result<Option<Value>, Failure> {
+fn import(
+    seam: &Seam,
+    person: &Path,
+    source: Option<config::ImportSource>,
+) -> Result<Option<Value>, Failure> {
     seam.import(person, source, fakes::clock::FakeClock::new())
 }
 
@@ -65,14 +69,10 @@ fn seam_import_runs_the_shared_import_into_the_seam_home() {
     assert!(home.join("import-claude-code.json").is_file());
     assert!(home.join("skills/review/SKILL.md").is_file());
     // A named source imports that source only.
-    let result = import(&seam, &person, Some("claude-code"))
+    let result = import(&seam, &person, Some(config::ImportSource::ClaudeCode))
         .unwrap()
         .unwrap();
     assert_eq!(result["imported"]["skills"], json!(["review"]));
-    // An unknown source is refused naming the two sources.
-    let error = import(&seam, &person, Some("vim")).unwrap_err();
-    assert_eq!(error.code, ErrorCode::InvalidArguments);
-    assert!(error.message.contains("claude-code") && error.message.contains("codex"));
 }
 
 /// The pending operation answers from the seam's own home: on the
@@ -92,6 +92,32 @@ fn import_pending_reads_the_seam_homes_receipts() {
     assert_eq!(
         result(&seam, "import_pending", json!({})),
         json!({"pending": false})
+    );
+}
+
+#[test]
+fn login_targets_carries_the_label_only_while_signed_in() {
+    // The wire carries `label` only when `Some`: an unsigned row omits
+    // it, and a stored credential marks with the default label.
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let seam = Seam::new(home.clone());
+    install(&home);
+    assert_eq!(
+        result(&seam, "login_targets", json!({})),
+        json!({"targets": [{"name": "acme", "kind": "key"}]})
+    );
+    assert_eq!(
+        result(
+            &seam,
+            "store_key",
+            json!({"name": "acme", "key": "sk-test"})
+        ),
+        json!({"path": "credentials/acme/default", "replaced": false})
+    );
+    assert_eq!(
+        result(&seam, "login_targets", json!({})),
+        json!({"targets": [{"name": "acme", "kind": "key", "label": "default"}]})
     );
 }
 
@@ -2222,6 +2248,137 @@ fn workspace_files_cap_at_10_mib() {
     seam.write_workspace_file(&workspace, &fresh, &"y".repeat(limit), "missing")
         .unwrap();
     assert_eq!(fs::read(&fresh).unwrap().len(), limit);
+}
+
+/// A bound socket that serves every connection until dropped: the
+/// live peer answers each subscribe with a status line, the keeper
+/// reads the subscribe and then closes, so every probe sees EOF after
+/// its send instead of racing the close with it.
+struct Served {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Served {
+    fn live(path: &Path) -> Self {
+        Self::serve(path, true)
+    }
+
+    fn keeper(path: &Path) -> Self {
+        Self::serve(path, false)
+    }
+
+    fn serve(path: &Path, answer: bool) -> Self {
+        use std::os::unix::net::UnixListener;
+
+        let listener = UnixListener::bind(path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread = {
+            let stop = Arc::clone(&stop);
+            std::thread::Builder::new()
+                .name("seam-keepers-peer".to_owned())
+                .spawn(move || {
+                    use std::io::{BufRead, Write};
+                    while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                        let Ok((mut stream, _)) = listener.accept() else {
+                            std::thread::park_timeout(std::time::Duration::from_millis(10));
+                            continue;
+                        };
+                        if !answer {
+                            // Read the probe's subscribe before closing:
+                            // closing first would race the probe's send,
+                            // reading EOF on one run and refused on the next.
+                            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                            let mut line = String::new();
+                            reader.read_line(&mut line).unwrap_or(0);
+                            continue;
+                        }
+                        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).is_ok() {
+                            stream
+                                .write_all(b"{\"kind\":\"session_status\"}\n")
+                                .unwrap();
+                        }
+                    }
+                })
+                .unwrap()
+        };
+        Self {
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for Served {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
+            thread.join().unwrap_or(());
+        }
+    }
+}
+
+#[test]
+fn seam_keepers_counts_only_keeper_or_gone() {
+    use hub::KeeperProbe;
+
+    // A hub-shape home: the seam probes the real doors classifier,
+    // never a stub.
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let run = home.join("run");
+    fs::create_dir_all(&run).unwrap();
+    // Refused: listed but no listener, so the connect fails.
+    fs::write(run.join("s_0000000000000001"), "stale").unwrap();
+    // A live session answers the probe's subscribe.
+    let _live = Served::live(&run.join("s_0000000000000002"));
+    // A keeper accepts, then closes: EOF before any line. Its session
+    // log carries the keeper's lock, which is what publishes the id.
+    let _keeper = Served::keeper(&run.join("s_0000000000000003"));
+    let keeper_dir = home
+        .join("projects")
+        .join("p")
+        .join("sessions")
+        .join("s_0000000000000003");
+    fs::create_dir_all(&keeper_dir).unwrap();
+    fs::write(keeper_dir.join("session.lock"), "keeper 4242\n").unwrap();
+    let seam = Seam::new(home.clone());
+    assert_eq!(
+        seam.keepers(&home, fakes::clock::FakeClock::new()),
+        vec![contract::SessionId("s_0000000000000003".to_owned())]
+    );
+}
+
+#[test]
+fn seam_keepers_leaves_out_keeper_or_gone_without_a_keeper_lock() {
+    use hub::KeeperProbe;
+
+    // Keeper-or-gone sockets no keeper holds: one with no session log
+    // at all, one with a dead session's stale pid label. A session
+    // that died as the probe landed reads keeper-or-gone either way,
+    // and neither may publish.
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let run = home.join("run");
+    fs::create_dir_all(&run).unwrap();
+    let _first = Served::keeper(&run.join("s_0000000000000001"));
+    let _second = Served::keeper(&run.join("s_0000000000000002"));
+    let stale_dir = home
+        .join("projects")
+        .join("p")
+        .join("sessions")
+        .join("s_0000000000000002");
+    fs::create_dir_all(&stale_dir).unwrap();
+    fs::write(stale_dir.join("session.lock"), "4242\n").unwrap();
+    let seam = Seam::new(home.clone());
+    assert_eq!(
+        seam.keepers(&home, fakes::clock::FakeClock::new()),
+        Vec::<contract::SessionId>::new()
+    );
 }
 
 #[test]

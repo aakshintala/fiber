@@ -18,6 +18,9 @@ use crate::configure::{HostGap, LoginKind, LoginTarget};
 use crate::format;
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
+use crate::login_logout_view::{
+    Group, Item, blank_row, build, shown_body_rows as shared_shown_body_rows, text_row,
+};
 use crate::login_worker::{LoginStep, LoginTicket, LoginWorker};
 use crate::mouse::{Target, TargetId};
 use crate::rows::Join;
@@ -69,56 +72,9 @@ impl SecretField {
     }
 }
 
-/// A heading's group.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Group {
-    /// The installed providers.
-    Providers,
-    /// The declared secrets.
-    Secrets,
-}
-
-/// One row of the view: a heading, one target, the blank row between
-/// the groups, or the note in place of every row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Item {
-    /// A group's heading; Enter on it does nothing.
-    Heading(Group),
-    /// One provider or secret: its index in the targets.
-    Target(usize),
-    /// The blank row between the providers and the secrets.
-    Gap,
-    /// The note shown with no provider and no secret.
-    Note,
-}
-
-/// The list overlay's chrome in rows, measured with a one-row probe so
-/// the count never depends on the body: the edges, the pads, the title
-/// and its gap, and the footer and its gap.
-fn list_chrome() -> usize {
-    let probe = overlay::Overlay {
-        title: Some(("Log in".to_owned(), Some(Span::raw("✕")))),
-        close: None,
-        body: vec![overlay::Row {
-            spans: Vec::new(),
-            right: Vec::new(),
-            targets: Vec::new(),
-            barred: false,
-        }],
-        footer: Some(overlay::legend(&[
-            ("↑↓", "move"),
-            ("Enter", "log in"),
-            ("Esc", "close"),
-        ])),
-        prefer: 96,
-    };
-    usize::from(overlay::height(&probe)).saturating_sub(1)
-}
-
-/// How many body rows the list overlay shows at `height` rows tall:
-/// the height less its chrome, or none when the chrome fills it.
+/// Login's list body rows, retaining the test module's existing helper seam.
 fn shown_body_rows(height: usize) -> usize {
-    height.saturating_sub(list_chrome())
+    shared_shown_body_rows(height, true)
 }
 
 /// Where the list overlay's window starts so `focused` shows in `shown`
@@ -342,8 +298,18 @@ impl Login {
     /// The view, its rows read.
     pub(crate) fn open(ctx: &Ctx<'_>) -> Self {
         let (targets, items, said) = match ctx.seam.login_targets() {
-            Ok(targets) => {
-                let items = build(&targets);
+            Ok(mut targets) => {
+                // Signed-in providers list first, each class in
+                // declaration order; secrets keep their own group
+                // after the providers.
+                targets.sort_by_key(|target| {
+                    (target.kind == LoginKind::Secret, target.label.is_none())
+                });
+                let provider_rows: Vec<bool> = targets
+                    .iter()
+                    .map(|target| target.kind != LoginKind::Secret)
+                    .collect();
+                let items = build(&provider_rows);
                 (targets, items, Vec::new())
             }
             Err(error) => (Vec::new(), Vec::new(), vec![error.message]),
@@ -471,16 +437,32 @@ impl Login {
             })
             .max()
             .unwrap_or(0);
-        let budget = usize::from(inner_w).saturating_sub(4).saturating_sub(tag);
+        // The marks ride after their tags, two spaces apart, in the same
+        // row: the widest whole tail comes out of the shared cut
+        // budget, so names are cut to what is left first. With no
+        // marks the tail is empty and the budget is today's.
+        let mark = self
+            .targets
+            .iter()
+            .filter_map(|target| target.label.as_deref())
+            .map(|label| format::width(&format!("  ✓ {label}")))
+            .max()
+            .unwrap_or(0);
+        let budget = usize::from(inner_w)
+            .saturating_sub(4)
+            .saturating_sub(tag)
+            .saturating_sub(mark);
         // One choice row per target, each exactly one row: the cut
-        // names leave every tag a single row at any area width.
-        let mut cut: Vec<(usize, String, &'static str)> = Vec::new();
+        // names leave every tag a single row; it carries the target
+        // index for the mark.
+        let mut cut: Vec<(usize, usize, String, &'static str)> = Vec::new();
         for (at, item) in self.items.iter().enumerate() {
             if let Item::Target(t) = *item
                 && let Some(target) = self.targets.get(t)
             {
                 cut.push((
                     at,
+                    t,
                     format::cut(&target.name, budget),
                     match target.kind {
                         LoginKind::Browser => "browser",
@@ -492,18 +474,40 @@ impl Login {
         }
         let listed: Vec<(&str, &str)> = cut
             .iter()
-            .map(|(_, name, tag)| (name.as_str(), *tag))
+            .map(|(_, _, name, tag)| (name.as_str(), *tag))
             .collect();
         let focused = cut
             .iter()
-            .position(|(at, _, _)| *at == self.selected)
+            .position(|(at, _, _, _)| *at == self.selected)
             .unwrap_or(0);
         let mut choices = overlay::choices(&listed, focused, u16::MAX);
         // Each target row takes clicks over its whole row; headings,
         // the gap and the note carry none.
-        for (row, (at, _, _)) in choices.iter_mut().zip(cut.iter()) {
+        for (row, (at, t, _, _)) in choices.iter_mut().zip(cut.iter()) {
             row.targets
                 .push((0, u16::MAX, TargetId::View(Spot::Row(*at))));
+            // The tag draws in the text colour, not dim; a signed-in
+            // row carries its `✓ <label>` mark in `success` after the
+            // tag, two spaces apart. The focused row keeps `bold`
+            // with the bar.
+            // Focused rows keep the bar's own styling: only unbarred
+            // tags drop their dim for the text colour.
+            if !row.barred
+                && let Some(tag) = row.spans.last_mut()
+            {
+                tag.style = Style::new();
+            }
+            let label = self
+                .targets
+                .get(*t)
+                .and_then(|target| target.label.as_deref());
+            if let Some(label) = label {
+                let mut mark = Style::new().fg(Role::Success.color());
+                if row.barred {
+                    mark = mark.add_modifier(Modifier::BOLD);
+                }
+                row.spans.push(Span::styled(format!("  ✓ {label}"), mark));
+            }
         }
         let mut choices = choices.into_iter();
         let dim = Style::new().add_modifier(Modifier::DIM);
@@ -672,19 +676,11 @@ impl Login {
         }
         let before = self.selected;
         if *key == Key::Up {
-            // The nearest target above, clamped at the first.
-            self.selected = targets
-                .iter()
-                .copied()
-                .rfind(|at| *at < before)
-                .unwrap_or(before);
+            // The nearest target above, wrapping to the last.
+            self.selected = crate::swapped::step_target(&targets, before, false);
         } else if *key == Key::Down {
-            // The nearest target below, clamped at the last.
-            self.selected = targets
-                .iter()
-                .copied()
-                .find(|at| *at > before)
-                .unwrap_or(before);
+            // The nearest target below, wrapping to the first.
+            self.selected = crate::swapped::step_target(&targets, before, true);
         } else {
             // A page is the shown body rows less one, at least one.
             let page = shown_body_rows(ctx.height).saturating_sub(1).max(1);
@@ -1163,12 +1159,12 @@ impl Login {
         if *key == Key::Down {
             choices.cursor = Some(match choices.cursor {
                 None => 0,
-                Some(at) => (at.saturating_add(1)).min(choices.models.len().saturating_sub(1)),
+                Some(at) => crate::swapped::wrap_step(at, choices.models.len(), 1),
             });
         } else if *key == Key::Up {
             choices.cursor = Some(match choices.cursor {
                 None => choices.models.len().saturating_sub(1),
-                Some(at) => at.saturating_sub(1),
+                Some(at) => crate::swapped::wrap_step(at, choices.models.len(), -1),
             });
         } else if *key == Key::Enter {
             let pick = choices
@@ -1627,26 +1623,6 @@ fn choice_rows(
     )
 }
 
-/// One overlay body row holding `text` in `style`.
-fn text_row(text: impl Into<String>, style: Style) -> overlay::Row {
-    overlay::Row {
-        spans: vec![Span::styled(text.into(), style)],
-        right: Vec::new(),
-        targets: Vec::new(),
-        barred: false,
-    }
-}
-
-/// One blank overlay body row.
-fn blank_row() -> overlay::Row {
-    overlay::Row {
-        spans: Vec::new(),
-        right: Vec::new(),
-        targets: Vec::new(),
-        barred: false,
-    }
-}
-
 /// `text` cut from the left to at most `max` columns, keeping its tail:
 /// whole when it fits, else "…" plus the longest tail that fits.
 /// `max` 0 gives "".
@@ -1963,42 +1939,6 @@ fn failed_rows(head: &str, reason: &str, dot: &str, inner: usize) -> Vec<(overla
         )
     })
     .collect()
-}
-
-/// The view's rows for `targets`: a heading over each group that has rows.
-/// With neither, one note in place of the rows.
-fn build(targets: &[LoginTarget]) -> Vec<Item> {
-    let mut items = Vec::new();
-    if targets
-        .iter()
-        .any(|target| target.kind != LoginKind::Secret)
-    {
-        items.push(Item::Heading(Group::Providers));
-        for (at, target) in targets.iter().enumerate() {
-            if target.kind != LoginKind::Secret {
-                items.push(Item::Target(at));
-            }
-        }
-    }
-    if targets
-        .iter()
-        .any(|target| target.kind == LoginKind::Secret)
-    {
-        // The blank row between the groups, only when both have rows.
-        if !items.is_empty() {
-            items.push(Item::Gap);
-        }
-        items.push(Item::Heading(Group::Secrets));
-        for (at, target) in targets.iter().enumerate() {
-            if target.kind == LoginKind::Secret {
-                items.push(Item::Target(at));
-            }
-        }
-    }
-    if items.is_empty() {
-        items.push(Item::Note);
-    }
-    items
 }
 
 #[cfg(test)]

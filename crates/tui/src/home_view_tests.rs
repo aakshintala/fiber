@@ -3,8 +3,8 @@
 use super::super::{cursor, render, text};
 use super::picker::{TypedRow, typed_body};
 use crate::app::{App, Effect, QUIT_HINT};
-use crate::home::{Launch, Spot};
-use crate::keys::Key;
+use crate::home::{Launch, ListLine, Spot};
+use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::look::Depth;
 use contract::ErrorCode;
@@ -403,7 +403,9 @@ fn home_with_an_archived_session_shows_only_ordinary_rows() {
     }
     let recent = outgoing
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        })
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("a recent: {outgoing:?}"));
     app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
@@ -428,6 +430,230 @@ fn home_with_an_archived_session_shows_only_ordinary_rows() {
         "home_with_an_archived_session_shows_only_ordinary_rows",
         frame
     );
+}
+
+#[test]
+fn a_project_with_archived_sessions_shows_the_folded_line() {
+    let app = home_with_archived_fold();
+    let frame = screen(&app, 80, 24);
+    // `docs/tui.md`, "The session list" (each project's archived sessions sit under a dim "archived · N").
+    assert!(frame.contains("exited · 1"), "{frame}");
+    assert!(frame.contains("archived · 2"), "{frame}");
+    // Folded, the archived rows draw nothing: deleting the head fails
+    // this assertion.
+    assert!(!frame.contains("filed work"), "{frame}");
+    assert!(!frame.contains("settled work"), "{frame}");
+    insta::assert_snapshot!("home_with_folded_archived_line", frame);
+}
+
+#[test]
+fn opening_the_archived_fold_lists_the_rows_as_exited_rows() {
+    let mut app = home_with_archived_fold();
+    // Focus the fold head from the entry bar: it is the last list stop.
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    let key = archived_head_key(&app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Archived(key)))
+    );
+    // Enter opens the fold in place, with no pointer coordinates
+    // anywhere: the archived rows draw as exited rows.
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    let frame = screen(&app, 80, 24);
+    assert!(frame.contains("filed work"), "{frame}");
+    assert!(frame.contains("settled work"), "{frame}");
+    insta::assert_snapshot!("home_with_open_archived_fold", frame);
+    // A click on the head folds it again.
+    app.on_click(crate::mouse::TargetId::Home(Spot::Archived(key)));
+    let folded = screen(&app, 80, 24);
+    assert!(!folded.contains("filed work"), "{folded}");
+    assert!(!folded.contains("settled work"), "{folded}");
+    assert!(folded.contains("archived · 2"), "{folded}");
+}
+
+#[test]
+fn a_project_with_no_archived_sessions_shows_no_line() {
+    let mut app = home(80, 24);
+    let outgoing = outgoings(app.on_line(hello()));
+    let recent = outgoing[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("recent id"))
+        .to_owned();
+    let fanout = outgoings(app.on_line(accepted(
+        &recent,
+        serde_json::json!({"sessions": [recent_row("s_aaaaaaaaaaaaaaaa", "old work", "exited")]}),
+    )));
+    let scoped = scoped_ask_id(&fanout);
+    let archived = archived_ask_id(&fanout);
+    app.on_line(accepted(
+        &scoped,
+        serde_json::json!({"sessions": [], "total": 1}),
+    ));
+    app.on_line(accepted(
+        &archived,
+        serde_json::json!({"sessions": [], "total": 0}),
+    ));
+    let frame = screen(&app, 80, 24);
+    // `docs/tui.md`, "The session list" (the line is left out when N is 0).
+    assert!(frame.contains("exited · 1"), "{frame}");
+    assert!(!frame.contains("archived"), "{frame}");
+    insta::assert_snapshot!("home_with_no_archived_line", frame);
+}
+
+#[test]
+fn opening_the_archived_fold_pages_until_every_row_is_loaded() {
+    let mut app = home(80, 24);
+    let outgoing = outgoings(app.on_line(hello()));
+    let recent = outgoing[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("recent id"))
+        .to_owned();
+    let fanout = outgoings(app.on_line(accepted(
+        &recent,
+        serde_json::json!({"sessions": [recent_row("s_aaaaaaaaaaaaaaaa", "old work", "exited")]}),
+    )));
+    let scoped = scoped_ask_id(&fanout);
+    let archived = archived_ask_id(&fanout);
+    app.on_line(accepted(
+        &scoped,
+        serde_json::json!({"sessions": [], "total": 1}),
+    ));
+    // The hub pages the archived `recent`: fifty rows, then the last one.
+    let first: Vec<serde_json::Value> = (0..50)
+        .map(|n| recent_row(&format!("s_{n:016x}"), &format!("filed {n:02}"), "exited"))
+        .collect();
+    app.on_line(accepted(
+        &archived,
+        serde_json::json!({"sessions": first, "total": 51}),
+    ));
+    // The head counts the held total, not the loaded rows.
+    let frame = screen(&app, 80, 24);
+    assert!(frame.contains("archived · 51"), "{frame}");
+    // Opening the fold asks the next page past the last loaded row: a
+    // fake hub serving two pages. Stopping after the first page leaves
+    // the last row missing, failing the assertion below.
+    let key = archived_head_key(&app);
+    let Effect::SendTracked(page) = app.on_click(crate::mouse::TargetId::Home(Spot::Archived(key)))
+    else {
+        panic!("opening the fold pages the archived recent");
+    };
+    assert_eq!(page.len(), 1);
+    let page: serde_json::Value =
+        serde_json::from_str(&page[0].line).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(page["command"], "recent");
+    assert_eq!(page["args"]["project"], "-w");
+    assert!(page["args"].get("archived").is_some());
+    assert_eq!(page["args"]["before"], "s_0000000000000031");
+    app.on_line(accepted(
+        page["id"].as_str().unwrap_or_else(|| panic!("page id")),
+        serde_json::json!({"sessions": [recent_row("s_3232323232323232", "filed 50", "exited")], "total": 51}),
+    ));
+    // The head still counts the held total, and every row is listed:
+    // stopping after the first page leaves the last row missing,
+    // failing the count below.
+    let frame = screen(&app, 80, 24);
+    assert!(frame.contains("archived · 51"), "{frame}");
+    let mut filed: Vec<String> = app
+        .home_screen()
+        .map(|screen| {
+            screen
+                .list
+                .into_iter()
+                .filter_map(|line| match line {
+                    ListLine::Exited { name, .. } => Some(name),
+                    ListLine::Head { .. }
+                    | ListLine::Live { .. }
+                    | ListLine::ExitedHead { .. }
+                    | ListLine::More { .. }
+                    | ListLine::ArchivedHead { .. } => None,
+                })
+                .filter(|name| name.starts_with("filed "))
+                .collect()
+        })
+        .unwrap_or_default();
+    filed.sort_unstable();
+    filed.dedup();
+    assert_eq!(filed.len(), 51, "{filed:?}");
+    insta::assert_snapshot!("home_with_fully_paged_archived_fold", frame);
+}
+
+#[test]
+fn an_archived_only_project_shows_its_section() {
+    let mut app = home_with_archived_fold();
+    // Delete the last exited row through the foot question: the accepted
+    // delete removes it and refills the unscoped page, which the hub
+    // answers with no exited rows left.
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    // The delete question opens with the Delete key: Backspace archives
+    // an exited row.
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
+    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
+    let Effect::SendTracked(delete) = app.on_key(Key::Enter, now) else {
+        panic!("Enter confirms the delete");
+    };
+    assert_eq!(delete.len(), 1);
+    let command: serde_json::Value =
+        serde_json::from_str(&delete[0].line).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(command["command"], "delete");
+    let refill = outgoings(
+        app.on_line(accepted(
+            command["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("delete id")),
+            serde_json::json!({}),
+        )),
+    );
+    let first = refill
+        .iter()
+        // The typed line writes an empty `args` object where the raw
+        // builder leaves it out; the hub reads both the same.
+        .find(|line| {
+            line.get("args")
+                .is_none_or(|args| args == &serde_json::json!({}))
+        })
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("an unscoped refill: {refill:?}"))
+        .to_owned();
+    assert!(
+        app.on_line(accepted(&first, serde_json::json!({"sessions": []})))
+            .is_empty()
+    );
+    // The refetch answers land: no exited rows left on the hub, and the
+    // archived pair still listed.
+    let scoped = scoped_ask_id(&refill);
+    let archived = archived_ask_id(&refill);
+    app.on_line(accepted(
+        &scoped,
+        serde_json::json!({"sessions": [], "total": 0}),
+    ));
+    app.on_line(accepted(
+        &archived,
+        serde_json::json!({"sessions": [
+            recent_row("s_bbbbbbbbbbbbbbbb", "filed work", "exited"),
+            recent_row("s_cccccccccccccccc", "settled work", "exited"),
+        ], "total": 2}),
+    ));
+    // The archived-only project keeps its section: a header, no exited
+    // rows, and the fold. With no section the empty text would draw
+    // instead (`docs/tui.md`, "The session list").
+    let frame = screen(&app, 80, 24);
+    assert!(!frame.contains("No sessions yet."), "{frame}");
+    assert!(!frame.contains("old work"), "{frame}");
+    assert!(frame.contains("archived · 2"), "{frame}");
+    // The fold stays closed through the delete: the rows draw nothing.
+    assert!(!frame.contains("filed work"), "{frame}");
+    insta::assert_snapshot!("home_with_archived_only_section", frame);
 }
 
 #[test]
@@ -496,9 +722,10 @@ fn home_with_more_rows_than_fit() {
     insta::assert_snapshot!("home_with_more_rows_than_fit", screen(&app, 80, 24));
 }
 
-/// Answers the feed, the first unscoped `recent` page with `rows`, and
-/// every scoped ask with `total` and no rows: the held total with one
-/// loaded row beneath it.
+/// Answers the feed, the first unscoped `recent` page with `rows`, every
+/// exited scoped ask with `total` and no rows, and every archived scoped
+/// ask with no rows and a zero total: the held exited total with one
+/// loaded row beneath it and no archived head.
 fn hold_total(app: &mut App, rows: serde_json::Value, total: usize) {
     fn parse(line: &String) -> serde_json::Value {
         serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
@@ -511,7 +738,9 @@ fn hold_total(app: &mut App, rows: serde_json::Value, total: usize) {
         .unwrap_or_else(|| panic!("a feed: {outgoing:?}"));
     let recent = outgoing
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        })
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("a recent: {outgoing:?}"));
     assert!(
@@ -527,10 +756,18 @@ fn hold_total(app: &mut App, rows: serde_json::Value, total: usize) {
     assert!(!fanout.is_empty(), "the unscoped answer fans out");
     for line in &fanout {
         let id = line["id"].as_str().unwrap_or_else(|| panic!("a scoped id"));
+        let archived = line["args"]
+            .get("archived")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         assert!(
             app.on_line(accepted(
                 id,
-                serde_json::json!({"sessions": [], "total": total})
+                if archived {
+                    serde_json::json!({"sessions": [], "total": 0})
+                } else {
+                    serde_json::json!({"sessions": [], "total": total})
+                }
             ))
             .is_empty()
         );
@@ -574,7 +811,9 @@ fn home_header_counts_loaded_rows_without_a_total() {
         .collect();
     let recent = outgoing
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        })
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("a recent: {outgoing:?}"));
     app.on_line(accepted(
@@ -611,6 +850,24 @@ fn accepted(id: &str, result: serde_json::Value) -> Line {
             ),
             ("result".to_owned(), result),
         ]
+        .into_iter()
+        .collect(),
+    })
+}
+
+/// A hub `command_accepted` with no `result`, the wire shape the hub
+/// sends for a successful `archive` (`crates/hub/src/archive.rs`
+/// returns `Ok(None)`, folded with no `result` per
+/// `crates/hub/src/feed.rs`).
+fn accepted_no_result(id: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: HubEventKind::CommandAccepted,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [(
+            "command_id".to_owned(),
+            serde_json::Value::String(id.to_owned()),
+        )]
         .into_iter()
         .collect(),
     })
@@ -761,6 +1018,87 @@ fn recent_row(session: &str, name: &str, how: &str) -> serde_json::Value {
         "name": name,
         "how": how,
     })
+}
+
+/// The outgoing lines of `on_line`, parsed.
+fn outgoings(lines: Vec<String>) -> Vec<serde_json::Value> {
+    lines
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect()
+}
+
+/// The id of the archived scoped `recent` ask among outgoing lines.
+fn archived_ask_id(lines: &[serde_json::Value]) -> String {
+    lines
+        .iter()
+        .find(|line| {
+            line["args"]
+                .get("archived")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        })
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("an archived ask: {lines:?}"))
+        .to_owned()
+}
+
+/// The id of the exited scoped `recent` ask among outgoing lines.
+fn scoped_ask_id(lines: &[serde_json::Value]) -> String {
+    lines
+        .iter()
+        .find(|line| {
+            line["args"].get("project").is_some() && line["args"].get("archived").is_none()
+        })
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a scoped ask: {lines:?}"))
+        .to_owned()
+}
+
+/// The folded `ArchivedHead`'s key on home.
+fn archived_head_key(app: &App) -> u64 {
+    app.home_screen()
+        .and_then(|screen| {
+            screen.list.into_iter().find_map(|line| match line {
+                ListLine::ArchivedHead { key, .. } => Some(key),
+                ListLine::Head { .. }
+                | ListLine::Live { .. }
+                | ListLine::ExitedHead { .. }
+                | ListLine::Exited { .. }
+                | ListLine::More { .. } => None,
+            })
+        })
+        .unwrap_or_else(|| panic!("an archived head"))
+}
+
+/// Home with one exited row ("old work") and two archived rows ("filed
+/// work", "settled work") in `-w`, both counts held: the folded
+/// `archived · 2` draws under the exited row.
+fn home_with_archived_fold() -> App {
+    let mut app = home(80, 24);
+    let outgoing = outgoings(app.on_line(hello()));
+    let recent = outgoing[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("recent id"))
+        .to_owned();
+    let fanout = outgoings(app.on_line(accepted(
+        &recent,
+        serde_json::json!({"sessions": [recent_row("s_aaaaaaaaaaaaaaaa", "old work", "exited")]}),
+    )));
+    let scoped = scoped_ask_id(&fanout);
+    let archived = archived_ask_id(&fanout);
+    app.on_line(accepted(
+        &scoped,
+        serde_json::json!({"sessions": [], "total": 1}),
+    ));
+    app.on_line(accepted(
+        &archived,
+        serde_json::json!({"sessions": [
+            recent_row("s_bbbbbbbbbbbbbbbb", "filed work", "exited"),
+            recent_row("s_cccccccccccccccc", "settled work", "exited"),
+        ], "total": 2}),
+    ));
+    app
 }
 
 /// A streaming state.
@@ -1121,19 +1459,31 @@ fn the_box_sits_on_the_last_rows_above_the_foot() {
 #[test]
 fn the_foot_draws_bold_keys_dim_labels_centred_and_cut() {
     use ratatui::style::Modifier;
-    let foot = "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit";
+    let foot = "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit";
     // Wide: the whole foot fits, centred, each key bold and the rest dim.
-    let app = home(160, 48);
-    let area = Rect::new(0, 0, 160, 48);
+    // The foot outgrew 160 columns with the archive part, then 200
+    // columns with the project part beside it, so the fits case renders
+    // wider still.
+
+    let app = home(220, 48);
+    let area = Rect::new(0, 0, 220, 48);
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
     let frame = text(&buf);
     let row = frame.lines().nth(47).expect("foot row");
     assert!(row.contains(foot), "{row}");
     let start = row.find("Enter").expect("foot starts");
-    assert_eq!(start, (160 - crate::format::width(foot)) / 2);
+    assert_eq!(start, (220 - crate::format::width(foot)) / 2);
     let y = 47u16;
-    for key in ["Enter", "↑↓", "Delete", "F1", "Ctrl+C"] {
+    for key in [
+        "Enter",
+        "↑↓",
+        "Shift+↑↓",
+        "Delete",
+        "Backspace",
+        "F1",
+        "Ctrl+C",
+    ] {
         let at = row.find(key).unwrap_or_else(|| panic!("{key} shows"));
         let x = u16::try_from(row[..at].chars().count()).expect("foot x");
         for dx in 0..key.chars().count() {
@@ -1374,11 +1724,11 @@ fn blocker_lines_sit_above_the_box_and_the_list_yields() {
     choose_session_model(&mut app);
     type_draft(&mut app, "hi");
     let now = fakes::clock::FakeClock::new().now();
-    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter sends the start");
     };
     let start: serde_json::Value =
-        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+        serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("start: {err}"));
     let id = start["id"].as_str().unwrap_or_else(|| panic!("start id"));
     app.on_line(Line::Hub(contract::HubLine {
         kind: HubEventKind::CommandRejected,
@@ -1447,11 +1797,11 @@ fn blockers_count_against_the_four_row_logo() {
     choose_session_model(&mut app);
     type_draft(&mut app, "hi");
     let now = fakes::clock::FakeClock::new().now();
-    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter sends the start");
     };
     let start: serde_json::Value =
-        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+        serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("start: {err}"));
     let id = start["id"].as_str().unwrap_or_else(|| panic!("start id"));
     app.on_line(Line::Hub(contract::HubLine {
         kind: HubEventKind::CommandRejected,
@@ -1722,13 +2072,16 @@ fn home_stop_flow_keeps_the_home_list_drawn() {
     focus_first_row(&mut app);
     for _ in 0..2 {
         app.on_edit(crate::keys::Edit::Delete);
-        let crate::app::Effect::Send(sent) = app.on_key(Key::Enter, now) else {
+        let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
             panic!("Enter sends the stop");
         };
         app.on_key(Key::Down, now);
-        let lines: Vec<serde_json::Value> = sent
+        let lines: Vec<serde_json::Value> = sents
             .iter()
-            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .map(|sent| {
+                let line = &sent.line;
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
+            })
             .collect();
         let close = lines
             .iter()
@@ -1825,10 +2178,22 @@ fn first_key(app: &App) -> u64 {
         .unwrap_or_else(|| panic!("a row"))
 }
 
-/// Clicks the first row's ✕.
-fn stop_first(app: &mut App) {
-    let key = first_key(app);
-    app.on_click(crate::mouse::TargetId::Home(Spot::Stop(key)));
+/// Draws `app` at 80x24 so ↑ can focus its rows.
+fn drawn(app: &mut App) {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(app, area, &mut buf, None);
+    app.drawn(&targets);
+}
+
+/// Opens the delete question for the only row with the Delete key:
+/// the row's ✕ archives an exited row. Every caller shows one exited
+/// row, so ↑ lands on its stop.
+fn ask_delete_first_row(app: &mut App) {
+    drawn(app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
 }
 
 #[test]
@@ -1838,7 +2203,8 @@ fn home_rows_with_their_x() {
     app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
     app.on_line(status("s_bbbbbbbbbbbbbbbb", "tidy docs", idle()));
     app.on_line(left("s_bbbbbbbbbbbbbbbb", "exited"));
-    // An unreadable row ends in no ✕.
+    // A live row and an exited row end in a ✕; an unreadable row ends
+    // in none.
     let mut unreadable = status("s_cccccccccccccccc", "future work", live());
     if let Line::Session(status) = &mut unreadable {
         status.schema_version = contract::SCHEMA_VERSION + 1;
@@ -1853,8 +2219,244 @@ fn home_delete_question() {
     app.on_line(hello());
     app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
     app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
-    stop_first(&mut app);
+    ask_delete_first_row(&mut app);
     insta::assert_snapshot!("home_delete_question", screen(&app, 80, 24));
+}
+
+/// Backspace on an exited row archives it with no question overlay.
+#[test]
+fn backspace_archives_the_exited_row_with_no_question() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    // ↑ focuses the exited row.
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    let Effect::Send(lines) = app.on_key(Key::Backspace, now) else {
+        panic!("Backspace archives");
+    };
+    // One `archive` line for the exited row (`docs/tui.md`, "The session
+    // list": a ✕ on an exited row, or Backspace on it, archives that
+    // session through the hub and asks nothing).
+    assert_eq!(lines.len(), 1);
+    let line: serde_json::Value =
+        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "archive");
+    assert_eq!(line["args"]["session"], "s_aaaaaaaaaaaaaaaa");
+    assert!(
+        app.home_screen()
+            .unwrap_or_else(|| panic!("home draws"))
+            .question
+            .is_none(),
+        "no question opens"
+    );
+    insta::assert_snapshot!("archive_backspace_no_question", screen(&app, 80, 24));
+}
+
+/// The exited row's ✕ archives it with no question overlay.
+#[test]
+fn cross_archives_the_exited_row_with_no_question() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    // The exited row draws its ✕: the archived row draws none.
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    assert!(
+        targets
+            .iter()
+            .any(|target| matches!(target.id, crate::mouse::TargetId::Home(Spot::Stop(_)))),
+        "the exited ✕ draws"
+    );
+    let key = first_key(&app);
+    let Effect::Send(lines) = app.on_click(crate::mouse::TargetId::Home(Spot::Stop(key))) else {
+        panic!("the ✕ archives");
+    };
+    // One `archive` line for the exited row (`docs/tui.md`, "The session
+    // list": a ✕ on an exited row, or Backspace on it, archives that
+    // session through the hub and asks nothing).
+    assert_eq!(lines.len(), 1);
+    let line: serde_json::Value =
+        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "archive");
+    assert!(
+        app.home_screen()
+            .unwrap_or_else(|| panic!("home draws"))
+            .question
+            .is_none(),
+        "no question opens"
+    );
+    insta::assert_snapshot!("archive_cross_no_question", screen(&app, 80, 24));
+}
+
+/// Backspace on a live row does nothing: the frame is unchanged.
+#[test]
+fn backspace_on_a_live_row_leaves_the_frame() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    // ↑ focuses the live row.
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    let before = screen(&app, 80, 24);
+    assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
+    let after = screen(&app, 80, 24);
+    assert_eq!(before, after, "the frame is unchanged");
+    insta::assert_snapshot!("backspace_live_row_noop", after);
+}
+
+/// Shift+Backspace and Delete open the delete question naming the
+/// session; Enter deletes it.
+#[test]
+fn shift_backspace_and_delete_ask_then_delete() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    // ↑ focuses the exited row.
+    drawn(&mut app);
+    assert_eq!(
+        app.on_key(Key::Up, fakes::clock::FakeClock::new().now()),
+        Effect::None
+    );
+    // Shift+Backspace arrives as the same delete edit.
+    let stroke =
+        crate::stroke::Stroke::parse("shift+backspace").unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(
+        app.on_press(stroke, fakes::clock::FakeClock::new().now()),
+        Effect::None
+    );
+    let question = app
+        .home_screen()
+        .unwrap_or_else(|| panic!("home draws"))
+        .question
+        .unwrap_or_else(|| panic!("a delete question"));
+    assert!(question.contains("s_aaaaaaaaaaaaaaaa"), "{question}");
+    insta::assert_snapshot!("archive_delete_question", screen(&app, 80, 24));
+    // Enter deletes exactly that session.
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    // One `delete` line for the exited row (`docs/tui.md`, "The session
+    // list": Delete on a selected exited row deletes that session
+    // through the hub, after asking).
+    assert_eq!(sents.len(), 1);
+    let line: serde_json::Value =
+        serde_json::from_str(&sents[0].line).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "delete");
+    assert_eq!(line["args"]["session"], "s_aaaaaaaaaaaaaaaa");
+}
+
+/// `/archive` in a session stops it, archives it and lands on home
+/// with the session gone from the exited rows.
+#[test]
+fn archive_command_stops_archives_and_lands_home() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    // The live status fans out the project's scoped and archived asks;
+    // answer them so the later refetches send fresh ones.
+    let appearing = outgoings(app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live())));
+    let scoped = scoped_ask_id(&appearing);
+    let archived = archived_ask_id(&appearing);
+    app.on_line(accepted(
+        &scoped,
+        serde_json::json!({"sessions": [], "total": 1}),
+    ));
+    app.on_line(accepted(
+        &archived,
+        serde_json::json!({"sessions": [], "total": 0}),
+    ));
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in "/archive".chars() {
+        assert_eq!(app.on_key(Key::Char(ch), now), Effect::None);
+    }
+    let Effect::Send(dry) = app.on_key(Key::Enter, now) else {
+        panic!("/archive sends the dry run");
+    };
+    assert_eq!(dry.len(), 1);
+    let discovery: serde_json::Value =
+        serde_json::from_str(&dry[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(discovery["command"], "delete");
+    assert_eq!(
+        discovery["args"],
+        serde_json::json!({"session": "s_aaaaaaaaaaaaaaaa", "cascade": true, "dry_run": true})
+    );
+    // The discovery answer stops the held session and goes home: no
+    // question at any phase.
+    let stops = outgoings(
+        app.on_line(accepted(
+            discovery["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("dry-run id")),
+            serde_json::json!({"sessions": ["s_aaaaaaaaaaaaaaaa"], "held": ["s_aaaaaaaaaaaaaaaa"]}),
+        )),
+    );
+    let closes: Vec<&serde_json::Value> = stops
+        .iter()
+        .filter(|line| line["command"] == "close")
+        .collect();
+    // One `close` stop for the held session (`docs/tui.md`, "The session
+    // list": `/archive` stops that session the way `/delete` does, and
+    // `/delete` stops every running one first).
+    assert_eq!(closes.len(), 1, "{stops:?}");
+    assert_eq!(closes[0]["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert!(app.on_home());
+    // Its exit sends the one archive line, for that session only. The
+    // exit also refetches the project's scoped and archived totals.
+    let out = outgoings(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")));
+    let archived: Vec<&serde_json::Value> = out
+        .iter()
+        .filter(|line| line["command"] == "archive")
+        .collect();
+    // Exactly that one `archive` (`docs/tui.md`, "The session list":
+    // then archives that one session and goes home).
+    assert_eq!(archived.len(), 1, "{out:?}");
+    assert_eq!(
+        archived[0]["args"],
+        serde_json::json!({"session": "s_aaaaaaaaaaaaaaaa"})
+    );
+    let scoped_ask = scoped_ask_id(&out);
+    let archived_ask = archived_ask_id(&out);
+    // The accepted archive lands home with the session gone from the
+    // exited rows. The hub accepts with no `result`, so the test folds
+    // the no-result wire shape.
+    let out = outgoings(
+        app.on_line(accepted_no_result(
+            archived[0]["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("archive id")),
+        )),
+    );
+    assert!(
+        out.iter().any(|line| line["command"] == "recent"),
+        "{out:?}"
+    );
+    assert!(app.on_home());
+    let frame = screen(&app, 80, 24);
+    assert!(!frame.contains("fix the parser"), "{frame}");
+    // Answering the exit's scoped refetch with no rows left clears the
+    // exited section; answering the archived refetch with the archived
+    // session and its new total draws the fold head.
+    app.on_line(accepted(
+        &scoped_ask,
+        serde_json::json!({"sessions": [], "total": 0}),
+    ));
+    app.on_line(accepted(
+        &archived_ask,
+        serde_json::json!({"sessions": [recent_row("s_aaaaaaaaaaaaaaaa", "fix the parser", "exited")], "total": 1}),
+    ));
+    let frame = screen(&app, 80, 24);
+    // The fold head counts the archived `recent` total (`docs/tui.md`,
+    // "The session list").
+    assert!(frame.contains("archived · 1"), "{frame}");
+    insta::assert_snapshot!("archive_command_home", frame);
 }
 
 #[test]
@@ -1863,14 +2465,18 @@ fn home_cascade_question() {
     app.on_line(hello());
     app.on_line(status("s_0123456789abcdef", "fix the parser", live()));
     app.on_line(left("s_0123456789abcdef", "exited"));
-    stop_first(&mut app);
+    ask_delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
-    let delete: serde_json::Value =
-        serde_json::from_str(lines.first().unwrap_or_else(|| panic!("a delete line")))
-            .unwrap_or_else(|err| panic!("{err}"));
+    let delete: serde_json::Value = serde_json::from_str(
+        sents
+            .first()
+            .map(|sent| sent.line.as_str())
+            .unwrap_or_else(|| panic!("a delete line")),
+    )
+    .unwrap_or_else(|err| panic!("{err}"));
     let id = delete["id"].as_str().unwrap_or_else(|| panic!("delete id"));
     app.on_line(refused(
         id,
@@ -1884,14 +2490,18 @@ fn home_cascade_question() {
 /// Opens the cascade question naming `dependents`: the plain delete
 /// goes out, and the hub refuses naming them all.
 fn ask_cascade(app: &mut App, root: &str, dependents: &[String]) {
-    stop_first(app);
+    ask_delete_first_row(app);
     let now = fakes::clock::FakeClock::new().now();
-    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
-    let delete: serde_json::Value =
-        serde_json::from_str(lines.first().unwrap_or_else(|| panic!("a delete line")))
-            .unwrap_or_else(|err| panic!("{err}"));
+    let delete: serde_json::Value = serde_json::from_str(
+        sents
+            .first()
+            .map(|sent| sent.line.as_str())
+            .unwrap_or_else(|| panic!("a delete line")),
+    )
+    .unwrap_or_else(|err| panic!("{err}"));
     let id = delete["id"].as_str().unwrap_or_else(|| panic!("delete id"));
     let names: Vec<String> = dependents
         .iter()
@@ -2072,7 +2682,7 @@ fn max_question_scroll_is_body_rows_minus_capacity() {
     app.on_line(hello());
     app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
     app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
-    stop_first(&mut app);
+    ask_delete_first_row(&mut app);
     let max = |app: &App, width: u16, height: u16| {
         let drawn = app.home_screen().unwrap_or_else(|| panic!("home draws"));
         super::question::max_question_scroll(app, &drawn, Rect::new(0, 0, width, height))
@@ -2107,7 +2717,7 @@ fn a_session_named_with_the_footer_words_keeps_one_legend() {
         live(),
     ));
     app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
-    stop_first(&mut app);
+    ask_delete_first_row(&mut app);
     let drawn = screen(&app, 80, 24);
     // The head keeps the session's name whole, footer words and all.
     let head = drawn
@@ -2133,7 +2743,7 @@ fn the_plain_question_has_no_cascade_text() {
     app.on_line(hello());
     app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
     app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
-    stop_first(&mut app);
+    ask_delete_first_row(&mut app);
     let drawn = screen(&app, 80, 24);
     assert!(drawn.contains("Delete session"), "the frame draws");
     assert!(
@@ -2154,14 +2764,18 @@ fn the_cascade_question_names_the_added_sessions() {
     app.on_line(hello());
     app.on_line(status("s_0123456789abcdef", "fix the parser", live()));
     app.on_line(left("s_0123456789abcdef", "exited"));
-    stop_first(&mut app);
+    ask_delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let crate::app::Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
-    let delete: serde_json::Value =
-        serde_json::from_str(lines.first().unwrap_or_else(|| panic!("a delete line")))
-            .unwrap_or_else(|err| panic!("{err}"));
+    let delete: serde_json::Value = serde_json::from_str(
+        sents
+            .first()
+            .map(|sent| sent.line.as_str())
+            .unwrap_or_else(|| panic!("a delete line")),
+    )
+    .unwrap_or_else(|err| panic!("{err}"));
     let id = delete["id"].as_str().unwrap_or_else(|| panic!("delete id"));
     app.on_line(refused(
         id,
@@ -2190,15 +2804,19 @@ fn enter_in_the_delete_question_sends_delete_naming_the_session() {
     app.on_line(hello());
     app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
     app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
-    stop_first(&mut app);
+    ask_delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+    let Effect::SendTracked(sents) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes");
     };
-    assert_eq!(lines.len(), 1);
-    let line: serde_json::Value =
-        serde_json::from_str(lines.first().unwrap_or_else(|| panic!("a delete line")))
-            .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(sents.len(), 1);
+    let line: serde_json::Value = serde_json::from_str(
+        sents
+            .first()
+            .map(|sent| sent.line.as_str())
+            .unwrap_or_else(|| panic!("a delete line")),
+    )
+    .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(line["command"], "delete");
     assert_eq!(line["args"]["session"], "s_aaaaaaaaaaaaaaaa");
     assert!(line["args"].get("cascade").is_none(), "no cascade");
@@ -2210,7 +2828,7 @@ fn esc_in_the_delete_question_keeps_the_session() {
     app.on_line(hello());
     app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
     app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
-    stop_first(&mut app);
+    ask_delete_first_row(&mut app);
     assert!(screen(&app, 80, 24).contains("Delete session"));
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Esc, now), Effect::None);
@@ -2250,7 +2868,7 @@ fn other_keys_leave_the_delete_question_open() {
     app.on_line(hello());
     app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
     app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
-    stop_first(&mut app);
+    ask_delete_first_row(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Char('x'), now), Effect::None);
     assert!(
@@ -2272,20 +2890,20 @@ fn focus_does_not_paint_through_the_delete_question() {
     let targets = render(&app, area, &mut buf, None);
     app.drawn(&targets);
     let now = fakes::clock::FakeClock::new().now();
-    // ↑ focuses the only row; Backspace opens its delete question.
+    // ↑ focuses the only row; Delete opens its delete question.
     app.on_key(Key::Up, now);
-    app.on_key(Key::Backspace, now);
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
     assert!(
         app.home_screen()
             .unwrap_or_else(|| panic!("home draws"))
             .question
             .is_some(),
-        "Backspace opens the question"
+        "Delete opens the question"
     );
     assert!(
         matches!(
             app.focused(),
-            Some(crate::mouse::TargetId::Home(Spot::Entry(_)))
+            Some(crate::mouse::TargetId::Home(Spot::Entry(_) | Spot::Stop(_)))
         ),
         "focus stays on the row under the box"
     );
@@ -3606,7 +4224,7 @@ fn a_short_screen_keeps_the_focused_recent_drawn() {
     answer(&mut app, &sent[0].0, &refs, "/");
     // Past the 30 completions to the first recent.
     let now = fakes::clock::FakeClock::new().now();
-    for _ in 0..31 {
+    for _ in 0..30 {
         assert_eq!(app.on_key(Key::Down, now), Effect::None);
     }
     let shown = screen(&app, 80, 10);
@@ -4308,4 +4926,185 @@ fn home_logo_rect_values() {
     keys.set_graphics();
     keys.open_keys();
     assert_eq!(crate::view::logo_rect(&keys, Rect::new(0, 0, 80, 24)), None);
+}
+
+/// The focused home entry's row name.
+fn focused_name(app: &App) -> String {
+    let Some(crate::mouse::TargetId::Home(Spot::Entry(key))) = app.focused() else {
+        panic!("a focused row, got {:?}", app.focused())
+    };
+    app.home_screen()
+        .expect("home draws")
+        .list
+        .into_iter()
+        .find_map(|line| match line {
+            ListLine::Live { key: row, name, .. } if row == key => Some(name),
+            ListLine::Exited { key: row, name, .. } if row == key => Some(name),
+            ListLine::Live { .. }
+            | ListLine::Exited { .. }
+            | ListLine::Head { .. }
+            | ListLine::ExitedHead { .. }
+            | ListLine::More { .. }
+            | ListLine::ArchivedHead { .. } => None,
+        })
+        .unwrap_or_else(|| panic!("row {key}"))
+}
+
+/// Draws `app` at 160x48 so list focus applies.
+fn draw_160x48(app: &mut App) {
+    let area = Rect::new(0, 0, 160, 48);
+    let mut buf = Buffer::empty(area);
+    let targets = render(app, area, &mut buf, None);
+    app.drawn(&targets);
+}
+
+#[test]
+fn shift_arrows_jump_between_projects_first_rows() {
+    let mut app = home(160, 48);
+    app.on_line(hello());
+    // Three projects: two live rows in the launch project, one live
+    // row in each of the other two, in feed order.
+    for (id, name, project, workspace) in [
+        ("s_aaaaaaaaaaaaaaaa", "first work", "-w", "/w"),
+        ("s_bbbbbbbbbbbbbbbb", "second work", "-w", "/w"),
+        ("s_cccccccccccccccc", "other work", "other", "/o"),
+        ("s_dddddddddddddddd", "third work", "third", "/t"),
+    ] {
+        let mut state = live();
+        state["project"] = serde_json::json!(project);
+        state["workspace"] = serde_json::json!(workspace);
+        app.on_line(status(id, name, state));
+    }
+    draw_160x48(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    // Up from the entry bar to the middle of the first project.
+    for key in [Key::Up, Key::Up, Key::Up] {
+        assert_eq!(app.on_key(key, now), Effect::None);
+    }
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(focused_name(&app), "second work");
+    // Shift+↓ lands on the second project's first row.
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    draw_160x48(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(focused_name(&app), "other work");
+    // Shift+↑ returns to the first project's first row.
+    assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
+    draw_160x48(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(focused_name(&app), "first work");
+    // No wrap past the first project.
+    assert_eq!(app.on_key(Key::ShiftUp, now), Effect::None);
+    draw_160x48(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(focused_name(&app), "first work");
+    // Down to the last row, then no wrap past the last project.
+    for key in [Key::Down, Key::Down, Key::Down] {
+        assert_eq!(app.on_key(key, now), Effect::None);
+    }
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(focused_name(&app), "third work");
+    assert_eq!(app.on_key(Key::ShiftDown, now), Effect::None);
+    draw_160x48(&mut app);
+    // `docs/tui.md`, "The session list" (launch project first, then others in the order their first session started).
+    assert_eq!(focused_name(&app), "third work");
+}
+
+#[test]
+fn home_after_forgot_drops_the_row() {
+    // Client B's home after another client's delete: one live row and
+    // one exited row, then a `session_deleted` wire line for the
+    // exited row drops it and re-asks that project's counts.
+    let mut app = home(80, 24);
+    let lines: Vec<serde_json::Value> = app
+        .on_line(hello())
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    let feed = lines
+        .iter()
+        .find(|line| line["command"] == "feed")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a feed: {lines:?}"));
+    let recent = lines
+        .iter()
+        .find(|line| {
+            line["command"] == "recent" && line.get("args") == Some(&serde_json::json!({}))
+        })
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a recent: {lines:?}"));
+    assert!(
+        app.on_line(accepted(feed, serde_json::json!({})))
+            .is_empty()
+    );
+    // The live status queues one scoped ask of each kind for the new
+    // project; settle both empty so the forgot re-ask below is exactly
+    // one of each.
+    let asked: Vec<serde_json::Value> = app
+        .on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    let scoped = asked
+        .iter()
+        .find(|line| line["command"] == "recent" && line["args"].get("archived").is_none())
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a scoped ask: {asked:?}"));
+    let archived = asked
+        .iter()
+        .find(|line| line["command"] == "recent" && line["args"].get("archived").is_some())
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("an archived ask: {asked:?}"));
+    assert!(
+        app.on_line(accepted(
+            scoped,
+            serde_json::json!({"sessions": [], "total": 0})
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            archived,
+            serde_json::json!({"sessions": [], "total": 0})
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            recent,
+            serde_json::json!({"sessions": [recent_row("s_cccccccccccccccc", "old work", "exited")]}),
+        ))
+        .is_empty()
+    );
+    let before = screen(&app, 80, 24);
+    assert!(before.contains("old work"), "{before}");
+    let forgot = crate::link::parse_line(
+        r#"{"kind":"session_deleted","ts":0,"schema_version":1,"payload":{"session_id":"s_cccccccccccccccc","project":"-w"}}"#,
+    )
+    .unwrap_or_else(|| panic!("the forgot line parses"));
+    let sent: Vec<serde_json::Value> = app
+        .on_line(forgot)
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    // (`docs/tui.md`, "The session list"): the deleted session re-asks
+    // its project's counts, with one ask of each in flight: the exited
+    // scoped page and the archived scoped page.
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    for line in &sent {
+        assert_eq!(line["command"], "recent");
+        assert_eq!(line["args"]["project"], "-w");
+        assert!(line["args"].get("before").is_none());
+    }
+    assert_eq!(
+        sent.iter()
+            .filter(|line| line["args"].get("archived").is_some())
+            .count(),
+        1,
+        "{sent:?}"
+    );
+    let frame = screen(&app, 80, 24);
+    assert!(frame.contains("fix the parser"), "{frame}");
+    assert!(!frame.contains("old work"), "{frame}");
+    insta::assert_snapshot!("home_after_forgot_drops_the_row", frame);
 }

@@ -125,6 +125,7 @@ fn serve_in_env(
             move || {
                 configure().map(|idle_exit| crate::Settings {
                     idle_exit,
+                    keep_exited: 10,
                     level: log::diag::Level::Info,
                     port: None,
                 })
@@ -135,6 +136,7 @@ fn serve_in_env(
             fakes::clock::FakeClock::new(),
             environments,
             Arc::new(crate::fake::FakeMachine::default()),
+            None,
         );
         done_tx.send(result).unwrap_or(());
     });
@@ -165,6 +167,7 @@ fn serve_in_with(home: &Path, mode: Mode, settings: crate::Settings) -> Result<i
                 source: contract::events::VariablesSource::Inherited,
             }),
             Arc::new(crate::fake::FakeMachine::default()),
+            None,
         );
         done_tx.send(result).unwrap_or(());
     });
@@ -191,6 +194,7 @@ fn an_installed_hub_with_a_taken_port_is_io_failed_and_logged() {
         Mode::Installed,
         crate::Settings {
             idle_exit: Duration::from_secs(1),
+            keep_exited: 10,
             level: log::diag::Level::Info,
             port: Some(port_settings(port)),
         },
@@ -231,6 +235,7 @@ fn an_on_demand_hub_never_binds_the_port() {
         Mode::OnDemand,
         crate::Settings {
             idle_exit: Duration::ZERO,
+            keep_exited: 10,
             level: log::diag::Level::Info,
             port: Some(port_settings(port)),
         },
@@ -406,6 +411,7 @@ fn serve_captures_first_then_reports_the_fallback() {
             || {
                 Ok(crate::Settings {
                     idle_exit: idle,
+                    keep_exited: 10,
                     level: log::diag::Level::Info,
                     port: None,
                 })
@@ -416,6 +422,7 @@ fn serve_captures_first_then_reports_the_fallback() {
             clock_serve,
             environments,
             Arc::new(crate::fake::FakeMachine::default()),
+            None,
         );
         done_tx.send(result).unwrap_or(());
     });

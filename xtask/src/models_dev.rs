@@ -3,11 +3,16 @@
 //! field in the per-package table (`docs/model-routing.md`, "What a
 //! provider extension declares").
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
 use serde_json::{Map, Value};
 
+use crate::models_dev_corrections::{
+    CORRECTIONS, Correction, check_corrections, names_package, parse_corrections,
+    render_corrections,
+};
 use crate::models_dev_table::{PACKAGES, Package, ProtocolRule};
 
 /// The models.dev catalog the generator reads when `--from` is absent.
@@ -445,8 +450,10 @@ pub(crate) struct OverlayRow {
 
 /// Parses overlay `text` from `source`: each row holds `levels` and an
 /// optional `default`. Every level is a vocabulary name, a default sits
-/// inside its levels, levels are never empty, and each key normalizes
-/// with `databricks_model_key`. A normalized-key collision keeps the
+/// inside its levels, and each key normalizes with `databricks_model_key`.
+/// A row may name no levels only when it names no default: an empty row
+/// carrying a `default` fails as a default outside its levels.
+/// A normalized-key collision keeps the
 /// first row when both rows match and fails naming both file keys when
 /// they differ; a `gpt-5` or `gpt-5-*` key fails, as those rows keep the
 /// openai package's. A syntax error has no key to name, so it reports
@@ -487,11 +494,6 @@ fn parse_thinking_overlay(source: &str, text: &str) -> Result<Vec<OverlayRow>, S
                 ));
             };
             kept.push(canonical);
-        }
-        if kept.is_empty() {
-            return Err(format!(
-                "databricks thinking overlay: `{raw}` names no levels"
-            ));
         }
         let default = match row.get("default") {
             None | Some(Value::Null) => None,
@@ -619,6 +621,7 @@ pub(crate) fn merge_databricks_thinking(
         models: rows.len(),
     })
 }
+
 /// One generated model: its derived fields, then the table layers, with a
 /// later key replacing an earlier one.
 fn generate_model(
@@ -699,12 +702,47 @@ fn generate_model(
     Ok(generated)
 }
 
+/// Whether `id` names a catalog model left out specifically for deprecation.
+fn reference_was_deprecated(package: &Package, id: &str, models: &Map<String, Value>) -> bool {
+    package.drop_deprecated
+        && models
+            .get(id)
+            .is_some_and(|model| deprecated(package, model))
+}
+
+/// Record a table reference omitted because its source model is deprecated.
+fn note_deprecated_reference(
+    package: &Package,
+    id: &str,
+    category: &str,
+    models: &Map<String, Value>,
+    left_out: &mut Vec<String>,
+) -> bool {
+    if !reference_was_deprecated(package, id, models) {
+        return false;
+    }
+    left_out.push(format!(
+        "models-dev: {}/{id} {category} entry skipped because the model is deprecated",
+        stem(package)
+    ));
+    true
+}
+
 /// Every package's file from `catalog` (full or trimmed), plus one line
 /// per left-out model. Models are sorted by id, keys are sorted, and
-/// numbers keep models.dev's spelling.
-pub(crate) fn generate(catalog: &Value, packages: &[Package]) -> Result<Generated, String> {
+/// numbers keep models.dev's spelling. `corrections` apply over the
+/// derived and table values of the models they name; an entry every
+/// field of which already matches is pruned, and the survivors return
+/// for the run to rewrite the file with.
+pub(crate) fn generate(
+    catalog: &Value,
+    packages: &[Package],
+    corrections: &[Correction],
+) -> Result<(Generated, Vec<Correction>), String> {
+    check_corrections(packages, corrections)?;
     let mut outputs = Vec::new();
     let mut left_out = Vec::new();
+    let mut pruned: Vec<usize> = Vec::new();
     for package in packages {
         let source = package.source;
         let provider = catalog
@@ -735,25 +773,64 @@ pub(crate) fn generate(catalog: &Value, packages: &[Package]) -> Result<Generate
             ));
         }
         for id in package.only.iter().copied() {
-            if !generated.iter().any(|model| model.0 == id) {
+            if !generated.iter().any(|model| model.0 == id)
+                && !note_deprecated_reference(package, id, "only", &models, &mut left_out)
+            {
                 return Err(format!(
                     "{}: only entry for `{id}` matches no generated model",
                     stem(package)
                 ));
             }
         }
-        for id in package
+        for (id, table) in package
             .protocol_overrides
             .iter()
-            .map(|entry| entry.0)
-            .chain(package.by_model.iter().map(|entry| entry.0))
-            .chain(package.thinking.iter().map(|entry| entry.0))
+            .map(|entry| (entry.0, "protocol_overrides"))
+            .chain(package.by_model.iter().map(|entry| (entry.0, "by_model")))
+            .chain(package.thinking.iter().map(|entry| (entry.0, "thinking")))
         {
-            if !generated.iter().any(|model| model.0 == id) {
+            if !generated.iter().any(|model| model.0 == id)
+                && !note_deprecated_reference(package, id, table, &models, &mut left_out)
+            {
                 return Err(format!(
                     "{}: table entry for `{id}` matches no generated model",
                     stem(package)
                 ));
+            }
+        }
+        for (index, correction) in corrections.iter().enumerate() {
+            if !names_package(package, &correction.package) {
+                continue;
+            }
+            let Some((_, built)) = generated
+                .iter_mut()
+                .find(|built| built.0 == correction.model)
+            else {
+                if note_deprecated_reference(
+                    package,
+                    &correction.model,
+                    "correction",
+                    &models,
+                    &mut left_out,
+                ) {
+                    continue;
+                }
+                return Err(format!(
+                    "{}: correction for `{}` matches no generated model",
+                    stem(package),
+                    correction.model
+                ));
+            };
+            let agreed = correction
+                .fields
+                .iter()
+                .all(|(key, value)| built.get(key) == Some(value));
+            if agreed {
+                pruned.push(index);
+            } else {
+                for (key, value) in &correction.fields {
+                    built.insert(key.clone(), value.clone());
+                }
             }
         }
         let provider_layer = layer(package, package.provider)?;
@@ -765,7 +842,49 @@ pub(crate) fn generate(catalog: &Value, packages: &[Package]) -> Result<Generate
                 stem(package)
             ));
         }
+        let mut pins = BTreeMap::<String, Vec<String>>::new();
+        for (id, model) in &generated {
+            let protocol = protocol_of(package, models.get(id).unwrap_or(&Value::Null), id);
+            let mut fields = BTreeSet::new();
+            for text in [
+                Some(package.every_model),
+                package
+                    .by_protocol
+                    .iter()
+                    .find(|entry| entry.0 == protocol)
+                    .map(|entry| entry.1),
+                package
+                    .by_model
+                    .iter()
+                    .find(|entry| entry.0 == id)
+                    .map(|entry| entry.1),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                fields.extend(layer(package, text)?.keys().cloned());
+            }
+            for (index, correction) in corrections.iter().enumerate() {
+                if !pruned.contains(&index)
+                    && names_package(package, &correction.package)
+                    && correction.model == *id
+                {
+                    fields.extend(correction.fields.keys().cloned());
+                }
+            }
+            fields.retain(|field| model.contains_key(field));
+            if !fields.is_empty() {
+                pins.insert(id.clone(), fields.into_iter().collect());
+            }
+        }
         let mut file = provider_layer;
+        file.insert(
+            "models_dev".to_owned(),
+            serde_json::json!({
+                "source": package.source,
+                "pins": pins,
+            }),
+        );
         file.insert(
             "models".to_owned(),
             Value::Array(
@@ -783,7 +902,13 @@ pub(crate) fn generate(catalog: &Value, packages: &[Package]) -> Result<Generate
             models: generated.len(),
         });
     }
-    Ok((outputs, left_out))
+    let mut survivors = Vec::with_capacity(corrections.len());
+    for (index, correction) in corrections.iter().enumerate() {
+        if !pruned.contains(&index) {
+            survivors.push(correction.clone());
+        }
+    }
+    Ok(((outputs, left_out), survivors))
 }
 
 /// `curl -fsSL --max-time 120 <url>` writing the body to stdout.
@@ -812,10 +937,13 @@ pub(crate) fn fetch(url: &str) -> Result<Vec<u8>, String> {
 }
 
 /// `cargo xtask models-dev [--from FILE]`: reads `FILE`, or fetches
-/// `MODELS_DEV_URL`, then trims and generates. Only when trim, generate and
-/// the Databricks thinking table all succeed does it write `SNAPSHOT` and every `Output` under `root` (creating parent
-/// directories). Prints `<path>: <n> models` per file to stdout and each
-/// left-out line to stderr.
+/// `MODELS_DEV_URL`, then trims and generates with the cited corrections
+/// file read from `root`. Only when trim, generate and the Databricks
+/// thinking table all succeed does it write `SNAPSHOT`, every `Output`
+/// and the corrections file under `root` (creating parent
+/// directories): an unchanged corrections file keeps its bytes, while a
+/// prune rewrites it with the survivors. Prints `<path>: <n> models` per
+/// file to stdout and each left-out line to stderr.
 pub(crate) fn run(root: &Path, from: Option<&Path>) -> Result<(), String> {
     let (source, bytes) = match from {
         Some(path) => (
@@ -827,15 +955,25 @@ pub(crate) fn run(root: &Path, from: Option<&Path>) -> Result<(), String> {
     let catalog: Value =
         serde_json::from_slice(&bytes).map_err(|error| format!("{source}: {error}"))?;
     let trimmed = trim(&catalog)?;
-    let (outputs, left_out) = generate(&trimmed, &PACKAGES)?;
+    let corrections_path = root.join(CORRECTIONS);
+    let corrections_text = std::fs::read_to_string(&corrections_path)
+        .map_err(|error| format!("{}: {error}", corrections_path.display()))?;
+    let corrections = parse_corrections(CORRECTIONS, &corrections_text)?;
+    let ((outputs, left_out), survivors) = generate(&trimmed, &PACKAGES, &corrections)?;
     let thinking = databricks_thinking(&PACKAGES)?;
     let snapshot =
         serde_json::to_string_pretty(&trimmed).map_err(|error| format!("{source}: {error}"))?;
+    let corrections_text = if survivors.len() == corrections.len() {
+        corrections_text
+    } else {
+        render_corrections(&survivors)
+    };
     let mut writes = vec![(root.join(SNAPSHOT), snapshot + "\n")];
     for output in &outputs {
         writes.push((root.join(output.path), output.text.clone()));
     }
     writes.push((root.join(thinking.path), thinking.text.clone()));
+    writes.push((corrections_path, corrections_text));
     for (path, text) in &writes {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)

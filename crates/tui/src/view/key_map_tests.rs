@@ -167,7 +167,9 @@ fn typing_narrows_the_rows_to_the_query() {
             "new_session",
             "rail_row_n",
             "delete_session",
+            "archive_session",
             "recall_prompt",
+            "focus_project",
             "next_request",
             "session_only"
         ]

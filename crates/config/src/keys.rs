@@ -360,6 +360,17 @@ pub const KEYS: &[Key] = &[
         ),
     ),
     key(
+        "model_lists.models_dev",
+        Bool,
+        NO,
+        Some("true"),
+        tabbed(
+            SettingsTab::Models,
+            "Live model details",
+            "Whether Fiber fetches models.dev to fill in model details under the model list refresh age rule.",
+        ),
+    ),
+    key(
         "model",
         Model,
         YES,
@@ -407,8 +418,7 @@ pub const KEYS: &[Key] = &[
         CountBelow(65536),
         NO,
         None,
-        tabbed(
-            SettingsTab::Advanced,
+        untabbed(
             "Hub port",
             "The 127.0.0.1 port an installed hub listens on besides its local socket; unset means the local socket only.",
         ),
@@ -454,6 +464,17 @@ pub const KEYS: &[Key] = &[
             SettingsTab::Advanced,
             "Session idle exit",
             "Milliseconds a session stays running with no turn, no jobs and no cache warming.",
+        ),
+    ),
+    key(
+        "session.keep_exited",
+        Count,
+        NO,
+        Some("10"),
+        tabbed(
+            SettingsTab::Advanced,
+            "Keep exited sessions",
+            "How many exited sessions each project keeps on home before the hub archives the older ones; 0 keeps them all.",
         ),
     ),
     key(
@@ -1078,17 +1099,6 @@ pub const KEYS: &[Key] = &[
         ),
     ),
     key(
-        "tui.screen_reader",
-        Bool,
-        NO,
-        None,
-        tabbed(
-            SettingsTab::Appearance,
-            "Screen reader mode",
-            "Forces the flat screen-reader mode on or off; unset detects a screen reader.",
-        ),
-    ),
-    key(
         "tui.attention.notification",
         Bool,
         NO,
@@ -1342,6 +1352,13 @@ pub fn refresh_after(config: &crate::Config) -> Duration {
         .get("model_lists.refresh_after", None)
         .and_then(|(value, _)| value.as_str().and_then(parse_duration))
         .unwrap_or(Duration::from_secs(86_400))
+}
+
+/// Whether live models.dev details are enabled; the default is true.
+pub fn models_dev_enabled(config: &crate::Config) -> bool {
+    config
+        .get("model_lists.models_dev", None)
+        .is_some_and(|(value, _)| value == true)
 }
 
 /// Whether the diagnostic logs record at the `debug` level

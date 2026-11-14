@@ -86,7 +86,7 @@ fn run_get(
             writeln!(err, "`{key}` is not set.").map_err(CliError::StandardError)?;
             return Ok(());
         }
-        write_line(out, &notes).map_err(CliError::from)?;
+        write_line(out, &notes)?;
         return Ok(());
     }
     match config.get(key, None) {
@@ -95,7 +95,7 @@ fn run_get(
                 key: key.to_owned(),
                 source,
             })?;
-            write_line(out, &format!("{text} from {source}")).map_err(CliError::from)?;
+            write_line(out, &format!("{text} from {source}"))?;
             Ok(())
         }
         None if !config::known_key(key) => Err(CliError::ConfigKeyUnknown {
@@ -167,7 +167,7 @@ fn run_get_extension(
                 key: key.to_owned(),
                 source,
             })?;
-            write_line(out, &format!("{text} from {source}")).map_err(CliError::from)?;
+            write_line(out, &format!("{text} from {source}"))?;
             Ok(())
         }
         None => {
@@ -190,6 +190,7 @@ fn run_set(
     err: &mut dyn Write,
     clock: &dyn contract::clock::Clock,
 ) -> Result<PathBuf, CliError> {
+    config::refuse_overlapping_repository(home, workspace, layer)?;
     let (_, project) = project_of(home, workspace)?;
     let parsed = serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.into()));
     let mut notices = Vec::new();

@@ -1,0 +1,162 @@
+{
+ "route": "zen",
+ "protocol": "responses",
+ "model": "muse-wonder-1.0",
+ "base": "https://opencode.ai/zen",
+ "levels": [
+  {
+   "level": "off",
+   "status": 402,
+   "elapsed_s": 0.41,
+   "request": {
+    "model": "muse-wonder-1.0",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "none"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "minimal",
+   "status": 402,
+   "elapsed_s": 0.29,
+   "request": {
+    "model": "muse-wonder-1.0",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "minimal"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "low",
+   "status": 402,
+   "elapsed_s": 0.36,
+   "request": {
+    "model": "muse-wonder-1.0",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "low"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "medium",
+   "status": 402,
+   "elapsed_s": 0.37,
+   "request": {
+    "model": "muse-wonder-1.0",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "medium"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "high",
+   "status": 402,
+   "elapsed_s": 0.29,
+   "request": {
+    "model": "muse-wonder-1.0",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "high"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "xhigh",
+   "status": 402,
+   "elapsed_s": 0.3,
+   "request": {
+    "model": "muse-wonder-1.0",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "xhigh"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  },
+  {
+   "level": "max",
+   "status": 402,
+   "elapsed_s": 0.33,
+   "request": {
+    "model": "muse-wonder-1.0",
+    "input": "Reply with the single word: ok",
+    "max_output_tokens": 16,
+    "reasoning": {
+     "effort": "max"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   },
+   "response": {
+    "error": {
+     "type": "invalid_request_error",
+     "message": "Insufficient balance. Top up at https://opencode.ai/console/wrk_01KR72TJBPZDFB766BKARC7081/billing?credits=1."
+    }
+   }
+  }
+ ]
+}

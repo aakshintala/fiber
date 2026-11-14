@@ -235,6 +235,8 @@ impl Offer {
             | EventKind::DelegateFinished
             | EventKind::JobCompleted
             | EventKind::JobsPendingNotified
+            | EventKind::KeeperStarted
+            | EventKind::KeeperBound
             | EventKind::CommandAccepted
             | EventKind::CommandRejected
             | EventKind::Unknown(_) => {}
@@ -280,8 +282,8 @@ impl Offer {
         let page = height.saturating_sub(1).max(1);
         match key {
             Key::Esc | Key::F1 | Key::AltA | Key::CtrlC => return None,
-            Key::Up => held.cursor = held.cursor.saturating_sub(1),
-            Key::Down => held.cursor = held.cursor.saturating_add(1).min(send),
+            Key::Up => held.cursor = crate::swapped::wrap_step(held.cursor, send + 1, -1),
+            Key::Down => held.cursor = crate::swapped::wrap_step(held.cursor, send + 1, 1),
             Key::Enter if held.cursor == send => return Some(OfferKey::Send),
             Key::Enter => return Some(OfferKey::Source),
             Key::PageUp => {
@@ -306,6 +308,8 @@ impl Offer {
             | Key::CtrlF
             | Key::AltUp
             | Key::AltDown
+            | Key::ShiftUp
+            | Key::ShiftDown
             | Key::AltX
             | Key::AltP
             | Key::AltR

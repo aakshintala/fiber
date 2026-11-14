@@ -48,9 +48,12 @@ With `gpt-6-luna` the endpoint accepted
 `usage_limit_reached` or `usage_not_included` to `quota_exceeded`, on any
 endpoint and whatever the HTTP status, and never retries it. No other vendor
 sends these codes, so the match needs no flag. When the body has `resets_at`
-(Unix seconds), the milliseconds from the reply's `Date` header until then
-become the error's `retry_after_ms`, and
-the message names the reset time. Without a usable `Date`, no wait is set. `rate_limit_exceeded` stays `rate_limited`.
+(Unix seconds), Fiber uses `retry-after` first. Only when the reply has no
+`retry-after` header at all does it use the milliseconds from the reply's
+`Date` header until `resets_at` as `retry_after_ms`; a present but
+unparseable `retry-after` vetoes that fallback. Without a usable `Date`, no
+fallback wait is set. The message names the reset time. `rate_limit_exceeded`
+stays `rate_limited`.
 No usage-limit reply has been probed: the match rests on the reference
 implementations ([research/codex-responses-probe](../research/codex-responses-probe/README.md),
 "The usage-limit error body").
@@ -74,7 +77,10 @@ and its limits are in
 So Fiber sends `strict` on every tool, on every protocol that has strict mode,
 and decides it per tool, except on `bedrock-converse`, which sends no
 `strict`: Nova refuses the field whether it is `true` or `false` ("Bedrock
-Converse wire facts"). It sends `true` only when the tool's schema already
+Converse wire facts"), and except on a model whose data sets
+`compat.no_strict`, which sends no `strict` key at all: the Databricks
+gateway rejects `strict` even as `false` on `claude-opus-4-1` (the Databricks
+gateway example below). It sends `true` only when the tool's schema already
 fits the vendor's strict subset, and `false` otherwise. Fiber never rewrites a
 schema to fit, and never moves keywords into the description. Fiber's built-in
 tools are written to fit the strict subset, except a tool whose section in
@@ -89,7 +95,8 @@ installed, not built into the binary. Installing Fiber installs every
 first-party provider, and a person may remove any of them. How extensions
 arrive and stay current is `docs/extensions.md`.
 
-A first-party provider is one Fiber can probe and re-record. There are eleven:
+A first-party provider is one Fiber can probe and re-record. There are ten, and an eleventh,
+Azure, is not built yet:
 
 | Provider | Protocols | Credential |
 |---|---|---|
@@ -103,7 +110,7 @@ A first-party provider is one Fiber can probe and re-record. There are eleven:
 | muse (the Meta Model API) | `anthropic-messages`, `openai-completions`, `openai-responses` | key |
 | AWS Bedrock | `anthropic-messages` for Claude and `bedrock-converse` for other models, both with AWS framing | Bedrock API key, or SigV4 through `sign()` |
 | Google Vertex | `anthropic-messages` for Claude, `google-generative-ai` for Gemini | token from `credential()` |
-| Azure | `openai-completions`, `openai-responses`; `anthropic-messages` for Foundry Claude | `api-key` header, or token from `credential()` |
+| Azure (not built yet: see #224) | `openai-completions`, `openai-responses`; `anthropic-messages` for Foundry Claude | `api-key` header, or token from `credential()` |
 
 The protocols are the ones each provider serves and Fiber speaks for it. A
 package's shipped models may use only some of them, and a model on another
@@ -397,6 +404,8 @@ Measured on October 1, 2026 with one OpenCode key (`research/opencode-probe`).
   `openai-completions` requests, as the OpenAI provider does on every
   request; its `anthropic-messages` requests carry no `store` key.
 
+Which thinking level each Go and Zen model takes is probed in [research/opencode-thinking](../research/opencode-thinking/README.md).
+
 ### Bedrock Invoke wire facts
 
 Measured on October 20, 2026 against `bedrock-runtime.ap-south-1.amazonaws.com`
@@ -628,8 +637,10 @@ For each model:
 - its protocol and base URL, which can differ between models of one provider,
   and may name a per-account host ("A per-account host")
 - compatibility flags the native protocol reads, such as whether the vendor
-  accepts `store`, which field carries the token limit, and which thinking
-  dialect it speaks
+  accepts `store`, which field carries the token limit, which thinking
+  dialect it speaks, and whether the request leaves the `strict` key off
+  every tool (`compat.no_strict`, which `claude-opus-4-1` needs on the
+  Databricks gateway: it rejects `strict` even as `false`)
 - the thinking levels it supports ("Thinking")
 - whether deferred tools work for it, declared only after a probe
   (`docs/tools.md`, "Which tools the model sees"), except the Databricks
@@ -660,7 +671,9 @@ changes it (`docs/configuration.md`, "When Fiber reads configuration"). The key,
 its layers and its handling of an invalid value are in `docs/configuration.md`,
 "A provider's data".
 
-A first-party package's `models` list is generated, except `openrouter`'s and `databricks`'s, which their `models()` functions read from their vendors ("Model discovery"): `openrouter`'s takes each model's `name` from OpenRouter's list, and `databricks`'s matches the workspace's model services to its catalog rows. `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. It derives each model's name, protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A gateway package's model (`opencode-go`, `opencode-zen`) whose id a vendor package also lists takes that vendor's `thinking` row unless its own table names one; every other gateway model names its own `thinking` row, with levels and a default, or an explicit empty row for a model that takes none. A `databricks` model found by discovery takes the `thinking` row of the vendor model its bare service name matches, looked up by the same match key discovery routes it with, overlaid by `providers/databricks/thinking-overlay.json`, which wins on a shared key over the four thinking-vendor packages' rows; a service neither names a row for keeps no levels. The table also lists the ids a package keeps when its models are a subset of the source's (`codex` keeps four of models.dev's `openai` models; `bedrock` keeps its Claude models' inference profiles and the other models that answered a probe through ConverseStream, "Protocols and providers"), names a model's protocol where models.dev cannot (`bedrock`'s Claude models speak `anthropic-messages`, its others `bedrock-converse`), and pins a derived field the vendor's endpoint differs on (`codex`'s `context_window` is the ChatGPT backend's 272000, where models.dev lists the API's 1050000). A rerun on an unchanged models.dev changes nothing. It runs only when someone runs it: CI never fetches, and a test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
+A first-party package's `models` list is generated, except `openrouter`'s and `databricks`'s, which their `models()` functions read from their vendors ("Model discovery"): `openrouter`'s takes each model's `name` from OpenRouter's list, and `databricks`'s matches the workspace's model services to its catalog rows. `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. It derives each model's name, protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A gateway package's model (`opencode-go`, `opencode-zen`) whose id a vendor package also lists takes that vendor's `thinking` row unless its own table names one; every other gateway model names its own `thinking` row, with levels and a default, or an explicit empty row for a model that takes none. A `databricks` model found by discovery takes the `thinking` row of the vendor model its bare service name matches, looked up by the same match key discovery routes it with, overlaid by `providers/databricks/thinking-overlay.json`, which wins on a shared key over the four thinking-vendor packages' rows; an overlay row may be explicitly empty, and an empty row still wins over a vendor row; a service neither names a row for keeps no levels. The table also lists the ids a package keeps when its models are a subset of the source's (`codex` keeps five of models.dev's `openai` models; `bedrock` keeps its Claude models' inference profiles and the other models that answered a probe through ConverseStream, "Protocols and providers"), names a model's protocol where models.dev cannot (`bedrock`'s Claude models speak `anthropic-messages`, its others `bedrock-converse`), and pins a derived field the vendor's endpoint differs on (`codex`'s `context_window` is the ChatGPT backend's 272000, where models.dev lists the API's 1050000). It leaves out every model models.dev marks `status = "deprecated"`, in every package. A table entry for a model it leaves out as deprecated is skipped with a note, and an entry for an id models.dev does not list fails the run. It applies `providers/models-corrections.toml` last: each entry names a package, a model and the fields it overrides, with the vendor page that says so and the models.dev pull request that fixes the same data upstream. An entry exists only while models.dev is wrong, and the run that finds models.dev agreeing with it deletes it. A rerun on an unchanged models.dev changes nothing. A scheduled workflow runs it every night and opens a pull request when a committed file changes (`docs/ci.md`); no other CI job fetches. A test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
+
+This generated list is each package's fallback. A package whose vendor has a listing endpoint also lists its models live ("Model discovery").
 
 Fiber never guesses a flag from a URL or a provider name. A flag the vendor
 needs is declared, or it is not set.
@@ -799,6 +812,24 @@ fills it, and the declared variable when one exists.
 - Tool-call deltas from `gpt-6-luna` and from OpenRouter with
   `z-ai/glm-5.3-flash` carry `index`. OpenRouter adds
   `: OPENROUTER PROCESSING` comment lines to the stream.
+- On Databricks, `gemini-4-argon` rejects `reasoning_effort` with a 400
+  while `gemini-3-8-flash` accepts it (`research/databricks-gateway-probe`).
+- On Databricks, open-weight chat services reject `max_completion_tokens`
+  with a 400 and take `max_tokens`, while the GPT and Gemini services on
+  the same route take `max_completion_tokens`
+  (`research/databricks-gateway-probe`).
+- A gateway serving Gemini returns a tool call's `extra_content` (such as
+  `extra_content.google.thought_signature`) on the call; the last delta
+  carrying one wins. Fiber decodes each such call with its carrier
+  immediately before it, an empty-text `Reasoning` holding the verbatim
+  `{"extra_content": ...}`, the calls in stream order. Under
+  `compat.gemini` a bare `{"extra_content": ...}` carrier waits for its own
+  model's next tool call and replays back byte-identical on that call only,
+  in conversation order; a user turn, a tool result or a foreign-model call
+  clears it, a trailing carrier is dropped, and without the flag no
+  `extra_content` is ever sent. A wider object is no carrier: it merges
+  into the assistant message as before, and a foreign model's carrier never
+  merges.
 
 Every protocol reports `input` without cache reads and writes, as
 `docs/events.md` (`tokens`) defines it. Where a vendor's input figure includes
@@ -828,7 +859,16 @@ models work only through its Anthropic route, because its default route rejects
 support the Responses API get `openai-responses`, and the rest get
 `openai-completions`. It also sends one custom header on every request. A
 `gemini-` service, or one whose catalog row names `GEMINI_ENTERPRISE`,
-carries `compat.gemini` on the protocol already chosen. All of that is data.
+carries `compat.gemini` on the protocol already chosen. A service whose
+catalog row's `provider_type` is neither `OPENAI` nor `GEMINI_ENTERPRISE`
+carries `compat.max_tokens`, so its output limit goes in `max_tokens`.
+Two Claude rows differ per model, as probed through the gateway: the
+`claude-sonnet-4-5` rows carry no `deferred_tools`, because the gateway
+rejects their deferred load; and `claude-opus-4-1` carries
+`compat.no_strict`, because the gateway rejects the `strict` key on it,
+even as `false`, so its tools are sent with no `strict` key at all. The
+returned list holds one entry per service, sorted by id. All of that is
+data.
 
 ### Model discovery
 
@@ -853,8 +893,8 @@ runs in the background and never holds a list back. The generator leaves out ids
   so the key goes only to a host the person set.
 - **The model picker** refreshes, in the background, any provider whose list
   is older than `model_lists.refresh_after` or whose extension source is newer than the cached copy, and updates the list when the result
-  arrives. Its refresh button refreshes every provider with a credential,
-  whatever the age of its list.
+  arrives. Its refresh button refreshes every provider with a credential, and the
+  models.dev catalog, whatever the age of each.
 
 Displayed lists filter out providers without credential presence on every
 read, including cached reads, before grouping missing host settings. Logging
@@ -874,10 +914,57 @@ A refresh never changes the tool definitions a session has sent: an agent sees
 a new list only through a tool result (`docs/prompt-cache.md`).
 
 The function can ask the vendor's own listing endpoint, read a file, or look up
-metadata anywhere, models.dev included. A vendor with no listing endpoint ships a
-static list instead. A service the vendor lists but backs with no serving
-endpoint is deliberately left out of discovery, and each omission is named once in
-the diagnostic log (see #4337).
+metadata anywhere, models.dev included. A service the vendor lists but backs with no serving
+endpoint is deliberately left out of discovery: its entry keeps its place in
+the returned list and carries `omit_reason` with the provider's reason, and
+Fiber drains each marked entry into one `model_omitted` notice naming the
+model and the reason, the way `model_invalid` names a defective declaration.
+Each omission is also named once in the diagnostic log. The mark applies to
+static provider data too: a static entry carrying `omit_reason` drains the
+same way.
+
+The load reports each `model_invalid` once per reason and each
+`model_omitted` once per marked entry; a later admission on the same registry
+reports only what the registry has not already reported.
+
+#### Which models exist, and what Fiber knows about them
+
+The vendor's own list decides which models a provider offers. Every first-party
+package whose vendor has a listing endpoint declares a `models()` that calls it
+with the person's credential, except OpenRouter, whose models endpoint needs no
+key: `anthropic`, `openai`, `gemini`, `codex`, `muse` and `databricks` use the
+person's credential; `openrouter` sends none, avoiding needless credential
+exposure. It keeps the models that output text and call
+tools, judged by the vendor's fields where it has them and by models.dev
+otherwise. A package whose vendor has no listing endpoint, and every package
+before its first refresh or without a credential, shows its generated list
+(`cargo xtask models-dev` above).
+
+Fiber also fetches models.dev's catalog (`https://models.dev/api.json`), one
+GET with no key, under the same rule as a provider's list: at start or when the
+picker opens, only when the cached copy is older than
+`model_lists.refresh_after`, and on the picker's refresh. Setting
+`model_lists.models_dev = false` stops the fetch, and the generated values stand
+in for it. A failed fetch keeps the cached copy.
+
+Each field of a listed model takes the first of these that names it:
+
+1. The package's table pins and `providers/models-corrections.toml`.
+2. The fetched models.dev catalog.
+3. The generated list.
+
+Fields only Fiber keeps, such as `thinking_levels`, `compat`, `base_url` and
+`web_search`, come from the package's table alone.
+
+A model the vendor lists that none of the three knows is shown and usable,
+marked new (`docs/tui.md`, "The model picker"). It takes cautious values: text
+input only, no thinking levels, a context window of 128000 tokens and an output
+limit of 8192, and no price, so its cost reads as unknown. The mark and the
+cautious values go once any of the three names the model.
+
+A model models.dev marks `status = "deprecated"` is left out of every list. A
+session or setting that names it by id still runs it, and Fiber shows a
+`model_deprecated` notice naming it once per session.
 
 A provider runs Lua in five functions at most: `models()`, `quota()`,
 `credential()`, `sign()` and `cost()`. Only `sign()` runs on the request path,

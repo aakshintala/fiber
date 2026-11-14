@@ -244,7 +244,10 @@ fn delete_question() -> App {
                 .map(|row| row.0)
         })
         .expect("one row");
-    assert_eq!(app.home_click(Spot::Stop(key)), Effect::None);
+    // The delete question opens with the Delete key: the row's ✕
+    // archives an exited row.
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
     assert_eq!(app.top_surface(), Surface::DeleteQuestion);
     app
 }
@@ -636,7 +639,10 @@ fn an_open_delete_question_keeps_right_and_esc_from_going_back() {
                 .map(|row| row.0)
         })
         .expect("the exited row");
-    assert_eq!(app.home_click(Spot::Stop(key)), Effect::None);
+    // The delete question opens with the Delete key: the row's ✕
+    // archives an exited row.
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(key)));
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
     assert_eq!(app.top_surface(), Surface::DeleteQuestion);
     assert_eq!(press(&mut app, "right"), Effect::None);
     assert!(app.session().is_none());
@@ -745,7 +751,7 @@ fn back_keys_while_a_start_waits_are_a_no_op() {
     // picker, as on a launch that names one.
     app.home.launch.model = Some("test/model".to_owned());
     type_text(&mut app, "hi");
-    let Effect::Send(_) = app.on_key(Key::Enter, now()) else {
+    let Effect::SendTracked(_) = app.on_key(Key::Enter, now()) else {
         panic!("Enter starts");
     };
     assert_eq!(press(&mut app, "right"), Effect::None);
@@ -1003,7 +1009,7 @@ fn enter_on_the_delete_question_still_deletes() {
     let mut app = delete_question();
     keyed(&mut app, &[("send", json!("ctrl+s"))]);
     assert_eq!(app.top_surface(), Surface::DeleteQuestion);
-    assert!(matches!(press(&mut app, "enter"), Effect::Send(_)));
+    assert!(matches!(press(&mut app, "enter"), Effect::SendTracked(_)));
 }
 
 #[test]
@@ -1261,7 +1267,8 @@ fn the_key_map_scrolls_by_binding_and_searches() {
     // The focus moves by binding; the scroll follows whole bindings.
     assert_eq!(app.keymap_top(), Some(0));
     app.on_key(Key::Up, now());
-    assert_eq!(app.keymap_top(), Some(0));
+    let total_bindings = app.keymap().expect("open").visible(app.keys()).len();
+    assert_eq!(app.keymap().expect("open").focus(), total_bindings - 1);
     app.on_key(Key::Down, now());
     assert_eq!(app.keymap_top(), Some(0));
     // A page moves by the bindings that fit less one: the smaller
@@ -1269,22 +1276,22 @@ fn the_key_map_scrolls_by_binding_and_searches() {
     // one row further down.
     app.on_key(Key::PageDown, now());
     let map = app.keymap().expect("open");
-    assert_eq!((map.focus(), map.top()), (2, 1));
+    assert_eq!((map.focus(), map.top()), (1, 0));
     app.on_key(Key::PageUp, now());
     let map = app.keymap().expect("open");
-    assert_eq!((map.focus(), map.top()), (1, 1));
+    assert_eq!((map.focus(), map.top()), (0, 0));
     app.on_key(Key::PageUp, now());
     assert_eq!(app.keymap_top(), Some(0));
-    // Down past the end holds on the last binding.
+    // Down past the end wraps to the first binding.
     for _ in 0..80 {
         app.on_key(Key::Down, now());
     }
     let map = app.keymap().expect("open");
     let total = map.visible(app.keys()).len();
-    assert_eq!(map.focus(), total - 1);
+    assert_eq!(map.focus(), 80 % total);
     let last = app.keymap_top();
     app.on_key(Key::Down, now());
-    assert_eq!(app.keymap_top(), last);
+    assert_ne!(app.keymap_top(), last);
     // Typing narrows the rows to the query; the draft keeps nothing.
     app.on_key(Key::Esc, now());
     app.on_key(Key::F1, now());
@@ -1903,5 +1910,134 @@ fn the_default_key_methods_bind_no_key() {
     assert_eq!(
         defaulted.run_key(&ctx, "home", false),
         KeyOutcome::NotHandled
+    );
+}
+
+/// A renderer counting focus runs with the session each saw.
+#[derive(Debug, Default)]
+struct Focused {
+    seen: RefCell<Vec<Option<String>>>,
+    pending: RefCell<Vec<(String, String)>>,
+}
+
+impl Renderer for Focused {
+    fn name(&self) -> &str {
+        "focused"
+    }
+
+    fn fills(&self, _slot: &str) -> bool {
+        false
+    }
+
+    fn on_focus(&self, ctx: &SessionCtx) {
+        self.seen
+            .borrow_mut()
+            .push(ctx.session_id.as_ref().map(|id| id.0.clone()));
+    }
+
+    fn take_pending(&self) -> Vec<(String, String)> {
+        std::mem::take(&mut *self.pending.borrow_mut())
+    }
+
+    fn render(
+        &self,
+        _ctx: &SessionCtx,
+        _slot: &str,
+        _input: &RendererInput<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&RendererInput<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> Decision {
+        Decision::NotForSession {
+            extension: String::new(),
+            tui_version: String::new(),
+            half: SessionVersion::Unseen,
+        }
+    }
+}
+
+/// An attached app with `focused` installed for focus counting.
+fn focused_app(focused: &Rc<Focused>) -> App {
+    let mut app = homed(80, 24);
+    app.install_renderer(focused.clone());
+    app
+}
+
+#[test]
+fn focus_attach_fires_once_with_the_session() {
+    let focused = Rc::new(Focused::default());
+    let mut app = focused_app(&focused);
+    // `docs/tui.md`, "Input and focus": the session on screen fires once, carrying its id.
+    let session = app.session().cloned();
+    app.fire_focus_change(session);
+    assert_eq!(*focused.seen.borrow(), vec![Some(SESSION.to_owned())]);
+}
+
+#[test]
+fn focus_home_fires_once_with_no_session() {
+    let focused = Rc::new(Focused::default());
+    let mut app = focused_app(&focused);
+    // Home fires once with the key omitted: no previous session's
+    // identity is reused.
+    app.fire_focus_change(None);
+    assert_eq!(*focused.seen.borrow(), vec![None]);
+}
+
+#[test]
+fn focus_switch_fires_once_with_the_new_session() {
+    let focused = Rc::new(Focused::default());
+    let mut app = focused_app(&focused);
+    let other = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    // `docs/tui.md`, "Input and focus": a switch fires once, with the session on screen now.
+    app.fire_focus_change(Some(other));
+    assert_eq!(
+        *focused.seen.borrow(),
+        vec![Some("s_bbbbbbbbbbbbbbbb".to_owned())]
+    );
+}
+
+#[test]
+fn focus_drains_failure_notices_to_the_screen() {
+    let focused = Rc::new(Focused::default());
+    let mut app = focused_app(&focused);
+    focused
+        .pending
+        .borrow_mut()
+        .push(("hook_failed".into(), "focus broke".to_owned()));
+    focused
+        .pending
+        .borrow_mut()
+        .push(("extension_failed".into(), "focus timed out".to_owned()));
+    app.fire_focus_change(app.session().cloned());
+    // The run queued both failure kinds, and neither is dropped.
+    assert_eq!(app.notices().len(), 2);
+    assert_eq!(app.notice(), Some("focus timed out"));
+}
+
+#[test]
+fn kitty_dispatch_reaches_both_the_kitty_and_fallback_bindings() {
+    let canned = Keyed::canned();
+    canned.run_handled.set(true);
+    let mut app = keyed_app(&canned);
+    // The kitty-protocol bytes and the fallback key each parse to one
+    // stroke, and each stroke reaches the fake's `run` binding: the
+    // fixture binds both, so every action keeps a key on any terminal.
+    for bytes in [b"\x1b[13;2u".as_slice(), b"\r".as_slice()] {
+        let mut strokes = Vec::new();
+        for event in crate::keys::Parser::default().feed(bytes) {
+            if let crate::keys::Event::Stroke(stroke) = event {
+                strokes.push(stroke);
+            }
+        }
+        assert_eq!(strokes.len(), 1, "{bytes:?}");
+        assert_eq!(app.on_press(strokes.pop().unwrap(), now()), Effect::None);
+    }
+    // `docs/tui.md`, "Keys": the kitty binding dispatches once detection
+    // finishes, and its fallback dispatches without the protocol.
+    assert_eq!(
+        *canned.runs.borrow(),
+        vec![
+            ("shift+enter".to_owned(), false),
+            ("enter".to_owned(), false)
+        ]
     );
 }

@@ -52,7 +52,7 @@ the hub checked them. Other `session_held` refusals omit it (`docs/events.md`,
 
 ## Where a code comes from
 
-Each library crate has its own error enum (`docs/code-quality.md`, "Errors").
+Each library crate that has failures to report has its own error enum (`docs/code-quality.md`, "Errors").
 The crate that defines the enum also maps each case to a code, in a match with
 no wildcard arm, so a new case does not compile until it has one. The codes
 themselves are data in `contract`: names and nothing else, because `contract`
@@ -100,7 +100,7 @@ asked for the session.
 |---|---|---|
 | `usage` | the invocation or its environment is wrong: a bad flag, no prompt with stdin on a terminal, `fiber` without a tty, an empty or relative `FIBER_HOME`, `git` is not installed, `fiber ask --worktree` outside a git repository, or an unknown `--hub` name | 2 |
 | `config_invalid` | invalid JSON, a value of the wrong type (except `providers.databricks.request_tags`, whose invalid value produces one nonfatal `config_invalid` notice and uses the default header), one extension key set under both its full and short name in a configuration or script file (`docs/configuration.md`; `docs/model-routing.md`, "The scripted provider"), or an MCP server marked `required` that declares both `command` and `url` or whose `url` carries a user name or password, or `hub.default` names a missing entry or a stored hub address is invalid | 1 |
-| `io_failed` | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path; or Fiber could not install its signal handlers, and the message starts `signals:`; or the terminal could not start its input reader, and the message starts `terminal:` | 1 |
+| `io_failed` | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path; or Fiber could not install its signal handlers, and the message starts `signals:`; or the terminal could not start its input reader, and the message starts `terminal:`; or the terminal could not send an image, draw the screen, draw the logo, or take the terminal back, and the message starts `terminal:` | 1 |
 | `log_corrupt` | a log line that cannot be encoded, or one read back that does not parse | 1 |
 | `no_model` | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id (`docs/model-routing.md`, "Naming a model") | 1 |
 | `model_ambiguous` | a bare model id matches models of two or more installed providers; the message lists every match; through the session's bare-id resolution only switched-on providers count and only switched-on matches are listed (`docs/model-routing.md`, "Naming a model") | 1 |
@@ -185,8 +185,8 @@ The Retried column is the default. A response header `x-should-retry: true`
 or `false` overrides it for that response (`docs/model-routing.md`, "When a
 model call fails"). It never overrides `quota_exceeded`, `unknown_stop_reason` or `paused_too_long`, which are never retried.
 
-A wait longer than 60 seconds fails at once as `rate_limited` with
-`retry_after_ms` set, so a person or a caller can decide.
+A wait longer than `retry.max_delay_ms` (60 seconds by default) fails at once
+as `rate_limited` with `retry_after_ms` set, so a person or a caller can decide.
 
 ### Recognising a context overflow
 
@@ -211,9 +211,13 @@ the exception.
 
 ### Recognising a quota or billing error
 
-`quota_exceeded` is matched only on the shapes vendors document
+`quota_exceeded` matches the documented shapes
 (`research/provider-errors/quota.md`, one fixture each in
-`research/provider-errors/documented/`):
+`research/provider-errors/documented/`), and any other HTTP 402 maps to `quota_exceeded`, except an OpenRouter
+in-flight-budget 402 with a `Retry-After` in seconds, which remains
+`rate_limited`: HTTP 402 means Payment Required, with no other meaning outside
+that known retryable exception.
+The documented shapes are:
 
 - Anthropic: HTTP 402 `billing_error`; HTTP 429 `rate_limit_error` with
   `details.error_code` `enforced_spend_limit_reached` and no `retry-after`;
@@ -343,14 +347,14 @@ the lines that carry it.
 | `fetch_failed` | exit, driver command (`rewind`) | an install or update could not fetch: git or the network failed; try again later. Not retried automatically (`docs/extensions.md`, "Installing") | — |
 | `flooded` | job | a monitor was suppressed for 30 seconds (`docs/tools.md`) | — |
 | `history_loading` | notice | the terminal is still reading the session's history (`docs/tui.md`, "Notices") | condition |
-| `hook_failed` | tool call, turn, compaction, notice, exit | an extension hook errored or ran out of time, or a TUI extension's renderer errored or returned the wrong shape (one notice for each extension and slot until `/reload`; `docs/tui.md`, "When an extension fails"); or a TUI extension's key binding errored or returned the wrong shape, which counts as not handled with one notice for each extension and key slot until `/reload`; or an approved repository hook's pinned copy could not be made: a `required` one fails the start with exit 1 naming it, any other is skipped with a notice naming it (`docs/extensions.md`, "Hooks") | event |
+| `hook_failed` | tool call, turn, compaction, notice, exit | an extension hook errored or ran out of time, or a TUI extension's renderer errored or returned the wrong shape (one notice for each extension and slot until `/reload`; `docs/tui.md`, "When an extension fails"); or a TUI extension's key binding errored or returned the wrong shape, which counts as not handled with one notice for each extension and key slot until `/reload`; or a TUI extension's command errored or returned the wrong shape, which counts as not handled with one notice for each extension and command until `/reload` (`true`, `false` and `nil` returns are ignored); or an approved repository hook's pinned copy could not be made: a `required` one fails the start with exit 1 naming it, any other is skipped with a notice naming it (`docs/extensions.md`, "Hooks") | event |
 | `hook_unapproved` | exit, driver command (`rewind`) | a repository's required hook is not approved; run `fiber approve` in the repository | — |
 | `http_error` | extension call, tool call | `web_fetch` got a status other than 2xx, was redirected more than 10 times, or was redirected to a URL it cannot parse | — |
 | `hub_version` | notice | the hub runs another Fiber version or commit than this terminal (`docs/tui.md`, "Notices") | event |
 | `indeterminate` | tool call, job, driver command, hub command, notice | Fiber cannot tell whether the call completed, or a `/delete` whose delete got no answer or whose line write failed ambiguously | event |
 | `invalid_arguments` | driver command, hub command, extension call, tool call, notice | the arguments failed the tool's schema or checks, or a driver or hub command's `args` (`docs/invocation.md`, "Driver commands" and "The hub") | event |
 | `invalid_request` | model call, turn | the provider rejected the request for any other reason | — |
-| `io_failed` | exit, driver command, hub command, extension call, notice | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path; or Fiber could not install its signal handlers, and the message starts `signals:`; or the terminal could not start its input reader, and the message starts `terminal:`; or the hub could not start the worker thread for a file search or a device login, or the file search worker stopped; the message says which; or the hub link dropped before a confirmed stop finished, and the message starts `Not deleted: the hub link dropped` | event |
+| `io_failed` | exit, driver command, hub command, extension call, notice | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path; or Fiber could not install its signal handlers, and the message starts `signals:`; or the terminal could not start its input reader, and the message starts `terminal:`; or the terminal could not send an image, draw the screen, draw the logo, or take the terminal back, and the message starts `terminal:`; or the hub could not start the worker thread for a file search or a device login, or the file search worker stopped; the message says which; or the hub link dropped before a confirmed stop finished, and the message starts `Not deleted: the hub link dropped` | event |
 | `keeper_timeout` | job | the session stayed gone for 2 hours after a crash, so its keeper stopped the job (`docs/tools.md`, "The keeper") | — |
 | `log_corrupt` | exit, hub command, driver command (`rewind`), job | a log line that cannot be encoded, or one read back that does not parse | — |
 | `login_url` | notice | an extension's `host.oauth.open` or `host.oauth.show` needs a person to finish a login; the message gives the URL to open, and the code to enter for a device-code login | condition |
@@ -363,7 +367,9 @@ the lines that carry it.
 | `mcp_tool_removed` | tool call | the server has removed the tool | — |
 | `message_refused` | tool call, driver command | a `before_message` hook refused a message: a session message, or a person's or a driver's | — |
 | `model_ambiguous` | exit, driver command (`rewind`), hub command | a bare model id matches models of two or more installed providers; prefix the provider; or a hub `configure` operation sets `model` to an ambiguous bare id | — |
+| `model_deprecated` | notice | a session runs a model models.dev marks deprecated | event |
 | `model_invalid` | notice | a model's `extra_body` names a field Fiber builds, its `web_search` names a type its protocol does not read, it declares no `context_window`, or its `thinking_default` is not among its `thinking_levels`, so the model is left out of the model list (`docs/model-routing.md`, "Extra request body fields", "Hosted web search", "Thinking") | event |
+| `model_omitted` | notice | a provider's discovery found a model and left it out on purpose, so the model is left out of the model list; the message names the model and the provider's reason (for Databricks, that the service has no serving endpoint) | event |
 | `model_not_found` | model call, turn | the provider's error body says it does not know the model | — |
 | `model_unconfigured` | exit, notice, driver command (`rewind`) | a model's base URL names a per-account host whose setting has a value that is not a host, so the model is left out of the model list; the message names the model and the setting. When the setting has no value the terminal raises nothing at launch and the model picker counts the model instead (`docs/tui.md`, "Swapped views"); `fiber models` prints the provider, the setting and the count of models it leaves out (`docs/model-routing.md`, "A per-account host") | event |
 | `models_loading` | notice | the terminal's model list is not read yet (`docs/tui.md`, "Notices") | condition |
@@ -432,7 +438,9 @@ code: its message gives the count and lists each item.
 | `hub_version` | event | the hub runs another Fiber version or commit than this terminal (`docs/tui.md`, "Notices") |
 | `instructions_large` | event | the instruction text passes 10% of the context window, or a subdirectory file is sent as a stub (`docs/system-prompt.md`, "Size") |
 | `login_url` | condition | an extension's `host.oauth.open` or `host.oauth.show` needs a person to finish a login, and a `full` client is attached; the message gives the URL to open, and the code to enter for a device-code login (`docs/extensions.md`, "Host calls") |
+| `model_deprecated` | event | a session runs a model models.dev marks deprecated, which no model list shows; raised once per session, the message names the model (`docs/model-routing.md`, "Which models exist, and what Fiber knows about them") |
 | `model_invalid` | event | a model's `extra_body` names a field Fiber builds, such as `tools`, its `web_search` names a type its protocol does not read, it declares no `context_window`, or its `thinking_default` is not among its `thinking_levels`, so the model is left out of the model list; the message names the model and the field or type (`docs/model-routing.md`, "Extra request body fields", "Hosted web search", "Thinking") |
+| `model_omitted` | event | a provider's discovery found a model and left it out on purpose, so the model is left out of the model list; the message names the model and the provider's reason |
 | `model_unconfigured` | event | a model's base URL names a per-account host whose setting has a value that is not a host, so the model is left out of the model list; the message names the model and the setting. When the setting has no value the terminal raises nothing at launch and the model picker counts the model instead (`docs/tui.md`, "Swapped views"); `fiber models` prints the provider, the setting and the count of models it leaves out (`docs/model-routing.md`, "A per-account host") |
 | `no_jobs_running` | event | `/jobs` ran in an attached session with no running jobs (`docs/tui.md`, "Slash commands") |
 | `no_model` | event | nothing chose the reviewer's model; set `reviewer.model` (`docs/permissions.md`, "How it runs") |

@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/model_picker_view_tests.rs
-assertion_line: 187
 expression: "screen(&app, 80, 24)"
 ---
  Models  /model                                                      Esc returns
@@ -20,6 +19,6 @@ expression: "screen(&app, 80, 24)"
     z2 [chat]
         thinking low [high]
 
-  ↑↓ move · ←→ levels · Enter choose · Tab all · Ctrl+S session · Ctrl+R refre
+  ↑↓ move · ←→ levels · Enter choose · Ctrl+S session · Ctrl+R refresh · Esc c
 
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

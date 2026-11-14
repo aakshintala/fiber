@@ -170,6 +170,8 @@ impl ContextFold {
             | EventKind::DelegateFinished
             | EventKind::JobCompleted
             | EventKind::JobsPendingNotified
+            | EventKind::KeeperStarted
+            | EventKind::KeeperBound
             | EventKind::CommandAccepted
             | EventKind::CommandRejected
             | EventKind::Unknown(_) => {}
@@ -498,6 +500,7 @@ pub(crate) fn frame(
         command: "/context".to_owned(),
         rows,
         list,
+        gutter_mark: ratatui::style::Style::default(),
         below,
         field: None,
         footer: String::new(),

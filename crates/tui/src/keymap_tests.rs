@@ -90,12 +90,15 @@ fn tabs_run_all_then_each_area_in_table_order() {
             .find(|row| row.id == *id)
             .is_some_and(|row| row.area == "Sessions")
     }));
-    assert_eq!(shown(&state, &keys).len(), 9);
+    // Ten Sessions rows (`docs/tui.md`, "Bindings").
+    assert_eq!(shown(&state, &keys).len(), 10);
 }
 
 #[test]
 fn each_area_tab_shows_exactly_its_bindings_in_table_order() {
     let keys = Keyset::default();
+    // Each tab's ids read in the table's row order (`docs/tui.md`,
+    // "Bindings").
     let tabs: [(&str, &[&str]); 5] = [
         (
             "Sessions",
@@ -109,6 +112,7 @@ fn each_area_tab_shows_exactly_its_bindings_in_table_order() {
                 "rail_row_n",
                 "delete_session",
                 "interrupt_turn",
+                "archive_session",
             ],
         ),
         (
@@ -131,6 +135,7 @@ fn each_area_tab_shows_exactly_its_bindings_in_table_order() {
                 "toggle_ledgers",
                 "navigate",
                 "focus_next_prev",
+                "focus_project",
                 "open_focused",
                 "copy_focused",
                 "focus_area",
@@ -294,24 +299,24 @@ fn editing_the_query_resets_focus_and_scroll() {
 }
 
 #[test]
-fn up_and_down_stop_at_the_ends() {
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
+fn up_and_down_wrap_at_the_ends() {
     let keys = Keyset::default();
     let fits = |_: usize| 40;
     let mut state = KeyMap::default();
+    let last = state.visible(&keys).len() - 1;
     state.key(&Key::Up, &keys, &fits);
-    assert_eq!((state.focus(), state.top()), (0, 0));
+    assert_eq!(state.focus(), last);
     state.key(&Key::Down, &keys, &fits);
-    assert_eq!(state.focus(), 1);
-    for _ in 0..100 {
+    assert_eq!(state.focus(), 0);
+    for _ in 0..last {
         state.key(&Key::Down, &keys, &fits);
     }
-    assert_eq!(state.focus(), BINDINGS.len() - 1);
+    assert_eq!(state.focus(), last);
     state.key(&Key::Down, &keys, &fits);
-    assert_eq!(state.focus(), BINDINGS.len() - 1);
-    for _ in 0..100 {
-        state.key(&Key::Up, &keys, &fits);
-    }
-    assert_eq!((state.focus(), state.top()), (0, 0));
+    assert_eq!(state.focus(), 0);
+    state.key(&Key::Up, &keys, &fits);
+    assert_eq!(state.focus(), last);
 }
 
 #[test]

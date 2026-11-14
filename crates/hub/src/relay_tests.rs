@@ -123,8 +123,6 @@ impl support::peer::ProcessRead for TargetRead {
 
 #[test]
 fn a_reroute_uses_a_live_relay_with_a_strictly_newer_epoch() {
-    use std::sync::{Arc, Mutex};
-
     const SID: &str = "s_0123456789abcdef";
     let held = fakes::TempDir::new("epoch");
     let hub = Arc::new(hub(&held));
@@ -209,8 +207,6 @@ fn a_reroute_uses_a_live_relay_with_a_strictly_newer_epoch() {
 
 #[test]
 fn authorization_uses_the_target_session_relay_not_another_session() {
-    use std::sync::{Arc, Mutex};
-
     const A: &str = "s_0123456789abcdef";
     const B: &str = "s_fedcba9876543210";
     let held = fakes::TempDir::new("relay-session-selection");
@@ -970,7 +966,6 @@ fn a_rejected_subscribe_settles_to_nothing() {
 fn a_relay_without_a_thread_is_recovered_with_its_queue_first() {
     use std::io::{BufRead, BufReader};
     use std::net::Shutdown;
-    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     const DEADLINE: Duration = Duration::from_secs(10);
     const SID: &str = "s_0123456789abcdef";
@@ -1252,7 +1247,6 @@ fn muted_drops_each_replay_once() {
 #[test]
 fn a_failed_transfer_leaves_a_dead_relay_that_a_route_recovers() {
     use std::io::{BufRead, BufReader};
-    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     const DEADLINE: Duration = Duration::from_secs(10);
     const SID: &str = "s_0123456789abcdef";
@@ -1363,7 +1357,6 @@ fn a_failed_transfer_leaves_a_dead_relay_that_a_route_recovers() {
 #[test]
 fn a_recovered_command_never_queues_behind_an_older_relay() {
     use std::io::{BufRead, BufReader};
-    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     const DEADLINE: Duration = Duration::from_secs(10);
     const SID: &str = "s_0123456789abcdef";
@@ -1930,7 +1923,6 @@ fn the_acknowledgement_queue_orders_a_retiring_relays_handovers() {
 #[test]
 fn refusing_a_missing_relay_writes_the_rejection_and_releases_its_acknowledgement() {
     use std::io::{BufRead, BufReader};
-    use std::sync::{Arc, Mutex};
     const SID: &str = "s_0123456789abcdef";
 
     let held = fakes::TempDir::new("rn");
@@ -2236,7 +2228,6 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
 #[test]
 fn passing_an_empty_queue_does_not_finish_its_retiring_relay() {
     use std::io::{BufRead, Write};
-    use std::sync::{Arc, Mutex};
     const SID: &str = "s_0123456789abcdef";
     const EPOCH: u64 = 7;
     let held = fakes::TempDir::new("rp");
@@ -2378,7 +2369,6 @@ fn a_relay_end_drops_sent_commands_and_clears_only_unsent_commands() {
 #[test]
 fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
     use std::io::{BufRead, Write};
-    use std::sync::{Arc, Mutex};
     const SID: &str = "s_0123456789abcdef";
     let held = fakes::TempDir::new("rk");
     let hub = Arc::new(hub(&held));
@@ -3924,7 +3914,6 @@ fn clean_exit_reroutes_sent_command_once() {
 /// command is never delivered.
 #[test]
 fn a_rejected_answer_consumes_an_in_flight_write() {
-    use std::sync::{Arc, Mutex};
     let held = fakes::TempDir::new("rwj");
     let hub = hub(&held);
     let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
@@ -4235,7 +4224,6 @@ fn an_indeterminate_answer_from_the_session_is_forwarded_and_never_routed() {
 /// never routed again (`docs/invocation.md:1159`).
 #[test]
 fn a_reply_cut_before_its_line_feed_is_answered_indeterminate_once() {
-    use std::sync::{Arc, Mutex};
     const SID: &str = "s_0123456789abcdef";
     let held = fakes::TempDir::new("rc");
     let dir = held.path().join("h");
@@ -4647,7 +4635,6 @@ fn parse_typed_keeps_the_ack_on_wrong_typed_optionals() {
 #[test]
 fn a_refused_admission_answers_the_pending_command() {
     use std::io::{BufRead, BufReader};
-    use std::sync::{Arc, Mutex};
     const SID: &str = "s_0123456789abcdef";
 
     let held = fakes::TempDir::new("rr");
@@ -4713,7 +4700,6 @@ fn a_refused_admission_answers_the_pending_command() {
 #[test]
 fn a_spawn_failure_answers_the_written_command() {
     use std::io::{BufRead, BufReader};
-    use std::sync::{Arc, Mutex};
     const SID: &str = "s_0123456789abcdef";
 
     fn failing_spawner(
@@ -4786,7 +4772,6 @@ fn a_spawn_failure_answers_the_written_command() {
 /// (`Partial`, answered `indeterminate`, never resumed).
 #[test]
 fn an_attach_write_failure_is_queued_when_nothing_landed_and_partial_once_bytes_did() {
-    use std::sync::{Arc, Mutex};
     const SID: &str = "s_0123456789abcdef";
 
     fn never_spawns(
@@ -5171,4 +5156,896 @@ fn a_failed_change_workspace_start_keeps_the_old_subscription_for_the_retry() {
         Some(other_level),
         "the refusal keeps every other session's level"
     );
+}
+
+/// One envelope line of a gone-workspace fixture log: every line carries
+/// its seq, as a real log does, so positions and seqs agree.
+fn gone_line(sid: &str, seq: u64, kind: &str, payload: Value) -> String {
+    json!({
+        "kind": kind, "seq": seq, "session_id": sid,
+        "ts": 1, "schema_version": 1, "payload": payload,
+    })
+    .to_string()
+}
+
+/// Writes `sid`'s log under `dir`: a `session_started` recording the
+/// missing `workspace`, then each of `last` in order.
+fn write_gone_log(dir: &std::path::Path, sid: &str, workspace: &std::path::Path, last: &[String]) {
+    let session_dir = dir.join("projects").join("-w").join("sessions").join(sid);
+    std::fs::create_dir_all(&session_dir).unwrap();
+    let mut text = format!(
+        "{}\n",
+        gone_line(sid, 0, "session_started", json!({"workspace": workspace}))
+    );
+    for line in last {
+        text.push_str(line);
+        text.push('\n');
+    }
+    std::fs::write(session_dir.join("events.jsonl"), text).unwrap();
+}
+
+/// A hub over `dir` whose starter records every resume, on a fake clock.
+fn gone_hub(
+    dir: &std::path::Path,
+    starter: crate::fake::FakeStarter,
+) -> (Arc<Hub>, crate::fake::FakeStarter) {
+    let hub = Arc::new(crate::testkit::hub(
+        dir,
+        Arc::new(starter.clone()),
+        fakes::clock::FakeClock::new(),
+    ));
+    (hub, starter)
+}
+
+/// Routes `stripped` for `sid` on a fresh client socket pair, returning
+/// the reader, a held writer keeping the connection open past the
+/// route, and the relays the route served on.
+fn route_gone(
+    hub: &Arc<Hub>,
+    sid: &str,
+    stripped: Map<String, Value>,
+    id: &str,
+) -> (UnixStream, Arc<Mutex<UnixStream>>, Arc<Mutex<Relays>>) {
+    let (writer, reader) = UnixStream::pair().unwrap();
+    reader.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
+    let writer = Arc::new(Mutex::new(writer));
+    let relays = Arc::new(Mutex::new(Relays::default()));
+    route(
+        &contract::CommandId(id.to_owned()),
+        sid,
+        stripped,
+        hub,
+        &writer,
+        &relays,
+        None,
+        false,
+        None,
+    );
+    (reader, writer, relays)
+}
+
+/// Routes history while the client drains its answer concurrently.
+fn route_gone_while_reading<T>(
+    hub: &Arc<Hub>,
+    sid: &str,
+    stripped: Map<String, Value>,
+    id: &str,
+    read: impl FnOnce(&mut BufReader<UnixStream>) -> T,
+) -> (T, Arc<Mutex<UnixStream>>, Arc<Mutex<Relays>>) {
+    let (writer, reader) = UnixStream::pair().unwrap();
+    reader.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
+    let writer = Arc::new(Mutex::new(writer));
+    let route_writer = Arc::clone(&writer);
+    let relays = Arc::new(Mutex::new(Relays::default()));
+    let route_relays = Arc::clone(&relays);
+    let route_hub = Arc::clone(hub);
+    let route_sid = sid.to_owned();
+    let route_id = id.to_owned();
+
+    std::thread::scope(|scope| {
+        let route = scope.spawn(move || {
+            fakes::within(
+                "history route",
+                Deadline::start().within(fakes::WHOLE_SUBSYSTEM_WITHIN),
+                move || {
+                    route(
+                        &contract::CommandId(route_id),
+                        &route_sid,
+                        stripped,
+                        &route_hub,
+                        &route_writer,
+                        &route_relays,
+                        None,
+                        false,
+                        None,
+                    );
+                },
+            );
+        });
+        let mut lines = BufReader::new(reader);
+        let value = read(&mut lines); // The read timeout names the answer phase; route has its own deadline.
+        route.join().unwrap();
+        (value, writer, relays)
+    })
+}
+
+/// The next line the client reads, parsed.
+fn next_client_line(reader: &mut BufReader<UnixStream>, what: &str) -> Value {
+    let mut text = String::new();
+    reader
+        .read_line(&mut text)
+        .unwrap_or_else(|error| panic!("the client reads {what}: {error}"));
+    serde_json::from_str(text.trim_end()).unwrap_or_else(|error| panic!("{what} parses: {error}"))
+}
+
+#[test]
+fn a_full_subscribe_for_a_gone_workspace_replays_the_fold_with_the_missing_path() {
+    let (held, dir) = crate::testkit::with_run("gone-workspace-replay");
+    let sid = crate::testkit::id(11);
+    // The workspace is never created: a plain folder that cannot be made
+    // again (`docs/invocation.md`, "Lifecycle").
+    let workspace = dir.join("gone-w");
+    write_gone_log(
+        &dir,
+        &sid,
+        &workspace,
+        &[
+            gone_line(&sid, 1, "turn_started", json!({})),
+            gone_line(&sid, 2, "fiber_exited", json!({})),
+        ],
+    );
+    let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
+    let (reader, _writer, relays) = route_gone(
+        &hub,
+        &sid,
+        crate::testkit::args(
+            json!({"id": "c_sub", "command": "subscribe", "args": {"level": "full"}}),
+        ),
+        "c_sub",
+    );
+    let mut lines = BufReader::new(reader.try_clone().unwrap());
+    let accepted = next_client_line(&mut lines, "the accept");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    assert_eq!(accepted["payload"]["command_id"], "c_sub", "{accepted}");
+    assert_eq!(accepted["payload"]["result"]["last_seq"], 2, "{accepted}");
+    assert_eq!(
+        accepted["payload"]["result"]["workspace_gone"],
+        workspace.display().to_string(),
+        "{accepted}"
+    );
+    let mut seqs = Vec::new();
+    let mut kinds = Vec::new();
+    for _ in 0..3 {
+        let line = next_client_line(&mut lines, "the fold");
+        assert_eq!(line["session_id"], sid, "{line}");
+        seqs.push(line["seq"].as_u64().unwrap());
+        kinds.push(line["kind"].as_str().unwrap().to_owned());
+    }
+    // History replay order is promised by `docs/invocation.md`, "What each command does".
+    assert_eq!(seqs, [0, 1, 2], "the fold runs first through last in order");
+    assert_eq!(kinds, ["session_started", "turn_started", "fiber_exited"]);
+    // Nothing resumes the session: no process starts, and the hub log
+    // never holds the resumed line.
+    assert!(starter.resumed().is_empty(), "no process starts");
+    let hub_log = std::fs::read_to_string(dir.join("logs").join("hub.log")).unwrap_or_default();
+    assert!(!hub_log.contains("session_resumed"), "{hub_log}");
+    assert!(!dir.join("run").join(&sid).exists(), "no socket binds");
+    // The fold ends the stream: no live tail follows it. The preloaded
+    // bytes all arrived above, and nothing else can write to this
+    // connection, so a nonblocking read proves the silence without
+    // waiting, as `assert_no_more` does.
+    drop(lines);
+    reader.set_nonblocking(true).unwrap();
+    let mut tail_reader = BufReader::new(reader.try_clone().unwrap());
+    let mut tail = String::new();
+    match tail_reader.read_line(&mut tail) {
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Ok(0) => {}
+        other => panic!("the tail stays silent: {other:?}"),
+    }
+    drop(relays);
+    drop(held);
+}
+
+#[test]
+fn a_summary_subscribe_for_a_gone_workspace_stays_refused() {
+    // A `summary` subscribe is every other command: refused `io_failed`
+    // with the missing path, never replayed.
+    let (held, dir) = crate::testkit::with_run("gone-workspace-summary");
+    let sid = crate::testkit::id(12);
+    let workspace = dir.join("gone-w");
+    write_gone_log(
+        &dir,
+        &sid,
+        &workspace,
+        &[gone_line(&sid, 1, "fiber_exited", json!({}))],
+    );
+    let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
+    let (reader, _writer, relays) = route_gone(
+        &hub,
+        &sid,
+        crate::testkit::args(
+            json!({"id": "c_sum", "command": "subscribe", "args": {"level": "summary"}}),
+        ),
+        "c_sum",
+    );
+    let mut lines = BufReader::new(reader);
+    let rejected = next_client_line(&mut lines, "the rejection");
+    assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+    assert_eq!(rejected["payload"]["code"], "io_failed", "{rejected}");
+    assert_eq!(rejected["payload"]["command_id"], "c_sum", "{rejected}");
+    assert_eq!(
+        rejected["payload"]["message"],
+        format!(
+            "Session {sid} could not resume: {} no longer exists",
+            workspace.display()
+        ),
+        "{rejected}"
+    );
+    assert!(starter.resumed().is_empty(), "no process starts");
+    drop(relays);
+    drop(held);
+}
+
+/// A child log continuing `parent` through seq 1, both exited with gone
+/// workspaces.
+fn write_forked_logs(dir: &std::path::Path, parent: &str, sid: &str, workspace: &std::path::Path) {
+    let sessions = dir.join("projects").join("-w").join("sessions");
+    let write = |id: &str, first: String, last: &[String]| {
+        std::fs::create_dir_all(sessions.join(id)).unwrap();
+        let mut text = format!("{first}\n");
+        for line in last {
+            text.push_str(line);
+            text.push('\n');
+        }
+        std::fs::write(sessions.join(id).join("events.jsonl"), text).unwrap();
+    };
+    write(
+        parent,
+        gone_line(
+            parent,
+            0,
+            "session_started",
+            json!({"workspace": workspace}),
+        ),
+        &[
+            gone_line(parent, 1, "turn_started", json!({})),
+            gone_line(parent, 2, "turn_completed", json!({})),
+            gone_line(parent, 3, "fiber_exited", json!({})),
+        ],
+    );
+    write(
+        sid,
+        gone_line(
+            sid,
+            0,
+            "session_started",
+            json!({"workspace": workspace, "forked_from": {"session_id": parent, "seq": 1}}),
+        ),
+        &[
+            gone_line(sid, 1, "turn_started", json!({})),
+            gone_line(sid, 2, "fiber_exited", json!({})),
+        ],
+    );
+}
+
+#[test]
+fn a_gone_workspace_history_pages_its_own_log_and_its_forked_from_parent() {
+    let (held, dir) = crate::testkit::with_run("gone-workspace-history");
+    let parent = crate::testkit::id(21);
+    let sid = crate::testkit::id(22);
+    let workspace = dir.join("gone-w");
+    write_forked_logs(&dir, &parent, &sid, &workspace);
+    let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
+    let history = |args: Value, id: &str| {
+        let (answer, _writer, relays) = route_gone_while_reading(
+            &hub,
+            &sid,
+            crate::testkit::args(json!({"id": id, "command": "history", "args": args})),
+            id,
+            |lines| next_client_line(lines, "the history answer"),
+        );
+        drop(relays);
+        answer
+    };
+    // No args: the own log's last lines, at most the page.
+    let answered = history(json!({}), "c_hist");
+    assert_eq!(answered["kind"], "command_accepted", "{answered}");
+    assert_eq!(answered["payload"]["command_id"], "c_hist", "{answered}");
+    let seqs: Vec<u64> = answered["payload"]["result"]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["seq"].as_u64().unwrap())
+        .collect();
+    assert_eq!(seqs, [0, 1, 2], "{answered}");
+    // A window of the own log.
+    let answered = history(json!({"from_seq": 1, "to_seq": 1}), "c_win");
+    let seqs: Vec<u64> = answered["payload"]["result"]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["seq"].as_u64().unwrap())
+        .collect();
+    assert_eq!(seqs, [1], "{answered}");
+    // The parent's lines the child continues: the chain walk holds the
+    // parent at seq 1, so the count is 2.
+    let answered = history(json!({"session_id": parent, "from_seq": 0}), "c_par");
+    assert_eq!(answered["kind"], "command_accepted", "{answered}");
+    let seqs: Vec<u64> = answered["payload"]["result"]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["seq"].as_u64().unwrap())
+        .collect();
+    assert_eq!(seqs, [0, 1], "{answered}");
+    assert!(
+        answered["payload"]["result"]["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|line| line["session_id"] == parent),
+        "{answered}"
+    );
+    // The refusal edges read exactly as the session's: past the latest
+    // line, a reversed window, an id outside the chain, and a malformed
+    // id, all `invalid_arguments`.
+    let outside = format!(
+        "Session {} is neither this session nor one it continues.",
+        crate::testkit::id(23)
+    );
+    for (args, id, message) in [
+        (
+            json!({"from_seq": 99}),
+            "c_past",
+            "`from_seq` is past the latest line.".to_owned(),
+        ),
+        (
+            json!({"from_seq": 2, "to_seq": 1}),
+            "c_reversed",
+            "`to_seq` is before `from_seq`.".to_owned(),
+        ),
+        (
+            json!({"session_id": crate::testkit::id(23)}),
+            "c_outside",
+            outside,
+        ),
+        (
+            json!({"session_id": "nope"}),
+            "c_bad",
+            "nope is not a session id: one is `s_` followed by 16 lowercase hex digits.".to_owned(),
+        ),
+    ] {
+        let refused = history(args, id);
+        assert_eq!(refused["kind"], "command_rejected", "{refused}");
+        assert_eq!(refused["payload"]["code"], "invalid_arguments", "{refused}");
+        assert_eq!(refused["payload"]["command_id"], id, "{refused}");
+        assert_eq!(
+            refused["payload"]["message"].as_str(),
+            Some(message.as_str()),
+            "{refused}"
+        );
+    }
+    assert!(starter.resumed().is_empty(), "no process starts");
+    drop(held);
+}
+
+#[test]
+fn a_history_for_a_gone_workspace_with_no_parent_log_is_unfit() {
+    // The child names a parent whose log is gone: the chain cannot be
+    // resolved, refused as the session refuses it.
+    let (held, dir) = crate::testkit::with_run("gone-workspace-no-parent");
+    let parent = crate::testkit::id(31);
+    let sid = crate::testkit::id(32);
+    let workspace = dir.join("gone-w");
+    write_forked_logs(&dir, &parent, &sid, &workspace);
+    std::fs::remove_dir_all(
+        dir.join("projects")
+            .join("-w")
+            .join("sessions")
+            .join(&parent),
+    )
+    .unwrap();
+    let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
+    let (refused, _writer, relays) = route_gone_while_reading(
+        &hub,
+        &sid,
+        crate::testkit::args(
+            json!({"id": "c_par", "command": "history", "args": {"session_id": parent}}),
+        ),
+        "c_par",
+        |lines| next_client_line(lines, "the refusal"),
+    );
+    assert_eq!(refused["kind"], "command_rejected", "{refused}");
+    assert_eq!(refused["payload"]["code"], "invalid_arguments", "{refused}");
+    assert_eq!(
+        refused["payload"]["message"], "The arguments do not fit this command.",
+        "{refused}"
+    );
+    assert!(starter.resumed().is_empty(), "no process starts");
+    drop(relays);
+    drop(held);
+}
+
+/// Routes `stripped` for `sid` on `relays` with `from`, returning the
+/// reader and the held writer: `route_gone` with a pre-populated relay
+/// table. The writer stays held past the route, as in `route_gone`, so
+/// a replay thread the route spawned can drain.
+fn route_gone_on(
+    hub: &Arc<Hub>,
+    sid: &str,
+    stripped: Map<String, Value>,
+    id: &str,
+    relays: &Arc<Mutex<Relays>>,
+    from: Option<u64>,
+) -> (UnixStream, Arc<Mutex<UnixStream>>) {
+    let (writer, reader) = UnixStream::pair().unwrap();
+    reader
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    let writer = Arc::new(Mutex::new(writer));
+    route(
+        &contract::CommandId(id.to_owned()),
+        sid,
+        stripped,
+        hub,
+        &writer,
+        relays,
+        from,
+        false,
+        None,
+    );
+    (reader, writer)
+}
+
+/// Routes `history` for `sid` straight at `replay_history`: route's
+/// readability check is bypassed, so the log's own failures surface.
+fn history_direct(
+    hub: &Arc<Hub>,
+    sid: &str,
+    dir: &std::path::Path,
+    args: Value,
+    id: &str,
+) -> Value {
+    let (writer, reader) = UnixStream::pair().unwrap();
+    reader
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    let writer = Arc::new(Mutex::new(writer));
+    let relays = Arc::new(Mutex::new(Relays::default()));
+    let stripped = crate::testkit::args(json!({"id": id, "command": "history", "args": args}));
+    replay_history(
+        &contract::CommandId(id.to_owned()),
+        sid,
+        &stripped,
+        hub,
+        &writer,
+        &relays,
+        dir,
+    );
+    let mut lines = BufReader::new(reader);
+    let answer = next_client_line(&mut lines, "the history answer");
+    drop(relays);
+    answer
+}
+
+/// A live relay for `session`: its target peer reads what the hub
+/// serves it, and the thread stays up until `stop` fires.
+fn live_entry(
+    relays: &Arc<Mutex<Relays>>,
+    session: &str,
+    epoch: u64,
+) -> (UnixStream, std::sync::mpsc::Sender<()>) {
+    let (writer, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+    let live_thread = std::thread::spawn(move || {
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&stop_rx)
+            .unwrap_or(())
+    });
+    crate::connection::lock(relays).entries.push(Relay {
+        session: session.to_owned(),
+        epoch,
+        writer,
+        kept: Kept::default(),
+        replayed: Replayed::default(),
+        thread: Some(live_thread),
+        retiring: None,
+        target: RelayTarget::Live {
+            pid: support::peer::Pid(42),
+        },
+    });
+    (peer, stop_tx)
+}
+
+#[test]
+fn a_live_relay_keeps_a_gone_workspace_subscribe() {
+    // A relay already serves the session: the `full` subscribe goes to
+    // it, never to the log replay, even with the workspace gone.
+    let (held, dir) = crate::testkit::with_run("gone-workspace-live-relay");
+    let sid = crate::testkit::id(41);
+    let workspace = dir.join("gone-w");
+    write_gone_log(
+        &dir,
+        &sid,
+        &workspace,
+        &[gone_line(&sid, 1, "fiber_exited", json!({}))],
+    );
+    let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
+    let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+    let epoch = crate::connection::lock(&relays).mint();
+    let (peer, stop) = live_entry(&relays, &sid, epoch);
+    let (_reader, _writer) = route_gone_on(
+        &hub,
+        &sid,
+        crate::testkit::args(
+            json!({"id": "c_sub", "command": "subscribe", "args": {"level": "full"}}),
+        ),
+        "c_sub",
+        &relays,
+        None,
+    );
+    let mut text = String::new();
+    BufReader::new(peer).read_line(&mut text).unwrap();
+    let routed: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(routed["id"], "c_sub", "the live relay receives it");
+    assert_eq!(routed["command"], "subscribe");
+    assert!(starter.resumed().is_empty(), "no process starts");
+    stop.send(()).unwrap();
+    crate::connection::lock(&relays).entries[0]
+        .thread
+        .take()
+        .unwrap()
+        .join()
+        .unwrap();
+    drop(relays);
+    drop(held);
+}
+
+#[test]
+fn a_gone_workspace_subscribe_ignores_another_sessions_relay() {
+    // The relay serves another session: the gone session still replays
+    // from its log, and nothing is written into the foreign relay.
+    let (held, dir) = crate::testkit::with_run("gone-workspace-foreign-relay");
+    let sid = crate::testkit::id(42);
+    let other = crate::testkit::id(43);
+    let workspace = dir.join("gone-w");
+    write_gone_log(
+        &dir,
+        &sid,
+        &workspace,
+        &[gone_line(&sid, 1, "fiber_exited", json!({}))],
+    );
+    let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
+    let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+    let epoch = crate::connection::lock(&relays).mint();
+    let (mut peer, stop) = live_entry(&relays, &other, epoch);
+    peer.set_nonblocking(true).unwrap();
+    let (reader, _writer) = route_gone_on(
+        &hub,
+        &sid,
+        crate::testkit::args(
+            json!({"id": "c_sub", "command": "subscribe", "args": {"level": "full"}}),
+        ),
+        "c_sub",
+        &relays,
+        None,
+    );
+    let mut lines = BufReader::new(reader);
+    let accepted = next_client_line(&mut lines, "the accept");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    assert_eq!(
+        accepted["payload"]["result"]["workspace_gone"],
+        workspace.display().to_string(),
+        "{accepted}"
+    );
+    let mut foreign = [0u8; 1];
+    assert!(
+        matches!(std::io::Read::read(&mut peer, &mut foreign), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "nothing is written into the foreign relay"
+    );
+    assert!(starter.resumed().is_empty(), "no process starts");
+    stop.send(()).unwrap();
+    crate::connection::lock(&relays).entries[0]
+        .thread
+        .take()
+        .unwrap()
+        .join()
+        .unwrap();
+    drop(relays);
+    drop(held);
+}
+
+#[test]
+fn a_gone_workspace_subscribe_ignores_a_stale_epoch_relay() {
+    // The relay's epoch is not past the client's: a reconnect from the
+    // epoch, or past it, still replays from the log.
+    let (held, dir) = crate::testkit::with_run("gone-workspace-stale-relay");
+    let sid = crate::testkit::id(44);
+    let workspace = dir.join("gone-w");
+    write_gone_log(
+        &dir,
+        &sid,
+        &workspace,
+        &[gone_line(&sid, 1, "fiber_exited", json!({}))],
+    );
+    let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
+    for past in [false, true] {
+        let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+        let epoch = crate::connection::lock(&relays).mint();
+        let (mut peer, stop) = live_entry(&relays, &sid, epoch);
+        peer.set_nonblocking(true).unwrap();
+        let (reader, _writer) = route_gone_on(
+            &hub,
+            &sid,
+            crate::testkit::args(
+                json!({"id": "c_sub", "command": "subscribe", "args": {"level": "full"}}),
+            ),
+            "c_sub",
+            &relays,
+            Some(if past { epoch.saturating_add(1) } else { epoch }),
+        );
+        let mut lines = BufReader::new(reader);
+        let accepted = next_client_line(&mut lines, "the accept");
+        assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+        assert_eq!(
+            accepted["payload"]["result"]["workspace_gone"],
+            workspace.display().to_string(),
+            "{accepted}"
+        );
+        let mut served = [0u8; 1];
+        assert!(
+            matches!(std::io::Read::read(&mut peer, &mut served), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "nothing is written into the stale relay"
+        );
+        stop.send(()).unwrap();
+        crate::connection::lock(&relays).entries[0]
+            .thread
+            .take()
+            .unwrap()
+            .join()
+            .unwrap();
+        drop(relays);
+    }
+    assert!(starter.resumed().is_empty(), "no process starts");
+    drop(held);
+}
+
+#[test]
+fn a_history_with_a_vanished_own_log_is_session_not_found() {
+    // The own log vanished mid-route: an ancestor query answers
+    // `session_not_found`, not the unfit-chain refusal, with the
+    // replay's sentence.
+    let (held, dir) = crate::testkit::with_run("gone-workspace-vanished-log");
+    let sid = crate::testkit::id(45);
+    let parent = crate::testkit::id(46);
+    std::fs::create_dir_all(dir.join("projects").join("-w").join("sessions").join(&sid)).unwrap();
+    let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
+    let refused = history_direct(
+        &hub,
+        &sid,
+        &dir.join("projects").join("-w").join("sessions").join(&sid),
+        json!({"session_id": parent}),
+        "c_par",
+    );
+    assert_eq!(refused["kind"], "command_rejected", "{refused}");
+    assert_eq!(refused["payload"]["code"], "session_not_found", "{refused}");
+    assert_eq!(
+        refused["payload"]["message"],
+        format!("The log of session `{sid}` cannot be replayed."),
+        "{refused}"
+    );
+    assert!(starter.resumed().is_empty(), "no process starts");
+    drop(held);
+}
+
+#[test]
+fn a_history_for_a_session_with_no_log_is_session_not_found() {
+    // The own log is gone, so its last line cannot be read: the count
+    // fails `session_not_found` with the replay's sentence.
+    let (held, dir) = crate::testkit::with_run("gone-workspace-no-log");
+    let sid = crate::testkit::id(47);
+    std::fs::create_dir_all(dir.join("projects").join("-w").join("sessions").join(&sid)).unwrap();
+    let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
+    let refused = history_direct(
+        &hub,
+        &sid,
+        &dir.join("projects").join("-w").join("sessions").join(&sid),
+        json!({}),
+        "c_hist",
+    );
+    assert_eq!(refused["kind"], "command_rejected", "{refused}");
+    assert_eq!(refused["payload"]["code"], "session_not_found", "{refused}");
+    assert_eq!(
+        refused["payload"]["message"],
+        format!("The log of session `{sid}` cannot be replayed."),
+        "{refused}"
+    );
+    assert!(starter.resumed().is_empty(), "no process starts");
+    drop(held);
+}
+
+#[test]
+fn a_history_with_an_unreadable_tail_is_log_corrupt() {
+    // The log's last line does not parse: the count fails `log_corrupt`
+    // with the replay's sentence.
+    let (held, dir) = crate::testkit::with_run("gone-workspace-corrupt-tail");
+    let sid = crate::testkit::id(48);
+    let workspace = dir.join("gone-w");
+    let session_dir = dir.join("projects").join("-w").join("sessions").join(&sid);
+    std::fs::create_dir_all(&session_dir).unwrap();
+    std::fs::write(
+        session_dir.join("events.jsonl"),
+        format!(
+            "{}\nnot json\n",
+            gone_line(&sid, 0, "session_started", json!({"workspace": workspace})),
+        ),
+    )
+    .unwrap();
+    let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
+    let refused = history_direct(&hub, &sid, &session_dir, json!({}), "c_hist");
+    assert_eq!(refused["kind"], "command_rejected", "{refused}");
+    assert_eq!(refused["payload"]["code"], "log_corrupt", "{refused}");
+    assert_eq!(
+        refused["payload"]["message"],
+        format!("The log of session `{sid}` cannot be replayed."),
+        "{refused}"
+    );
+    assert!(starter.resumed().is_empty(), "no process starts");
+    drop(held);
+}
+
+#[test]
+fn a_history_window_counts_from_and_to_exactly() {
+    // A mid-log window returns exactly its lines: the span binds the
+    // page, so a wider span reads too much and a narrower one too few.
+    let (held, dir) = crate::testkit::with_run("gone-workspace-window");
+    let sid = crate::testkit::id(49);
+    let workspace = dir.join("gone-w");
+    let mut last = Vec::new();
+    for seq in 1..9 {
+        last.push(gone_line(&sid, seq, "turn_started", json!({})));
+    }
+    last.push(gone_line(&sid, 9, "fiber_exited", json!({})));
+    write_gone_log(&dir, &sid, &workspace, &last);
+    let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
+    let (answered, _writer, relays) = route_gone_while_reading(
+        &hub,
+        &sid,
+        crate::testkit::args(
+            json!({"id": "c_win", "command": "history", "args": {"from_seq": 5, "to_seq": 7}}),
+        ),
+        "c_win",
+        |lines| next_client_line(lines, "the history answer"),
+    );
+    assert_eq!(answered["kind"], "command_accepted", "{answered}");
+    let seqs: Vec<u64> = answered["payload"]["result"]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["seq"].as_u64().unwrap())
+        .collect();
+    // `from_seq` and `to_seq` are inclusive (`docs/invocation.md`, "What each command does").
+    assert_eq!(seqs, [5, 6, 7], "{answered}");
+    assert!(starter.resumed().is_empty(), "no process starts");
+    drop(relays);
+    drop(held);
+}
+
+#[test]
+fn a_history_without_from_takes_the_last_page() {
+    // Past the page the window holds the newest page: 300 durable
+    // lines answer 256, ending at the last line.
+    let (held, dir) = crate::testkit::with_run("gone-workspace-last-page");
+    let sid = crate::testkit::id(50);
+    let workspace = dir.join("gone-w");
+    let mut last = Vec::new();
+    for seq in 1..299 {
+        last.push(gone_line(&sid, seq, "turn_started", json!({})));
+    }
+    last.push(gone_line(&sid, 299, "fiber_exited", json!({})));
+    write_gone_log(&dir, &sid, &workspace, &last);
+    let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
+    let page = |args: Value, id: &str| {
+        let (answered, _writer, relays) = route_gone_while_reading(
+            &hub,
+            &sid,
+            crate::testkit::args(json!({"id": id, "command": "history", "args": args})),
+            id,
+            |lines| next_client_line(lines, "the history answer"),
+        );
+        drop(relays);
+        answered
+    };
+    for (args, id) in [(json!({}), "c_hist"), (json!({"to_seq": 300}), "c_to")] {
+        let answered = page(args, id);
+        assert_eq!(answered["kind"], "command_accepted", "{answered}");
+        let seqs: Vec<u64> = answered["payload"]["result"]["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|line| line["seq"].as_u64().unwrap())
+            .collect();
+        let expected: Vec<u64> = (44..=299).collect();
+        // History returns at most 256 lines (`docs/invocation.md`, "What each command does").
+        assert_eq!(seqs, expected, "{id}: the newest page");
+    }
+    assert!(starter.resumed().is_empty(), "no process starts");
+    drop(held);
+}
+
+#[test]
+fn a_history_with_an_unreadable_log_is_log_corrupt() {
+    // The log exists but cannot be opened: the count fails `log_corrupt`,
+    // not `session_not_found`. Replacing the `NotFound` guard with `true`
+    // would answer `session_not_found` here.
+    use std::os::unix::fs::PermissionsExt as _;
+    let (held, dir) = crate::testkit::with_run("gone-workspace-unreadable-log");
+    let sid = crate::testkit::id(51);
+    let workspace = dir.join("gone-w");
+    write_gone_log(
+        &dir,
+        &sid,
+        &workspace,
+        &[gone_line(&sid, 1, "fiber_exited", json!({}))],
+    );
+    let session_dir = dir.join("projects").join("-w").join("sessions").join(&sid);
+    let log = session_dir.join("events.jsonl");
+    std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::File::open(&log).is_ok() {
+        panic!("running as root: root bypasses file modes, so the read cannot fail here");
+    }
+    let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
+    let refused = history_direct(&hub, &sid, &session_dir, json!({}), "c_hist");
+    std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(refused["kind"], "command_rejected", "{refused}");
+    assert_eq!(refused["payload"]["code"], "log_corrupt", "{refused}");
+    assert_eq!(
+        refused["payload"]["message"],
+        format!("The log of session `{sid}` cannot be replayed."),
+        "{refused}"
+    );
+    assert!(starter.resumed().is_empty(), "no process starts");
+    drop(held);
+}
+
+#[test]
+fn a_history_window_ignores_lines_past_to() {
+    // Lines past `to_seq` are never read: a corrupt line beyond the
+    // window still answers the window. Widening the span (`-` to `+`)
+    // would read into it and refuse `invalid_arguments` here.
+    let (held, dir) = crate::testkit::with_run("gone-workspace-past-to");
+    let sid = crate::testkit::id(52);
+    let workspace = dir.join("gone-w");
+    let mut last = Vec::new();
+    for seq in 1..=7 {
+        last.push(gone_line(&sid, seq, "turn_started", json!({})));
+    }
+    last.push("not json".to_owned());
+    last.push(gone_line(&sid, 8, "turn_started", json!({})));
+    last.push(gone_line(&sid, 9, "fiber_exited", json!({})));
+    write_gone_log(&dir, &sid, &workspace, &last);
+    let (hub, starter) = gone_hub(&dir, crate::fake::FakeStarter::bind_and_hold(&dir));
+    let (answered, _writer, relays) = route_gone_while_reading(
+        &hub,
+        &sid,
+        crate::testkit::args(
+            json!({"id": "c_win", "command": "history", "args": {"from_seq": 5, "to_seq": 7}}),
+        ),
+        "c_win",
+        |lines| next_client_line(lines, "the history answer"),
+    );
+    assert_eq!(answered["kind"], "command_accepted", "{answered}");
+    let seqs: Vec<u64> = answered["payload"]["result"]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["seq"].as_u64().unwrap())
+        .collect();
+    // `from_seq` and `to_seq` are inclusive (`docs/invocation.md`, "What each command does").
+    assert_eq!(seqs, [5, 6, 7], "{answered}");
+    assert!(starter.resumed().is_empty(), "no process starts");
+    drop(relays);
+    drop(held);
 }

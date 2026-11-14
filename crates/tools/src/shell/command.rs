@@ -305,6 +305,7 @@ pub(super) fn finish_spawned(
     drive: Drive,
 ) -> Result<Ran, std::io::Error> {
     let pgid = spawned.pgid();
+    let identity = spawned.identity();
     let shared = Arc::new(Shared::default());
     // The marker observation wakes the drive loop parked in
     // `drive_confined`: the wake bumps under the same lock the park
@@ -372,6 +373,7 @@ pub(super) fn finish_spawned(
             | MovePolicy::Monitor => None,
         },
         members: None,
+        identity,
         pgid,
         listing: listing.map(Box::new),
         hosted,
@@ -700,7 +702,7 @@ fn build_inner(
         // program only borrowed, never moved or freed. A failure writes the
         // raw errno to the sentinel, without formatting or allocation, and
         // returns it, so spawn aborts and the command never runs unconfined.
-        // See docs/code-quality.md, "Unsafe".
+        // See `docs/code-quality.md`, "`unsafe`".
         unsafe {
             use std::os::unix::process::CommandExt as _;
             cmd.pre_exec(move || {

@@ -48,6 +48,7 @@ jobs:
       base: ${{ steps.base.outputs.base }}
       mode: ${{ steps.select.outputs.mode }}
       packages: ${{ steps.select.outputs.packages }}
+      package_specs: ${{ steps.select.outputs.package_specs }}
       jobs: ${{ steps.plan.outputs.jobs }}
       shards: ${{ steps.plan.outputs.shards }}
       shard_total: ${{ steps.plan.outputs.shard_total }}
@@ -147,19 +148,17 @@ jobs:
           PACKAGES: ${{ steps.select.outputs.packages }}
           DRAFT: ${{ github.event.pull_request.draft || 'false' }}
           BUG: ${{ steps.ticket.outputs.bug || 'false' }}
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
           BASE: ${{ steps.base.outputs.base }}
-          # Mutants run on a ready pull request and on a draft labelled `mutants`,
-          # never on the backstop.
-          MUTANTS: ${{ github.event_name == 'pull_request' && (!github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'mutants')) }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           CURRENT_RUN_ID: ${{ github.run_id }}
         run: |
-          # The shard count follows the diff's mutant count (docs/ci.md, "On every pull request that changes code").
-          # Every code pull request lists the diff's mutants, draft or not, so a
-          # lane reads them before CI runs its shards; only `MUTANTS` starts shards.
+          # Count the diff's mutants; xtask decides whether to run them and
+          # whether a completed same-head run can be reused.
           count=0
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ "$MODE" != docs ]; then
             git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"
@@ -170,82 +169,38 @@ jobs:
               cat "$RUNNER_TEMP/mutants.txt"
               echo '```'
             } >>"$GITHUB_STEP_SUMMARY"
-            # A lane on the command line reads the log: `gh run view` prints no summaries.
             cat "$RUNNER_TEMP/mutants.txt"
-            listed=$(wc -l <"$RUNNER_TEMP/mutants.txt")
-            if [ "$MUTANTS" = true ]; then
-              count=$listed
-            fi
+            count=$(wc -l <"$RUNNER_TEMP/mutants.txt")
           fi
-          if [ "$MUTANTS" != true ] && [ "${listed:-0}" -gt 0 ]; then
-            echo "mutants in the diff: $listed (not run: a draft without the \`mutants\` label)"
-          else
-            echo "mutants in the diff: $count"
-          fi
-          # Same-head reuse (docs/ci.md, "On every pull request that changes code"): a ready run on
-          # a head whose mutants already passed reuses the pass. Every error
-          # below keeps reuse off and starts the shards.
-          reuse=false
-          if [ "$count" -gt 0 ]; then
-            head_sha="$HEAD_SHA"
-            head_ref="$HEAD_REF"
-            pr_number="$PR_NUMBER"
-            # Any lookup failure starts the shards (docs/ci.md, "On every
-            # pull request that changes code"): a failed jobs lookup must
-            # not let a later matching candidate reuse the pass.
-            lookup_failed=false
-            if runs_json=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=pull_request&status=completed&branch=$head_ref&per_page=20" 2>/dev/null); then
-              echo "$runs_json" >"$RUNNER_TEMP/runs.json"
-              echo '{}' >"$RUNNER_TEMP/jobs.json"
-              ids=$(echo "$runs_json" | jq -r '.workflow_runs[]?.id' 2>/dev/null || true)
-              for id in $ids; do
-                # `gh api --paginate` prints one JSON object per page, so
-                # slurp every page into one jobs array before `--argjson`
-                # (docs/ci.md, "On every pull request that changes code"):
-                # a same-head pass with more than 30 jobs still reuses.
-                if jobs_pages=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" --paginate 2>/dev/null) \
-                  && [ -n "$jobs_pages" ] \
-                  && jobs_json=$(printf '%s' "$jobs_pages" | jq -c -s 'map(.jobs // []) | add // []' 2>/dev/null); then
-                  tmp="$RUNNER_TEMP/jobs-$id.json"
-                  if jq --arg id "$id" --argjson jobs "$jobs_json" '. + {($id): $jobs}' "$RUNNER_TEMP/jobs.json" >"$tmp" 2>/dev/null; then
-                    mv "$tmp" "$RUNNER_TEMP/jobs.json"
-                  else
-                    rm -f "$tmp"
-                    lookup_failed=true
+          echo "mutants in the diff: $count"
+
+          lookup_ok=true
+          args=(--base "$BASE" --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME"
+            --draft "$DRAFT" --bug "$BUG" --labels "$LABELS" --mutant-count "$count")
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            runs_file="$RUNNER_TEMP/runs.json"
+            jobs_dir="$RUNNER_TEMP/jobs"
+            mkdir -p "$jobs_dir"
+            if gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=pull_request&status=completed&branch=$HEAD_REF&per_page=20" >"$runs_file"; then
+              if ids=$(cargo xtask plan reuse-candidates --runs "$runs_file"); then
+                while IFS= read -r id; do
+                  [ -n "$id" ] || continue
+                  if ! gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" >"$jobs_dir/$id.json"; then
+                    lookup_ok=false
                   fi
-                else
-                  lookup_failed=true
-                fi
-              done
-              if [ "$lookup_failed" != true ]; then
-                if reuse_out=$(cargo xtask mutants-reuse --pr "$pr_number" --head "$head_sha" --base "$BASE" --mutant-count "$count" --run-id "$CURRENT_RUN_ID" --draft "$DRAFT" --runs "$RUNNER_TEMP/runs.json" --jobs "$RUNNER_TEMP/jobs.json" 2>/dev/null); then
-                  reuse=false
-                  matched_run_id=""
-                  matched_pr_head=""
-                  if [ "$(printf '%s' "$reuse_out" | sed -n '1p')" = "reuse=true" ]; then
-                    matched_run_id=$(printf '%s' "$reuse_out" | sed -n 's/^matched_run_id=//p')
-                    matched_pr_head=$(printf '%s' "$reuse_out" | sed -n 's/^matched_pr_head=//p')
-                    if [ -n "$matched_run_id" ] && [ -n "$matched_pr_head" ]; then
-                      reuse=true
-                    fi
-                  fi
-                fi
+                done <<<"$ids"
               else
-                echo "mutants reuse: jobs lookup failed; starting shards"
+                lookup_ok=false
               fi
+            else
+              lookup_ok=false
+              : >"$runs_file"
             fi
-          if [ "$reuse" = true ]; then
-            echo "mutants reuse: reuse=$reuse matched_run_id=$matched_run_id matched_pr_head=$matched_pr_head (head $head_sha, base $BASE)"
-          else
-            echo "mutants reuse: reuse=$reuse (head $head_sha, base $BASE)"
+            args+=(--head "$HEAD_SHA" --run-id "$CURRENT_RUN_ID" --pr "$PR_NUMBER"
+              --runs "$runs_file" --jobs "$jobs_dir")
           fi
-          fi
-          mutants="$MUTANTS"
-          if [ "$reuse" = true ]; then
-            mutants=false
-          fi
-          cargo xtask plan --base "$BASE" --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME" \
-            --draft "$DRAFT" --bug "$BUG" --mutants "$mutants" --mutant-count "$count" | tee -a "$GITHUB_OUTPUT"
+          args+=(--lookup-ok "$lookup_ok" --pr-body "$PR_BODY")
+          cargo xtask plan "${args[@]}" | tee -a "$GITHUB_OUTPUT"
 
   lint:
     name: Linux x86_64 checks
@@ -573,7 +528,10 @@ jobs:
       # flake_decide closed before any lookup. The marker travels in the
       # leg's artifact on the two-leg matrix, and in this job's outputs on
       # the one-leg test_linux matrix, whose list upload stays conditional
-      # on a non-empty list.
+      # on a non-empty list. A record step skipped after an earlier
+      # failure leaves no output, so its completeness condition applies
+      # only when its execution ran; a record that ran but whose parser
+      # failed still marks the collection incomplete.
       - name: Mark the collection complete or not
         id: collection
         if: always()
@@ -585,10 +543,10 @@ jobs:
           if [ "${{ matrix.runner }}" = ubuntu-24.04 ] && [ "${{ steps.flaky_hub.outputs.complete }}" = false ]; then
             complete=false
           fi
-          if [ "${{ github.event_name }}" = push ] && [ "${{ steps.flaky_alloc.outputs.complete }}" != true ]; then
+          if [ "${{ github.event_name }}" = push ] && [ "${{ steps.alloc_tests.outcome }}" != skipped ] && [ "${{ steps.flaky_alloc.outputs.complete }}" != true ]; then
             complete=false
           fi
-          if [ "${{ github.event_name }}" = push ] && [ "${{ steps.flaky_dhat.outputs.complete }}" != true ]; then
+          if [ "${{ github.event_name }}" = push ] && [ "${{ steps.dhat_tests.outcome }}" != skipped ] && [ "${{ steps.flaky_dhat.outputs.complete }}" != true ]; then
             complete=false
           fi
           if [ "$complete" = true ]; then
@@ -629,8 +587,8 @@ jobs:
             ${{ runner.temp }}/flaky/collection-complete-${{ matrix.runner }}.txt
           if-no-files-found: ignore
       # The leg's final list, after both record steps above. flake_decide
-      # downloads this leg's artifact only when this output is true; a
-      # missing artifact then fails that job.
+      # downloads this leg's artifact only when this output is true; the
+      # collate reports a missing artifact as partial when another list feeds it.
       - name: Report whether this leg found flakes
         id: has_flakes
         if: always()
@@ -797,6 +755,60 @@ jobs:
     env:
       BASE: ${{ needs.select.outputs.base }}
     steps: *test-steps
+
+  # Clippy only, no tests: on a pull request whose diff touches a file
+  # containing `target_os`, the selected crates are linted on macOS arm64,
+  # where Linux-only code would otherwise die as dead code under
+  # `-D warnings` (docs/ci.md, "On every pull request that changes code").
+  clippy_macos:
+    name: Clippy (macOS arm64)
+    needs: select
+    if: fromJSON(needs.select.outputs.jobs).clippy_macos
+    runs-on: macos-26
+    # No history yet: a generous bound, retuned to twice the median after
+    # twenty runs (docs/ci.md, "Job time limits").
+    timeout-minutes: 30
+    env:
+      PACKAGE_SPECS: ${{ needs.select.outputs.package_specs }}
+    steps:
+      - *checkout-full
+      - *toolchain
+      - *cache-restore
+      - name: cargo clippy -q --all-targets -- -D warnings
+        run: |
+          # The specs expand to `-p` args exactly as the shared check
+          # script does (scripts/check): one package per spec, so a
+          # workspace crate sharing a dependency's name still names one
+          # package. An empty selection logs and succeeds without cargo.
+          package_spec_args=()
+          for p in $PACKAGE_SPECS; do package_spec_args+=(-p "$p"); done
+          if [ "${#package_spec_args[@]}" -eq 0 ]; then
+            echo "no crates selected: nothing to lint"
+            exit 0
+          fi
+          echo "== cargo clippy -q --all-targets -- -D warnings"
+          cargo clippy -q --all-targets "${package_spec_args[@]}" -- -D warnings
+
+  # Run scripts/check's platform-specific self-tests with the system Bash
+  # on macOS when a pull request changes a script; the push backstop's test
+  # job already runs the macOS leg.
+  scripts_self_test_macos:
+    name: Scripts self-tests (macOS arm64)
+    needs: select
+    if: fromJSON(needs.select.outputs.jobs).scripts_self_test_macos
+    runs-on: macos-26
+    # No history yet: a generous bound, retuned to twice the median after
+    # twenty runs (docs/ci.md, "Job time limits").
+    timeout-minutes: 30
+    steps:
+      - *checkout-full
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest
+      - name: scripts/check self-test block with system Bash
+        run: |
+          /bin/bash --version
+          /bin/bash scripts/test-script-selftests
 
   # The tests the push touches, each run 30 times (100 when the
   # push fixes a flaky test), beside the test jobs on the backstop: one failure
@@ -1022,23 +1034,26 @@ jobs:
             exit 1
           fi
       # The one-leg test_linux matrix uploads its list only when
-      # non-empty: download it only when its output says flakes exist,
-      # and a missing artifact then fails the job.
+      # non-empty: download it only when its output says flakes exist;
+      # a missing artifact is reported as partial by the collate.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: fromJSON(needs.select.outputs.jobs).test_linux && needs.test_linux.outputs.has_flakes == 'true'
+        continue-on-error: true
         with:
           name: flaky-tests-ubuntu-24.04
           path: ${{ runner.temp }}/flaky
       # Each two-leg test matrix leg always uploads its list, including
       # an empty one: an empty file is a complete empty list, while a
-      # missing artifact fails closed.
+      # missing artifact is reported as partial by the collate.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: fromJSON(needs.select.outputs.jobs).test
+        continue-on-error: true
         with:
           name: flaky-tests-ubuntu-24.04-arm
           path: ${{ runner.temp }}/flaky
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: fromJSON(needs.select.outputs.jobs).test
+        continue-on-error: true
         with:
           name: flaky-tests-macos-26
           path: ${{ runner.temp }}/flaky
@@ -1055,26 +1070,63 @@ jobs:
             echo "$1" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           }
-          # The one-leg matrix reports its marker as a job output: an
-          # incomplete collection fails closed here, before any lookup.
-          if [ "$LINUX_SELECTED" = true ] && [ "$LINUX_COMPLETE" != true ]; then
-            fail_closed "test_linux collection is incomplete: no report"
+          # A readable list always feeds the scan below, whatever its
+          # marker says: a leg whose tests failed but whose list was
+          # written still feeds the collate. Readable is a non-empty
+          # list, or an empty list with a true marker; an existing but
+          # empty list with a false marker is the parser-error
+          # placeholder, which is no report.
+          readable() {
+            if [ -s "$1" ]; then
+              return 0
+            fi
+            [ -f "$1" ] && [ "$(cat "$2" 2>/dev/null)" = true ]
+          }
+          # Walk each selected producer once. Missing or placeholder lists
+          # warn when another leg feeds the report; no-report fails closed
+          # only after the walk proves that no readable list feeds.
+          first_no_report=""
+          partial_reports=""
+          any_feeds=false
+          for runner in ubuntu-24.04-arm macos-26 ubuntu-24.04; do
+            if [ "$runner" = ubuntu-24.04 ]; then
+              [ "$LINUX_SELECTED" = true ] || continue
+              expected=false
+              if [ "$LINUX_FLAKES" = true ] || [ "$LINUX_COMPLETE" != true ]; then
+                expected=true
+              fi
+            else
+              [ "$TEST_SELECTED" = true ] || continue
+              expected=true
+            fi
+            list="$FLAKY_DIR/flaky-tests-$runner.txt"
+            marker="$FLAKY_DIR/collection-complete-$runner.txt"
+            feeds=false
+            if readable "$list" "$marker"; then
+              feeds=true
+            fi
+            if [ "$feeds" = true ]; then
+              any_feeds=true
+              if [ "$(cat "$marker" 2>/dev/null)" != true ]; then
+                partial_reports+="the $runner collection is incomplete: partial report"$'\n'
+              fi
+            elif [ "$expected" = true ]; then
+              if [ -f "$list" ]; then
+                message="the $runner collection is incomplete"
+              else
+                message="the flaky-tests-$runner list is missing"
+              fi
+              partial_reports+="$message: partial report"$'\n'
+              if [ -z "$first_no_report" ]; then
+                first_no_report="$message: no report"
+              fi
+            fi
+          done
+          if [ -n "$first_no_report" ] && [ "$any_feeds" = false ]; then
+            fail_closed "$first_no_report"
           fi
-          # Each selected two-leg matrix leg uploads its list plus a true
-          # marker; a missing list, a missing marker or a false marker
-          # fails closed. An empty list with a true marker is a complete
-          # empty result.
-          if [ "$TEST_SELECTED" = true ]; then
-            for runner in ubuntu-24.04-arm macos-26; do
-              list="$FLAKY_DIR/flaky-tests-$runner.txt"
-              marker="$FLAKY_DIR/collection-complete-$runner.txt"
-              [ -f "$list" ] || fail_closed "the flaky-tests-$runner list is missing: no report"
-              [ "$(cat "$marker" 2>/dev/null)" = true ] || fail_closed "the $runner collection is incomplete: no report"
-            done
-          fi
-          if [ "$LINUX_SELECTED" = true ] && [ "$LINUX_FLAKES" = true ]; then
-            [ -f "$FLAKY_DIR/flaky-tests-ubuntu-24.04.txt" ] || fail_closed "the flaky-tests-ubuntu-24.04 list is missing: no report"
-            [ "$(cat "$FLAKY_DIR/collection-complete-ubuntu-24.04.txt" 2>/dev/null)" = true ] || fail_closed "the ubuntu-24.04 collection is incomplete: no report"
+          if [ -n "$partial_reports" ]; then
+            printf '%s' "$partial_reports" >> "$GITHUB_STEP_SUMMARY"
           fi
           has_flakes=false
           if [ -d "$FLAKY_DIR" ]; then
@@ -1253,6 +1305,7 @@ jobs:
             exit 0
           fi
           cat "$mutant_list"
+          cargo build -q -p fakes --example process-extension
           # The Linux x86_64 tests passed on this head before the shard
           # started, so the baseline run adds nothing (docs/ci.md).
           sudo loginctl enable-linger "$USER"
@@ -1272,6 +1325,7 @@ jobs:
           fi
           mutant_args=(
             --in-diff "$RUNNER_TEMP/diff.patch"
+            --in-place
             --test-tool nextest
             --baseline=skip
             # Recent mutants take 13 to 27 s; 120 s leaves room for test deadlines (docs/ci.md).
@@ -1283,9 +1337,15 @@ jobs:
           # OOMPolicy=kill fails the whole scope instead of letting nextest count a killed test as caught.
           run_log=/dev/shm/mutants-run-$SHARD.log
           if systemd-run --user --scope -p MemoryMax=12G -p OOMPolicy=kill -- cargo mutants "${mutant_args[@]}" 2>&1 | tee "$run_log"; then
-            :
+            status=0
           else
             status=$?
+          fi
+          if grep -rFq 'is not built; run cargo build' mutants.out/log; then
+            echo "::error title=Missing process-extension fake::Mutants shard $SHARD scenario log reports a fake was not built"
+            exit 1
+          fi
+          if [ "$status" -ne 0 ]; then
             last_log=$(find mutants.out/log -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null \
               | sort -nr | head -n 1 | cut -d' ' -f2- || true)
             echo "cargo mutants failed with status $status; last mutant:"
@@ -1399,15 +1459,42 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - *toolchain
-      - name: Install the musl target and C compiler
+      - name: Install the musl target
+        timeout-minutes: 5
+        run: rustup target add x86_64-unknown-linux-musl
+      # The musl archives are cached per runner image and architecture. The key
+      # names the package list: change it here and in scripts/install-shells
+      # together. ImageOS and ImageVersion are not in the `env` context, so a
+      # step builds the key.
+      - name: Key the musl and time archive cache
+        id: musl-debs-key
+        timeout-minutes: 5
+        run: echo "key=musl-debs-${ImageOS:?}-${ImageVersion:?}-${RUNNER_ARCH:?}-musl-tools-time" >> "$GITHUB_OUTPUT"
+      - name: Restore the musl and time archives
+        id: musl-debs
+        timeout-minutes: 5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/musl-debs
+          key: ${{ steps.musl-debs-key.outputs.key }}
+      - name: Install musl-tools and time
         # A mirror that stops answering must fail the step, not hold the job to its bound.
         timeout-minutes: 5
+        env:
+          MUSL_DEBS_CACHE_HIT: ${{ steps.musl-debs.outputs.cache-hit }}
         run: |
-          rustup target add x86_64-unknown-linux-musl
-          # shellcheck disable=SC2086 # APT_OPTS is a list of options
-          sudo apt-get $APT_OPTS update
-          # shellcheck disable=SC2086 # APT_OPTS is a list of options
-          sudo apt-get $APT_OPTS install -y --no-install-recommends musl-tools time
+          # A restore that fails part way can leave files behind and report no hit.
+          if [ "$MUSL_DEBS_CACHE_HIT" != true ]; then
+            rm -rf "$RUNNER_TEMP/musl-debs"
+          fi
+          scripts/install-shells "$RUNNER_TEMP/musl-debs" musl-tools time
+      - name: Save the musl and time archives
+        if: steps.musl-debs.outputs.cache-hit != 'true'
+        timeout-minutes: 5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/musl-debs
+          key: ${{ steps.musl-debs-key.outputs.key }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: release
@@ -1656,6 +1743,9 @@ jobs:
     # A new job, so no history yet: the bound is generous, covering a cold
     # clippy of the journey target plus the suite (docs/ci.md, "Job time limits").
     timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
     # The suite command below reads these; the gate exports the same values,
     # and an empty CARGO_BUILD_JOBS fails cargo ("could not parse"), so they
     # are pinned here rather than left to the runner.
@@ -1677,21 +1767,44 @@ jobs:
         with:
           path: ${{ runner.temp }}/release/cache
           key: release-musl-${{ github.sha }}
-      - name: Run the journey suite against the release binary
+      - name: journey-suite
+        id: journey_suite
         env:
           BIN: ${{ runner.temp }}/release/cache/fiber
-          FAILURES: ${{ runner.temp }}/journey-failures.txt
+          FAILURES: ${{ runner.temp }}/journey-report/journey-failures.txt
         run: |
           [ -x "$BIN" ] || { printf 'journey: %s\n' "FIBER_JOURNEY_BIN is not executable: $BIN (the release job's stored binary is missing)." >&2; exit 1; }
+          mkdir -p "$(dirname "$FAILURES")"
           : > "$FAILURES" || { printf 'journey: %s\n' "cannot write FIBER_JOURNEY_FAILURES at $FAILURES." >&2; exit 1; }
           CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS NEXTEST_TEST_THREADS=$NEXTEST_TEST_THREADS CARGO_INCREMENTAL=0 cargo clippy -p main --test main_journeys -- -D warnings
           FIBER_JOURNEY_BIN="$BIN" FIBER_JOURNEY_FAILURES="$FAILURES" cargo nextest run -p main --test main_journeys
-      - name: Upload the failures file
-        if: always()
+      - name: Compute journey streak metadata
+        if: always() && steps.journey_suite.outcome != 'skipped'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HISTORY: ${{ runner.temp }}/journey-history
+          REPORT: ${{ runner.temp }}/journey-report
+        run: |
+          set -u
+          mkdir -p "$HISTORY" "$REPORT"
+          gh run list --workflow ci.yml -L 21 --json databaseId,headSha,event,headBranch,conclusion > "$HISTORY/runs.json" || exit 0
+          cargo xtask journey-streak select < "$HISTORY/runs.json" > "$HISTORY/selected.txt" || exit 0
+          while IFS= read -r id || [ -n "$id" ]; do
+            [ -n "$id" ] || continue
+            dir="$HISTORY/$id"
+            mkdir -p "$dir"
+            gh run view "$id" --json jobs > "$dir/view.json" || continue
+            gh run download "$id" --name journey-failures --dir "$dir" >/dev/null 2>&1 || true
+          done < "$HISTORY/selected.txt"
+          cargo xtask journey-streak compute --current-id "$GITHUB_RUN_ID" --current-sha "$GITHUB_SHA" --failures "$REPORT/journey-failures.txt" --runs "$HISTORY/runs.json" --history-dir "$HISTORY" --output "$REPORT/journey-streaks.json" || rm -f "$REPORT/journey-streaks.json"
+      - name: Upload the journey report files
+        if: always() && steps.journey_suite.outcome != 'skipped'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: journey-failures
-          path: ${{ runner.temp }}/journey-failures.txt
+          path: ${{ runner.temp }}/journey-report/
           if-no-files-found: error
           retention-days: 7
 
@@ -1714,6 +1827,7 @@ jobs:
       queue: max
     permissions:
       issues: write
+      actions: read
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -1727,6 +1841,7 @@ jobs:
       - name: File or comment on the journey issues
         env:
           FAILURES: ${{ runner.temp }}/journey/journey-failures.txt
+          STREAKS: ${{ runner.temp }}/journey/journey-streaks.json
         run: |
           # The failing journey names, one per line; a missing or empty file
           # is a pass, so it writes nothing.
@@ -1748,6 +1863,13 @@ jobs:
             title="Journey failure: $name"
             # shellcheck disable=SC2016 # the backticks are literal markdown in the issue body; printf expands the %s.
             body=$(printf 'Journey `%s` failed at %s: %s\nFailing journeys in this run:\n%s' "$name" "$COMMIT" "$RUN_URL" "$listed")
+            if [ -f "${STREAKS:-}" ]; then
+              streak=$(jq -r --arg journey "$name" '.[$journey] // empty | "\(.count) \(.first_sha)"' "$STREAKS" 2>/dev/null || true)
+              if [ -n "$streak" ]; then
+                read -r count first_sha <<< "$streak"
+                body="$body$(printf '\nStreak: %s consecutive failures since %s.' "$count" "$first_sha")"
+              fi
+            fi
             if number=$(open_number "$title"); then
               if [ -n "$number" ]; then
                 gh issue comment "$number" --body "$body"
@@ -2126,7 +2248,7 @@ jobs:
   ci:
     # On a draft the required `CI` check stays pending, so a draft's partial run never satisfies it.
     name: ${{ github.event.pull_request.draft && 'CI (draft)' || 'CI' }}
-    needs: [select, lint, test_linux, test, mutants, bug_red, release, stress]
+    needs: [select, lint, test_linux, test, clippy_macos, scripts_self_test_macos, mutants, bug_red, release, stress]
     if: always()
     runs-on: ubuntu-24.04
     # Median 46 s; floor.

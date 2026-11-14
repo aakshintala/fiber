@@ -84,16 +84,14 @@ fn provider_with_port(setup: &Setup, server: &ProviderServer, port: u16) {
             "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
     serve_on(setup, port);
 }
 
@@ -559,9 +557,22 @@ fn bare_fiber_on_a_listed_hub_opens_the_hubs_home() {
                 .iter()
                 .any(|row| row.contains("Hover") && row.contains("[ ] Off"))
     });
-    for _ in 0..2 {
-        run.write(b"\x1b[C");
-    }
+    run.write(b"\x1b[B");
+    run.wait_screen("the non-numeric Appearance row", |screen| {
+        screen
+            .rows
+            .iter()
+            .any(|row| row.contains("› Inline images"))
+    });
+    run.write(b"\x1b[C");
+    run.wait_screen("the focused Notifications row", |screen| {
+        screen.rows.iter().any(|row| row.contains("› Quota notice"))
+    });
+    run.write(b"\x1b[B");
+    run.wait_screen("the non-numeric Notifications row", |screen| {
+        screen.rows.iter().any(|row| row.contains("› Bell"))
+    });
+    run.write(b"\x1b[C");
     run.wait_screen("the hub settings", |screen| {
         screen
             .rows

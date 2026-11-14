@@ -15,6 +15,7 @@ use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, JobDelive
 use contract::jobs::{JobRecord, Taken};
 use contract::shapes::Process;
 use contract::tool::Bound;
+use contract::{MONITOR_DELIVERY_LIMIT as DELIVERY_LIMIT, MONITOR_LINE_LIMIT as LINE_LIMIT};
 use log::{OutputRead, Unreadable};
 use serde_json::Map;
 
@@ -50,7 +51,9 @@ impl Starts {
     /// Anything else leaves it.
     pub(crate) fn fold(&mut self, event: &Event) {
         match event {
-            Event::JobStarted(started) => {
+            Event::JobStarted(started)
+                if started.kind != Some(contract::events::JobKind::Detached) =>
+            {
                 let entry = self.jobs.entry(started.job_id.clone()).or_default();
                 entry.tool = started.tool.clone().unwrap_or_default();
                 entry.output_path = PathBuf::from(&started.output_path);
@@ -123,12 +126,15 @@ impl Starts {
             | Event::ExtensionLog(_)
             | Event::ExtensionHello(_)
             | Event::ExtensionRequest(_)
+            | Event::JobStarted(_)
             | Event::ExtensionExec(_)
             | Event::JobDelta(_)
             | Event::JobLine(_)
             | Event::DelegateFinished(_)
             | Event::JobCompleted(_)
             | Event::JobsPendingNotified(_)
+            | Event::KeeperStarted(_)
+            | Event::KeeperBound(_)
             | Event::CommandAccepted(_)
             | Event::CommandRejected(_) => {}
         }
@@ -525,11 +531,6 @@ fn bound_notice(log: &log::Log, id: &JobId, replacement: &str, built: &str) -> S
         .0
 }
 
-// debt: two copies of the monitor's line and delivery limits; move them to
-// `contract` when monitor.rs is next edited beyond a literal.
-const LINE_LIMIT: usize = 500;
-const DELIVERY_LIMIT: usize = 3_000;
-
 /// A replaced monitor batch after the hook: each line cut at 500
 /// characters with ` [cut]`, the delivery at 3,000 characters with a
 /// marker, as the monitor's own batching cuts them. A replacement equal
@@ -853,3 +854,7 @@ fn replace_external(path: &Path, bytes: &[u8]) -> Result<(), crate::Error> {
     })?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "deliveries_tests.rs"]
+mod tests;

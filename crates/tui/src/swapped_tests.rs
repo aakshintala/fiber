@@ -6,13 +6,44 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
 use super::{
-    Chrome, Frame, Ink, Inline, List, Spot, about, compact, render, rows_height,
-    wheel_targets_window, wheel_window,
+    Chrome, Frame, Ink, Inline, List, Spot, about, compact, render, rows_height, step_target,
+    wheel_targets_window, wheel_window, wrap_cursor, wrap_step,
 };
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::rows::Join;
 use crate::theme::Role;
+
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
+#[test]
+fn wrap_step_handles_empty_single_and_both_directions() {
+    assert_eq!(wrap_step(7, 0, 1), 7);
+    assert_eq!(wrap_step(0, 1, 1), 0);
+    assert_eq!(wrap_step(0, 1, -1), 0);
+    assert_eq!(wrap_step(0, 4, -1), 3);
+    assert_eq!(wrap_step(3, 4, 1), 0);
+    assert_eq!(wrap_step(1, 4, 6), 3);
+    assert_eq!(wrap_step(1, 4, -6), 3);
+}
+
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
+#[test]
+fn wrap_cursor_wraps_and_keeps_empty_rows() {
+    assert_eq!(wrap_cursor::<usize>(&[], 3, true), 3);
+    assert_eq!(wrap_cursor(&[2, 5, 9], 2, false), 9);
+    assert_eq!(wrap_cursor(&[2, 5, 9], 9, true), 2);
+}
+
+// Up/Down wrap past either end (`docs/tui.md`, "Swapped views").
+#[test]
+fn step_target_wraps_sparse_targets_and_keeps_empty() {
+    assert_eq!(step_target(&[], 4, true), 4);
+    assert_eq!(step_target(&[2], 2, true), 2);
+    assert_eq!(step_target(&[1, 4, 8], 8, true), 1);
+    assert_eq!(step_target(&[1, 4, 8], 1, false), 8);
+    assert_eq!(step_target(&[1, 4, 8], 4, true), 8);
+    assert_eq!(step_target(&[1, 4, 8], 4, false), 1);
+}
 
 /// A list after pressing `keys` over `rows` rows shown `height` at a time.
 fn pressed(keys: &[Key], rows: usize, height: usize) -> List {
@@ -42,16 +73,40 @@ fn wheel_targets_window_moves_three_rows_and_clamps_to_targets() {
     assert_eq!(wheel_targets_window(false, 1, 0, 20, 0, &[1, 2]), (1, 0));
 }
 
+/// ↓ on the last row focuses the first, ↑ on the first focuses the
+/// last (`docs/tui.md:666-667`, "Swapped views").
 #[test]
-fn selection_clamps_at_both_ends() {
-    let list = pressed(&[Key::Up], 5, 10);
-    assert_eq!(list.selected(), 0);
-    let list = pressed(&vec![Key::Down; 9], 5, 10);
+fn selection_wraps_past_either_end() {
+    // ↑ on the first row goes to the last, and the key says so.
+    let mut list = List::default();
+    assert!(list.key(&Key::Up, 5, 10));
     assert_eq!(list.selected(), 4);
+    // ↓ on the last row goes to the first, and the key says so.
+    assert!(list.key(&Key::Down, 5, 10));
+    assert_eq!(list.selected(), 0);
+    // Just inside either end still steps to the neighbour.
+    let list = pressed(&vec![Key::Down; 4], 5, 10);
+    assert_eq!(list.selected(), 4);
+    let list = pressed(&[Key::Down, Key::Up], 5, 10);
+    assert_eq!(list.selected(), 0);
+    // A full turn down five rows lands back on the first.
+    let list = pressed(&vec![Key::Down; 5], 5, 10);
+    assert_eq!(list.selected(), 0);
+    // A two-position list wraps like a pair of tabs.
+    let list = pressed(&[Key::Up], 2, 10);
+    assert_eq!(list.selected(), 1);
+    let list = pressed(&vec![Key::Down; 2], 2, 10);
+    assert_eq!(list.selected(), 0);
+    // Pages still clamp at both ends.
     let list = pressed(&[Key::PageDown, Key::PageDown], 5, 3);
     assert_eq!(list.selected(), 4);
     let list = pressed(&[Key::Down, Key::PageUp], 5, 3);
     assert_eq!(list.selected(), 0);
+    // A zero-height window moves nothing.
+    let mut list = List::default();
+    assert!(!list.key(&Key::Up, 5, 0));
+    assert!(!list.key(&Key::Down, 5, 0));
+    assert_eq!((list.selected(), list.top()), (0, 0));
 }
 
 #[test]
@@ -61,10 +116,13 @@ fn page_moves_by_the_height_less_one() {
     assert_eq!(list.selected(), 9);
     assert!(list.key(&Key::PageUp, 100, 10));
     assert_eq!(list.selected(), 0);
-    // At the top nothing moves, and the key says so.
+    // At the top a page still stops, and the key says so.
     assert!(!list.key(&Key::PageUp, 100, 10));
-    assert!(!list.key(&Key::Up, 100, 10));
+    // At the top ↑ wraps to the last row, and the key says so.
+    assert!(list.key(&Key::Up, 100, 10));
+    assert_eq!(list.selected(), 99);
     // A one-row view still moves by one.
+    let mut list = List::default();
     assert!(list.key(&Key::PageDown, 100, 1));
     assert_eq!(list.selected(), 1);
     // Any other key leaves it.
@@ -76,13 +134,16 @@ fn page_moves_by_the_height_less_one() {
 fn scroll_keeps_the_selection_in_view() {
     for height in [1, 3, 10] {
         let mut list = List::default();
-        for _ in 0..20 {
+        for _ in 0..19 {
             list.key(&Key::Down, 20, height);
             assert!(list.top() <= list.selected(), "height {height}");
             assert!(list.selected() < list.top() + height, "height {height}");
         }
         assert_eq!(list.selected(), 19, "height {height}");
         assert_eq!(list.top(), 20 - height, "height {height}");
+        // One more ↓ wraps to the first row, still in view.
+        assert!(list.key(&Key::Down, 20, height), "height {height}");
+        assert_eq!((list.selected(), list.top()), (0, 0), "height {height}");
         for _ in 0..20 {
             list.key(&Key::Up, 20, height);
             assert!(list.top() <= list.selected(), "height {height}");
@@ -90,6 +151,43 @@ fn scroll_keeps_the_selection_in_view() {
         }
         assert_eq!((list.selected(), list.top()), (0, 0), "height {height}");
     }
+}
+
+/// ↑ and ↓ wrap past either end of the entries that take a key, in
+/// both directions; pages never reach this path (`docs/tui.md:666-667`,
+/// "Swapped views").
+#[test]
+fn key_over_wraps_past_either_end_of_takes() {
+    let takes = vec![0, 3, 6];
+    let mut list = List::default();
+    list.select(0, 9, 4);
+    // ↑ on the first entry goes to the last, and the key says so.
+    assert!(list.key_over(&Key::Up, 9, 4, &takes));
+    assert_eq!(list.selected(), 6);
+    // ↓ on the last entry goes to the first, and the key says so.
+    assert!(list.key_over(&Key::Down, 9, 4, &takes));
+    assert_eq!(list.selected(), 0);
+    // Between entries it still steps to the neighbour.
+    assert!(list.key_over(&Key::Down, 9, 4, &takes));
+    assert_eq!(list.selected(), 3);
+    assert!(list.key_over(&Key::Up, 9, 4, &takes));
+    assert_eq!(list.selected(), 0);
+    // A two-entry list wraps like a pair of tabs.
+    let pair = vec![0, 1];
+    let mut list = List::default();
+    assert!(list.key_over(&Key::Up, 2, 10, &pair));
+    assert_eq!(list.selected(), 1);
+    assert!(list.key_over(&Key::Down, 2, 10, &pair));
+    assert_eq!(list.selected(), 0);
+    // With no entries it moves as `key` does, which wraps too.
+    let mut list = List::default();
+    assert!(list.key_over(&Key::Up, 5, 10, &[]));
+    assert_eq!(list.selected(), 4);
+    // Any other key leaves it.
+    let mut list = List::default();
+    list.select(3, 9, 4);
+    assert!(!list.key_over(&Key::Enter, 9, 4, &takes));
+    assert_eq!(list.selected(), 3);
 }
 
 /// The line window sets the selection and the top independently: a
@@ -213,6 +311,7 @@ fn frame(rows: usize) -> Frame {
             .map(|at| vec![(format!("row {at}"), None, Ink::Plain)])
             .collect(),
         list: List::default(),
+        gutter_mark: Style::default(),
         below: vec!["below".to_owned()],
         field: None,
         footer: "keys".to_owned(),
@@ -272,6 +371,7 @@ fn top_row(title: &str, command: &'static str, width: u16) -> Buffer {
         command: command.to_owned(),
         rows: Vec::new(),
         list: List::default(),
+        gutter_mark: Style::default(),
         below: Vec::new(),
         field: None,
         footer: String::new(),
@@ -390,6 +490,7 @@ fn a_heading_cell_is_bold_and_a_muted_cell_is_muted() {
             ],
         ],
         list: List::default(),
+        gutter_mark: Style::default(),
         below: Vec::new(),
         field: None,
         footer: "keys".to_owned(),
@@ -433,6 +534,7 @@ fn a_role_cell_draws_its_role_and_a_muted_cell_is_faint() {
             vec![("tail".to_owned(), None, Ink::Muted)],
         ],
         list: List::default(),
+        gutter_mark: Style::default(),
         below: Vec::new(),
         field: None,
         footer: String::new(),
@@ -464,6 +566,33 @@ fn the_footer_and_the_lines_below_draw_dim() {
     }
     // A row stays as its ink draws it.
     assert!(!buf[(0, 1)].modifier.contains(Modifier::DIM));
+}
+
+/// The gutter mark draws with the frame's `gutter_mark` style; a
+/// frame that leaves the default draws it plain.
+#[test]
+fn the_gutter_mark_draws_with_the_frames_style() {
+    let area = Rect::new(0, 0, 40, 6);
+    let mut buf = Buffer::empty(area);
+    let mut shown = frame(5);
+    shown.list = List::gutter();
+    shown.list.select(1, 5, rows_height(&shown, 6));
+    shown.gutter_mark = Style::new()
+        .fg(Role::Accent.color())
+        .add_modifier(Modifier::BOLD);
+    render(&shown, area, &mut buf, &mut Vec::new());
+    assert_eq!(text(&buf, 2), "› row 1");
+    assert_eq!(buf[(0, 2)].fg, Role::Accent.color());
+    assert!(buf[(0, 2)].modifier.contains(Modifier::BOLD));
+    // The default frame keeps the mark plain.
+    let mut buf = Buffer::empty(area);
+    let mut shown = frame(5);
+    shown.list = List::gutter();
+    shown.list.select(1, 5, rows_height(&shown, 6));
+    render(&shown, area, &mut buf, &mut Vec::new());
+    assert_eq!(text(&buf, 2), "› row 1");
+    assert_eq!(buf[(0, 2)].fg, Color::Reset);
+    assert!(!buf[(0, 2)].modifier.contains(Modifier::BOLD));
 }
 
 #[test]
@@ -549,16 +678,20 @@ fn arrows_move_only_between_the_rows_that_take_a_key() {
             8,
             &takes
         ),
-        [2, 5, 5, 2, 1, 1]
+        [2, 5, 1, 5, 2, 1]
     );
     let mut list = List::default();
     list.select(1, 8, 8);
     assert!(list.key_over(&Key::Down, 8, 8, &takes));
     assert!(!list.key_over(&Key::Enter, 8, 8, &takes));
+    // Past the last take ↓ wraps to the first.
     list.select(5, 8, 8);
-    assert!(!list.key_over(&Key::Down, 8, 8, &takes));
+    assert!(list.key_over(&Key::Down, 8, 8, &takes));
+    assert_eq!(list.selected(), 1);
+    // Past the first take ↑ wraps to the last.
     list.select(1, 8, 8);
-    assert!(!list.key_over(&Key::Up, 8, 8, &takes));
+    assert!(list.key_over(&Key::Up, 8, 8, &takes));
+    assert_eq!(list.selected(), 5);
 }
 
 #[test]
@@ -732,6 +865,7 @@ fn made_frame(rows: &[&str], below: &[&str], field: Option<(&str, usize)>) -> Fr
             .map(|row| vec![((*row).to_owned(), None, Ink::Plain)])
             .collect(),
         list: List::gutter(),
+        gutter_mark: Style::default(),
         below: below.iter().map(|line| (*line).to_owned()).collect(),
         field: field.map(|(text, caret)| (text.to_owned(), caret)),
         footer: "move".to_owned(),

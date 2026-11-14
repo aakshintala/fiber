@@ -8,6 +8,7 @@ use crate::app::testkit::{hello, home_with};
 use crate::home::Spot;
 use crate::link::Line;
 use contract::SessionId;
+use contract::clock::Clock;
 use contract::commands::{HistoryArgs, SubscribeLevel};
 use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
@@ -131,6 +132,16 @@ fn commands(lines: Vec<String>) -> Vec<Value> {
         .collect()
 }
 
+/// Whether `line` is an archived scoped `recent` ask, riding beside
+/// the exited scoped asks.
+fn is_archived(line: &Value) -> bool {
+    line["command"] == "recent"
+        && line["args"]
+            .get("archived")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+}
+
 /// The keys of the rows home draws.
 fn keys(app: &App) -> Vec<u64> {
     app.home_screen()
@@ -204,14 +215,18 @@ fn a_list_launch_focuses_the_list_after_the_first_recent_page() {
     // their order or count, so take the unscoped recent by kind.
     let recent = lines
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| line["command"] == "recent" && line.get("args") == Some(&json!({})))
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("unscoped recent id"));
-    // The unscoped answer fans out the project's scoped ask.
-    let fanout = commands(app.on_line(accepted(
+    // The unscoped answer fans out the project's scoped asks, one of
+    // each kind; this test follows the exited ask.
+    let fanout: Vec<Value> = commands(app.on_line(accepted(
         recent,
         json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
-    )));
+    )))
+    .into_iter()
+    .filter(|line| !is_archived(line))
+    .collect();
     // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(fanout.len(), 1);
     // `docs/tui.md`, "The session list" (scoped ask carries the project's key).
@@ -252,10 +267,15 @@ fn a_list_launch_with_an_empty_first_page_but_a_live_row_focuses_the_list() {
     let lines = commands(app.on_line(hello()));
     let recent = lines
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| line["command"] == "recent" && line.get("args") == Some(&json!({})))
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("unscoped recent id"));
-    let scoped = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
+    // A newly appearing project earns one scoped ask of each kind;
+    // this test follows the exited ask.
+    let scoped: Vec<Value> = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")))
+        .into_iter()
+        .filter(|line| !is_archived(line))
+        .collect();
     // `docs/tui.md`, "The session list" (a newly appearing project earns one scoped ask).
     assert_eq!(scoped.len(), 1);
     assert_eq!(scoped[0]["command"], "recent");
@@ -299,14 +319,18 @@ fn a_home_launch_never_focuses_the_list() {
     // their order or count, so take the unscoped recent by kind.
     let recent = lines
         .iter()
-        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .find(|line| line["command"] == "recent" && line.get("args") == Some(&json!({})))
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("unscoped recent id"));
-    // The unscoped answer fans out the project's scoped ask.
-    let fanout = commands(app.on_line(accepted(
+    // The unscoped answer fans out the project's scoped asks, one of
+    // each kind; this test follows the exited ask.
+    let fanout: Vec<Value> = commands(app.on_line(accepted(
         recent,
         json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
-    )));
+    )))
+    .into_iter()
+    .filter(|line| !is_archived(line))
+    .collect();
     // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(fanout.len(), 1);
     // `docs/tui.md`, "The session list" (scoped ask carries the project's key).
@@ -813,11 +837,15 @@ fn home_with_row() -> App {
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("a recent id"));
     assert!(app.on_line(accepted(feed, json!({}))).is_empty());
-    // The unscoped answer fans out the project's scoped ask.
-    let fanout = commands(app.on_line(accepted(
+    // The unscoped answer fans out the project's scoped asks, one of
+    // each kind; this helper's callers follow the exited ask.
+    let fanout: Vec<Value> = commands(app.on_line(accepted(
         recent,
         json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
-    )));
+    )))
+    .into_iter()
+    .filter(|line| !is_archived(line))
+    .collect();
     // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(fanout.len(), 1);
     // `docs/tui.md`, "The session list" (scoped ask carries the project's key).
@@ -996,26 +1024,64 @@ fn an_open_from_a_held_full_sends_summary_then_the_raise_later() {
     assert!(!app.gated(&id("s_aaaaaaaaaaaaaaaa")));
 }
 
+/// Opens the exited row and retries the exact missing-workspace refusal:
+/// one `full` subscribe with a fresh id goes out instead of failing the
+/// open.
+fn retry_full(app: &mut App, message: &str) -> String {
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    let retry = commands(app.on_line(refused_code(first, "io_failed", message)));
+    assert_eq!(retry.len(), 1, "exactly one retry goes out: {retry:?}");
+    assert_eq!(retry[0]["command"], "subscribe", "{retry:?}");
+    assert_eq!(retry[0]["session_id"], "s_aaaaaaaaaaaaaaaa", "{retry:?}");
+    assert_eq!(retry[0]["args"], json!({"level": "full"}), "{retry:?}");
+    let second = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("retry id"));
+    assert_ne!(second, first, "the retry mints a fresh id");
+    second.to_owned()
+}
+
 #[test]
-fn a_missing_workspace_refusal_names_the_path_with_no_rail_card() {
+fn a_missing_workspace_refusal_retries_full_and_opens_read_only() {
     // The hub sends one exact shape for the confirmed case, from its
     // guard and from a starter failure on an already-missing target:
     // no trailing period. The race keeps the wrapper's period and
     // renders verbatim, as the near-miss test pins.
     let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
     let mut app = home_with_row();
-    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
-    let first = lines[0]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("first id"));
+    let second = retry_full(&mut app, message);
+    // The open holds: still attached, no notice, the row untouched.
+    assert_eq!(app.session(), Some(&id("s_aaaaaaaaaaaaaaaa")));
+    assert!(!app.on_home());
+    assert!(app.notice().is_none(), "no failure renders yet");
     assert!(
-        app.on_line(refused_code(first, "io_failed", message))
-            .is_empty()
+        app.subscribe_pending(&id("s_aaaaaaaaaaaaaaaa")),
+        "the retry waits for its answer"
     );
-    assert!(app.session().is_none());
-    assert!(app.on_home());
-    let ruled = "Cannot resume: /w no longer exists. Delete removes the session.";
-    assert_eq!(app.notice(), Some(ruled), "{message}");
+    // The hub accept carrying the missing path opens read only.
+    assert!(
+        app.on_line(accepted(
+            &second,
+            json!({"last_seq": 3, "workspace_gone": "/w"})
+        ))
+        .is_empty()
+    );
+    assert_eq!(
+        app.unwritable(),
+        Some("/w"),
+        "the path lands beside the pass"
+    );
+    assert_eq!(app.session(), Some(&id("s_aaaaaaaaaaaaaaaa")));
+    assert!(!app.on_home());
+    assert!(!app.gated(&id("s_aaaaaaaaaaaaaaaa")), "the gate ends");
+    assert!(
+        !app.subscribe_pending(&id("s_aaaaaaaaaaaaaaaa")),
+        "the answered retry leaves nothing in flight"
+    );
+    assert!(app.notice().is_none(), "no failure renders");
     let sessions = &app.home.sessions;
     let row = sessions
         .row(&id("s_aaaaaaaaaaaaaaaa"))
@@ -1024,12 +1090,324 @@ fn a_missing_workspace_refusal_names_the_path_with_no_rail_card() {
         matches!(row.left, Some(crate::home::Left::Exited)),
         "the row stays under exited: {message}"
     );
+    assert!(row.note.is_none(), "no row note: {message}");
+    assert!(sessions.cards().is_empty(), "no rail card: {message}");
+}
+
+#[test]
+fn a_retry_accept_without_the_missing_path_renders_the_refusal_verbatim() {
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    let second = retry_full(&mut app, message);
+    // A hub accept for the retry without the path ends the read-only
+    // open the way the refusal does: home with the message verbatim.
+    assert!(
+        app.on_line(accepted(&second, json!({"last_seq": 3})))
+            .is_empty()
+    );
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert!(app.unwritable().is_none());
+    assert_eq!(app.notice(), Some(message), "{message}");
+    let row = app
+        .home
+        .sessions
+        .row(&id("s_aaaaaaaaaaaaaaaa"))
+        .unwrap_or_else(|| panic!("the row stays: {message}"));
+    assert!(
+        matches!(row.left, Some(crate::home::Left::Exited)),
+        "the row stays under exited: {message}"
+    );
     assert_eq!(
         row.note.as_deref(),
-        Some(ruled),
-        "the row's note: {message}"
+        Some(message),
+        "the row's note renders verbatim: {message}"
     );
-    assert!(sessions.cards().is_empty(), "no rail card: {message}");
+}
+
+#[test]
+fn esc_on_a_read_only_session_goes_home_with_the_row_in_place() {
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    let second = retry_full(&mut app, message);
+    assert!(
+        app.on_line(accepted(
+            &second,
+            json!({"last_seq": 3, "workspace_gone": "/w"})
+        ))
+        .is_empty()
+    );
+    assert_eq!(app.unwritable(), Some("/w"));
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(crate::keys::Key::Esc, now);
+    assert!(app.session().is_none(), "Esc leaves the session");
+    assert!(app.on_home(), "Esc goes home");
+    assert!(
+        app.unwritable().is_none(),
+        "the mark clears on the way home"
+    );
+    let row = app
+        .home
+        .sessions
+        .row(&id("s_aaaaaaaaaaaaaaaa"))
+        .unwrap_or_else(|| panic!("the row stays"));
+    assert!(
+        matches!(row.left, Some(crate::home::Left::Exited)),
+        "the row stays under exited"
+    );
+}
+
+#[test]
+fn option_zero_on_a_read_only_session_goes_home_like_esc() {
+    // ⌥0 is the go-home action in conversation contexts
+    // (`crates/tui/src/bindings.rs`, "go_home"): the keyboard adapter
+    // resolves the stroke to the action, so the test invokes the action
+    // itself — a raw `AltDigit` key would take the rail's digit path
+    // instead. It leaves a read-only session the way Esc does.
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    let second = retry_full(&mut app, message);
+    assert!(
+        app.on_line(accepted(
+            &second,
+            json!({"last_seq": 3, "workspace_gone": "/w"})
+        ))
+        .is_empty()
+    );
+    assert_eq!(app.unwritable(), Some("/w"));
+    app.on_action("go_home");
+    assert!(app.session().is_none(), "⌥0 leaves the session");
+    assert!(app.on_home(), "⌥0 goes home");
+    let row = app
+        .home
+        .sessions
+        .row(&id("s_aaaaaaaaaaaaaaaa"))
+        .unwrap_or_else(|| panic!("the row stays"));
+    assert!(
+        matches!(row.left, Some(crate::home::Left::Exited)),
+        "the row stays under exited"
+    );
+}
+
+#[test]
+fn enter_on_a_read_only_session_sends_nothing_and_keeps_the_draft() {
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    let second = retry_full(&mut app, message);
+    assert!(
+        app.on_line(accepted(
+            &second,
+            json!({"last_seq": 3, "workspace_gone": "/w"})
+        ))
+        .is_empty()
+    );
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(crate::keys::Key::Char('h'), now), Effect::None);
+    assert_eq!(app.on_key(crate::keys::Key::Char('i'), now), Effect::None);
+    assert_eq!(
+        app.on_key(crate::keys::Key::Enter, now),
+        Effect::None,
+        "no prompt line leaves the terminal"
+    );
+    assert!(app.unwritable().is_some(), "still read only");
+}
+
+#[test]
+fn typing_backspace_recall_and_at_search_change_nothing_while_read_only() {
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    let second = retry_full(&mut app, message);
+    assert!(
+        app.on_line(accepted(
+            &second,
+            json!({"last_seq": 3, "workspace_gone": "/w"})
+        ))
+        .is_empty()
+    );
+    assert_eq!(app.unwritable(), Some("/w"));
+    assert!(app.input().expand().is_empty());
+    let now = fakes::clock::FakeClock::new().now();
+    // Typing, `@` search, Backspace and recall change nothing, so no
+    // completion can open: `draft_key` takes nothing while unwritable.
+    assert_eq!(app.on_key(crate::keys::Key::Char('h'), now), Effect::None);
+    assert_eq!(app.on_key(crate::keys::Key::Char('@'), now), Effect::None);
+    assert_eq!(app.on_key(crate::keys::Key::Backspace, now), Effect::None);
+    assert_eq!(app.on_key(crate::keys::Key::Up, now), Effect::None);
+    assert_eq!(app.on_key(crate::keys::Key::Down, now), Effect::None);
+    assert!(app.input().expand().is_empty(), "the draft stays empty");
+    assert!(app.completions().is_none(), "no completion opens");
+    assert!(!app.files_open(), "no `@` panel opens");
+}
+
+#[test]
+fn set_unwritable_clears_an_open_completion_panel() {
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    // The `/` panel opens before the read-only attach.
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(crate::keys::Key::Char('/'), now), Effect::None);
+    assert!(
+        app.completions().is_some(),
+        "the `/` panel opens before the attach"
+    );
+    let retry = commands(app.on_line(refused_code(first, "io_failed", message)));
+    assert_eq!(retry.len(), 1, "exactly one retry goes out: {retry:?}");
+    let second = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("retry id"));
+    assert!(
+        app.on_line(accepted(
+            second,
+            json!({"last_seq": 3, "workspace_gone": "/w"})
+        ))
+        .is_empty()
+    );
+    assert_eq!(app.unwritable(), Some("/w"));
+    assert!(
+        app.completions().is_none(),
+        "the panel closes on the read-only attach"
+    );
+}
+
+#[test]
+fn esc_with_an_open_completion_goes_home_from_read_only() {
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    // A panel open before the attach cannot linger to take Esc first:
+    // `set_unwritable` clears it, so Esc reaches the go-home path.
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(crate::keys::Key::Char('/'), now), Effect::None);
+    assert!(app.completions().is_some());
+    let retry = commands(app.on_line(refused_code(first, "io_failed", message)));
+    let second = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("retry id"));
+    assert!(
+        app.on_line(accepted(
+            second,
+            json!({"last_seq": 3, "workspace_gone": "/w"})
+        ))
+        .is_empty()
+    );
+    assert!(app.completions().is_none());
+    app.on_key(crate::keys::Key::Esc, now);
+    assert!(app.session().is_none(), "Esc leaves the session");
+    assert!(app.on_home(), "Esc goes home");
+    assert!(app.unwritable().is_none());
+}
+
+#[test]
+fn a_read_only_accept_replaces_only_its_session_pass() {
+    // A stale pass for the opening session and a live one for another
+    // session: the hub accept replaces only its own, and the foreign
+    // pass survives.
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    app.passes.push((
+        id("s_bbbbbbbbbbbbbbbb"),
+        crate::app::Pass::Until(contract::Seq(9)),
+    ));
+    app.passes.push((
+        id("s_aaaaaaaaaaaaaaaa"),
+        crate::app::Pass::Until(contract::Seq(99)),
+    ));
+    let second = retry_full(&mut app, message);
+    assert!(
+        app.on_line(accepted(
+            &second,
+            json!({"last_seq": 3, "workspace_gone": "/w"})
+        ))
+        .is_empty()
+    );
+    let mut bounds: Vec<(String, u64)> = app
+        .passes
+        .iter()
+        .map(|(held, pass)| match pass {
+            crate::app::Pass::Until(last) => (held.0.clone(), last.0),
+            crate::app::Pass::Pending => (held.0.clone(), u64::MAX),
+        })
+        .collect();
+    bounds.sort();
+    assert_eq!(
+        bounds,
+        [
+            ("s_aaaaaaaaaaaaaaaa".to_owned(), 3),
+            ("s_bbbbbbbbbbbbbbbb".to_owned(), 9),
+        ],
+        "its own pass is replaced, the foreign one survives"
+    );
+}
+
+#[test]
+fn a_session_stream_accept_for_the_retry_leaves_the_read_only_open_alone() {
+    // A session-stream accept naming the retry id is not the hub retry
+    // answer: the open stays gated with no mark and no notice.
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    let retry = commands(app.on_line(refused_code(first, "io_failed", message)));
+    let second = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("retry id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", second))
+            .is_empty()
+    );
+    assert_eq!(app.session(), Some(&id("s_aaaaaaaaaaaaaaaa")));
+    assert!(!app.on_home(), "the open stays gated");
+    assert!(app.unwritable().is_none(), "no mark without the hub path");
+    assert!(app.notice().is_none(), "no failure renders");
+}
+
+#[test]
+fn a_second_read_only_open_starts_with_no_mark() {
+    // Leaving clears the read-only mark: the next open starts with no
+    // mark, so no stale bar gates its draft before its own accept.
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    let second = retry_full(&mut app, message);
+    assert!(
+        app.on_line(accepted(
+            &second,
+            json!({"last_seq": 3, "workspace_gone": "/w"})
+        ))
+        .is_empty()
+    );
+    assert_eq!(app.unwritable(), Some("/w"));
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(crate::keys::Key::Esc, now);
+    assert!(app.on_home());
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
+    assert!(
+        app.unwritable().is_none(),
+        "leave cleared the mark for the next open"
+    );
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    let retry = commands(app.on_line(refused_code(first, "io_failed", message)));
+    let third = retry[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("retry id"));
+    assert!(
+        app.on_line(accepted(
+            third,
+            json!({"last_seq": 3, "workspace_gone": "/w"})
+        ))
+        .is_empty()
+    );
+    assert_eq!(app.unwritable(), Some("/w"), "the next open marks anew");
 }
 
 #[test]

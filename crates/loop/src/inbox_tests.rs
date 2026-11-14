@@ -348,6 +348,10 @@ fn extension_job() -> Delivery {
             extension: Some("fiber.test/notes".into()),
             description: "scan".into(),
             output_path: "/child/events.jsonl".into(),
+
+            pgid: None,
+            start_time: None,
+            kind: None,
         },
         contract::events::DelegateStarted {
             job_id: id,

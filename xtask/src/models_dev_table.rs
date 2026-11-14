@@ -66,7 +66,9 @@ const OFF_LOW_MEDIUM_HIGH_XHIGH_MAX: &[&str] = &["off", "low", "medium", "high",
 const OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX: &[&str] =
     &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const OFF_LOW_MEDIUM_HIGH: &[&str] = &["off", "low", "medium", "high"];
+const OFF_LOW_HIGH_MAX: &[&str] = &["off", "low", "high", "max"];
 const OFF_HIGH: &[&str] = &["off", "high"];
+const OFF_LOW_HIGH: &[&str] = &["off", "low", "high"];
 /// No thinking level: the model takes none that could be shown, so Fiber
 /// never sends a level. Cited by the record that shows why.
 const NO_LEVELS: &[&str] = &[];
@@ -80,11 +82,9 @@ const LOW_MEDIUM_HIGH: &[&str] = &["low", "medium", "high"];
 const LOW_HIGH_MAX: &[&str] = &["low", "high", "max"];
 const LOW_MEDIUM_HIGH_XHIGH: &[&str] = &["low", "medium", "high", "xhigh"];
 const LOW_MEDIUM_HIGH_XHIGH_MAX: &[&str] = &["low", "medium", "high", "xhigh", "max"];
-const LOW_HIGH_XHIGH_MAX: &[&str] = &["low", "high", "xhigh", "max"];
 const LOW_MEDIUM_HIGH_MAX: &[&str] = &["low", "medium", "high", "max"];
 const OFF_MINIMAL_LOW_MEDIUM_HIGH_MAX: &[&str] =
     &["off", "minimal", "low", "medium", "high", "max"];
-const MEDIUM_XHIGH: &[&str] = &["medium", "xhigh"];
 const MEDIUM_HIGH_XHIGH: &[&str] = &["medium", "high", "xhigh"];
 const HIGH_ONLY: &[&str] = &["high"];
 const OFF_MINIMAL_LOW_MEDIUM_HIGH: &[&str] = &["off", "minimal", "low", "medium", "high"];
@@ -103,7 +103,7 @@ const ANTHROPIC: Package = Package {
     provider: r#"{"credential":{"env":"ANTHROPIC_API_KEY"},"name":"anthropic","reviewer_model":"claude-sonnet-5-5"}"#,
     protocol: ProtocolRule::Fixed("anthropic-messages"),
     base_url: "https://api.anthropic.com/v1",
-    drop_deprecated: false,
+    drop_deprecated: true,
     skip: &[],
     only: &[],
     protocol_overrides: &[],
@@ -117,8 +117,6 @@ const ANTHROPIC: Package = Package {
         ("claude-haiku-4-5-20251001", THINKING_BUDGET_DEFERRED),
         ("claude-opus-4-5", THINKING_BUDGET_DEFERRED),
         ("claude-opus-4-5-20251101", THINKING_BUDGET_DEFERRED),
-        ("claude-sonnet-4-5", THINKING_BUDGET_DEFERRED),
-        ("claude-sonnet-4-5-20250929", THINKING_BUDGET_DEFERRED),
         ("claude-fable-5", DEFERRED),
         ("claude-fable-5-1", DEFERRED),
         ("claude-haiku-5-5", DEFERRED),
@@ -154,12 +152,6 @@ const ANTHROPIC: Package = Package {
             OFF_MINIMAL_LOW_MEDIUM_HIGH,
             None,
         ),
-        ("claude-sonnet-4-5", OFF_MINIMAL_LOW_MEDIUM_HIGH, None),
-        (
-            "claude-sonnet-4-5-20250929",
-            OFF_MINIMAL_LOW_MEDIUM_HIGH,
-            None,
-        ),
     ],
 };
 
@@ -174,7 +166,7 @@ const GEMINI: Package = Package {
     provider: r#"{"credential":{"env":"GEMINI_API_KEY"},"name":"gemini","reviewer_model":"gemini-3.8-flash"}"#,
     protocol: ProtocolRule::Fixed("google-generative-ai"),
     base_url: "https://generativelanguage.googleapis.com/v1beta",
-    drop_deprecated: false,
+    drop_deprecated: true,
     skip: &[],
     only: &[],
     protocol_overrides: &[],
@@ -182,7 +174,6 @@ const GEMINI: Package = Package {
     by_protocol: &[],
     by_model: &[
         ("gemini-3.1-flash-lite", GOOGLE_SEARCH),
-        ("gemini-3.1-flash-lite-preview", GOOGLE_SEARCH),
         ("gemini-3.1-pro-preview", GOOGLE_SEARCH),
         ("gemini-3.1-pro-preview-customtools", GOOGLE_SEARCH),
         ("gemini-3.5-flash", GOOGLE_SEARCH),
@@ -200,11 +191,6 @@ const GEMINI: Package = Package {
         ("gemini-3-flash-preview", MINIMAL_LOW_MEDIUM_HIGH, None),
         ("gemini-3.1-flash-lite", MINIMAL_LOW_MEDIUM_HIGH, None),
         ("gemini-3.1-flash-lite-image", MINIMAL_HIGH, None),
-        (
-            "gemini-3.1-flash-lite-preview",
-            MINIMAL_LOW_MEDIUM_HIGH,
-            None,
-        ),
         (
             "gemini-3.1-flash-live-preview",
             MINIMAL_LOW_MEDIUM_HIGH,
@@ -238,7 +224,7 @@ const OPENAI: Package = Package {
     provider: r#"{"credential":{"env":"OPENAI_API_KEY"},"name":"openai","reviewer_model":"gpt-6-luna"}"#,
     protocol: ProtocolRule::Fixed("openai-responses"),
     base_url: "https://api.openai.com/v1",
-    drop_deprecated: false,
+    drop_deprecated: true,
     skip: &["gpt-5.6"],
     only: &[],
     protocol_overrides: &[],
@@ -248,7 +234,6 @@ const OPENAI: Package = Package {
         ("gpt-4.1", OPENAI_SEARCH),
         ("gpt-4.1-mini", OPENAI_SEARCH),
         ("gpt-4o", OPENAI_SEARCH),
-        ("gpt-4o-2024-05-13", OPENAI_SEARCH),
         ("gpt-4o-2024-08-06", OPENAI_SEARCH),
         ("gpt-4o-2024-11-20", OPENAI_SEARCH),
         ("gpt-4o-mini", OPENAI_SEARCH),
@@ -274,7 +259,6 @@ const OPENAI: Package = Package {
         ("gpt-6-sol", OPENAI_SEARCH_DEFERRED),
         ("gpt-6.1-sol", OPENAI_SEARCH),
         ("o3", OPENAI_SEARCH),
-        ("o4-mini", OPENAI_SEARCH),
     ],
     thinking: &[
         ("gpt-5", MINIMAL_LOW_MEDIUM_HIGH, None),
@@ -283,7 +267,6 @@ const OPENAI: Package = Package {
         ("gpt-5-pro", HIGH_ONLY, None),
         ("gpt-5.1", OFF_LOW_MEDIUM_HIGH, None),
         ("gpt-5.2", OFF_LOW_MEDIUM_HIGH_XHIGH, None),
-        ("gpt-5.2-chat-latest", MEDIUM_XHIGH, None),
         ("gpt-5.2-pro", MEDIUM_HIGH_XHIGH, None),
         ("gpt-5.3-codex", OFF_LOW_MEDIUM_HIGH_XHIGH, None),
         ("gpt-5.3-codex-spark", LOW_MEDIUM_HIGH_XHIGH, None),
@@ -311,16 +294,12 @@ const OPENAI: Package = Package {
             None,
         ),
         ("gpt-realtime-2.1", MINIMAL_LOW_MEDIUM_HIGH_XHIGH, None),
-        ("o1", LOW_MEDIUM_HIGH, None),
-        ("o1-pro", LOW_MEDIUM_HIGH, None),
         ("o3", LOW_MEDIUM_HIGH, None),
-        ("o3-mini", LOW_MEDIUM_HIGH, None),
         ("o3-pro", LOW_MEDIUM_HIGH, None),
-        ("o4-mini", LOW_MEDIUM_HIGH, None),
     ],
 };
 
-/// Codex's models: the four subscription models models.dev lists under
+/// Codex's models: the five subscription models models.dev lists under
 /// `openai`, all on `openai-responses` with the session cache-key header.
 /// The ChatGPT backend serves a 272000-token window, not the 1050000 the
 /// OpenAI API lists, so the table pins `context_window`.
@@ -330,9 +309,16 @@ const CODEX: Package = Package {
     provider: r#"{"headers":{"originator":"fiber"},"login":"browser","name":"codex","reviewer_model":"gpt-6-luna"}"#,
     protocol: ProtocolRule::Fixed("openai-responses"),
     base_url: "https://chatgpt.com/backend-api/codex",
-    drop_deprecated: false,
+    drop_deprecated: true,
     skip: &[],
-    only: &["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"],
+    only: &[
+        "gpt-6-astra",
+        "gpt-6-luna",
+        "gpt-6-sol",
+        "gpt-6.1-sol",
+        "gpt-6.1-terra",
+    ],
+
     protocol_overrides: &[],
     every_model: r#"{"compat":{"cache_key_header":"session_id","store":false},"context_window":272000,"subscription":true}"#,
     by_protocol: &[],
@@ -342,6 +328,7 @@ const CODEX: Package = Package {
         ("gpt-6-sol", LOW_MEDIUM_HIGH_XHIGH_MAX, Some("medium")),
         ("gpt-6-astra", LOW_MEDIUM_HIGH_XHIGH_MAX, Some("low")),
         ("gpt-6-luna", LOW_MEDIUM_HIGH_XHIGH_MAX, Some("medium")),
+        ("gpt-6.1-terra", LOW_MEDIUM_HIGH_XHIGH_MAX, Some("low")),
     ],
 };
 
@@ -352,7 +339,7 @@ const MUSE: Package = Package {
     provider: r#"{"credential":{"env":"META_API_KEY"},"name":"muse","reviewer_model":"muse-spark-1.3"}"#,
     protocol: ProtocolRule::Fixed("openai-responses"),
     base_url: "https://api.meta.ai/v1",
-    drop_deprecated: false,
+    drop_deprecated: true,
     skip: &[],
     only: &[],
     protocol_overrides: &[],
@@ -369,6 +356,8 @@ const MUSE: Package = Package {
             MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
             None,
         ),
+        ("muse-ember-1.0", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("muse-wonder-1.0", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
     ],
 };
 
@@ -418,19 +407,10 @@ const OPENCODE_GO: Package = Package {
     ],
     by_model: &[],
     thinking: &[
-        // research/opencode-thinking/raw/go-deepseek-v4-flash.json (every
-        // level 200s).
-        (
-            "deepseek-v4-flash",
-            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
-            None,
-        ),
-        // research/opencode-thinking/raw/go-deepseek-v4-flash-vision-exp.json
-        (
-            "deepseek-v4-flash-vision-exp",
-            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
-            None,
-        ),
+        // research/opencode-thinking/raw/go-beam-free.json (low through
+        // max 200; off and minimal are rejected as unsupported) and
+        // models.dev's effort values for this id.
+        ("beam-free", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-deepseek-v4-pro.json (every
         // level 200s).
         (
@@ -445,6 +425,10 @@ const OPENCODE_GO: Package = Package {
             OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
             None,
         ),
+        // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon:
+        // thinking levels LOW, MEDIUM (default) and HIGH; models.dev
+        // names the same three for this id.
+        ("gemini-4-argon", LOW_MEDIUM_HIGH, None),
         // research/opencode-thinking/raw/go-glm-5.2.json (`off` is
         // rejected: a thinking-only model).
         ("glm-5.2", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
@@ -456,23 +440,34 @@ const OPENCODE_GO: Package = Package {
         // https://docs.x.ai/developers/model-capabilities/text/reasoning:
         // `reasoning.effort` takes low, medium, high and xhigh (4.6 and
         // later); reasoning cannot be disabled, so no `off`.
-        ("grok-4.6", LOW_MEDIUM_HIGH_XHIGH, None),
         ("grok-4.7", LOW_MEDIUM_HIGH_XHIGH, None),
         // research/opencode-thinking/raw/go-hy3.json
         ("hy3", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        // models.dev names effort values none and high for this id.
+        ("hy4", OFF_HIGH, None),
         // research/opencode-thinking/raw/go-hy4-preview.json
         ("hy4-preview", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        // research/opencode-thinking/raw/go-iceman-contributor-free.json:
+        // the route enumerates low, medium, high and xhigh as the
+        // supported values (max 400s).
+        ("iceman-contributor-free", LOW_MEDIUM_HIGH_XHIGH, None),
         // research/opencode-thinking/raw/go-kimi-k2.7-code.json
         ("kimi-k2.7-code", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // https://platform.moonshot.ai/docs/guide/use-reasoning-effort:
         // K3 configures reasoning effort with top-level `reasoning_effort`,
         // supporting low, high and max with a max default.
         ("kimi-k3", LOW_HIGH_MAX, None),
+        // https://platform.moonshot.ai/docs/guide/use-reasoning-effort:
+        // K3.1 Pro configures reasoning effort with top-level
+        // `reasoning_effort`, supporting low, high and max with a max
+        // default; models.dev names the same three for this id.
+        ("kimi-k3.1-pro", LOW_HIGH_MAX, None),
         // research/opencode-thinking/raw/go-longcat-2.0.json
         ("longcat-2.0", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // research/opencode-thinking/raw/go-longcat-2.5-preview-free.json
+        // research/opencode-thinking/raw/go-longcat-2.5-free.json (every
+        // level 200s, as on longcat-2.0 and longcat-2.5-preview-free).
         (
-            "longcat-2.5-preview-free",
+            "longcat-2.5-free",
             OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
             None,
         ),
@@ -485,11 +480,12 @@ const OPENCODE_GO: Package = Package {
         ("mimo-v2.6-flash", OFF_LOW_MEDIUM_HIGH_MAX, None),
         // research/opencode-thinking/raw/go-mimo-v2.6-pro.json
         ("mimo-v2.6-pro", OFF_LOW_MEDIUM_HIGH_MAX, None),
-        // research/opencode-thinking/raw/go-minimax-m2.7.json (messages;
-        // completions is unsupported there).
-        ("minimax-m2.7", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-minimax-m3.json
         ("minimax-m3", OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        // https://platform.minimax.io/docs/guides/text-generation: effort
+        // accepts low, medium, high, xhigh and max (thinking cannot be
+        // disabled); models.dev names the same five for this id.
+        ("minimax-m3.1-flash", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-muse-spark-1.2-contributor.json:
         // the route enumerates minimal through xhigh.
         (
@@ -509,14 +505,10 @@ const OPENCODE_GO: Package = Package {
         ("qwen3.8-flash", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/go-qwen3.8-max.json
         ("qwen3.8-max", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // research/opencode-thinking/raw/go-space-bunny.json
-        ("space-bunny", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
-        // research/opencode-thinking/raw/go-step-5-preview-free.json
-        (
-            "step-5-preview-free",
-            MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
-            None,
-        ),
+        // https://platform.stepfun.ai/docs/en/guides/models/step-5-preview:
+        // reasoning effort supports low, medium and high; models.dev names
+        // the same three for this id.
+        ("step-5-preview", LOW_MEDIUM_HIGH, None),
     ],
 };
 
@@ -539,6 +531,10 @@ const OPENCODE_ZEN: Package = Package {
         // The route retired this model
         // (research/opencode-thinking/raw/zen-exo-free.json).
         "exo-free",
+        // Model is unavailable on Go; FreeUsageLimitError on Zen
+        // (research/opencode-thinking/raw/go-iceman-free.json and
+        // raw/zen-iceman-free.json).
+        "iceman-free",
         // Endpoint is unavailable on Zen, unavailable on Go
         // (research/opencode-thinking/raw/zen-kimi-k2.5.json and
         // raw/go-kimi-k2.5.json).
@@ -592,19 +588,19 @@ const OPENCODE_ZEN: Package = Package {
         // thinking (`docs/model-routing.md`, "Thinking").
         ("claude-haiku-4-5", GATEWAY_THINKING_BUDGET),
         ("claude-opus-4-5", GATEWAY_THINKING_BUDGET),
-        ("claude-sonnet-4", GATEWAY_THINKING_BUDGET),
         ("claude-sonnet-4-5", GATEWAY_THINKING_BUDGET),
     ],
     thinking: &[
-        // https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking:
-        // Claude Sonnet 4 is an earlier Claude 4 model, so it keeps manual
-        // budget thinking; the compat layer above carries the budget flag.
-        ("claude-sonnet-4", OFF_MINIMAL_LOW_MEDIUM_HIGH, None),
-        // research/opencode-thinking/raw/zen-deepseek-v4-flash.json:
-        // served by deepseek-v4.1-flash upstream, which supports only low,
-        // high, xhigh and max there (off, minimal and medium are rejected
-        // as unsupported).
-        ("deepseek-v4-flash", LOW_HIGH_XHIGH_MAX, None),
+        // research/opencode-thinking/raw/go-beam-free.json (low through
+        // max 200); Zen answers FreeUsageLimitError
+        // (research/opencode-thinking/raw/zen-beam-free.json); models.dev
+        // names the same five for this id.
+        ("beam-free", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        // https://ngrok.com/changelog/ai-gateway-claude-fable-5-2: adaptive
+        // thinking is always on; effort sets low, medium, high, xhigh or
+        // max; models.dev names the same five for this id.
+        ("claude-fable-5-2", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("claude-sonnet-4-5", OFF_MINIMAL_LOW_MEDIUM_HIGH, None),
         // research/opencode-thinking/raw/zen-deepseek-v4-pro.json (every
         // level 200s).
         (
@@ -618,12 +614,27 @@ const OPENCODE_ZEN: Package = Package {
             OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
             None,
         ),
+        // https://docs.anyfast.ai/guides/model-api/deepseek/deepseek-v4-1-flash:
+        // reasoning_effort takes none, low, high and max; models.dev names
+        // effort values low, high and max for this id.
+        ("deepseek-v4.1-flash-free", OFF_LOW_HIGH_MAX, None),
+        // https://docs.recursive.com/guides/coding-agents: leave reasoning
+        // effort out, since Flint always reasons, so Fiber sends no level.
+        ("flint-40b-free", NO_LEVELS, None),
         // research/opencode-thinking/raw/zen-gemini-3-flash.json (every
         // level but xhigh 200s; xhigh 400s as an invalid thinking level).
         ("gemini-3-flash", OFF_MINIMAL_LOW_MEDIUM_HIGH_MAX, None),
         // research/opencode-thinking/raw/zen-gemini-3.1-pro.json (low,
         // medium, high and max 200; off, minimal and xhigh 400).
         ("gemini-3.1-pro", LOW_MEDIUM_HIGH_MAX, None),
+        // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon:
+        // thinking levels LOW, MEDIUM (default) and HIGH; models.dev
+        // names the same three for this id.
+        ("gemini-4-argon", LOW_MEDIUM_HIGH, None),
+        // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-carbon:
+        // thinking levels LOW, MEDIUM (default) and HIGH; models.dev
+        // names the same three for this id.
+        ("gemini-4-carbon", LOW_MEDIUM_HIGH, None),
         // research/opencode-thinking/raw/zen-glm-5.json (minimal through
         // max 200; off 400: a thinking-only model).
         ("glm-5", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
@@ -638,6 +649,10 @@ const OPENCODE_ZEN: Package = Package {
         ("glm-5.3", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/zen-glm-5.3-flash.json
         ("glm-5.3-flash", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        // https://docs.z.ai/guides/llm/glm-5.3: always reasons; effort
+        // takes low, high and max; models.dev names the same three for
+        // this id.
+        ("glm-5.3-flash-free", LOW_HIGH_MAX, None),
         // research/opencode-thinking/raw/zen-gpt-5-codex.json: the route
         // enumerates low, medium and high as the supported efforts.
         ("gpt-5-codex", LOW_MEDIUM_HIGH, None),
@@ -663,6 +678,14 @@ const OPENCODE_ZEN: Package = Package {
         ("grok-4.5", LOW_MEDIUM_HIGH, None),
         ("grok-4.6", LOW_MEDIUM_HIGH_XHIGH, None),
         ("grok-4.7", LOW_MEDIUM_HIGH_XHIGH, None),
+        // https://docs.nvidia.com/dynamo/dev/recipes/inkling: named levels
+        // none, minimal, low, medium, high and max (default high);
+        // models.dev names the same six for this id.
+        (
+            "inkling-2-small-free",
+            OFF_MINIMAL_LOW_MEDIUM_HIGH_MAX,
+            None,
+        ),
         // research/opencode-thinking/raw/go-kimi-k2.6.json (every level
         // 200s, including `off`); Zen answers `Endpoint is unavailable`
         // (research/opencode-thinking/raw/zen-kimi-k2.6.json).
@@ -675,6 +698,14 @@ const OPENCODE_ZEN: Package = Package {
         // K3 configures reasoning effort with top-level `reasoning_effort`,
         // supporting low, high and max with a max default.
         ("kimi-k3", LOW_HIGH_MAX, None),
+        // research/opencode-thinking/raw/go-longcat-2.5-free.json (every
+        // level 200s); Zen answers FreeUsageLimitError
+        // (research/opencode-thinking/raw/zen-longcat-2.5-free.json).
+        (
+            "longcat-2.5-free",
+            OFF_MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX,
+            None,
+        ),
         // research/opencode-thinking/raw/zen-minimax-m2.5.json (every level
         // but minimal 200s).
         ("minimax-m2.5", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
@@ -684,6 +715,10 @@ const OPENCODE_ZEN: Package = Package {
         // research/opencode-thinking/raw/zen-minimax-m3.json (every level
         // but minimal 200s).
         ("minimax-m3", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        // https://platform.minimax.io/docs/guides/text-generation: effort
+        // accepts low, medium, high, xhigh and max; models.dev names the
+        // same five for this free-tier id.
+        ("minimax-m3.1-flash-free", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         // research/opencode-thinking/raw/zen-mistral-large-4.json (the
         // `high` reply carries a thinking chunk) and
         // https://docs.mistral.ai/capabilities/reasoning.
@@ -694,6 +729,9 @@ const OPENCODE_ZEN: Package = Package {
         ("muse-spark-1.2", MINIMAL_LOW_MEDIUM_HIGH_XHIGH, None),
         // Same levels as the vendor muse package's row for this id.
         ("muse-spark-1.3", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        // https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3_5-super-vl-120b-a12b-infer:
+        // reasoning_effort takes none, low and high (default high).
+        ("nemotron-3.5-super-vl-free", OFF_LOW_HIGH, None),
         // research/opencode-thinking/raw/zen-qwen3.5-plus.json (every level
         // but minimal 200s).
         ("qwen3.5-plus", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),

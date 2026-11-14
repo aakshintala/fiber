@@ -101,6 +101,8 @@ pub(crate) fn standing_request(request_id: &str) -> Event {
                 prefix: "run tests".into(),
             },
         },
+        arguments: None,
+        changed_by: None,
     })
 }
 
@@ -157,6 +159,10 @@ pub(crate) fn job_started(id: &str) -> Event {
         extension: None,
         description: "npm test".into(),
         output_path: format!("artifacts/{id}.log"),
+
+        pgid: None,
+        start_time: None,
+        kind: None,
     })
 }
 

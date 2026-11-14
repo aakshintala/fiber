@@ -6,17 +6,18 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use contract::ErrorCode;
-use contract::SessionId;
+use contract::commands::hub::HubCommand;
 use contract::commands::{
     AddDirectoryArgs, ChangeWorkspaceArgs, CloseArgs, Command, Compact, ContentArgs, ImportArgs,
     Name, RunCommand, SandboxArgs,
 };
 use contract::events::CommandAccepted;
-use serde_json::json;
+use contract::{CommandId, SessionId};
 
-use super::{App, Effect, Kind, Link, Phase, Surface, session_line};
+use super::{App, Effect, Kind, Link, Phase, Sent, Surface, hub_line, session_line};
 use crate::editor::{OpenFile, Target};
-use crate::import_report::ImportSource;
+use crate::ext::KeyOutcome;
+use crate::import_report::parse_import;
 use crate::input::Draft;
 use crate::keymap::KeyMap;
 use crate::keys::{Edit, Key};
@@ -312,6 +313,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_close,
     },
     CommandEntry {
+        name: "archive",
+        description: "Stops the session and its cascade as /delete does, then archives that one session and goes home, asking nothing.",
+        hint: None,
+        run: run_archive,
+    },
+    CommandEntry {
         name: "delete",
         description: "Stops, then deletes the session on screen.",
         hint: None,
@@ -447,18 +454,22 @@ fn run_sandbox(app: &mut App, rest: &str) -> Option<Effect> {
 }
 
 fn run_import(app: &mut App, rest: &str) -> Option<Effect> {
-    // A bare `/import` imports both sources; anything else goes out as
-    // `source`, and the session refuses what it does not take. The
-    // source rides beside the pending entry under the command's id, so
-    // the accepted answer's report names it; a bare import reports the
-    // generic title.
+    // A bare `/import` imports both sources; a named source imports
+    // that one; anything else is refused locally naming the two, with
+    // the draft kept and nothing sent — the same outcome as the
+    // session's refusal, without a round trip. The source rides beside
+    // the pending entry under the command's id, so the accepted
+    // answer's report names it; a bare import reports the generic
+    // title.
     let rest = rest.trim();
-    let source = (!rest.is_empty()).then(|| rest.to_owned());
-    // The entry carries the import's source, so the accepted answer's
-    // report names it; an unknown source stays a plain command, and
-    // its accept opens no report.
-    let kind = ImportSource::parse(rest).map_or(Kind::Command, Kind::Import);
-    let (effect, _) = app.send_kind(kind, Command::Import(ImportArgs { source }));
+    let Some(source) = parse_import(rest) else {
+        app.push_notice(
+            ErrorCode::InvalidArguments,
+            "`source` must be `claude-code` or `codex`.".to_owned(),
+        );
+        return Some(Effect::None);
+    };
+    let (effect, _) = app.send_kind(Kind::Import(source), Command::Import(ImportArgs { source }));
     Some(effect)
 }
 
@@ -475,6 +486,10 @@ fn run_clear(app: &mut App, _rest: &str) -> Option<Effect> {
 
 fn run_delete(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.delete_on_screen())
+}
+
+fn run_archive(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.archive_on_screen())
 }
 
 /// `/feedback`: with no description, asks for one by leaving the draft
@@ -810,8 +825,13 @@ impl App {
 
     /// A key the draft takes: a character or Backspace, which may open or
     /// search the `@` panel, or ↑ ↓ by wrapped row and then through earlier
-    /// prompts. `None` for any other key.
+    /// prompts. `None` for any other key. While a read-only session is
+    /// attached the draft takes nothing, so typing, Backspace, recall
+    /// and `@` search change nothing and no completion can open.
     pub(super) fn draft_key(&mut self, key: &Key) -> Option<Effect> {
+        if self.unwritable().is_some() {
+            return None;
+        }
         match key {
             Key::Char(ch) => Some(self.type_char(*ch)),
             Key::Backspace => Some(self.backspace()),
@@ -826,6 +846,8 @@ impl App {
             | Key::AltA
             | Key::AltUp
             | Key::AltDown
+            | Key::ShiftUp
+            | Key::ShiftDown
             | Key::AltX
             | Key::AltP
             | Key::AltR
@@ -853,6 +875,26 @@ impl App {
         self.completion.generation
     }
 
+    /// Runs the TUI winner for `name` with `rest`: a handled command
+    /// clears the draft and sends nothing; anything else is consumed
+    /// silently with the draft preserved — the failure already has its
+    /// notice, and a conflict's merge notice stands. A TUI name never
+    /// reaches the driver command path.
+    fn run_tui_command(&mut self, name: &str, rest: &str) -> Effect {
+        let ctx = self.command_ctx();
+        let outcome = self.handle.get().map(|renderer| {
+            let outcome = renderer.run_tui_command(&ctx, name, rest.trim());
+            for (code, text) in renderer.take_pending() {
+                self.push_notice(ErrorCode::from_name(&code), text);
+            }
+            outcome
+        });
+        if outcome == Some(KeyOutcome::Handled) {
+            self.draft.clear();
+        }
+        Effect::None
+    }
+
     /// Runs the draft when its first word is an extension command or a
     /// built-in command; `None` when it is neither, and the draft goes out
     /// as typed. A draft holding an image is never a command: Enter sends
@@ -865,6 +907,19 @@ impl App {
         let draft = draft.trim();
         let (head, rest) = draft.split_once(char::is_whitespace).unwrap_or((draft, ""));
         let name = head.strip_prefix('/')?;
+        if self.completion.tui_conflicts.contains(name) {
+            // A conflicted name runs nowhere: consumed, nothing sent,
+            // no second notice, draft preserved.
+            return Some(Effect::None);
+        }
+        if self
+            .completion
+            .tui_commands
+            .iter()
+            .any(|command| command.name == name)
+        {
+            return Some(self.run_tui_command(name, rest));
+        }
         let extension = self
             .completion
             .extensions
@@ -911,6 +966,18 @@ impl App {
         }
     }
 
+    /// The missing workspace path when the attached session is read
+    /// only: the hub replays its log instead of resuming it
+    /// (`docs/invocation.md`, "Lifecycle"). `None` anywhere else, so
+    /// the read-only bar draws only for a read-only attach and no
+    /// prompt ever leaves one.
+    pub(crate) fn unwritable(&self) -> Option<&str> {
+        match &self.phase {
+            Phase::Attached { session, .. } => self.unwritable_session(session),
+            Phase::Starting | Phase::Pending { .. } => None,
+        }
+    }
+
     /// Resets the screen before a session without clearing its rows,
     /// so a reconnect keeps them for the landing: the conversation and
     /// the draft cleared everywhere else, the old session left running.
@@ -918,6 +985,9 @@ impl App {
     /// False without the reset.
     pub(super) fn reset_session(&mut self) -> bool {
         self.draft.clear();
+        // Leaving and going home end a read-only attach with the open
+        // gate: the next open sets its own mark.
+        self.clear_unwritable();
         // A `/pwd` waiting on the old session's root ends with the
         // detach: going home forgets the wait with the screen.
         self.pwd_pending = false;
@@ -949,9 +1019,15 @@ impl App {
             self.outbox.settled(&asked);
         }
         self.offer = crate::offer::Offer::default();
-        self.completion.slash_rows = slash::rows(&[]);
+        self.completion.session_answer.clear();
         self.completion.extensions.clear();
         self.completion.commands_id = None;
+        // The session rows go with the session; the TUI rows refresh for
+        // home, which holds every loaded winner with no half gate.
+        self.refresh_tui_commands();
+        if self.handle.get().is_none() {
+            self.merge_slash_rows();
+        }
         self.outbox.forget(&super::outbox::Waiting::Commands);
         self.copy_owed = false;
         true
@@ -1041,9 +1117,11 @@ impl App {
     /// A `commands` line for `session`, sent on attach and after each
     /// `reloaded`, `extensions_loaded`, and `turn_started`; its answer,
     /// and no older one, fills the `/` list.
-    /// Until it answers, the list holds the built-ins only.
+    /// Until it answers, the list holds the built-ins and the TUI
+    /// commands only.
     pub(super) fn ask_commands(&mut self, session: &SessionId) -> String {
         let line = self.completion.ask_commands(session);
+        self.merge_slash_rows();
         if let Some(id) = &self.completion.commands_id {
             self.outbox.wait(id, super::outbox::Waiting::Commands);
         }
@@ -1051,9 +1129,12 @@ impl App {
     }
 
     /// A session's `command_accepted`: the answer to the latest `commands`
-    /// sent replaces the session's rows of the `/` list.
+    /// sent replaces the session's rows of the `/` list, re-resolved
+    /// against the TUI commands.
     pub(super) fn commands_answered(&mut self, accepted: &CommandAccepted) {
-        self.completion.commands_answered(accepted);
+        if self.completion.commands_answered(accepted) {
+            self.merge_slash_rows();
+        }
     }
 
     /// Whether the draft starts with an unknown slash command: its first
@@ -1089,6 +1170,11 @@ impl App {
             .iter()
             .any(|row| row.name == name || row.aliases.iter().any(|alias| alias == name))
         {
+            return false;
+        }
+        // A conflicted name has no row: without this `on_enter` refuses
+        // it as unknown before `built_in` consumes it.
+        if self.completion.tui_conflicts.contains(name) {
             return false;
         }
         self.push_notice(
@@ -1140,6 +1226,12 @@ impl App {
         let id = support::mint("c_");
         let args = content_arg(&self.draft);
         let shell = (!has_image).then(|| shell::parse(&text)).flatten();
+        // A read-only session emits nothing new: no prompt, no steer,
+        // no shell run. The bar below is the only affordance.
+        if matches!(&self.phase, Phase::Attached { session, .. } if self.unwritable_session(session).is_some())
+        {
+            return Effect::None;
+        }
         let (kind, line) = match (&self.phase, shell) {
             (Phase::Starting | Phase::Pending { .. }, Some(_)) => {
                 self.notices.push(
@@ -1155,12 +1247,34 @@ impl App {
                 if self.home.launch.model.is_none() && self.model_picker.start_model.is_none() {
                     return self.open_model_picker(crate::model_picker::Mode::Choose);
                 }
-                let mut args = self.start_args();
+                let Some(mut start) = self.start_args() else {
+                    // Without a workspace the hub would refuse the
+                    // missing key as `invalid_arguments`: keep the
+                    // draft, as the link-down path does.
+                    return Effect::None;
+                };
                 // A session-only choice on home rides this `start`.
-                self.with_start_model(&mut args);
-                self.panel_state.note_start(&args);
-                let line = json!({"id": id, "command": "start", "args": args});
-                (Kind::Start, line.to_string())
+                self.with_start_model(&mut start);
+                self.panel_state
+                    .note_start(&serde_json::to_value(&start).unwrap_or(serde_json::Value::Null));
+                let id = CommandId(id);
+                let sent = Sent {
+                    line: hub_line(&id, HubCommand::Start(start)),
+                    id: id.clone(),
+                };
+                self.phase = Phase::Pending {
+                    command_id: sent.id.0.clone(),
+                };
+                let draft = std::mem::take(&mut self.draft);
+                return match self.outbox.send(
+                    sent.id.0.clone(),
+                    Kind::Start,
+                    draft,
+                    sent.line.clone(),
+                ) {
+                    Some(_) => Effect::SendTracked(vec![sent]),
+                    None => Effect::None,
+                };
             }
             (Phase::Attached { session, .. }, Some((command, send))) => {
                 (Kind::Shell, shell::command(&id, session, command, send))
@@ -1220,8 +1334,16 @@ impl App {
         line
     }
 
-    /// Esc with nothing open interrupts the turn: `cancel`, only when busy.
+    /// Esc with nothing open goes home from a read-only session and
+    /// interrupts the turn otherwise: `cancel`, only when busy.
     pub(super) fn on_esc(&mut self) -> Effect {
+        // A read-only session takes no prompt, so Esc leaves it the way
+        // the go-home action does.
+        if let Phase::Attached { session, .. } = &self.phase
+            && self.unwritable_session(session).is_some()
+        {
+            return self.on_action("go_home");
+        }
         let session = match &self.phase {
             Phase::Attached {
                 session,
