@@ -2866,15 +2866,31 @@ fn an_artifact_write_failure() {
         run_answer("Done.", 0),
     ]);
     arm_fail_artifact_write();
+    let mut watcher = world.log.watch();
     prompt(&world, "hi");
     let outcome = world.loop_mut().turn();
     assert!(
         outcome.is_ok(),
         "the note completes despite the failed artifact write"
     );
-    assert!(
-        kinds(&world).contains(&EventKind::Notice),
-        "the artifact failure is reported as a notice"
+    let notices: Vec<_> = std::iter::from_fn(|| watcher.try_recv().unwrap())
+        .filter(|line| line.kind() == EventKind::Notice)
+        .collect();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].payload["code"], "io_failed");
+    let action = log::read(&world.home.path().join("s_test"))
+        .unwrap()
+        .into_iter()
+        .find(|line| line.kind() == EventKind::ToolCallRequested)
+        .unwrap()
+        .action_id
+        .unwrap();
+    assert_eq!(
+        notices[0].payload["message"],
+        format!(
+            "Could not write artifact artifacts/{}.txt: injected artifact write failure. The result stays in the note request.",
+            action.0
+        )
     );
 }
 
