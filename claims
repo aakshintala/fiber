@@ -344,3 +344,4 @@ crates/tui/src/app/select.rs	fiber-688	plan	2026-11-14T13:56:10Z	roundhouse-7010
 crates/tui/src/app/panel.rs	fiber-688	plan	2026-11-14T13:56:10Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-688-part6	
 crates/tui/src/app/rail.rs	fiber-688	plan	2026-11-14T13:56:10Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-688-part6	
 crates/tui/src/view/drag.rs	fiber-688	plan	2026-11-14T13:56:34Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-688-part6	
+crates/tui/src/app/status_rows.rs	fiber-688	plan	2026-11-14T13:59:16Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-688-part6	
