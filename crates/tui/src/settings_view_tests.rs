@@ -2712,6 +2712,20 @@ fn the_current_theme_is_marked_and_selected() {
 }
 
 #[test]
+fn space_and_enter_choose_the_same_theme() {
+    let fake = themed(rows());
+    let mut by_enter = theme_choices(&fake);
+    one(&mut by_enter, &fake, Key::Enter);
+    let enter_writes = writes(&fake);
+
+    let fake = themed(rows());
+    let mut by_space = theme_choices(&fake);
+    one(&mut by_space, &fake, Key::Char(' '));
+    assert_eq!(writes(&fake), enter_writes);
+    assert!(names(&by_space).is_empty());
+}
+
+#[test]
 fn choosing_a_theme_writes_the_global_tui_theme_queues_it_and_returns_to_the_tabs() {
     let fake = themed(rows());
     let mut settings = theme_choices(&fake);
