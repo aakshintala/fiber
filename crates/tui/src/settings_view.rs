@@ -60,7 +60,7 @@ const fn screen(
 /// The screens, in the order they end their tab: Key bindings ends
 /// Appearance, Credentials ends Models, Rules then Tools end Permissions,
 /// and Skills then MCP servers end Sessions.
-pub const SCREEN_ROWS: [ScreenRow; 6] = [
+pub const SCREEN_ROWS: [ScreenRow; 8] = [
     screen(
         SettingsTab::Appearance,
         "Key bindings",
@@ -70,10 +70,24 @@ pub const SCREEN_ROWS: [ScreenRow; 6] = [
     ),
     screen(
         SettingsTab::Models,
+        "Scoped models",
+        "Choose which models the picker shows by default.",
+        "/scoped-models",
+        &["scoped_models"],
+    ),
+    screen(
+        SettingsTab::Models,
         "Credentials",
         "Choose which stored credential each provider's sessions use.",
         "/credential",
         &["providers.*.credential"],
+    ),
+    screen(
+        SettingsTab::Permissions,
+        "Reviewer notes",
+        "Edit the notes reviewers use when reviewing a change.",
+        "/reviewer-setup",
+        &["reviewer.context"],
     ),
     screen(
         SettingsTab::Permissions,
@@ -122,13 +136,17 @@ pub const SCREEN_ROWS: [ScreenRow; 6] = [
     ),
 ];
 
-/// The six screens the screen rows open, in [`SCREEN_ROWS`] order.
+/// The screens the screen rows open, in [`SCREEN_ROWS`] order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Screen {
     /// `/keys`.
     Keys,
+    /// `/scoped-models`.
+    ScopedModels,
     /// `/credential`.
     Credentials,
+    /// `/reviewer-setup`.
+    ReviewerNotes,
     /// `/rules`.
     Rules,
     /// `/tools`.
@@ -141,9 +159,11 @@ pub(crate) enum Screen {
 
 impl Screen {
     /// Every screen, in [`SCREEN_ROWS`] order.
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 8] = [
         Self::Keys,
+        Self::ScopedModels,
         Self::Credentials,
+        Self::ReviewerNotes,
         Self::Rules,
         Self::Tools,
         Self::Skills,
@@ -425,6 +445,8 @@ enum Mode {
     /// The theme choices `/theme` opens on: their names, the current one,
     /// the selection.
     Choices {
+        key: String,
+        layer: Layer,
         names: Vec<String>,
         current: Option<String>,
         list: List,
@@ -638,6 +660,9 @@ impl Settings {
                         .enumerate()
                         .filter(|(_, row)| {
                             row.key != "hub.port"
+                                && !SCREEN_ROWS
+                                    .iter()
+                                    .any(|screen| screen.covers.contains(&row.key.as_str()))
                                 && row.presentation.tab == Some(tab)
                                 && key_matches(row, &needle)
                         })
@@ -660,7 +685,13 @@ impl Settings {
             .rows
             .iter()
             .enumerate()
-            .filter(|(_, row)| row.key != "hub.port" && row.presentation.tab == Some(self.tab))
+            .filter(|(_, row)| {
+                row.key != "hub.port"
+                    && !SCREEN_ROWS
+                        .iter()
+                        .any(|screen| screen.covers.contains(&row.key.as_str()))
+                    && row.presentation.tab == Some(self.tab)
+            })
             .map(|(at, _)| Item::Key(at))
             .collect();
         items.extend(
@@ -876,6 +907,17 @@ impl Settings {
     /// its key path, where it is set and when a change applies.
     fn details(&self, item: Item, usage: Option<u64>) -> Vec<String> {
         match item {
+            Item::Screen(Screen::ReviewerNotes) => {
+                let preview = self
+                    .rows
+                    .iter()
+                    .find(|row| row.key == "reviewer.context")
+                    .and_then(|row| current_text(&row.value))
+                    .map(|text| text.lines().next().unwrap_or_default().trim().to_owned())
+                    .filter(|line| !line.is_empty())
+                    .unwrap_or_else(|| "None yet".to_owned());
+                vec!["Edit with /reviewer-setup ›".to_owned(), preview]
+            }
             Item::Screen(screen) => screen.row().map_or_else(Vec::new, |row| {
                 vec![
                     row.metadata.description.to_owned(),
@@ -964,7 +1006,12 @@ impl Settings {
                 self.field_key(key, ctx);
                 Act::Stay
             }
-            Mode::Choices { names, list, .. } => {
+            Mode::Choices {
+                key: choice_key,
+                names,
+                list,
+                ..
+            } => {
                 if *key == Key::Enter {
                     let name = names.get(list.selected()).cloned();
                     return name.map_or(Act::Stay, |name| self.choose(&name, ctx));
@@ -979,7 +1026,9 @@ impl Settings {
                 if list.key(key, names.len(), shown) {
                     // Moving focus previews the focused theme live;
                     // the single-slot queue keeps only the last one.
-                    if let Some(name) = names.get(list.selected()).cloned() {
+                    if choice_key == THEME
+                        && let Some(name) = names.get(list.selected()).cloned()
+                    {
                         return Act::Theme(ctx.seam.theme(ctx.workspace, &name));
                     }
                 }
@@ -1158,10 +1207,16 @@ impl Settings {
                 self.focus_line(list.selected(), ctx);
                 Act::Stay
             }
-            Mode::Choices { names, list, .. } => {
+            Mode::Choices {
+                key: choice_key,
+                names,
+                list,
+                ..
+            } => {
                 let before = list.selected();
                 list.wheel(up, names.len(), shown, 3);
                 if list.selected() != before
+                    && choice_key == THEME
                     && let Some(name) = names.get(list.selected()).cloned()
                 {
                     return Act::Theme(ctx.seam.theme(ctx.workspace, &name));
@@ -1396,6 +1451,30 @@ impl Settings {
                 );
                 let next = next_choice(&names, current_text(value).as_deref());
                 self.step(ctx, layer, &row.key, next)
+            }
+            (SettingControl::Text, _) if row.key == "web_search.backend" => {
+                let mut names = vec!["Default".to_owned()];
+                match ctx.seam.search_backends(ctx.workspace) {
+                    Ok(backends) => names.extend(backends),
+                    Err(error) => {
+                        self.said = vec![error.message];
+                        return Act::Stay;
+                    }
+                }
+                self.open_dynamic_choices(row.key, layer, names, current_text(&row.value), ctx);
+                Act::Stay
+            }
+            (SettingControl::Text, _) if row.key == "hub.default" => {
+                let mut names = vec!["Default".to_owned()];
+                match ctx.seam.hubs() {
+                    Ok(hubs) => names.extend(hubs),
+                    Err(error) => {
+                        self.said = vec![error.message];
+                        return Act::Stay;
+                    }
+                }
+                self.open_dynamic_choices(row.key, layer, names, current_text(&row.value), ctx);
+                Act::Stay
             }
             (SettingControl::Model, _) => {
                 self.awaiting = Some((row.key.clone(), layer));
@@ -1692,6 +1771,31 @@ impl Settings {
             .unwrap_or(0);
         list.select(at, names.len(), self.shown(ctx));
         self.mode = Mode::Choices {
+            key: THEME.to_owned(),
+            layer: Layer::Global,
+            names,
+            current,
+            list,
+        };
+    }
+
+    fn open_dynamic_choices(
+        &mut self,
+        key: String,
+        layer: Layer,
+        names: Vec<String>,
+        current: Option<String>,
+        ctx: &Ctx<'_>,
+    ) {
+        let mut list = List::gutter();
+        let at = names
+            .iter()
+            .position(|name| Some(name) == current.as_ref())
+            .unwrap_or(0);
+        list.select(at, names.len(), self.shown(ctx));
+        self.mode = Mode::Choices {
+            key,
+            layer,
             names,
             current,
             list,
@@ -1701,10 +1805,37 @@ impl Settings {
     /// Writes theme `name` to the global `tui.theme`, then asks for it to
     /// apply. A failed write applies nothing.
     fn choose(&mut self, name: &str, ctx: &Ctx<'_>) -> Act {
-        if self.save(ctx, Layer::Global, THEME, &quoted(name)) {
-            self.mode = Mode::Rows;
+        let Mode::Choices { key, layer, .. } = &self.mode else {
+            return Act::Stay;
+        };
+        let (key, layer) = (key.clone(), *layer);
+        let saved = if name == "Default" {
+            let Some(row) = self.rows.iter().find(|row| row.key == key) else {
+                return Act::Stay;
+            };
+            match (layer_named(&row.layer), current_text(&row.value)) {
+                (Some(source), Some(expected)) => {
+                    match ctx.seam.reset(ctx.workspace, source, &key, &expected) {
+                        Ok(_) => true,
+                        Err(error) => {
+                            self.said = vec![error.message];
+                            false
+                        }
+                    }
+                }
+                _ => true,
+            }
+        } else {
+            self.save(ctx, layer, &key, &quoted(name))
+        };
+        if !saved {
+            return Act::Stay;
+        }
+        self.mode = Mode::Rows;
+        if key == THEME {
             return Act::Theme(ctx.seam.theme(ctx.workspace, name));
         }
+        self.reread(ctx);
         Act::Stay
     }
 }
@@ -1946,12 +2077,14 @@ impl Settings {
         }
         match &self.mode {
             Mode::Choices {
+                key,
                 names,
                 current,
                 list,
+                ..
             } => Frame {
                 joins: Vec::new(),
-                title: format!("Settings › {THEME}"),
+                title: format!("Settings › {key}"),
                 command: "/settings".to_owned(),
                 rows: names
                     .iter()
@@ -2113,9 +2246,13 @@ impl Settings {
         }
         let (value, tag) = match item {
             Item::Screen(screen) => (
-                screen
-                    .row()
-                    .map_or_else(String::new, |row| format!("Open {} ›", row.command)),
+                if screen == Screen::ReviewerNotes {
+                    "Edit with /reviewer-setup ›".to_owned()
+                } else {
+                    screen
+                        .row()
+                        .map_or_else(String::new, |row| format!("Open {} ›", row.command))
+                },
                 None,
             ),
             Item::Key(at) => self
@@ -2804,6 +2941,16 @@ fn shown_value(row: &SettingRow) -> (String, Option<String>) {
         }
         (SettingControl::Model, Shown::Unset) => "Default ›".to_owned(),
         (SettingControl::Model, Shown::Value(text)) => format!("{} ›", as_typed(text)),
+        (SettingControl::Text, Shown::Unset)
+            if matches!(row.key.as_str(), "web_search.backend" | "hub.default") =>
+        {
+            "Default ›".to_owned()
+        }
+        (SettingControl::Text, Shown::Value(text))
+            if matches!(row.key.as_str(), "web_search.backend" | "hub.default") =>
+        {
+            format!("{} ›", as_typed(text))
+        }
         (SettingControl::StringList | SettingControl::RepositoryExtensions, Shown::Unset) => {
             "Default ›".to_owned()
         }

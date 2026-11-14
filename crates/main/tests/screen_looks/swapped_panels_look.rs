@@ -512,13 +512,25 @@ fn the_settings_view_matches_the_doc() {
     assert!(text.contains("scripted/s.json ›"), "{text}");
     assert!(!text.contains("\"scripted/s.json\""), "unquoted: {text}");
     assert!(is_bold(&grid, find_row(&grid, "Models").unwrap(), "Models"));
-    // Move to Permissions, focus its non-numeric Reviewer model row, then
-    // move to Sessions; walk the focus to `compaction.tokens` below.
+    // Move to Permissions and find its non-numeric Reviewer model row. The
+    // tab also contains the screen-covered Reviewer notes row.
     run.write(b"\x1b[C");
-    run.write(b"\x1b[B\x1b[B\x1b[B");
-    run.wait_screen("the focused non-numeric Permissions row", |grid| {
-        focused_label(grid).as_deref() == Some("Reviewer model")
+    let mut grid = run.wait_screen("the Permissions tab", |grid| {
+        find_row(grid, "Reviewer model").is_some()
+            && find_row(grid, "Permissions").is_some_and(|row| is_bold(grid, row, "Permissions"))
     });
+    for _ in 0..12 {
+        if focused_label(&grid).as_deref() == Some("Reviewer model") {
+            break;
+        }
+        let before = focused_label(&grid);
+        run.write(b"\x1b[B");
+        grid = run.wait_screen("the Permissions focus moved", |next| {
+            focused_label(next) != before
+        });
+    }
+    assert_eq!(focused_label(&grid).as_deref(), Some("Reviewer model"));
+    // Move to Sessions; walk the focus to `compaction.tokens` below.
     run.write(b"\x1b[C");
     grid = run.wait_screen("the Sessions tab", |grid| {
         find_row(grid, "Compaction tokens").is_some()

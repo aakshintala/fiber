@@ -135,6 +135,8 @@ pub(in crate::app) struct ConfigViews {
     doctor_blocker: Option<contract::feedback::ReadDoctorBlocker>,
     /// The login opened automatically while completing first-run setup.
     automatic_login: bool,
+    /// A command the settings screen asked to run after a home session starts.
+    after_start_command: Option<String>,
     /// The sole owner of an outstanding hub editor copy.
     copy: Option<crate::remote::RemoteCopy>,
     /// The open view.
@@ -164,6 +166,7 @@ impl Default for ConfigViews {
             doctor: None,
             doctor_blocker: None,
             automatic_login: false,
+            after_start_command: None,
             copy: None,
             open: None,
             theme: None,
@@ -776,6 +779,43 @@ impl App {
         }
     }
 
+    /// Runs a command-table entry after closing `/settings`.
+    fn config_screen_command(&mut self, command: &str) -> Effect {
+        self.config_views.open = None;
+        if matches!(self.phase, super::Phase::Attached { .. }) {
+            self.draft.set(command);
+            return self.built_in().unwrap_or(Effect::None);
+        }
+        self.config_views.after_start_command = Some(command.to_owned());
+        self.draft.clear();
+        if matches!(self.phase, super::Phase::Starting) {
+            self.start_session_for_settings()
+        } else {
+            Effect::None
+        }
+    }
+
+    /// Whether the settings screen is waiting for the home session's
+    /// command table before running its requested command.
+    pub(super) fn has_after_start_command(&self) -> bool {
+        self.config_views.after_start_command.is_some()
+    }
+
+    /// Runs the queued settings command through the same slash-command
+    /// table used for typed input after `/commands` has been folded.
+    pub(super) fn run_after_start_command(&mut self) -> Effect {
+        let Some(command) = self.config_views.after_start_command.take() else {
+            return Effect::None;
+        };
+        self.draft.set(&command);
+        self.built_in().unwrap_or(Effect::None)
+    }
+
+    /// Discards a command queued for a home start that failed.
+    pub(super) fn clear_after_start_command(&mut self) {
+        self.config_views.after_start_command = None;
+    }
+
     /// Carries out what the view asked, then what `/settings` asked of the
     /// app: a screen row opens its screen, and a model row opens the model
     /// picker over the view. The view names no slash command and writes
@@ -790,7 +830,15 @@ impl App {
             None => Effect::None,
             Some(Request::Screen(screen)) => match screen {
                 Screen::Keys => self.open_keys(),
-                Screen::Credentials => self.open_config_view(ConfigView::Credential),
+                Screen::ScopedModels => self.scoped_models_command(),
+                Screen::ReviewerNotes | Screen::Credentials => {
+                    let command = if screen == Screen::ReviewerNotes {
+                        "/reviewer-setup"
+                    } else {
+                        "/credential"
+                    };
+                    self.config_screen_command(command)
+                }
                 Screen::Rules => self.open_config_view(ConfigView::Rules),
                 Screen::Tools => self.open_config_view(ConfigView::Tools),
                 Screen::Skills => self.open_config_view(ConfigView::Skills),
