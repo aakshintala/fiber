@@ -3720,9 +3720,6 @@ fn slider_custom_values_step_to_nearest_tick_and_off_range_values_clamp() {
     assert!((stepped - 0.9).abs() < 1e-12);
 }
 
-/// A width row counts columns after region limits, read from terminal width
-/// while draw width keeps room and cut (`docs/tui.md`, `/settings`, "Controls").
-
 #[test]
 fn keep_exited_lists_and_persists_the_documented_session_counts() {
     let row = |shown| {
@@ -3798,6 +3795,8 @@ fn slider_steps_pin_exact_minimum_and_maximum_boundaries() {
     );
 }
 
+/// A width row counts columns after region limits, read from terminal width
+/// while draw width keeps room and cut (`docs/tui.md`, `/settings`, "Controls").
 #[test]
 fn a_width_row_counts_columns_for_its_width() {
     use SettingControl::Number;

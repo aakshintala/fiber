@@ -194,6 +194,7 @@ fn project_filters_by_exact_key() {
     assert!(page_of(&temp.dir, None, Some("b")).is_empty());
 }
 
+// `docs/invocation.md`, "Archiving" promises these results.
 #[test]
 fn retention_candidates_include_only_unarchived_exited_rows_in_newest_order() {
     let temp = Temp::new();
@@ -749,6 +750,7 @@ fn a_before_outside_the_partition_is_unknown() {
     );
 }
 
+// `docs/invocation.md`, "Archiving" promises these results.
 #[test]
 fn automatic_archive_candidates_union_missing_and_retention_without_recounting() {
     let temp = Temp::new();
@@ -798,6 +800,7 @@ fn automatic_archive_candidates_union_missing_and_retention_without_recounting()
     assert_eq!(stats.len(), 11, "archived row is not statted");
 }
 
+// `docs/invocation.md`, "Archiving" promises these results.
 #[test]
 fn retention_skips_archived_crashed_delegate_running_and_other_project_rows() {
     let temp = Temp::new();
@@ -821,6 +824,7 @@ fn retention_skips_archived_crashed_delegate_running_and_other_project_rows() {
     assert_eq!(selected, BTreeSet::from([SessionId(id(1))]));
 }
 
+// `docs/invocation.md`, "Archiving" promises these results.
 #[test]
 fn a_missing_workspace_and_an_old_retention_row_are_independent_candidates() {
     let temp = Temp::new();
@@ -844,6 +848,7 @@ fn a_missing_workspace_and_an_old_retention_row_are_independent_candidates() {
     );
 }
 
+// `docs/invocation.md`, "Archiving" promises these results.
 #[test]
 fn automatic_archive_zero_keeps_all_except_missing_and_scopes_stats() {
     let temp = Temp::new();

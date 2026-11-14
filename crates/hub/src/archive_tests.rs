@@ -779,6 +779,7 @@ fn recent_listing_repairs_a_marker_without_an_archived_row() {
     assert_eq!(rows[1]["archived"], true);
 }
 
+// `docs/invocation.md`, "Archiving" promises these results.
 #[test]
 fn recent_listing_archives_missing_workspaces_and_archived_mode_counts_it() {
     let temp = Temp::new();
@@ -927,6 +928,7 @@ fn a_cascaded_missing_delegate_is_not_appended_twice_in_one_listing() {
     assert_eq!(rows.len(), 4, "{}", temp.recent_text());
 }
 
+// `docs/invocation.md`, "Archiving" promises these results.
 #[test]
 fn recent_cursor_uses_pre_archive_position_in_the_same_answer() {
     let temp = Temp::new();
@@ -969,6 +971,7 @@ fn recent_cursor_uses_pre_archive_position_in_the_same_answer() {
     assert!(archived_lines(&temp.log_text(1)).is_empty());
 }
 
+// `docs/invocation.md`, "Archiving" promises these results.
 #[test]
 fn keep_two_archives_the_three_oldest_top_level_sessions() {
     let temp = Temp::new();
@@ -1002,6 +1005,7 @@ fn keep_two_archives_the_three_oldest_top_level_sessions() {
     }
 }
 
+// `docs/invocation.md`, "Archiving" promises these results.
 #[test]
 fn keep_two_archives_oldest_parent_and_its_exited_delegates_only() {
     let temp = Temp::new();
@@ -1058,6 +1062,7 @@ fn keep_two_archives_oldest_parent_and_its_exited_delegates_only() {
     }
 }
 
+// `docs/invocation.md`, "Archiving" promises these results.
 #[test]
 fn a_running_delegate_does_not_block_archiving_its_parent() {
     let mut temp = Temp::new();
@@ -1081,6 +1086,7 @@ fn a_running_delegate_does_not_block_archiving_its_parent() {
     assert!(archived_lines(&temp.log_text(2)).is_empty());
 }
 
+// `docs/invocation.md`, "Archiving" promises these results.
 #[test]
 fn a_parent_archive_does_not_reappend_an_already_archived_delegate() {
     let temp = Temp::new();
@@ -1118,6 +1124,7 @@ fn a_parent_archive_does_not_reappend_an_already_archived_delegate() {
     assert_eq!(archived_lines(&temp.log_text(2)).len(), 1);
 }
 
+// `docs/invocation.md`, "Archiving" promises these results.
 #[test]
 fn a_missing_workspace_delegate_is_archived_independently_of_retention() {
     let temp = Temp::new();
@@ -1137,6 +1144,7 @@ fn a_missing_workspace_delegate_is_archived_independently_of_retention() {
     assert_eq!(archived_lines(&temp.log_text(2)).len(), 1);
 }
 
+// `docs/invocation.md`, "Archiving" promises these results.
 #[test]
 fn cursor_after_multiple_pre_archive_rows_keeps_its_exact_page_position() {
     let temp = Temp::new();

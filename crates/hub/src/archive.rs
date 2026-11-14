@@ -23,11 +23,7 @@ use crate::resume::not_found;
 
 /// Tries the archive path for a listing candidate without waiting for
 /// either lock. An empty set leaves it eligible for a later listing.
-pub(crate) fn try_archive(
-    hub: &Hub,
-    candidate: &RecentRow,
-    snapshot: &[RecentRow],
-) -> Vec<RecentRow> {
+fn try_archive(hub: &Hub, candidate: &RecentRow, snapshot: &[RecentRow]) -> Vec<RecentRow> {
     let _gate = match hub.resume_gate.try_lock() {
         Ok(guard) => guard,
         Err(TryLockError::Poisoned(error)) => error.into_inner(),

@@ -56,24 +56,7 @@ pub(crate) fn recent_for_hub(
     hub: &Hub,
     args: &Map<String, Value>,
 ) -> Result<Option<Value>, Refused> {
-    let text = |key: &str| match args.get(key) {
-        None => Ok(None),
-        Some(Value::String(value)) => Ok(Some(value.as_str())),
-        Some(_) => Err(invalid()),
-    };
-    let before = text("before")?;
-    let project = text("project")?;
-    let archived = match args.get("archived") {
-        None => false,
-        Some(Value::Bool(wanted)) => *wanted,
-        Some(_) => return Err(invalid()),
-    };
-    if args
-        .keys()
-        .any(|key| key != "before" && key != "project" && key != "archived")
-    {
-        return Err(invalid());
-    }
+    let (before, project, archived) = parse_recent_args(args)?;
     let raw_snapshot = recent::read_all(&hub.home);
     let newest_snapshot = recent::newest_first(raw_snapshot.clone());
     let running: BTreeSet<String> = lock(&hub.feed.state)
@@ -517,24 +500,7 @@ impl Feed {
     /// are left out.
     #[cfg(test)]
     pub(crate) fn recent(&self, args: &Map<String, Value>) -> Result<Option<Value>, Refused> {
-        let text = |key: &str| match args.get(key) {
-            None => Ok(None),
-            Some(Value::String(value)) => Ok(Some(value.as_str())),
-            Some(_) => Err(invalid()),
-        };
-        let before = text("before")?;
-        let project = text("project")?;
-        let archived = match args.get("archived") {
-            None => false,
-            Some(Value::Bool(wanted)) => *wanted,
-            Some(_) => return Err(invalid()),
-        };
-        if args
-            .keys()
-            .any(|key| key != "before" && key != "project" && key != "archived")
-        {
-            return Err(invalid());
-        }
+        let (before, project, archived) = parse_recent_args(args)?;
         let running = lock(&self.state)
             .entries
             .iter()
@@ -1058,6 +1024,30 @@ fn status_line(row: &RecentRow, payload: &SessionStatus) -> Line {
         seq: None,
         payload,
     })
+}
+
+fn parse_recent_args(
+    args: &Map<String, Value>,
+) -> Result<(Option<&str>, Option<&str>, bool), Refused> {
+    let text = |key: &str| match args.get(key) {
+        None => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.as_str())),
+        Some(_) => Err(invalid()),
+    };
+    let before = text("before")?;
+    let project = text("project")?;
+    let archived = match args.get("archived") {
+        None => false,
+        Some(Value::Bool(wanted)) => *wanted,
+        Some(_) => return Err(invalid()),
+    };
+    if args
+        .keys()
+        .any(|key| key != "before" && key != "project" && key != "archived")
+    {
+        return Err(invalid());
+    }
+    Ok((before, project, archived))
 }
 
 pub(crate) fn invalid() -> Refused {

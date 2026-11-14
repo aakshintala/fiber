@@ -10,10 +10,12 @@ fn keep_exited_is_a_nonnegative_count_defaulting_to_ten() {
         .find(|key| key.path == "session.keep_exited")
         .expect("the retention key is registered");
     assert!(matches!(key.kind, Kind::Count));
+    // `docs/configuration.md`, "Keys": the default is 10; zero keeps all.
     assert_eq!(
         defaults().pointer("/session/keep_exited"),
         Some(&serde_json::json!(10))
     );
+    assert!(key.kind.accepts(&serde_json::json!(0)));
     for value in [0, 5, 10, 20, 50, u64::MAX] {
         assert!(
             key.kind.accepts(&serde_json::json!(value)),

@@ -195,6 +195,7 @@ fn archive_hides_the_session_from_the_list_and_ends_its_log() {
     until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }
 
+// `docs/invocation.md`, "Archiving" promises these results.
 #[test]
 fn archive_command_archives_exited_delegate_descendants() {
     let setup = Setup::new();
