@@ -86,6 +86,15 @@ pub fn exit_code(failure: &Failure) -> i32 {
     }
 }
 
+/// Treats a closed standard output as quiet and retains any other write error.
+pub fn stdout_write_outcome(error: io::Error) -> Result<(), SessionError> {
+    if error.kind() == io::ErrorKind::BrokenPipe {
+        Ok(())
+    } else {
+        Err(SessionError::StdoutFailed { source: error })
+    }
+}
+
 /// The exit code for a failed standard-output write: only a broken pipe is quiet.
 pub fn stdout_write_exit_code(error: &io::Error) -> i32 {
     if error.kind() == io::ErrorKind::BrokenPipe {
@@ -165,5 +174,26 @@ mod stdout_write_tests {
             super::stdout_write_exit_code(&std::io::Error::other("full disk")),
             1
         );
+    }
+
+    #[test]
+    fn stdout_write_outcome_quiets_broken_pipe() {
+        assert!(
+            super::stdout_write_outcome(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn stdout_write_outcome_retains_other_error() {
+        let error = super::stdout_write_outcome(std::io::Error::other("full disk"))
+            .expect_err("a failed output write stays an error");
+        match error {
+            super::SessionError::StdoutFailed { source } => {
+                assert_eq!(source.kind(), std::io::ErrorKind::Other);
+                assert_eq!(source.to_string(), "full disk");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
     }
 }
