@@ -7,7 +7,18 @@ fn lua() -> Lua {
 
 /// Lua whose `host.secret` reads `secrets` from `home`.
 fn lua_in(home: PathBuf, secrets: &[&str]) -> Lua {
+    lua_in_with_memory_cap(home, secrets, crate::MEMORY_CAP)
+}
+
+/// Lua with the host setup installed under `memory_cap`.
+fn lua_in_with_memory_cap(home: PathBuf, secrets: &[&str], memory_cap: usize) -> Lua {
     let lua = Lua::new();
+    lua.set_memory_limit(memory_cap).unwrap();
+    lua.set_named_registry_value(
+        crate::host::MEMORY_CAP_ERROR_KEY,
+        lua.create_string(crate::host::MEMORY_CAP_ERROR).unwrap(),
+    )
+    .unwrap();
     let hub = crate::lua::Hub::new(fakes::clock::FakeClock::new());
     let failures = failure::install(&lua).unwrap();
     install(
@@ -17,7 +28,7 @@ fn lua_in(home: PathBuf, secrets: &[&str]) -> Lua {
             workspace: PathBuf::from("/nonexistent-workspace"),
             extension: "fiber.test/x".to_owned(),
             session: None,
-            memory_cap: crate::MEMORY_CAP,
+            memory_cap,
             secrets: secrets.iter().map(|name| (*name).to_owned()).collect(),
         },
         Arc::new(crate::SystemBrowser::default()),
@@ -888,15 +899,8 @@ fn exec_request_rejects_a_non_table_env() {
 
 #[test]
 fn successful_tool_memory_error_resumes_as_the_precreated_string() {
-    const MEMORY_ERROR: &str = "Lua memory cap exceeded";
     const MEMORY_CAP: usize = 1024 * 1024;
-    let lua = Lua::new();
-    lua.set_memory_limit(MEMORY_CAP).unwrap();
-    lua.set_named_registry_value(
-        "fiber.memory_cap_error",
-        lua.create_string(MEMORY_ERROR).unwrap(),
-    )
-    .unwrap();
+    let lua = lua_in_with_memory_cap(PathBuf::from("/nonexistent-fiber-home"), &[], MEMORY_CAP);
     assert!(
         lua.used_memory() < MEMORY_CAP,
         "test setup fits under its cap"
@@ -909,6 +913,21 @@ fn successful_tool_memory_error_resumes_as_the_precreated_string() {
     let Some(LuaValue::String(message)) = values.next() else {
         panic!("a memory error is delivered as the Lua shim's message string");
     };
-    assert_eq!(message.to_str().unwrap(), MEMORY_ERROR);
+    assert_eq!(message.to_str().unwrap(), crate::host::MEMORY_CAP_ERROR);
+    assert!(values.next().is_none());
+}
+
+#[test]
+fn tool_reply_error_is_returned_as_the_original_shim_message() {
+    let lua = lua();
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let values =
+        super::resume_values(&lua, &clock, Reply::Tool(Err("tool failed".to_owned()))).unwrap();
+    let mut values = values.into_iter();
+    assert!(matches!(values.next(), Some(LuaValue::Nil)));
+    let Some(LuaValue::String(message)) = values.next() else {
+        panic!("tool error stays a Lua shim message");
+    };
+    assert_eq!(message.to_str().unwrap(), "tool failed");
     assert!(values.next().is_none());
 }

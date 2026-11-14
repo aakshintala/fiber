@@ -2651,27 +2651,89 @@ fn bind_delegate_records_its_id_for_a_later_abandon() {
 }
 
 #[test]
-fn resumed_tool_memory_error_is_a_lua_string_error() {
-    const MEMORY_ERROR: &str = "Lua memory cap exceeded";
-    const MEMORY_CAP: usize = 1024 * 1024;
-    let lua = mlua::Lua::new();
-    lua.set_memory_limit(MEMORY_CAP).unwrap();
-    lua.set_named_registry_value(
-        "fiber.memory_cap_error",
-        lua.create_string(MEMORY_ERROR).unwrap(),
-    )
-    .unwrap();
-    assert!(
-        lua.used_memory() < MEMORY_CAP,
-        "test setup fits under its cap"
-    );
-    let thread = lua.create_thread(lua.load("local ok, err = pcall(function() local _, message = coroutine.yield('tool'); error(message, 0) end); return ok, err").into_function().unwrap()).unwrap();
-    let yielded: String = thread.resume(()).unwrap();
-    assert_eq!(yielded, "tool");
-    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let outcome = serde_json::json!({"content": [{"text": "x".repeat(MEMORY_CAP * 2)}]});
-    let values = crate::host::resume_values(&lua, &clock, Reply::Tool(Ok(outcome))).unwrap();
-    let (ok, message): (bool, String) = thread.resume(values).unwrap();
-    assert!(!ok);
-    assert_eq!(message, MEMORY_ERROR);
+fn scheduler_resumes_oversized_tool_as_error_and_incomplete_tool_as_value() {
+    use contract::events::{CallStatus, ToolCallCompleted};
+    use contract::shapes::ContentPart;
+    use contract::tool::InnerCalls;
+    use serde_json::Value;
+    use std::sync::Arc;
+
+    struct Answer(CallStatus, String);
+    impl InnerCalls for Answer {
+        fn run(
+            &self,
+            _extension: &str,
+            _name: &str,
+            _arguments: Value,
+        ) -> Result<Box<ToolCallCompleted>, String> {
+            Ok(Box::new(ToolCallCompleted {
+                status: self.0,
+                reason: None,
+                error: None,
+                process: None,
+                content: vec![ContentPart::Text {
+                    text: self.1.clone(),
+                }],
+                details: None,
+                artifact: None,
+                kept: None,
+                changes: None,
+                control: None,
+                changed_by: None,
+                protected_paths: None,
+                provider_item: None,
+                hosts_surfaced: Vec::new(),
+                loaded: None,
+            }))
+        }
+    }
+
+    const CAP: usize = 1024 * 1024;
+    for (status, reply, expected) in [
+        (
+            CallStatus::Completed,
+            "x".repeat(CAP * 2),
+            "error:Lua memory cap exceeded".to_owned(),
+        ),
+        (
+            CallStatus::Denied,
+            "incomplete".to_owned(),
+            "value:denied".to_owned(),
+        ),
+    ] {
+        let dir = fakes::TempDir::new("fiber-schedule-memory");
+        std::fs::write(
+            dir.path().join("init.lua"),
+            "fiber.command('go', { timeout=5000, run=function() local ok, result = pcall(function() return host.tool('inner', {}) end); if not ok then return 'error:' .. tostring(result) end; return 'value:' .. result.status end })",
+        ).unwrap();
+        let clock = fakes::clock::FakeClock::new();
+        let hub = Hub::new(clock);
+        let id = {
+            let mut shared = hub.lock();
+            let id = shared.push(Target::Command("go".into()), Value::Null, hub.clock().now());
+            shared.runners.insert(id, Arc::new(Answer(status, reply)));
+            shared.phase = Phase::Registering { abandon_at: None };
+            id
+        };
+        let mut start = start_in(dir.path());
+        start.memory_cap = CAP;
+        let serve_hub = Arc::clone(&hub);
+        let serve_thread = std::thread::spawn(move || serve(serve_hub, start));
+        let shared = hub.lock();
+        assert!(
+            hub.wait_for(shared, fakes::MUST_SUCCEED_WITHIN, |shared| {
+                matches!(shared.calls.get(&id), Some(Progress::Done(_)))
+            }),
+            "command completes through scheduler Work::Resume"
+        );
+        let shared = hub.lock();
+        let Some(Progress::Done(Ok(result))) = shared.calls.get(&id) else {
+            panic!("command completes successfully");
+        };
+        assert_eq!(result.as_str(), Some(expected.as_str()));
+        drop(shared);
+        hub.lock().phase = Phase::Stopped(StopReason::Stopped);
+        hub.notify();
+        serve_thread.join().expect("scheduler thread stops");
+    }
 }

@@ -902,6 +902,9 @@ pub(crate) fn duration_ms(elapsed: Duration) -> u64 {
 /// result, or nil, the failure's code and its message, or nil and the
 /// message of an error in the calling code. `clock` is what a held
 /// credential's expiry is judged by.
+pub(crate) const MEMORY_CAP_ERROR_KEY: &str = "fiber.memory_cap_error";
+pub(crate) const MEMORY_CAP_ERROR: &str = "Lua memory cap exceeded";
+
 pub(crate) fn resume_values(
     lua: &Lua,
     clock: &Arc<dyn Clock>,
@@ -934,8 +937,9 @@ pub(crate) fn resume_values(
         // code is nil with the string the Lua half raises.
         Reply::Tool(Ok(outcome)) => match to_lua(lua, &outcome) {
             Ok(value) => Ok(MultiValue::from_vec(vec![value])),
+            // The oversized result may leave too little Lua memory to construct this error.
             Err(mlua::Error::MemoryError(_)) => {
-                let message = lua.named_registry_value("fiber.memory_cap_error")?;
+                let message = lua.named_registry_value(MEMORY_CAP_ERROR_KEY)?;
                 Ok(MultiValue::from_vec(vec![
                     LuaValue::Nil,
                     LuaValue::String(message),

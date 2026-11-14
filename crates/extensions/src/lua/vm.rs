@@ -133,8 +133,8 @@ impl Vm {
         .map_err(lua_error)?;
         lua.set_memory_limit(*memory_cap).map_err(lua_error)?;
         lua.set_named_registry_value(
-            "fiber.memory_cap_error",
-            lua.create_string("Lua memory cap exceeded")
+            crate::host::MEMORY_CAP_ERROR_KEY,
+            lua.create_string(crate::host::MEMORY_CAP_ERROR)
                 .map_err(lua_error)?,
         )
         .map_err(lua_error)?;
