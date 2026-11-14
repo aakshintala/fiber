@@ -148,6 +148,14 @@ fn places(inputs: &PromptInputs, top: &Path) -> Vec<Place> {
         None,
         false,
     ));
+    let personal_dirs: Vec<PathBuf> = places
+        .iter()
+        .filter(|place| place.source == SkillSource::Personal)
+        .map(|place| canonical(&place.dir))
+        .collect();
+    places.retain(|place| {
+        place.source != SkillSource::Repository || !personal_dirs.contains(&canonical(&place.dir))
+    });
     places
 }
 

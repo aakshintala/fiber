@@ -605,6 +605,33 @@ fn get_prints_the_notice_for_an_ignored_repository_key() {
 }
 
 #[test]
+fn get_reports_global_source_when_workspace_fiber_is_home_and_key_is_repo_allowed() {
+    let setup = Setup::new();
+    let home = setup.workspace().join(".fiber");
+    fs::create_dir_all(&home).unwrap();
+    install(&home, "acme", "acme");
+    let file = home.join("config").join("acme.json");
+    setup.write_settings(&file, &json!({"workspace_url": "global.example"}));
+
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    run_get(
+        &home,
+        &setup.workspace(),
+        "extensions.\"acme\".settings.workspace_url",
+        &mut out,
+        &mut err,
+    )
+    .unwrap();
+
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        format!("\"global.example\" from {}\n", file.display())
+    );
+    assert_eq!(String::from_utf8(err).unwrap(), "");
+}
+
+#[test]
 fn get_for_an_uninstalled_extension_is_not_a_configuration_key() {
     let setup = Setup::new();
     let (result, _, _) = setup.get("extensions.\"nobody\".settings.region");

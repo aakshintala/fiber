@@ -709,6 +709,47 @@ fn the_shape_is_exactly_one_transport_and_no_flags_with_a_url() {
 }
 
 #[test]
+fn repository_add_refuses_fiber_home_without_changing_bytes() {
+    let setup = Setup::new();
+    let home = setup.workspace().join(".fiber");
+    fs::create_dir_all(&home).unwrap();
+    let file = home.join("config.json");
+    fs::write(&file, r#"{"model":"global/model"}"#).unwrap();
+    let before = fs::read(&file).unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let mut keys = FakeKeys;
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let result = run_add(
+        &home,
+        &setup.workspace(),
+        Layer::Repository,
+        "docs",
+        Some(URL),
+        &[],
+        &[],
+        &[],
+        &FakeRemote(false),
+        SecretInput {
+            keys: &mut keys,
+            input: &mut Cursor::new(Vec::new()),
+            terminal: false,
+        },
+        Streams {
+            out: &mut out,
+            err: &mut err,
+        },
+        &clock,
+    );
+
+    let failure = result.unwrap_err();
+    assert_eq!(failure.code(), ErrorCode::Usage, "{failure}");
+    assert!(failure.to_string().contains("global"), "{failure}");
+    assert_eq!(fs::read(&file).unwrap(), before);
+}
+
+#[test]
 fn a_duplicate_name_in_the_layer_is_refused_and_keeps_the_bytes() {
     let setup = Setup::new();
     let first = ok(&setup, Layer::Global, "docs", Some(URL), &[], &[], &[], "");

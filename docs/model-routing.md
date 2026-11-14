@@ -959,8 +959,8 @@ Fields only Fiber keeps, such as `thinking_levels`, `compat`, `base_url` and
 A model the vendor lists that none of the three knows is shown and usable,
 marked new (`docs/tui.md`, "The model picker"). It takes cautious values: text
 input only, no thinking levels, a context window of 128000 tokens and an output
-limit of 8192, and no price, so its cost reads as unknown. The mark clears once
-models.dev or the table names the model.
+limit of 8192, and no price, so its cost reads as unknown. The mark and the
+cautious values go once any of the three names the model.
 
 A model models.dev marks `status = "deprecated"` is left out of every list. A
 session or setting that names it by id still runs it, and Fiber shows a

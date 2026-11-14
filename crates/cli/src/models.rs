@@ -223,11 +223,16 @@ fn run(
     // and the process environment serves, as before.
     let lookup = crate::hub_env::placeholder_lookup(home, &providers, clock.as_ref());
     notices.extend(providers.add_session(&extensions, &config, run, &lookup));
-    notices.extend(extensions::models_dev::apply(
+    let catalog = extensions::models_dev::apply(
         home,
         config::models_dev_enabled(&config),
+        Some(config::refresh_after(&config)),
+        clock.wall(),
         &mut providers,
-    ));
+    );
+    let filter_notices = catalog.retain_listed(&mut providers);
+    notices.extend(catalog.notices);
+    notices.extend(filter_notices);
     // Only switched-on providers list: the presence gate drops the rest
     // before the host fill, so no per-model group leaks through for them.
     providers.retain_credentialed(&config);
