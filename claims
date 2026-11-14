@@ -423,3 +423,4 @@ crates/tools/src/shell/sandbox/protected/baseline.rs	fiber-4685	plan	2026-11-14T
 crates/tools/src/shell/sandbox/protected.rs	fiber-4685	plan	2026-11-14T15:10:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tools/src/shell/sandbox/sandbox_tests.rs	fiber-4685	plan	2026-11-14T15:10:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/state.md	fiber-4685	plan	2026-11-14T15:10:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/support/src/project_key.rs	fiber-4685	grant	2026-11-14T15:17:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4685-project-key	
