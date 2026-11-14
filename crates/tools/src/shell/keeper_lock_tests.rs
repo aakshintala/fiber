@@ -48,6 +48,7 @@ const DEADLINE: Duration = Duration::from_secs(30);
 /// The keeper-death fixture entry: spawns the confined writer through the
 /// production `keeper_spawn` seam and parks until killed. Started only by
 /// the keeper-death tests below, never by a filter run.
+#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "started only by the keeper-death fixture"]
 #[allow(
@@ -121,10 +122,10 @@ fn keeper_fixture() {
 fn writer_script(token: &str, ready: &Path, release: &Path, target: &Path) -> String {
     format!(
         "# {token}\necho $$ > {}\nprintf 'damaged' > {}\necho $$ >> {}\nread -r line < {}",
-        quote(ready),
-        quote(target),
-        quote(ready),
-        quote(release),
+        fakes::shell_quote(ready),
+        fakes::shell_quote(target),
+        fakes::shell_quote(ready),
+        fakes::shell_quote(release),
     )
 }
 
@@ -135,17 +136,11 @@ fn writer_script(token: &str, ready: &Path, release: &Path, target: &Path) -> St
 fn grandchild_script(token: &str, ready: &Path, release: &Path, target: &Path) -> String {
     format!(
         "# {token}\necho $$ > {}\nsh -c 'printf \"damaged\" > \"{}\"; echo $$ >> \"{}\"; exec cat \"{}\" > /dev/null' &\nexit 0",
-        quote(ready),
-        quote(target),
-        quote(ready),
-        quote(release),
+        fakes::shell_quote(ready),
+        fakes::shell_quote(target),
+        fakes::shell_quote(ready),
+        fakes::shell_quote(release),
     )
-}
-
-/// A single-quoted shell path: the confined scripts never interpolate one.
-#[cfg(target_os = "linux")]
-fn quote(path: &Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
 /// The forced keeper-death interleaving: a session guard, a keeper fixture
@@ -559,7 +554,10 @@ fn spawn_spec(
     contract::keeper::Spawn {
         id: "keeper-lock-probe".to_owned(),
         program: PathBuf::from("/bin/sh"),
-        args: vec!["-c".to_owned(), format!("touch {}", quote(marker))],
+        args: vec![
+            "-c".to_owned(),
+            format!("touch {}", fakes::shell_quote(marker)),
+        ],
         cwd: work.to_path_buf(),
         env: Vec::new(),
         stdin: contract::keeper::HostStdin::Null,
