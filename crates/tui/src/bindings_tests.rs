@@ -102,13 +102,8 @@ fn only_the_conditional_rows_carry_a_condition() {
     );
 }
 
-/// Doc rows that name a binding the table does not build yet: only row
-/// `open_in_editor` is still unbuilt. It names "the editor" (`tui.editor`,
-/// then `$VISUAL`, then `$EDITOR`); its build ticket (#4591) removes it.
-/// Rows `archive_session` and `delete_session` are built (#4491), and row
-/// `focus_project` is built (#4640), so the filter below skips only the
-/// one pending row.
-const NOT_BUILT: [&str; 1] = ["open_in_editor"];
+/// Doc rows that name a binding the table does not build yet.
+const NOT_BUILT: [&str; 0] = [];
 
 #[test]
 fn the_table_matches_the_doc_row_for_row() {
