@@ -231,7 +231,6 @@ pub(super) struct RestoredLivenessHook {
     answers: Receiver<bool>,
 }
 
-#[cfg(debug_assertions)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RestoredLivenessEvent {
     AfterKillLoopTop,

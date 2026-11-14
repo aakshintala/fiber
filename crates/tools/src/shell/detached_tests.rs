@@ -33,7 +33,7 @@ fn restored_drain_expiry_requires_deadline_and_live_group() {
     let deadline = clock.now();
     let called = AtomicBool::new(false);
     assert!(
-        !super::drain_expired(
+        !super::drain_is_expired(
             deadline
                 .checked_sub(Duration::from_nanos(1))
                 .expect("fake clock deadline has room before its origin"),
@@ -50,15 +50,15 @@ fn restored_drain_expiry_requires_deadline_and_live_group() {
         "liveness is not checked before the deadline"
     );
     assert!(
-        super::drain_expired(deadline, deadline, || true),
+        super::drain_is_expired(deadline, deadline, || true),
         "the boundary is expired while the group remains alive"
     );
     assert!(
-        !super::drain_expired(deadline, deadline, || false),
+        !super::drain_is_expired(deadline, deadline, || false),
         "a group that is no longer alive has not exceeded the drain"
     );
     assert!(
-        super::drain_expired(
+        super::drain_is_expired(
             deadline
                 .checked_add(Duration::from_nanos(1))
                 .expect("fake clock deadline has room after its origin"),
