@@ -1271,7 +1271,7 @@ impl Settings {
     pub(crate) fn click(&mut self, spot: Spot, ctx: &Ctx<'_>) -> Act {
         if let Some(page) = &self.page {
             if let (Spot::Row(at), None) = (spot, &page.field)
-                && at < page.entries.len()
+                && at <= page.entries.len()
             {
                 self.page_select(at, ctx);
                 self.page_key(&Key::Enter, ctx);

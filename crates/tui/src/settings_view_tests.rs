@@ -2623,6 +2623,33 @@ fn the_pages_clicks_and_wheel_move_its_focus_only_outside_a_field() {
     settings.wheel(true, &ctx(&fake));
     assert!(fake.writes().is_empty());
 
+    let mut add_by_click = page(&fake, "scoped_models");
+    let add_row = add_by_click.page.as_ref().unwrap().entries.len();
+    add_by_click.click(Spot::Row(add_row), &ctx(&fake));
+    let mut add_by_enter = page(&fake, "scoped_models");
+    add_by_enter.page_select(add_row, &ctx(&fake));
+    one(&mut add_by_enter, &fake, Key::Enter);
+    assert_eq!(
+        add_by_click
+            .page
+            .as_ref()
+            .unwrap()
+            .field
+            .as_ref()
+            .unwrap()
+            .draft
+            .expand(),
+        add_by_enter
+            .page
+            .as_ref()
+            .unwrap()
+            .field
+            .as_ref()
+            .unwrap()
+            .draft
+            .expand()
+    );
+
     let mut by_space = page(&fake, "scoped_models");
     by_space.click(Spot::Row(500), &ctx(&fake));
     assert_eq!(by_space.page.as_ref().unwrap().list.selected(), 0);
