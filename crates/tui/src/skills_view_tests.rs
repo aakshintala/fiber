@@ -909,7 +909,9 @@ fn a_shadowed_rows_switch_writes_its_name() {
     win.shadows = vec!["/home/skills/tdd/SKILL.md".to_owned()];
     let mut skills = opened(&fake, &[win, shadowed]);
     // The shadowed row is index 1, past the winner.
-    skills.key(&Key::Down, &ctx(&fake));
+    skills.click(Spot::Row(1), &ctx(&fake));
+    assert_eq!(skills.frame(80, 22).title, "Skill tdd");
+    skills.key(&Key::Esc, &ctx(&fake));
     skills.edit_key(&Edit::Right);
     skills.key(&Key::Char(' '), &ctx(&fake));
     assert_eq!(
@@ -1495,9 +1497,9 @@ fn wheel_shifts_three_rows_and_keeps_a_visible_selection() {
         .map(|n| repository(&format!("skill-{n:02}")))
         .collect();
     let mut skills = opened(&fake, &infos);
-    for _ in 0..10 {
-        skills.key(&Key::Down, &ctx(&fake));
-    }
+    skills.click(Spot::Row(10), &ctx(&fake));
+    assert_eq!(skills.frame(80, 22).title, "Skill skill-10");
+    skills.key(&Key::Esc, &ctx(&fake));
     assert_eq!(skills.list.selected(), 10);
     let top = skills.list.top();
     assert!(matches!(skills.wheel(false, &ctx(&fake)), Act::Stay));
@@ -1514,9 +1516,9 @@ fn wheel_move_clears_and_clamp_preserves_what_was_said() {
         .map(|n| repository(&format!("skill-{n:02}")))
         .collect();
     let mut skills = opened(&fake, &infos);
-    for _ in 0..10 {
-        skills.key(&Key::Down, &ctx(&fake));
-    }
+    skills.click(Spot::Row(10), &ctx(&fake));
+    assert_eq!(skills.frame(80, 22).title, "Skill skill-10");
+    skills.key(&Key::Esc, &ctx(&fake));
     skills.said = vec!["noted".to_owned()];
     let top = skills.list.top();
     assert!(matches!(skills.wheel(false, &ctx(&fake)), Act::Stay));

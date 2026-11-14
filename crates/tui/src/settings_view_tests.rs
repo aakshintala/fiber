@@ -2005,23 +2005,34 @@ fn a_reread_keeps_the_focused_key_where_it_is_and_a_vanished_one_falls_to_the_fi
 #[test]
 fn a_click_focuses_a_row_and_a_blank_line_or_the_header_changes_nothing() {
     let fake = Fake::new(rows());
-    let mut settings = tab(&fake, SettingsTab::Models);
+    let mut settings = at(&fake, "model_lists.models_dev");
     let layout = settings.layout(80, 24, None);
     let second = layout.takes[1];
+    let blank = layout
+        .lines
+        .iter()
+        .position(|line| matches!(line, super::Line::Blank))
+        .unwrap();
     let original_focus = settings.focus.clone();
-    settings.click(Spot::Row(second + 1), &ctx(&fake));
+    settings.click(Spot::Row(blank), &ctx(&fake));
     settings.click(Spot::Row(500), &ctx(&fake));
     assert_eq!(settings.focus, original_focus);
     assert!(settings.page.is_none());
     assert!(fake.writes().is_empty());
-    let mut by_enter = tab(&fake, SettingsTab::Models);
-    by_enter.focus_line(second, &ctx(&fake));
-    let enter_act = by_enter.key(&Key::Enter, &ctx(&fake));
+
+    let enter_fake = Fake::new(rows());
+    let mut by_enter = at(&enter_fake, "model_lists.models_dev");
+    let enter_act = by_enter.key(&Key::Enter, &ctx(&enter_fake));
     let click_act = settings.click(Spot::Row(second), &ctx(&fake));
     assert!(matches!(click_act, Act::Stay));
     assert!(matches!(enter_act, Act::Stay));
     assert_eq!(settings.focus, by_enter.focus);
     assert_eq!(settings.page.is_some(), by_enter.page.is_some());
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "model_lists.models_dev", "false")]
+    );
+    assert_eq!(writes(&fake), writes(&enter_fake));
     assert!(matches!(
         settings.click(Spot::Close, &ctx(&fake)),
         Act::Close
@@ -4007,11 +4018,22 @@ fn a_list_page_scrolls_its_focus_into_the_rows_the_lines_below_leave() {
 }
 
 #[test]
-fn space_on_the_add_row_of_an_object_list_writes_nothing() {
+fn space_and_enter_on_the_add_row_of_an_object_list_open_the_entry_field() {
     let fake = Fake::new(extensions(r#"[{"path":"a","required":false}]"#));
     let mut settings = page(&fake, "repository_extensions");
     one(&mut settings, &fake, Key::Down);
     one(&mut settings, &fake, Key::Char(' '));
+    let page = settings.page.as_ref().unwrap();
+    assert!(page.field.is_some(), "Space should open the + Add field");
+    assert_eq!(page.field.as_ref().unwrap().at, None);
+    one(&mut settings, &fake, Key::Esc);
+    one(&mut settings, &fake, Key::Enter);
+    let page = settings.page.as_ref().unwrap();
+    assert!(
+        page.field.is_some(),
+        "Enter should still open the + Add field"
+    );
+    assert_eq!(page.field.as_ref().unwrap().at, None);
     assert!(fake.writes().is_empty(), "{:?}", fake.writes());
 }
 
