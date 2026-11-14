@@ -546,3 +546,4 @@ crates/cli/src/login/reviewer_tests.rs	fiber-4685	plan	2026-11-14T23:23:16Z	Amog
 crates/main/tests/commands/import.rs	fiber-4685	plan	2026-11-14T23:23:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/commands/feedback.rs	fiber-4685	plan	2026-11-14T23:23:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/commands/install_script.rs	fiber-4685	plan	2026-11-14T23:23:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4837	plan	2026-11-14T23:31:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
