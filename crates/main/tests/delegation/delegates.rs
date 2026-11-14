@@ -10703,10 +10703,8 @@ fn a_parent_crash_delivers_the_keeper_completed_delegate_and_backfills_usage() {
                     cusage_id("c_3", 0.02),
                 ]),
                 _ => {
-                    let _received = finish_rx
-                        .lock()
-                        .unwrap()
-                        .recv_timeout(fakes::MUST_SUCCEED_WITHIN);
+                    let _received = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                        .recv(&finish_rx.lock().unwrap());
                     cstream(&[ctext_id("c_final", "delegate completed")])
                 }
             }
