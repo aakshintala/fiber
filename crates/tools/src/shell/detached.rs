@@ -324,6 +324,8 @@ impl RestoredSupervisor {
         support::group::alive(self.restored.pgid)
     }
 
+    // Dev-profile tests never compile this release-only body.
+    #[cfg_attr(false, mutants::skip)]
     #[cfg(not(debug_assertions))]
     fn group_alive(&self) -> bool {
         support::group::alive(self.restored.pgid)
