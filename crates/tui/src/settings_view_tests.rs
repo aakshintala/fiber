@@ -1991,6 +1991,11 @@ fn a_click_focuses_a_row_and_a_blank_line_or_the_header_changes_nothing() {
     let mut settings = tab(&fake, SettingsTab::Models);
     let layout = settings.layout(80, 24, None);
     let second = layout.takes[1];
+    let original_focus = settings.focus.clone();
+    settings.click(Spot::Row(second + 1), &ctx(&fake));
+    settings.click(Spot::Row(500), &ctx(&fake));
+    assert_eq!(settings.focus, original_focus);
+    assert!(settings.page.is_none());
     let mut by_enter = tab(&fake, SettingsTab::Models);
     by_enter.focus_line(second, &ctx(&fake));
     let enter_act = by_enter.key(&Key::Enter, &ctx(&fake));
@@ -1999,17 +2004,6 @@ fn a_click_focuses_a_row_and_a_blank_line_or_the_header_changes_nothing() {
     assert!(matches!(enter_act, Act::Stay));
     assert_eq!(settings.focus, by_enter.focus);
     assert_eq!(settings.page.is_some(), by_enter.page.is_some());
-    // The line between two rows is not a row.
-    settings.click(Spot::Row(second + 1), &ctx(&fake));
-    assert_eq!(
-        settings.focus,
-        Some(super::Focus::Key("model_lists.models_dev".to_owned()))
-    );
-    settings.click(Spot::Row(500), &ctx(&fake));
-    assert_eq!(
-        settings.focus,
-        Some(super::Focus::Key("model_lists.models_dev".to_owned()))
-    );
     assert!(matches!(
         settings.click(Spot::Close, &ctx(&fake)),
         Act::Close
@@ -2630,6 +2624,9 @@ fn the_pages_clicks_and_wheel_move_its_focus_only_outside_a_field() {
     assert!(fake.writes().is_empty());
 
     let mut by_space = page(&fake, "scoped_models");
+    by_space.click(Spot::Row(500), &ctx(&fake));
+    assert_eq!(by_space.page.as_ref().unwrap().list.selected(), 0);
+    assert!(by_space.page.as_ref().unwrap().field.is_none());
     one(&mut by_space, &fake, Key::Char(' '));
     assert!(by_space.page.as_ref().unwrap().field.is_some());
 }
