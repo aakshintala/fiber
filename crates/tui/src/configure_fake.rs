@@ -182,6 +182,10 @@ pub(crate) struct Fake {
     pub(crate) keys_saved: Mutex<Vec<Vec<KeyEdit>>>,
     /// The theme files `themes` lists.
     pub(crate) themes: Vec<String>,
+    /// Installed search backend names returned to the settings picker.
+    pub(crate) search_backends: Vec<String>,
+    /// Configured hub names returned to the settings picker.
+    pub(crate) hubs: Vec<String>,
     /// What `global_file` answers.
     pub(crate) global: PathBuf,
     /// What `rules` answers.
@@ -299,6 +303,8 @@ impl Fake {
             texts: Mutex::new(Ok(String::new())),
             keys_saved: Mutex::new(Vec::new()),
             themes: Vec::new(),
+            search_backends: Vec::new(),
+            hubs: Vec::new(),
             global: file(Layer::Global),
             rules: Mutex::new(Ok((
                 RulesSection {
@@ -682,6 +688,14 @@ impl Configure for Fake {
             },
             |rows| rows.clone(),
         )
+    }
+
+    fn search_backends(&self, _workspace: &Path) -> Result<Vec<String>, ConfigureError> {
+        Ok(self.search_backends.clone())
+    }
+
+    fn hubs(&self) -> Result<Vec<String>, ConfigureError> {
+        Ok(self.hubs.clone())
     }
 
     fn set(

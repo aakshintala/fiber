@@ -696,6 +696,7 @@ fn a_windowless_model_blocks_through_the_window_check() {
             reviewer_model: None,
         };
         let model_data = ModelData {
+            is_new: false,
             id: "m".to_owned(),
             name: None,
             protocol: Protocol::OpenaiResponses,

@@ -386,8 +386,7 @@ pub const KEYS: &[Key] = &[
         StrList,
         YES,
         None,
-        tabbed(
-            SettingsTab::Models,
+        untabbed(
             "Scoped models",
             "The models the model picker shows; none means every installed model.",
         ),
@@ -1187,8 +1186,7 @@ pub const KEYS: &[Key] = &[
     person_files(
         "reviewer.context",
         Str,
-        tabbed(
-            SettingsTab::Permissions,
+        untabbed(
             "Reviewer context",
             "Notes about your environment, in prose, that the reviewer reads after its fixed instructions.",
         ),

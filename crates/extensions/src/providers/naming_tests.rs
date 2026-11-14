@@ -19,6 +19,7 @@ use crate::{Error, Providers, START_ONLY};
 /// A plain model `id` on the test protocol.
 fn model(id: &str) -> ModelData {
     ModelData {
+        is_new: false,
         id: id.to_owned(),
         name: None,
         protocol: Protocol::OpenaiResponses,

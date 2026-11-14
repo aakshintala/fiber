@@ -267,6 +267,10 @@ fn remote_operations_round_trip_their_wire_shapes() {
     );
     assert!(!thinking["description"].as_str().unwrap().is_empty());
     assert_eq!(
+        result(&seam, "search_backends", json!({"workspace":workspace})),
+        json!({"backends":[]})
+    );
+    assert_eq!(
         result(
             &seam,
             "set",
@@ -1556,6 +1560,7 @@ fn remote_operation_documentation_lists_the_complete_wire_surface() {
         names,
         [
             "settings",
+            "search_backends",
             "set",
             "reset",
             "global_file",
@@ -2402,4 +2407,51 @@ fn workspace_files_refuse_non_utf8_and_directories() {
             .code,
         ErrorCode::InvalidArguments
     );
+}
+
+#[test]
+fn settings_omits_client_owned_hub_rows_but_keeps_hub_owned_rows() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let workspace = dirs.workspace("one");
+    write(
+        &home.join("config.json"),
+        r#"{"hub":{"default":"remote","port":45123,"allowed_origins":["https://example.test"],"idle_exit_ms":1200},"hubs":{"remote":{"address":"ws://127.0.0.1:1"}}}"#,
+    );
+    let seam = Seam::new(home);
+    let rows = result(&seam, "settings", json!({"workspace":workspace}))["rows"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let keys: Vec<&str> = rows.iter().filter_map(|row| row["key"].as_str()).collect();
+    assert!(!keys.contains(&"hub.default"), "{keys:?}");
+    assert!(!keys.contains(&"hubs.remote.address"), "{keys:?}");
+    for key in ["hub.port", "hub.allowed_origins", "hub.idle_exit_ms"] {
+        assert!(keys.contains(&key), "hub-owned {key} is missing: {keys:?}");
+    }
+}
+
+#[test]
+fn hub_owned_configure_rejects_client_owned_keys() {
+    let dirs = Dirs::new();
+    let seam = Seam::new(dirs.home());
+    let workspace = dirs.workspace("one");
+    for key in ["hub.default", "hubs.\"remote\".address"] {
+        let set = call(
+            &seam,
+            "set",
+            json!({"workspace":workspace,"layer":"global","key":key,"text":"\"value\""}),
+        );
+        assert_eq!(set.unwrap_err().code, ErrorCode::InvalidArguments, "{key}");
+        let reset = call(
+            &seam,
+            "reset",
+            json!({"workspace":workspace,"layer":"global","key":key,"expected":"\"value\""}),
+        );
+        assert_eq!(
+            reset.unwrap_err().code,
+            ErrorCode::InvalidArguments,
+            "{key}"
+        );
+    }
 }
