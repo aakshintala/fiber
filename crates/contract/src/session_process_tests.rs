@@ -8,7 +8,7 @@
     reason = "test code"
 )]
 
-use super::is_session_process;
+use super::{is_keeper_process, is_session_process};
 
 fn argv(words: &[&[u8]]) -> Vec<Vec<u8>> {
     words.iter().map(|word| word.to_vec()).collect()
@@ -49,6 +49,38 @@ fn other_executables_and_subcommands_are_not_session_processes() {
     ] {
         assert!(!is_session_process(&argv(words)), "{words:?}");
     }
+}
+
+#[test]
+fn only_the_keeper_command_is_a_keeper_process() {
+    assert!(is_keeper_process(&argv(&[
+        b"fiber".as_slice(),
+        b"keeper".as_slice()
+    ])));
+    assert!(is_keeper_process(&argv(&[
+        b"/usr/local/bin/fiber".as_slice(),
+        b"keeper".as_slice(),
+        b"--id".as_slice(),
+        b"s_1".as_slice(),
+    ])));
+    for words in [
+        [].as_slice(),
+        [b"fiber".as_slice()].as_slice(),
+        [b"fiber".as_slice(), b"session"].as_slice(),
+        [b"fiber".as_slice(), b"ask"].as_slice(),
+        [b"fiber".as_slice(), b"keeperx"].as_slice(),
+        [b"other".as_slice(), b"keeper"].as_slice(),
+    ] {
+        assert!(!is_keeper_process(&argv(words)), "{words:?}");
+    }
+}
+
+#[test]
+fn a_keeper_is_also_a_session_process() {
+    assert!(is_session_process(&argv(&[
+        b"fiber".as_slice(),
+        b"keeper".as_slice()
+    ])));
 }
 
 #[test]
