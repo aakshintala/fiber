@@ -1,22 +1,14 @@
 #!/usr/bin/env bash
-# Rebuilds calls.jsonl from the committed synthetic fixture dirs plus
-# seeded.jsonl, then labels first-family verdicts and scans the set clean.
+# Rebuilds the committed reviewer-eval set from retained sampled lines,
+# committed synthetic fixture dirs, and seeded.jsonl; labels synthetic
+# lines and scans the complete set clean.
 #
 #   fixtures/reviewer_eval/extract.sh [--out <file>]
 #
-# Every value the recipe needs is a committed byte or a literal flag:
-# the converter reads `reviewer_consent/`, the one
-# `reviewer_eval/contradictory-consent/` case and `review_person_input/`
-# with an empty scrub context, the python
-# step labels synthetic lines by fixture session (`control-*` sessions
-# block, every other synthetic session passes; `family2` stays null), and
-# `seeded.jsonl` lines keep their block verdicts. The committed
-# `calls.jsonl` is the scan's stdout; any `SCAN-DROP <matcher-class>
-# id=<id>` stderr line aborts the rebuild, so a silently shrunk set fails
-# loudly. Rerunning this script reproduces `calls.jsonl` byte-for-byte.
-#
-# The committed synthetic labels (family1 authored by the session map
-# below, family2 null on every line) await owner review.
+# Sampled calls are lane-authored rewrites; raw sessions are not committed.
+# The recipe retains those rows, regenerates synthetic rows from committed
+# fixtures, appends the seeded tail, and verifies the resulting set.
+# Any SCAN-DROP <matcher-class> id=<id> stderr line aborts the rebuild.
 
 set -euo pipefail
 export LC_ALL=C
@@ -28,7 +20,6 @@ usage() {
 
 FIX_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$FIX_DIR/../../../../.." && pwd)"
-
 OUT="$FIX_DIR/calls.jsonl"
 SEEDED="$FIX_DIR/seeded.jsonl"
 
@@ -46,11 +37,34 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 export TMPDIR="$TMP"
 
+# Preserve the 194 reviewed sample rows exactly; the raw source sessions are
+# deliberately absent. Reject drift rather than silently changing membership.
+python3 - "$FIX_DIR/calls.jsonl" "$TMP/sampled.jsonl" <<'PYEOF'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+rows = []
+with open(source, encoding="utf-8") as fh:
+    for raw in fh:
+        if not raw.strip():
+            continue
+        obj = json.loads(raw)
+        if obj["source"]["kind"] == "sampled":
+            if not obj.get("reason") or obj["labels"].get("family1") is None:
+                raise SystemExit("sampled line %s lost its reason or verdict" % obj["id"])
+            rows.append(raw.rstrip("\n"))
+if len(rows) != 194:
+    raise SystemExit("expected 194 retained sampled lines, found %d" % len(rows))
+with open(target, "w", encoding="utf-8") as fh:
+    for row in rows:
+        fh.write(row + "\n")
+PYEOF
+
 DIRS=()
 while IFS= read -r d; do DIRS+=("$d"); done < <(printf '%s\n' "$FIX_DIR"/../reviewer_consent/*/ | sort)
 DIRS+=("$FIX_DIR/contradictory-consent")
 DIRS+=("$FIX_DIR/../review_person_input")
-
 FLAGS=()
 for d in "${DIRS[@]}"; do FLAGS+=(--synthetic "$d"); done
 if ! ./target/debug/examples/review "${FLAGS[@]}" >"$TMP/synthetic.jsonl" 2>"$TMP/drops.txt"; then
@@ -59,11 +73,11 @@ if ! ./target/debug/examples/review "${FLAGS[@]}" >"$TMP/synthetic.jsonl" 2>"$TM
 fi
 cat "$TMP/drops.txt" >&2
 
-python3 - "$TMP/synthetic.jsonl" "$SEEDED" "$TMP/labelled.jsonl" <<'PYEOF'
+python3 - "$TMP/sampled.jsonl" "$TMP/synthetic.jsonl" "$SEEDED" "$TMP/labelled.jsonl" <<'PYEOF'
 import json
 import sys
 
-synthetic_path, seeded_path, out_path = sys.argv[1:4]
+sampled_path, synthetic_path, seeded_path, out_path = sys.argv[1:5]
 
 
 def emit(obj, kind):
@@ -76,11 +90,13 @@ def emit(obj, kind):
         session = obj.get("source", {}).get("session", "")
         labels["family1"] = "block" if session.startswith("control-") else "pass"
         labels["family2"] = None
-    else:
+    elif kind == "seeded":
         if obj.get("source", {}).get("kind") != "seeded":
             raise SystemExit("seeded input holds kind %r" % (obj.get("source", {}).get("kind"),))
         if labels.get("family1") != "block" or labels.get("family2") is not None:
             raise SystemExit("seeded line %s lost its block verdict" % obj.get("id"))
+    else:
+        raise SystemExit("unknown row kind %s" % kind)
     obj["labels"] = labels
     return json.dumps(obj, separators=(",", ":"))
 
@@ -88,7 +104,7 @@ def emit(obj, kind):
 seen = set()
 count = 0
 with open(out_path, "w", encoding="utf-8") as out:
-    for path, kind in ((synthetic_path, "synthetic"), (seeded_path, "seeded")):
+    for path, kind in ((sampled_path, "sampled"), (synthetic_path, "synthetic"), (seeded_path, "seeded")):
         with open(path, encoding="utf-8") as fh:
             for raw in fh:
                 raw = raw.rstrip("\n")
@@ -97,9 +113,10 @@ with open(out_path, "w", encoding="utf-8") as out:
                     if obj["id"] in seen:
                         raise SystemExit("duplicate id %s" % obj["id"])
                     seen.add(obj["id"])
-                    out.write(emit(obj, kind) + "\n")
+                    out.write(raw if kind == "sampled" else emit(obj, kind))
+                    out.write("\n")
                     count += 1
-print("labelled %d" % count, file=sys.stderr)
+print("assembled %d lines" % count, file=sys.stderr)
 PYEOF
 
 ./target/debug/examples/review --scan "$TMP/labelled.jsonl" >"$OUT" 2>"$TMP/scan.txt"
@@ -108,4 +125,5 @@ if grep -q "SCAN-DROP" "$TMP/scan.txt"; then
   echo "extract.sh: the scan dropped lines; refusing to write a shrunk set" >&2
   exit 1
 fi
+"$FIX_DIR/check_confidential.sh" --project QuotaBar --project pi-extensions "$OUT" "$SEEDED"
 wc -l "$OUT"
