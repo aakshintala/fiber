@@ -1893,7 +1893,7 @@ impl<B: Backend> Loop<B> {
     /// while the editor runs quits with 128 plus its number instead, with
     /// no resume: the run's own restore takes the terminal back.
     fn open_editor(&mut self, target: editor::Target, text: &str) -> LoopResult {
-        let Some(command) = editor::command(&self.var) else {
+        let Some(command) = editor::command(self.app.editor_setting(), &self.var) else {
             self.app
                 .editor_returned(target, Err(editor::NO_EDITOR.to_owned()));
             return Ok(None);
@@ -1934,7 +1934,7 @@ impl<B: Backend> Loop<B> {
     /// quits with 128 plus its number instead, with no resume, as above.
     fn open_file(&mut self, file: editor::OpenFile) -> LoopResult {
         let editor::OpenFile { path, line } = file;
-        let Some(command) = editor::command(&self.var) else {
+        let Some(command) = editor::command(self.app.editor_setting(), &self.var) else {
             self.app
                 .config_file_closed(Err(editor::NO_EDITOR_FILE.to_owned()));
             return Ok(None);

@@ -24,7 +24,7 @@ use crate::configure::{
 use crate::configure_fake::{Fake, controlled, file, placed};
 use crate::editor::OpenFile;
 use crate::home::Launch;
-use crate::keys::{Edit, Key, Mouse, MouseKind};
+use crate::keys::{Button, Edit, Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::TargetId;
 use crate::swapped::Spot;
@@ -70,7 +70,7 @@ fn fake() -> Arc<Fake> {
     Arc::new(fake)
 }
 
-/// The configuration fixture with a free-text row for field-routing tests.
+/// The configuration fixture with a free-text row for the editor picker.
 fn fake_with_editor() -> Arc<Fake> {
     let fake = fake();
     fake.rows
@@ -80,6 +80,24 @@ fn fake_with_editor() -> Arc<Fake> {
         .expect("fixture rows")
         .push(appearance(controlled(
             "tui.editor",
+            Shown::Value("\"vim\"".to_owned()),
+            "global",
+            WriteScope::Any { repo: false },
+            SettingControl::Text,
+        )));
+    fake
+}
+
+/// The configuration fixture with a generic text field for routing tests.
+fn fake_with_text() -> Arc<Fake> {
+    let fake = fake();
+    fake.rows
+        .lock()
+        .expect("fixture rows mutex")
+        .as_mut()
+        .expect("fixture rows")
+        .push(appearance(controlled(
+            "test.text",
             Shown::Value("\"vim\"".to_owned()),
             "global",
             WriteScope::Any { repo: false },
@@ -331,12 +349,62 @@ fn an_approval_waits_until_the_view_closes() {
 }
 
 #[test]
+fn opening_settings_on_a_key_focuses_that_row() {
+    let mut app = attached(fake_with_editor());
+    app.open_config_view_on(ConfigView::Settings, Some("tui.editor"));
+    let rows = app
+        .config_view_screen()
+        .map(|frame| frame.rows)
+        .unwrap_or_default();
+    assert!(
+        rows.iter()
+            .flatten()
+            .any(|row| row.0.contains("tui.editor") && row.2 != crate::swapped::Ink::Plain),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn clicking_the_no_editor_notice_opens_settings_with_editor_focused() {
+    let mut app = attached(fake_with_editor());
+    app.editor_returned(
+        crate::editor::Target::Draft,
+        Err(crate::editor::NO_EDITOR.to_owned()),
+    );
+    let targets = [crate::mouse::Target {
+        id: TargetId::Notice(0),
+        rect: ratatui::layout::Rect::new(0, 0, 40, 1),
+    }];
+    let mut pointer = crate::mouse::Pointer::default();
+    let press = Mouse {
+        kind: MouseKind::Press(Button::Left),
+        col: 1,
+        row: 0,
+    };
+    let release = Mouse {
+        kind: MouseKind::Release,
+        col: 1,
+        row: 0,
+    };
+    app.on_mouse_inner(&press, &targets, &mut pointer, true, now());
+    app.on_mouse_inner(&release, &targets, &mut pointer, true, now());
+    let rows = app
+        .config_view_screen()
+        .map(|frame| frame.rows)
+        .unwrap_or_default();
+    assert!(
+        rows.iter()
+            .flatten()
+            .any(|row| row.0.contains("tui.editor") && row.2 != crate::swapped::Ink::Plain),
+        "{rows:?}"
+    );
+}
+
+#[test]
 fn opening_a_view_drops_its_unsaved_field() {
-    let seam = fake_with_editor();
+    let seam = fake_with_text();
     let mut app = attached(Arc::clone(&seam));
-    slash_settings(&mut app);
-    app.on_key(Key::Down, now());
-    app.on_key(Key::Down, now());
+    app.open_config_view_on(ConfigView::Settings, Some("test.text"));
     app.on_key(Key::Enter, now());
     app.on_key(Key::Char('9'), now());
     let draft = |app: &App| {
@@ -578,10 +646,8 @@ fn a_save_says_the_reload_cost_of_the_session_on_screen() {
 
 #[test]
 fn an_edit_goes_to_the_open_field_not_the_input_box() {
-    let mut app = attached(fake_with_editor());
-    slash_settings(&mut app);
-    app.on_key(Key::Down, now());
-    app.on_key(Key::Down, now());
+    let mut app = attached(fake_with_text());
+    app.open_config_view_on(ConfigView::Settings, Some("test.text"));
     app.on_key(Key::Enter, now());
     app.on_edit(Edit::Paste("9".to_owned()));
     let text = app

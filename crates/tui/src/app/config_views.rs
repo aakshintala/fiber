@@ -242,6 +242,24 @@ impl App {
         Arc::clone(&self.config_views.seam)
     }
 
+    /// The effective client-side editor command, if configured.
+    pub(crate) fn editor_setting(&mut self) -> Option<String> {
+        let seam = self.configure_seam();
+        let workspace = self.view_workspace()?;
+        seam.settings(&workspace, &self.launch_overrides)
+            .ok()?
+            .into_iter()
+            .find(|row| row.key == "tui.editor")
+            .and_then(|row| match row.value {
+                crate::configure::Shown::Value(value) => {
+                    Some(crate::settings_view::as_typed(&value))
+                }
+                crate::configure::Shown::Unset
+                | crate::configure::Shown::Union { .. }
+                | crate::configure::Shown::Redacted(_) => None,
+            })
+    }
+
     /// Runs `/theme <name>`: saves the named theme to the global file
     /// and applies it at once, without opening the picker. The whole
     /// name is matched exactly against the built-ins and the seam's
@@ -394,6 +412,11 @@ impl App {
 
     /// Opens `view`, closing any open, its unsaved edit dropped.
     pub(crate) fn open_config_view(&mut self, view: ConfigView) -> Effect {
+        self.open_config_view_on(view, None)
+    }
+
+    /// Opens a configuration view with an optional setting row focused.
+    pub(crate) fn open_config_view_on(&mut self, view: ConfigView, focus: Option<&str>) -> Effect {
         if self.installing() {
             self.push_notice(ErrorCode::IoFailed, Self::INSTALLING_TEXT.to_owned());
             return Effect::None;
@@ -436,10 +459,12 @@ impl App {
                 let Some(workspace) = self.view_workspace() else {
                     return Effect::None;
                 };
-                Open::Settings(Box::new(Settings::open(
-                    &self.config_ctx(seam.as_ref(), &workspace),
-                    self.launch_overrides.clone(),
-                )))
+                let ctx = self.config_ctx(seam.as_ref(), &workspace);
+                let settings = match focus {
+                    Some(key) => Settings::open_on(&ctx, self.launch_overrides.clone(), key),
+                    None => Settings::open(&ctx, self.launch_overrides.clone()),
+                };
+                Open::Settings(Box::new(settings))
             }
             ConfigView::Theme => {
                 let Some(workspace) = self.view_workspace() else {

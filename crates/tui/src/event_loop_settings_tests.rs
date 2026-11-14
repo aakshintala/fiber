@@ -81,7 +81,7 @@ fn ctrl_g_opens_the_rows_file_and_reads_the_rows_again() {
         std::fs::read_to_string(dir.path().join("config.json")).ok(),
         Some("edited".to_owned())
     );
-    assert_eq!(seam.reads().len(), 2);
+    assert_eq!(seam.reads().len(), 3);
     watchdog.stand_down(fakes::Deadline::after(DEADLINE));
     crate::term::restore();
 }

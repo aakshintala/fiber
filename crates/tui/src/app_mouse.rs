@@ -228,8 +228,12 @@ impl App {
             }
             TargetId::DropSteering(at) => self.drop_steering(at),
             TargetId::Notice(id) => {
-                self.open_notice(id);
-                Effect::None
+                if self.notice_text(id) == Some(crate::editor::NO_EDITOR) {
+                    self.open_config_view_on(crate::app::ConfigView::Settings, Some("tui.editor"))
+                } else {
+                    self.open_notice(id);
+                    Effect::None
+                }
             }
             TargetId::DismissNotice(id) => {
                 self.dismiss_notice(id);
