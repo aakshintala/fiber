@@ -920,9 +920,9 @@ fn other_name_values_do_not_complete_installed_extensions() {
 #[test]
 fn login_values_complete_nothing() {
     let setup = Setup::without_provider();
-    // A login value completes no provider names. File-name fallback is a
-    // shell-side behaviour, pinned by the bash load test running in a
-    // directory that holds a file.
+    // A login value completes no provider names. This probe reads only the
+    // engine's candidates; file-name fallback is shell-side, pinned by
+    // `assert!(!complete.contains("default"))` in the bash load test.
     assert!(
         probe_candidates(
             &setup,
