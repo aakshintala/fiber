@@ -504,3 +504,5 @@ docs/workflow.md	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/ho
 docs/code-quality.md	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/dependencies.md	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/performance.md	fiber-4701	plan	2026-11-14T09:59:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/providers/model_picker_keys.rs	fiber-3961	plan	2026-11-14T10:03:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/providers/model_picker_name.rs	fiber-3961	plan	2026-11-14T10:03:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
