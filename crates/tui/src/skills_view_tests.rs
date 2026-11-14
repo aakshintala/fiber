@@ -1253,6 +1253,11 @@ fn navigation_keeps_the_selected_row_visible_at_small_heights() {
             let rows = skills.frame(80, height).rows.len();
             skills.click(Spot::Row(rows + 1), &context);
             assert_eq!(skills.frame(80, height).title, "Skill d");
+            skills.key(&Key::Esc, &context);
+            let selected = skills.list.selected();
+            let frame = skills.frame(80, height);
+            assert!(frame_has_row(&frame, height, selected));
+            assert_eq!(selected, rows - 1);
         }
     }
 }

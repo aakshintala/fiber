@@ -74,10 +74,13 @@ impl Picker {
 
     /// Moves, chooses or closes; typing never filters.
     pub(crate) fn key(&mut self, key: &Key, height: usize) -> Pick {
+        if key.is_enter_or_space() {
+            return self.choose(false);
+        }
         match key {
             Key::Esc => Pick::Close,
-            Key::Enter | Key::Char(' ') => self.choose(false),
-            Key::Char(_)
+            Key::Enter
+            | Key::Char(_)
             | Key::Backspace
             | Key::CtrlC
             | Key::CtrlO

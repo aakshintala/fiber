@@ -149,14 +149,18 @@ pub(crate) struct Skills {
     /// focused row's mark never sits on a non-skill row, since there is
     /// no header row.
     list: List,
-    /// The two switches' shared state: the switch Space flips.
-    focus: ScopeSwitches,
-    /// Whether keyboard activation targets the selected row rather than a switch.
-    row_focused: bool,
+    /// The focused row or switch.
+    focus: SkillsFocus,
     /// The text pane while open.
     text: Option<Text>,
     /// What the last action said, shown below the rows.
     said: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SkillsFocus {
+    Row,
+    Switch(SwitchScope),
 }
 
 impl Skills {
@@ -172,10 +176,7 @@ impl Skills {
             infos: Vec::new(),
             off,
             list: List::gutter(),
-            focus: ScopeSwitches {
-                focus: SwitchScope::Project,
-            },
-            row_focused: true,
+            focus: SkillsFocus::Row,
             text: None,
             said,
         };
@@ -214,11 +215,10 @@ impl Skills {
         if *key == Key::CtrlG {
             return self.open_file();
         }
-        if *key == Key::Enter || *key == Key::Char(' ') {
-            return if self.row_focused {
-                self.enter(ctx)
-            } else {
-                self.switch(ctx)
+        if key.is_enter_or_space() {
+            return match self.focus {
+                SkillsFocus::Row => self.enter(ctx),
+                SkillsFocus::Switch(_) => self.switch(ctx),
             };
         }
         let shown = self.shown(ctx);
@@ -274,22 +274,24 @@ impl Skills {
     /// Cycles the focus stops: row, project switch, everywhere switch.
     pub(crate) fn edit_key(&mut self, edit: &Edit) {
         match edit {
-            Edit::Left if self.row_focused => {
-                self.row_focused = false;
-                self.focus.focus = SwitchScope::Everywhere;
+            Edit::Left => {
+                self.focus = match self.focus {
+                    SkillsFocus::Row => SkillsFocus::Switch(SwitchScope::Everywhere),
+                    SkillsFocus::Switch(SwitchScope::Everywhere) => {
+                        SkillsFocus::Switch(SwitchScope::Project)
+                    }
+                    SkillsFocus::Switch(SwitchScope::Project) => SkillsFocus::Row,
+                };
             }
-            Edit::Left if self.focus.focus == SwitchScope::Everywhere => {
-                self.focus.focus = SwitchScope::Project;
+            Edit::Right => {
+                self.focus = match self.focus {
+                    SkillsFocus::Row => SkillsFocus::Switch(SwitchScope::Project),
+                    SkillsFocus::Switch(SwitchScope::Project) => {
+                        SkillsFocus::Switch(SwitchScope::Everywhere)
+                    }
+                    SkillsFocus::Switch(SwitchScope::Everywhere) => SkillsFocus::Row,
+                };
             }
-            Edit::Left => self.row_focused = true,
-            Edit::Right if self.row_focused => {
-                self.row_focused = false;
-                self.focus.focus = SwitchScope::Project;
-            }
-            Edit::Right if self.focus.focus == SwitchScope::Project => {
-                self.focus.focus = SwitchScope::Everywhere;
-            }
-            Edit::Right => self.row_focused = true,
             Edit::ShiftEnter
             | Edit::CtrlJ
             | Edit::WordLeft
@@ -316,7 +318,7 @@ impl Skills {
                         .select(at, wrap(&text.raw, ctx.width).len(), shown);
                 } else {
                     self.list.select(at, self.rows_len(ctx.width), shown);
-                    self.row_focused = true;
+                    self.focus = SkillsFocus::Row;
                     return self.enter(ctx);
                 }
                 // The new selection's details lines change the frame's
@@ -330,8 +332,7 @@ impl Skills {
                 }
                 let shown = self.shown(ctx);
                 self.list.select(row, self.rows_len(ctx.width), shown);
-                self.focus.focus = ScopeSwitches::scope_for_at(at);
-                self.row_focused = false;
+                self.focus = SkillsFocus::Switch(ScopeSwitches::scope_for_at(at));
                 self.switch(ctx)
             }
         }
@@ -380,7 +381,9 @@ impl Skills {
             return Act::Stay;
         };
         let name = info.name.clone();
-        let scope = self.focus.focused();
+        let SkillsFocus::Switch(scope) = self.focus else {
+            return Act::Stay;
+        };
         ScopeSwitches::write_then_reread(
             scope,
             self,
@@ -510,7 +513,7 @@ impl Skills {
             title: "Skills".to_owned(),
             command: "/skills".to_owned(),
             rows,
-            list: if self.row_focused {
+            list: if self.focus == SkillsFocus::Row {
                 self.list
             } else {
                 self.list.blur()
@@ -598,7 +601,7 @@ impl Skills {
         };
         let switch = |scope: SwitchScope, at: usize| {
             let (text, ink) =
-                ScopeSwitches::mark(selected, !self.row_focused && self.focus.focused() == scope);
+                ScopeSwitches::mark(selected, self.focus == SkillsFocus::Switch(scope));
             let mark = (text, None, ink);
             let (word, ink) = if self.on_in_scope(&info.name, scope) {
                 ("[on]", Ink::Heading)

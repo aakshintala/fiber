@@ -1292,12 +1292,11 @@ install still running.
   it comes from (`repo`, `personal`, an extension by its bare name, or
   `built in`; an extension named `repo`, `personal` or `built in` reads
   `extension <name>`), whether the model can see it (`seen` or `hidden`),
-  and any skill it shadows, plus whether it is switched off. A switch turns
+  and any skill it shadows with its source and path, plus whether it is switched off. A switch turns
   a skill off or on for this project or everywhere, writing
   `skills.disabled` in that layer; the change reaches the model at the next
   turn start. With row focus, Enter or Space shows its text; with a focused
-  switch, Enter or Space toggles that switch. A row click opens its text.
-  Ctrl+G opens its file
+  switch, Enter or Space toggles that switch. Ctrl+G opens its file
   (`docs/system-prompt.md`, "Skills"); on a remote terminal it opens the
   hub's copy instead ("Swapped views"). A row is "review · checks a diff
   · repo · seen · this project " and its switch, then " · everywhere " and

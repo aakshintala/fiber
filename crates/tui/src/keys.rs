@@ -75,6 +75,13 @@ pub(crate) enum Key {
     CtrlL,
 }
 
+impl Key {
+    /// Whether this key activates the focused row.
+    pub(crate) fn is_enter_or_space(&self) -> bool {
+        matches!(self, Self::Enter | Self::Char(' '))
+    }
+}
+
 /// One key that edits the draft (`docs/tui.md`, "The input box",
 /// "Bindings"). Kept apart from [`Key`]: the approval panel reads only
 /// [`Key`].

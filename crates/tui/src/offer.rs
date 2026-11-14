@@ -282,12 +282,17 @@ impl Offer {
         }
         let send = held.items.len();
         let page = height.saturating_sub(1).max(1);
+        if key.is_enter_or_space() {
+            return Some(if held.cursor == send {
+                OfferKey::Send
+            } else {
+                OfferKey::Source
+            });
+        }
         match key {
             Key::Esc | Key::F1 | Key::AltA | Key::CtrlC => return None,
             Key::Up => held.cursor = crate::swapped::wrap_step(held.cursor, send + 1, -1),
             Key::Down => held.cursor = crate::swapped::wrap_step(held.cursor, send + 1, 1),
-            Key::Enter | Key::Char(' ') if held.cursor == send => return Some(OfferKey::Send),
-            Key::Enter | Key::Char(' ') => return Some(OfferKey::Source),
             Key::PageUp => {
                 held.top = held.top.saturating_sub(page);
                 return Some(OfferKey::Handled);
@@ -297,7 +302,8 @@ impl Offer {
                 held.top = held.top.saturating_add(page).min(last);
                 return Some(OfferKey::Handled);
             }
-            Key::Char(_)
+            Key::Enter
+            | Key::Char(_)
             | Key::Backspace
             | Key::CtrlO
             | Key::End
@@ -641,14 +647,7 @@ fn layout(held: &Held, width: u16) -> (Vec<Row>, Vec<usize>) {
     for (at, (item, decision)) in held.items.iter().zip(&held.decisions).enumerate() {
         cursor_rows.push(rows.len());
         let header = header_line(item, held.cursor == at);
-        let end = to_u16(
-            header
-                .spans
-                .iter()
-                .map(|span| crate::format::width(&span.content))
-                .sum(),
-        );
-        rows.push(clipped(header, vec![(0, end, Spot::Item(at))], width));
+        rows.push(clipped(header, vec![(0, u16::MAX, Spot::Item(at))], width));
         rows.extend(
             item.summary
                 .lines()

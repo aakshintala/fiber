@@ -2013,6 +2013,7 @@ fn a_click_focuses_a_row_and_a_blank_line_or_the_header_changes_nothing() {
     settings.click(Spot::Row(500), &ctx(&fake));
     assert_eq!(settings.focus, original_focus);
     assert!(settings.page.is_none());
+    assert!(fake.writes().is_empty());
     let mut by_enter = tab(&fake, SettingsTab::Models);
     by_enter.focus_line(second, &ctx(&fake));
     let enter_act = by_enter.key(&Key::Enter, &ctx(&fake));
