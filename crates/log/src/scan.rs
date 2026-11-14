@@ -489,9 +489,7 @@ pub struct SessionLock {
     _file: File,
 }
 
-/// Opens `dir`'s lock file for locking: `Some` file when the lock takes,
-/// `None` when another process holds it.
-pub(crate) fn try_lock_file(dir: &Path) -> Result<Option<File>, Error> {
+fn open_lock_file(dir: &Path) -> Result<(PathBuf, File), Error> {
     let path = dir.join(LOCK);
     let file = OpenOptions::new()
         .read(true)
@@ -503,6 +501,13 @@ pub(crate) fn try_lock_file(dir: &Path) -> Result<Option<File>, Error> {
             path: path.clone(),
             source,
         })?;
+    Ok((path, file))
+}
+
+/// Opens `dir`'s lock file for locking: `Some` file when the lock takes,
+/// `None` when another process holds it.
+pub(crate) fn try_lock_file(dir: &Path) -> Result<Option<File>, Error> {
+    let (path, file) = open_lock_file(dir)?;
     match file.try_lock() {
         Ok(()) => Ok(Some(file)),
         Err(TryLockError::WouldBlock) => Ok(None),
@@ -521,17 +526,7 @@ pub(crate) fn lock_file_until(
     if clock.now() >= until {
         return Ok(None);
     }
-    let path = dir.join(LOCK);
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path)
-        .map_err(|source| Error::Io {
-            path: path.clone(),
-            source,
-        })?;
+    let (path, file) = open_lock_file(dir)?;
     let (send, receive) = mpsc::channel();
     let parker = Arc::new(Parker::new());
     let worker_parker = Arc::clone(&parker);

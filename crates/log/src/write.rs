@@ -167,12 +167,10 @@ impl Log {
         if !path.is_file() {
             return Err(Error::NotFound(dir));
         }
-        let Some(mut file) = crate::scan::lock_file_until(&dir, clock.as_ref(), until)? else {
+        let Some(file) = crate::scan::lock_file_until(&dir, clock.as_ref(), until)? else {
             return Ok(None);
         };
-        file.set_len(0).map_err(io_at(&dir.join(crate::LOCK)))?;
-        file.write_all(format!("{holder}\n").as_bytes())
-            .map_err(io_at(&dir.join(crate::LOCK)))?;
+        write_lock_label(&file, &dir.join(crate::LOCK), holder)?;
         Self::open_locked(dir, id, clock, Lock(file)).map(Some)
     }
 
@@ -213,6 +211,7 @@ impl Log {
             Ok(())
         })?;
         let end = offsets.end();
+        // A no-op unless the tail is torn.
         events.set_len(end).map_err(io_at(&path))?;
         let mut inner = Inner::new(id, dir, events, lock, next, offsets);
         inner.latest = latest;
@@ -1089,15 +1088,20 @@ impl Drop for Lock {
     }
 }
 
+fn write_lock_label(file: &File, path: &Path, label: &str) -> Result<(), Error> {
+    file.set_len(0).map_err(io_at(path))?;
+    let mut file = file;
+    file.write_all(format!("{label}\n").as_bytes())
+        .map_err(io_at(path))
+}
+
 /// Takes the session's lock and writes the holder's label into it, or names
 /// who holds it.
 fn lock(dir: &Path, id: &SessionId, clock: &dyn Clock, label: &str) -> Result<Lock, Error> {
     let path = dir.join(LOCK);
     match crate::scan::try_lock_file(dir)? {
-        Some(mut file) => {
-            file.set_len(0).map_err(io_at(&path))?;
-            file.write_all(format!("{label}\n").as_bytes())
-                .map_err(io_at(&path))?;
+        Some(file) => {
+            write_lock_label(&file, &path, label)?;
             Ok(Lock(file))
         }
         None => Err(Error::Held {

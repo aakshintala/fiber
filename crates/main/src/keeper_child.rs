@@ -324,12 +324,7 @@ impl Runtime {
                                 held();
                             }
                         }
-                        Ok(None) => {
-                            self.discard();
-                            let steps = lock(&self.supervisor).lock_lost();
-                            return self.apply(log, steps);
-                        }
-                        Err(log::Error::Held { .. }) => {
+                        Ok(None) | Err(log::Error::Held { .. }) => {
                             self.discard();
                             let steps = lock(&self.supervisor).lock_lost();
                             return self.apply(log, steps);
@@ -1116,13 +1111,7 @@ impl Runtime {
                 }
                 // Only a candidate on the keeper's socket may negotiate; the
                 // session's own control connection never does.
-                ToKeeper::Identify(_) => {
-                    return Err(io::Error::other("handshake frame on the session's control"));
-                }
-                ToKeeper::Handover(_) => {
-                    return Err(io::Error::other("handshake frame on the session's control"));
-                }
-                ToKeeper::Adopted(_) => {
+                ToKeeper::Identify(_) | ToKeeper::Handover(_) | ToKeeper::Adopted(_) => {
                     return Err(io::Error::other("handshake frame on the session's control"));
                 }
             }

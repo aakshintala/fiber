@@ -328,11 +328,6 @@ pub(crate) fn restore(
         let opened = registry
             .restore(started, stop(), input, job.lines)
             .map_err(|failure| io::Error::other(failure.to_string()))?;
-        let mut opened = opened;
-        let original_end = opened.end;
-        opened.end = End(Box::new(move |completion| {
-            (original_end.0)(completion);
-        }));
         restored.ids.push(job.job_id.clone());
         // The runner owns the execution from here: the registry's opened
         // job carries its recorded identity, files and report, and the

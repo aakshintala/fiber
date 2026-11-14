@@ -63,17 +63,7 @@ fn accept_error_keeps_acceptor_alive() {
     );
     runtime.listen(socket.clone(), listener);
     Deadline::after(Duration::from_secs(10)).recv_or_fail(&ready_rx, "injected accept pause");
-    let writer = UnixStream::connect(&socket).expect("connect to listener");
-    let reader = writer.try_clone().expect("clone reader");
-    let (send, frames) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut reader = BufReader::new(reader);
-        let frame = crate::keeper::read_reply(&mut reader).ok().flatten();
-        match send.send(frame) {
-            Ok(()) | Err(_) => {}
-        }
-    });
-    let mut peer = Peer { writer, frames };
+    let mut peer = connect_to(&socket);
     say(&mut peer, &ToKeeper::Identify(id));
     release_tx.send(()).expect("release accept error");
     clock
@@ -213,17 +203,7 @@ fn candidate_spawn_failure_drops_stream_and_acceptor_handles_next_connection() {
         .expect("failed candidate is dropped");
     assert!(eof.is_empty());
 
-    let writer = UnixStream::connect(&socket).expect("subsequent connection");
-    let reader = writer.try_clone().expect("reader");
-    let (send, frames) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut reader = BufReader::new(reader);
-        let frame = crate::keeper::read_reply(&mut reader).ok().flatten();
-        if let Err(mpsc::SendError(late)) = send.send(frame) {
-            drop(late);
-        }
-    });
-    let mut peer = Peer { writer, frames };
+    let mut peer = connect_to(&socket);
     say(
         &mut peer,
         &ToKeeper::Identify(SessionId("s_0123456789abcdef".into())),
@@ -998,7 +978,12 @@ fn keeper_waits_for_dying_session_lock() {
     );
     drop(predecessor);
     Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "takeover to bind");
-    assert!(keeper.result.try_recv().is_err(), "keeper remains bound");
+    assert!(
+        Deadline::after(Duration::from_millis(10))
+            .recv(&keeper.result)
+            .is_err(),
+        "keeper remains bound"
+    );
 }
 
 #[test]
@@ -1036,7 +1021,9 @@ fn keeper_lock_wait_deadline_exits_without_binding() {
     ));
     let socket = crashed_socket(&keeper);
     assert!(
-        keeper.result.try_recv().is_err(),
+        Deadline::after(Duration::from_millis(10))
+            .recv(&keeper.result)
+            .is_err(),
         "the keeper waits before the deadline"
     );
     assert!(
@@ -1243,7 +1230,11 @@ fn socket_of(keeper: &Keeper) -> std::path::PathBuf {
 }
 
 fn connect(keeper: &Keeper) -> Peer {
-    let writer = UnixStream::connect(socket_of(keeper)).expect("connect to the keeper");
+    connect_to(&socket_of(keeper))
+}
+
+fn connect_to(path: &std::path::Path) -> Peer {
+    let writer = UnixStream::connect(path).expect("connect to the keeper");
     let reader = writer.try_clone().expect("reader");
     let (send, frames) = mpsc::channel();
     std::thread::spawn(move || {

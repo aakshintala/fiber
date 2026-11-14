@@ -269,8 +269,8 @@ impl Host {
                     .args(["keeper", "--id", &id.0])
                     .env("FIBER_HOME", &home)
                     .stdin(Stdio::piped())
-                    .stdout(Stdio::from(std::os::fd::OwnedFd::from(child_end)));
-                command.stderr(Stdio::null());
+                    .stdout(Stdio::from(std::os::fd::OwnedFd::from(child_end)))
+                    .stderr(Stdio::null());
                 support::group::detach(&mut command, false);
                 let mut child = command.spawn()?;
                 let Some(lifeline) = child.stdin.take() else {
