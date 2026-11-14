@@ -106,13 +106,13 @@ fn keeper_fixture() {
     // grandchild case the leader exits at once while the separately
     // executed descendant lives on in its own group. The streams stay open
     // here, so a later acknowledgement is never lost to a closed pipe.
-    let _ = child.wait();
+    let _reaped = child.wait();
     // Park until the parent kills this process: the writer outlives it in
     // its own process group.
     let mut stdin = std::io::stdin();
     let mut parked = [0u8; 1];
     use std::io::Read as _;
-    let _ = stdin.read(&mut parked);
+    let _parked = stdin.read(&mut parked);
 }
 
 /// The confined writer: damages the protected file, acknowledges past the
@@ -332,10 +332,10 @@ impl Drop for KeeperDeath {
         drop(self.release.take());
         drop(self.session.take());
         if let Some(writer) = self.writer {
-            let _ = support::group::signal(writer, rustix::process::Signal::KILL);
+            let _killed = support::group::signal(writer, rustix::process::Signal::KILL);
         }
         if self.keeper.is_some() {
-            let _ = support::group::signal(self.keeper_id, rustix::process::Signal::KILL);
+            let _killed = support::group::signal(self.keeper_id, rustix::process::Signal::KILL);
         }
     }
 }
