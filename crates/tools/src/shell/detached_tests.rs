@@ -27,6 +27,24 @@ const FIBER_PID: u32 = 4242;
 /// process, which `launch` starts as a session leader.
 const LINGER: &str = "exec sleep 60\n";
 
+#[test]
+fn restored_drain_expiry_requires_deadline_and_live_group() {
+    let clock = FakeClock::new();
+    let deadline = clock.now();
+    assert!(
+        super::drain_expired(deadline, deadline, true),
+        "the boundary is expired while the group remains alive"
+    );
+    assert!(
+        !super::drain_expired(deadline, deadline, false),
+        "a group that is no longer alive has not exceeded the drain"
+    );
+    assert!(
+        !super::drain_expired(deadline - Duration::from_nanos(1), deadline, true),
+        "a live group before the deadline has not exceeded the drain"
+    );
+}
+
 fn mode_of(path: &Path) -> u32 {
     std::fs::metadata(path).unwrap().permissions().mode() & 0o777
 }
