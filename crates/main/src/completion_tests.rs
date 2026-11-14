@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use clap::{Arg, ArgAction, Command, ValueHint};
 
-use super::{PARSER, Shell, script, visible};
+use super::{PARSER, Shell, script_with_registration, static_script, visible};
 
 #[test]
 fn fish_fills_every_deep_command_without_repeating_parent_flags_or_values() {
@@ -70,7 +70,7 @@ fn fish_deep_rules_leave_bash_and_zsh_bytes_unchanged() {
         } else {
             expected
         };
-        assert_eq!(script(shell), expected);
+        assert_eq!(static_script(shell), expected);
     }
 }
 
@@ -306,8 +306,19 @@ fn resume_offers_credential_as_a_plain_label_value() {
 }
 
 #[test]
+fn a_registration_failure_uses_the_static_script() {
+    for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+        assert_eq!(
+            script_with_registration(shell, Err("unusable executable path".to_owned())),
+            static_script(shell),
+            "{shell:?}"
+        );
+    }
+}
+
+#[test]
 fn the_bash_script_completes_without_falling_back_to_file_names() {
-    let text = script(Shell::Bash);
+    let text = static_script(Shell::Bash);
     assert!(text.starts_with("_fiber() {"), "{text}");
     let lines: Vec<&str> = text.lines().collect();
     assert!(
@@ -322,7 +333,7 @@ fn the_bash_script_completes_without_falling_back_to_file_names() {
 
 #[test]
 fn the_zsh_script_completes_no_values_or_file_names() {
-    let text = script(Shell::Zsh);
+    let text = static_script(Shell::Zsh);
     assert!(text.starts_with("#compdef fiber\n"), "{text}");
     assert!(
         text.contains("'--model=[The model for this run, as a person types it]:model:' \\\n"),
@@ -342,7 +353,7 @@ fn the_zsh_script_completes_no_values_or_file_names() {
 
 #[test]
 fn the_fish_script_offers_commands_and_ends_without_file_names() {
-    let text = script(Shell::Fish);
+    let text = static_script(Shell::Fish);
     assert!(text.ends_with("\ncomplete -c fiber -f\n"), "{text}");
     let lines: Vec<&str> = text.lines().collect();
     assert!(
@@ -372,6 +383,6 @@ fn the_fish_script_offers_commands_and_ends_without_file_names() {
 #[test]
 fn the_same_shell_gives_the_same_bytes() {
     for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
-        assert_eq!(script(shell), script(shell), "{shell:?}");
+        assert_eq!(static_script(shell), static_script(shell), "{shell:?}");
     }
 }
