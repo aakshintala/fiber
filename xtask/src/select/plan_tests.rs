@@ -1,5 +1,6 @@
 use super::*;
 use crate::select::tests::strings;
+use crate::select::{CommitSha, MatchedReuse};
 
 fn changed(path: &str, contents: Option<&str>) -> ChangedPath {
     ChangedPath {
@@ -20,7 +21,18 @@ fn deleted_and_unreadable_paths_do_not_match_macos_triggers() {
     assert_eq!(deleted.state, PathState::Deleted);
     assert!(matches!(unreadable.state, PathState::Present(None)));
     let plan_result = plan_with_changed_paths(
-        plan("docs", &[], "pull_request", false, false, false, 0),
+        plan(
+            "docs",
+            &[],
+            "pull_request",
+            false,
+            false,
+            MutantPlanInput {
+                labels: Vec::new(),
+                count: 0,
+                reuse: None,
+            },
+        ),
         true,
         &[deleted, unreadable],
     );
@@ -28,14 +40,36 @@ fn deleted_and_unreadable_paths_do_not_match_macos_triggers() {
     assert!(!plan_result.jobs["scripts_self_test_macos"]);
 
     let deleted_script = plan_with_changed_paths(
-        plan("docs", &[], "pull_request", false, false, false, 0),
+        plan(
+            "docs",
+            &[],
+            "pull_request",
+            false,
+            false,
+            MutantPlanInput {
+                labels: Vec::new(),
+                count: 0,
+                reuse: None,
+            },
+        ),
         true,
         &[changed("scripts/probe", None)],
     );
     assert!(!deleted_script.jobs["scripts_self_test_macos"]);
 
     let unreadable_script = plan_with_changed_paths(
-        plan("docs", &[], "pull_request", false, false, false, 0),
+        plan(
+            "docs",
+            &[],
+            "pull_request",
+            false,
+            false,
+            MutantPlanInput {
+                labels: Vec::new(),
+                count: 0,
+                reuse: None,
+            },
+        ),
         true,
         &[ChangedPath {
             path: "scripts/probe".into(),
@@ -69,7 +103,18 @@ fn macos_jobs_follow_pull_request_paths_and_contents() {
     ];
     for (paths, clippy, scripts) in cases {
         let plan = plan_with_changed_paths(
-            plan("docs", &[], "pull_request", false, false, false, 0),
+            plan(
+                "docs",
+                &[],
+                "pull_request",
+                false,
+                false,
+                MutantPlanInput {
+                    labels: Vec::new(),
+                    count: 0,
+                    reuse: None,
+                },
+            ),
             true,
             &paths,
         );
@@ -80,7 +125,18 @@ fn macos_jobs_follow_pull_request_paths_and_contents() {
 
 #[test]
 fn changed_paths_restore_missing_macos_job_keys() {
-    let mut plan = plan("docs", &[], "pull_request", false, false, false, 0);
+    let mut plan = plan(
+        "docs",
+        &[],
+        "pull_request",
+        false,
+        false,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 0,
+            reuse: None,
+        },
+    );
     plan.jobs.remove("clippy_macos");
     plan.jobs.remove("scripts_self_test_macos");
 
@@ -93,7 +149,18 @@ fn changed_paths_restore_missing_macos_job_keys() {
 #[test]
 fn moved_matching_file_uses_its_head_path_and_content() {
     let plan = plan_with_changed_paths(
-        plan("docs", &[], "pull_request", false, false, false, 0),
+        plan(
+            "docs",
+            &[],
+            "pull_request",
+            false,
+            false,
+            MutantPlanInput {
+                labels: Vec::new(),
+                count: 0,
+                reuse: None,
+            },
+        ),
         true,
         &[changed("renamed.rs", Some("target_os"))],
     );
@@ -104,7 +171,18 @@ fn moved_matching_file_uses_its_head_path_and_content() {
 fn macos_jobs_are_off_for_non_pull_request_events() {
     for event in ["push", "workflow_dispatch"] {
         let plan = plan_with_changed_paths(
-            plan("all", &[], event, false, false, false, 0),
+            plan(
+                "all",
+                &[],
+                event,
+                false,
+                false,
+                MutantPlanInput {
+                    labels: Vec::new(),
+                    count: 0,
+                    reuse: None,
+                },
+            ),
             event == "pull_request",
             &[changed("scripts/test-x", Some("target_os"))],
         );
@@ -136,8 +214,55 @@ fn jobs(
 }
 
 #[test]
+fn plan_computes_mutants_eligibility_and_reuse() {
+    let packages = strings(&["log"]);
+    let matched = Some(MatchedReuse {
+        run_id: 7,
+        pr_head: CommitSha("abc123".to_owned()),
+    });
+    let cases = [
+        ("pull_request", false, vec![], None, true),
+        ("pull_request", false, strings(&["mutants"]), None, true),
+        ("pull_request", true, strings(&["mutants"]), None, true),
+        ("pull_request", true, vec![], None, false),
+        ("push", false, strings(&["mutants"]), None, false),
+        ("pull_request", false, vec![], matched, false),
+    ];
+    for (event, draft, labels, reuse, expected) in cases {
+        let actual = plan(
+            "crates",
+            &packages,
+            event,
+            draft,
+            false,
+            MutantPlanInput {
+                labels: labels.clone(),
+                count: 40,
+                reuse,
+            },
+        );
+        assert_eq!(
+            actual.jobs["mutants"], expected,
+            "{event}, draft={draft}, labels={labels:?}"
+        );
+        assert_eq!(actual.shards > 0, expected);
+    }
+}
+
+#[test]
 fn a_docs_only_pull_request_runs_no_job_after_the_selection() {
-    let plan = plan("docs", &[], "pull_request", false, true, true, 100);
+    let plan = plan(
+        "docs",
+        &[],
+        "pull_request",
+        false,
+        true,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
+    );
     assert_eq!(
         plan,
         Plan {
@@ -155,8 +280,11 @@ fn a_code_pull_request_runs_what_it_selected() {
         "pull_request",
         false,
         true,
-        true,
-        100,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
     );
     assert_eq!(
         plan,
@@ -289,8 +417,11 @@ fn a_pull_request_without_a_bug_label_skips_the_bug_check() {
         "pull_request",
         false,
         false,
-        true,
-        100,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
     );
     assert_eq!(
         plan.jobs,
@@ -300,7 +431,18 @@ fn a_pull_request_without_a_bug_label_skips_the_bug_check() {
 
 #[test]
 fn a_pull_request_that_selects_no_crate_skips_the_tests() {
-    let plan = plan("crates", &[], "pull_request", false, false, true, 100);
+    let plan = plan(
+        "crates",
+        &[],
+        "pull_request",
+        false,
+        false,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
+    );
     assert_eq!(
         plan.jobs,
         jobs(true, false, false, false, false, false, false)
@@ -316,8 +458,11 @@ fn a_draft_pull_request_skips_test_but_runs_test_linux() {
         "pull_request",
         true,
         true,
-        true,
-        100,
+        MutantPlanInput {
+            labels: strings(&["mutants"]),
+            count: 100,
+            reuse: None,
+        },
     );
     let ready = plan(
         "crates",
@@ -325,8 +470,11 @@ fn a_draft_pull_request_skips_test_but_runs_test_linux() {
         "pull_request",
         false,
         true,
-        true,
-        100,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
     );
     assert!(!draft.jobs["test"]);
     assert!(draft.jobs["test_linux"]);
@@ -357,14 +505,36 @@ fn no_pull_request_runs_the_release_job_for_any_input_that_selected_it() {
 
     for (input, packages, _release_paths) in inputs {
         for draft in [true, false] {
-            let plan = plan("crates", &packages, "pull_request", draft, false, false, 0);
+            let plan = plan(
+                "crates",
+                &packages,
+                "pull_request",
+                draft,
+                false,
+                MutantPlanInput {
+                    labels: Vec::new(),
+                    count: 0,
+                    reuse: None,
+                },
+            );
             assert!(!plan.jobs["release"], "{input}, draft {draft}");
             assert!(plan.jobs["lint"], "{input}, draft {draft}");
             assert!(plan.jobs["test_linux"], "{input}, draft {draft}");
         }
     }
 
-    let push = plan("crates", &[], "push", false, false, false, 0);
+    let push = plan(
+        "crates",
+        &[],
+        "push",
+        false,
+        false,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 0,
+            reuse: None,
+        },
+    );
     assert!(push.jobs["release"]);
 }
 
@@ -376,8 +546,11 @@ fn a_ready_pull_request_with_packages_skips_the_stress_job() {
         "pull_request",
         false,
         true,
-        true,
-        100,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
     );
     assert!(!plan.jobs["stress"]);
 }
@@ -390,27 +563,63 @@ fn a_draft_pull_request_skips_the_stress_job() {
         "pull_request",
         true,
         true,
-        true,
-        100,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
     );
     assert!(!plan.jobs["stress"]);
 }
 
 #[test]
 fn a_pull_request_without_packages_skips_the_stress_job() {
-    let plan = plan("crates", &[], "pull_request", false, true, true, 100);
+    let plan = plan(
+        "crates",
+        &[],
+        "pull_request",
+        false,
+        true,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
+    );
     assert!(!plan.jobs["stress"]);
 }
 
 #[test]
 fn a_push_runs_the_stress_job() {
-    let plan = plan("crates", &strings(&["log"]), "push", false, true, true, 100);
+    let plan = plan(
+        "crates",
+        &strings(&["log"]),
+        "push",
+        false,
+        true,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
+    );
     assert!(plan.jobs["stress"]);
 }
 
 #[test]
 fn a_docs_only_pull_request_skips_the_stress_job() {
-    let plan = plan("docs", &[], "pull_request", false, true, true, 100);
+    let plan = plan(
+        "docs",
+        &[],
+        "pull_request",
+        false,
+        true,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
+    );
     assert!(!plan.jobs["stress"]);
 }
 
@@ -422,8 +631,11 @@ fn an_unlabelled_draft_skips_mutants_and_runs_the_rest() {
         "pull_request",
         true,
         false,
-        false,
-        100,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
     );
     assert!(!plan.jobs["mutants"]);
     assert_eq!(plan.shards, 0);
@@ -432,7 +644,18 @@ fn an_unlabelled_draft_skips_mutants_and_runs_the_rest() {
 
 #[test]
 fn a_docs_push_runs_lint_tests_release_and_stress_but_no_mutants() {
-    let plan = plan("docs", &[], "push", false, true, true, 100);
+    let plan = plan(
+        "docs",
+        &[],
+        "push",
+        false,
+        true,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
+    );
     assert_eq!(
         plan,
         Plan {
@@ -444,7 +667,18 @@ fn a_docs_push_runs_lint_tests_release_and_stress_but_no_mutants() {
 
 #[test]
 fn a_code_push_runs_lint_tests_release_and_stress_but_no_mutants_or_bug_check() {
-    let plan = plan("all", &strings(&["log"]), "push", false, true, true, 1000);
+    let plan = plan(
+        "all",
+        &strings(&["log"]),
+        "push",
+        false,
+        true,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 1000,
+            reuse: None,
+        },
+    );
     assert_eq!(
         plan,
         Plan {
@@ -456,7 +690,18 @@ fn a_code_push_runs_lint_tests_release_and_stress_but_no_mutants_or_bug_check() 
 
 #[test]
 fn a_push_with_mutants_requested_starts_no_shard() {
-    let plan = plan("all", &strings(&["log"]), "push", false, true, true, 1000);
+    let plan = plan(
+        "all",
+        &strings(&["log"]),
+        "push",
+        false,
+        true,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 1000,
+            reuse: None,
+        },
+    );
     assert!(!plan.jobs["mutants"]);
     assert_eq!(plan.shards, 0);
 }
@@ -469,8 +714,11 @@ fn a_pull_request_that_selects_the_binary_skips_the_release_job() {
         "pull_request",
         false,
         false,
-        true,
-        100,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
     );
     assert_eq!(
         plan.jobs,
@@ -481,7 +729,18 @@ fn a_pull_request_that_selects_the_binary_skips_the_release_job() {
 #[test]
 fn a_pull_request_that_runs_everything_skips_the_release_job() {
     let packages = strings(&["config", "log", "main", "xtask"]);
-    let plan = plan("all", &packages, "pull_request", false, false, true, 100);
+    let plan = plan(
+        "all",
+        &packages,
+        "pull_request",
+        false,
+        false,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
+    );
     assert_eq!(
         plan.jobs,
         jobs(true, true, false, true, false, false, false)
@@ -496,8 +755,11 @@ fn a_pull_request_without_the_binary_skips_the_release_job() {
         "pull_request",
         false,
         false,
-        true,
-        100,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
     );
     assert_eq!(
         plan.jobs,
@@ -517,8 +779,11 @@ fn a_pull_request_touching_the_bench_crate_skips_the_release_job() {
             "pull_request",
             false,
             false,
-            true,
-            100,
+            MutantPlanInput {
+                labels: Vec::new(),
+                count: 100,
+                reuse: None,
+            },
         );
         assert!(!plan.jobs["release"], "{path}");
     }
@@ -537,8 +802,11 @@ fn a_pull_request_touching_the_bench_harness_skips_the_release_job() {
             "pull_request",
             false,
             false,
-            true,
-            100,
+            MutantPlanInput {
+                labels: Vec::new(),
+                count: 100,
+                reuse: None,
+            },
         );
         assert!(!plan.jobs["release"], "{path}");
     }
@@ -552,8 +820,11 @@ fn a_pull_request_touching_the_release_size_script_skips_the_release_job() {
         "pull_request",
         false,
         false,
-        true,
-        100,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
     );
     assert!(!plan.jobs["release"]);
 }
@@ -566,8 +837,11 @@ fn a_pull_request_touching_the_stored_results_script_skips_the_release_job() {
         "pull_request",
         false,
         false,
-        true,
-        100,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
     );
     assert!(!plan.jobs["release"]);
 }
@@ -580,8 +854,11 @@ fn a_pull_request_touching_only_the_performance_table_skips_the_release_job() {
         "pull_request",
         false,
         false,
-        false,
-        0,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 0,
+            reuse: None,
+        },
     );
     assert_eq!(
         plan,
@@ -600,8 +877,11 @@ fn a_pull_request_touching_another_docs_file_skips_the_release_job() {
         "pull_request",
         false,
         false,
-        false,
-        0,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 0,
+            reuse: None,
+        },
     );
     assert_eq!(
         plan,
@@ -628,8 +908,11 @@ fn a_pull_request_touching_a_release_path_lookalike_skips_the_release_job() {
             "pull_request",
             false,
             false,
-            true,
-            100,
+            MutantPlanInput {
+                labels: Vec::new(),
+                count: 100,
+                reuse: None,
+            },
         );
         assert!(!plan.jobs["release"], "{path}");
     }
@@ -637,7 +920,18 @@ fn a_pull_request_touching_a_release_path_lookalike_skips_the_release_job() {
 
 #[test]
 fn a_docs_only_pull_request_touching_the_bench_crate_runs_no_job() {
-    let plan = plan("docs", &[], "pull_request", false, true, true, 100);
+    let plan = plan(
+        "docs",
+        &[],
+        "pull_request",
+        false,
+        true,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
+    );
     assert_eq!(
         plan,
         Plan {
@@ -649,7 +943,18 @@ fn a_docs_only_pull_request_touching_the_bench_crate_runs_no_job() {
 
 #[test]
 fn an_ordinary_docs_only_pull_request_still_runs_no_job() {
-    let plan = plan("docs", &[], "pull_request", false, true, true, 100);
+    let plan = plan(
+        "docs",
+        &[],
+        "pull_request",
+        false,
+        true,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
+    );
     assert_eq!(
         plan,
         Plan {
@@ -667,8 +972,11 @@ fn a_code_pull_request_with_a_bench_readme_skips_the_release_job() {
         "pull_request",
         false,
         false,
-        true,
-        100,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 100,
+            reuse: None,
+        },
     );
     assert!(!plan.jobs["release"]);
 }
@@ -1089,8 +1397,11 @@ fn a_selected_run_with_no_mutants_starts_no_shard() {
         "pull_request",
         false,
         false,
-        false,
-        0,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 0,
+            reuse: None,
+        },
     );
     assert!(!plan.jobs["mutants"]);
     assert_eq!(plan.shards, 0);

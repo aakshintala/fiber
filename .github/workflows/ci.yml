@@ -150,18 +150,15 @@ jobs:
           BUG: ${{ steps.ticket.outputs.bug || 'false' }}
           PR_BODY: ${{ github.event.pull_request.body || '' }}
           BASE: ${{ steps.base.outputs.base }}
-          # Mutants run on a ready pull request and on a draft labelled `mutants`,
-          # never on the backstop.
-          MUTANTS: ${{ github.event_name == 'pull_request' && (!github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'mutants')) }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           CURRENT_RUN_ID: ${{ github.run_id }}
         run: |
-          # The shard count follows the diff's mutant count (docs/ci.md, "On every pull request that changes code").
-          # Every code pull request lists the diff's mutants, draft or not, so a
-          # lane reads them before CI runs its shards; only `MUTANTS` starts shards.
+          # Count the diff's mutants; xtask decides whether to run them and
+          # whether a completed same-head run can be reused.
           count=0
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ "$MODE" != docs ]; then
             git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"
@@ -172,83 +169,38 @@ jobs:
               cat "$RUNNER_TEMP/mutants.txt"
               echo '```'
             } >>"$GITHUB_STEP_SUMMARY"
-            # A lane on the command line reads the log: `gh run view` prints no summaries.
             cat "$RUNNER_TEMP/mutants.txt"
-            listed=$(wc -l <"$RUNNER_TEMP/mutants.txt")
-            if [ "$MUTANTS" = true ]; then
-              count=$listed
-            fi
+            count=$(wc -l <"$RUNNER_TEMP/mutants.txt")
           fi
-          if [ "$MUTANTS" != true ] && [ "${listed:-0}" -gt 0 ]; then
-            echo "mutants in the diff: $listed (not run: a draft without the \`mutants\` label)"
-          else
-            echo "mutants in the diff: $count"
-          fi
-          # Same-head reuse (docs/ci.md, "On every pull request that changes code"): a ready run on
-          # a head whose mutants already passed reuses the pass. Every error
-          # below keeps reuse off and starts the shards.
-          reuse=false
-          if [ "$count" -gt 0 ]; then
-            head_sha="$HEAD_SHA"
-            head_ref="$HEAD_REF"
-            pr_number="$PR_NUMBER"
-            # Any lookup failure starts the shards (docs/ci.md, "On every
-            # pull request that changes code"): a failed jobs lookup must
-            # not let a later matching candidate reuse the pass.
-            lookup_failed=false
-            if runs_json=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=pull_request&status=completed&branch=$head_ref&per_page=20" 2>/dev/null); then
-              echo "$runs_json" >"$RUNNER_TEMP/runs.json"
-              echo '{}' >"$RUNNER_TEMP/jobs.json"
-              ids=$(echo "$runs_json" | jq -r '.workflow_runs[]?.id' 2>/dev/null || true)
-              for id in $ids; do
-                # `gh api --paginate` prints one JSON object per page, so
-                # slurp every page into one jobs array before `--argjson`
-                # (docs/ci.md, "On every pull request that changes code"):
-                # a same-head pass with more than 30 jobs still reuses.
-                if jobs_pages=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" --paginate 2>/dev/null) \
-                  && [ -n "$jobs_pages" ] \
-                  && jobs_json=$(printf '%s' "$jobs_pages" | jq -c -s 'map(.jobs // []) | add // []' 2>/dev/null); then
-                  tmp="$RUNNER_TEMP/jobs-$id.json"
-                  if jq --arg id "$id" --argjson jobs "$jobs_json" '. + {($id): $jobs}' "$RUNNER_TEMP/jobs.json" >"$tmp" 2>/dev/null; then
-                    mv "$tmp" "$RUNNER_TEMP/jobs.json"
-                  else
-                    rm -f "$tmp"
-                    lookup_failed=true
+          echo "mutants in the diff: $count"
+
+          lookup_ok=true
+          args=(--base "$BASE" --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME"
+            --draft "$DRAFT" --bug "$BUG" --labels "$LABELS" --mutant-count "$count")
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            runs_file="$RUNNER_TEMP/runs.json"
+            jobs_dir="$RUNNER_TEMP/jobs"
+            mkdir -p "$jobs_dir"
+            if gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=pull_request&status=completed&branch=$HEAD_REF&per_page=20" >"$runs_file"; then
+              if ids=$(cargo xtask plan reuse-candidates --runs "$runs_file"); then
+                while IFS= read -r id; do
+                  [ -n "$id" ] || continue
+                  if ! gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" >"$jobs_dir/$id.json"; then
+                    lookup_ok=false
                   fi
-                else
-                  lookup_failed=true
-                fi
-              done
-              if [ "$lookup_failed" != true ]; then
-                if reuse_out=$(cargo xtask mutants-reuse --pr "$pr_number" --head "$head_sha" --base "$BASE" --mutant-count "$count" --run-id "$CURRENT_RUN_ID" --draft "$DRAFT" --runs "$RUNNER_TEMP/runs.json" --jobs "$RUNNER_TEMP/jobs.json" 2>/dev/null); then
-                  reuse=false
-                  matched_run_id=""
-                  matched_pr_head=""
-                  if [ "$(printf '%s' "$reuse_out" | sed -n '1p')" = "reuse=true" ]; then
-                    matched_run_id=$(printf '%s' "$reuse_out" | sed -n 's/^matched_run_id=//p')
-                    matched_pr_head=$(printf '%s' "$reuse_out" | sed -n 's/^matched_pr_head=//p')
-                    if [ -n "$matched_run_id" ] && [ -n "$matched_pr_head" ]; then
-                      reuse=true
-                    fi
-                  fi
-                fi
+                done <<<"$ids"
               else
-                echo "mutants reuse: jobs lookup failed; starting shards"
+                lookup_ok=false
               fi
+            else
+              lookup_ok=false
+              : >"$runs_file"
             fi
-          if [ "$reuse" = true ]; then
-            echo "mutants reuse: reuse=$reuse matched_run_id=$matched_run_id matched_pr_head=$matched_pr_head (head $head_sha, base $BASE)"
-          else
-            echo "mutants reuse: reuse=$reuse (head $head_sha, base $BASE)"
+            args+=(--head "$HEAD_SHA" --run-id "$CURRENT_RUN_ID" --pr "$PR_NUMBER"
+              --runs "$runs_file" --jobs "$jobs_dir")
           fi
-          fi
-          mutants="$MUTANTS"
-          if [ "$reuse" = true ]; then
-            mutants=false
-          fi
-          cargo xtask plan --base "$BASE" --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME" \
-            --draft "$DRAFT" --bug "$BUG" --mutants "$mutants" --mutant-count "$count" \
-            --pr-body "$PR_BODY" | tee -a "$GITHUB_OUTPUT"
+          args+=(--lookup-ok "$lookup_ok" --pr-body "$PR_BODY")
+          cargo xtask plan "${args[@]}" | tee -a "$GITHUB_OUTPUT"
 
   lint:
     name: Linux x86_64 checks
@@ -1478,8 +1430,7 @@ jobs:
       MACOS_RESULT: ${{ needs.bug_red_macos.result }}
     steps:
       - *checkout-full
-      - name: Collect bug-red leg results
-        run: scripts/bug-red --collect "$LINUX_STATUS" "$MACOS_STATUS"
+      - run: scripts/bug-red --collect "$LINUX_STATUS" "$MACOS_STATUS"
 
   release:
     name: Release build and size (Linux x86_64)

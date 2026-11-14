@@ -1729,6 +1729,71 @@ fn a_confirmed_detached_stop_that_loses_its_identity_requires_review() {
 }
 
 #[test]
+fn restored_dead_leader_live_group_stop_is_reviewed_without_signalling_before_approval() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (dir, registry, tool) = setup(clock);
+    let mut command = Command::new("sh");
+    command
+        .args(["-c", "sleep 60 & read _"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let (mut child, _listing) = support::group::spawn(&mut command).unwrap();
+    let pgid = child.id();
+    let watchdog = Watchdog::group(pgid);
+    let start_time = support::group::start_time(pgid).unwrap();
+    child.stdin.as_mut().unwrap().write_all(b"exit\n").unwrap();
+    drop(child.stdin.take());
+    assert!(child.wait().unwrap().success());
+    assert!(!support::group::pid_alive(pgid));
+    assert!(support::group::alive(pgid));
+
+    let root = dir.path().join("detached");
+    std::fs::create_dir(&root).unwrap();
+    let log = root.join("d_test.log");
+    std::fs::write(&log, b"running\\n").unwrap();
+    let started = contract::events::JobStarted {
+        job_id: JobId("j_restored".into()),
+        tool: Some("shell".into()),
+        extension: None,
+        description: "sleep 60".into(),
+        output_path: log.to_string_lossy().into_owned(),
+        pgid: Some(pgid),
+        start_time: Some(start_time),
+        kind: Some(contract::events::JobKind::Detached),
+    };
+    let stops = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&stops);
+    let opened = registry
+        .restore_detached(
+            started,
+            Stop(Box::new(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+            })),
+        )
+        .unwrap();
+    let arguments = json!({"action":"stop", "job_id":"j_restored"});
+    let effects = tool.effects(&args(arguments.clone())).unwrap();
+    assert_eq!(effects.declared.effects, vec![Effect::Executes]);
+    let refused = run(&tool, arguments.clone(), &CancelToken::new());
+    assert!(refused.error.is_some());
+    assert_eq!(stops.load(Ordering::SeqCst), 0);
+    assert!(
+        support::group::alive(pgid),
+        "unapproved stop did not signal"
+    );
+    assert_eq!(
+        contract::jobs::Jobs::owned_identities(registry.as_ref())[0].pgid,
+        pgid
+    );
+    drop(opened.end);
+    kill_group(pgid, "KILL").unwrap();
+    assert!(group_empties(pgid, Deadline::after(MUST_SUCCEED_WITHIN)));
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
+}
+
+#[test]
 fn an_unreadable_detached_leader_needs_review_and_can_be_stopped() {
     let clock: Arc<dyn Clock> = FakeClock::new();
     let (_dir, registry, tool) = setup(clock);
