@@ -392,3 +392,4 @@ crates/tui/src/view/offer_tests.rs:247-248	fiber-4675	plan	2026-11-14T08:52:44Z	
 docs/tui.md:1295-1295	fiber-4675	plan	2026-11-14T08:52:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-enter	
 docs/tui.md:1298-1299	fiber-4675	plan	2026-11-14T08:52:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-enter	
 docs/tui.md:1313-1313	fiber-4675	plan	2026-11-14T08:52:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-enter	
+crates/tools/src/shell/detached.rs	fiber-4816	grant	2026-11-14T09:10:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4816-release-cfg	
