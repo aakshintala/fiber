@@ -2149,6 +2149,29 @@ fn a_remote_changed_file_return_stores_the_copy_through_the_close_path() {
 }
 
 #[test]
+fn ctrl_g_uses_the_editor_setting_captured_at_terminal_start() {
+    let pair = open();
+    let _frames = watch(&pair.main, Vec::new());
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    let (captured, captured_var) = fake_editor("printf 'captured' > \"$1\"\n");
+    let (live, live_var) = fake_editor("printf 'live' > \"$1\"\n");
+    lp.editor_setting = captured_var("EDITOR");
+    lp.var = live_var;
+    let inputs = ["\x07"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
+    let (code, draft) = feed_within(lp, inputs.into());
+    assert_eq!(code.expect("editor returns the terminal"), 0);
+    assert_eq!(draft, "captured");
+    captured.assert_gone();
+    live.assert_gone();
+    crate::term::restore();
+}
+
+#[test]
 fn ctrl_g_that_cannot_take_the_terminal_back_quits_with_one() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     let (editor, var) = fake_editor("printf 'edited' > \"$1\"\n");
