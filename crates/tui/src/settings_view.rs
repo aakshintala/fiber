@@ -983,14 +983,15 @@ fn key_matches(row: &SettingRow, needle: &str) -> bool {
     row.presentation.label.to_lowercase().contains(needle) || row.key.contains(needle)
 }
 
-/// Whether a screen row matches the lowercased query: its label or one
-/// of the key paths it covers, either as a substring.
+/// Whether a screen row covers this key.
 fn covered(key: &str) -> bool {
     SCREEN_ROWS
         .iter()
         .any(|screen| screen.covers.contains(&key))
 }
 
+/// Whether a screen row matches the lowercased query: its label or one
+/// of the key paths it covers, either as a substring.
 fn screen_matches(row: &ScreenRow, needle: &str) -> bool {
     row.metadata.label.to_lowercase().contains(needle)
         || row.covers.iter().any(|covered| covered.contains(needle))
@@ -1000,7 +1001,7 @@ fn setting_count(row: &SettingRow) -> Option<usize> {
     match &row.value {
         Shown::Value(text) => serde_json::from_str::<Vec<Value>>(text)
             .ok()
-            .map(|values| values.len()),
+            .and_then(|values| (!values.is_empty()).then_some(values.len())),
         Shown::Union { names, .. } => Some(names.len()),
         Shown::Unset | Shown::Redacted(_) => None,
     }

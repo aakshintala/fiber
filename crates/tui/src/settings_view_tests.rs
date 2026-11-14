@@ -3257,6 +3257,34 @@ fn screen_row_details_show_scoped_model_and_disabled_skill_counts() {
             .details(Item::Screen(Screen::Skills), None)
             .contains(&"1 off".to_owned())
     );
+
+    let mut empty_rows = rows();
+    empty_rows.extend(row_on(
+        "scoped_models",
+        "Scoped models setting",
+        SettingsTab::Models,
+        value("[]"),
+        "global",
+        ANY,
+        SettingControl::StringList,
+    ));
+    empty_rows
+        .iter_mut()
+        .find(|row| row.key == "skills.disabled")
+        .unwrap()
+        .value = value("[]");
+    let empty = Fake::new(empty_rows);
+    let settings = Settings::open(&ctx(&empty), Vec::new());
+    assert!(
+        settings
+            .details(Item::Screen(Screen::ScopedModels), None)
+            .contains(&"All models".to_owned())
+    );
+    assert!(
+        settings
+            .details(Item::Screen(Screen::Skills), None)
+            .contains(&"0 off".to_owned())
+    );
 }
 
 #[test]
