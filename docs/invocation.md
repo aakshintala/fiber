@@ -331,7 +331,7 @@ credentials or stdin, so they succeed when home is empty or no provider is
 installed. A failed write to stdout is ignored and the exit is still 0, as
 with `fiber extension list`.
 
-Every other command stops quietly with exit 0 when standard output is closed early, as with `| head`; any other failed write to standard output is an error, with exit 1.
+Every other command stops quietly with exit 0 when standard output is closed early, as with `| head`; any other failed write to standard output is an error, with exit 1. A command that has already failed keeps its own exit code and error, and a failed write to standard output changes neither.
 
 ```sh
 fiber ask "review the diff on this branch"
@@ -1609,7 +1609,7 @@ session (`docs/tui.md`, "The session list"):
     in the project asked for; an archived row is not checked again.
   - in each project, every exited session past the `session.keep_exited`
     most recent (`docs/configuration.md`), 10 by default; 0 keeps them
-    all. Live sessions do not count.
+    all. Live sessions do not count. Delegates do not count; archiving a session by any route archives its delegates with it.
 
   It archives as `archive` does and asks nothing. A session whose lock
   another process holds is skipped and tried again at the next answer.

@@ -1030,16 +1030,18 @@ pub(crate) fn assemble_session(
                 crate::shutdown::start(signals, &cancel, &session, jobs.clone(), reads)
             {
                 servers.stop();
-                close(
-                    session,
-                    log,
-                    &home,
-                    dir.path(),
-                    &workspace,
-                    &*clock,
-                    &keeper,
+                return combine_close_result(
+                    Ok(code),
+                    close(
+                        session,
+                        log,
+                        &home,
+                        dir.path(),
+                        &workspace,
+                        &*clock,
+                        &keeper,
+                    ),
                 );
-                return Ok(code);
             }
             match signals.commit(|| {
                 r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), true)
@@ -1054,29 +1056,33 @@ pub(crate) fn assemble_session(
             }) {
                 Err(code) => {
                     servers.stop();
-                    close(
-                        session,
-                        log,
-                        &home,
-                        dir.path(),
-                        &workspace,
-                        &*clock,
-                        &keeper,
+                    return combine_close_result(
+                        Ok(code),
+                        close(
+                            session,
+                            log,
+                            &home,
+                            dir.path(),
+                            &workspace,
+                            &*clock,
+                            &keeper,
+                        ),
                     );
-                    return Ok(code);
                 }
                 Ok(Err(e)) => {
                     servers.stop();
-                    close(
-                        session,
-                        log,
-                        &home,
-                        dir.path(),
-                        &workspace,
-                        &*clock,
-                        &keeper,
+                    return combine_close_result(
+                        Err(failed(e.code(), e)),
+                        close(
+                            session,
+                            log,
+                            &home,
+                            dir.path(),
+                            &workspace,
+                            &*clock,
+                            &keeper,
+                        ),
                     );
-                    return Err(failed(e.code(), e));
                 }
                 Ok(Ok(())) => {}
             }
@@ -1100,19 +1106,21 @@ pub(crate) fn assemble_session(
                 && let Err(error) = handed.finish()
             {
                 servers.stop();
-                close(
-                    session,
-                    log,
-                    &home,
-                    dir.path(),
-                    &workspace,
-                    &*clock,
-                    &keeper,
+                return combine_close_result(
+                    Err(failed(
+                        ErrorCode::IoFailed,
+                        format!("The keeper did not finish handing over its jobs: {error}."),
+                    )),
+                    close(
+                        session,
+                        log,
+                        &home,
+                        dir.path(),
+                        &workspace,
+                        &*clock,
+                        &keeper,
+                    ),
                 );
-                return Err(failed(
-                    ErrorCode::IoFailed,
-                    format!("The keeper did not finish handing over its jobs: {error}."),
-                ));
             }
             let code = run_turn(
                 &session,
@@ -1193,16 +1201,18 @@ pub(crate) fn assemble_session(
                 },
             );
             servers.stop();
-            close(
-                session,
-                log,
-                &home,
-                dir.path(),
-                &workspace,
-                &*clock,
-                &keeper,
-            );
-            Ok(code)
+            combine_close_result(
+                Ok(code),
+                close(
+                    session,
+                    log,
+                    &home,
+                    dir.path(),
+                    &workspace,
+                    &*clock,
+                    &keeper,
+                ),
+            )
         }
         fresh @ Start::New { .. }
         | fresh @ Start::Delegate { .. }
@@ -1566,16 +1576,18 @@ pub(crate) fn assemble_session(
             let reads = switching.reads();
             if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
                 servers.stop();
-                close(
-                    session,
-                    log,
-                    &home,
-                    dir.path(),
-                    &workspace,
-                    &*clock,
-                    &keeper,
+                return combine_close_result(
+                    Ok(code),
+                    close(
+                        session,
+                        log,
+                        &home,
+                        dir.path(),
+                        &workspace,
+                        &*clock,
+                        &keeper,
+                    ),
                 );
-                return Ok(code);
             }
             let inbox_wake = session.inbox_wake();
             let rewrites = session.rewrites();
@@ -1775,16 +1787,18 @@ pub(crate) fn assemble_session(
                 }
             }
             servers.stop();
-            close(
-                session,
-                log,
-                &home,
-                dir.path(),
-                &workspace,
-                &*clock,
-                &keeper,
-            );
-            Ok(code)
+            combine_close_result(
+                Ok(code),
+                close(
+                    session,
+                    log,
+                    &home,
+                    dir.path(),
+                    &workspace,
+                    &*clock,
+                    &keeper,
+                ),
+            )
         }
     }
 }
@@ -1845,11 +1859,11 @@ pub(crate) fn report(signals: &doors::Signals, failure: Failure) -> i32 {
 #[path = "session_command_tests.rs"]
 mod tests;
 
-/// Ends a session process, however it ran: closes the door side, then
-/// appends the session's `recent.jsonl` row with what it stopped on, its
-/// last `session_status` (`docs/state.md`, "Fiber home").
-/// A session `close` deleted, never prompted, leaves nothing behind.
-pub(crate) fn close(
+/// Closes the door side, then appends the session's `recent.jsonl` row
+/// with what it stopped on, its last `session_status` (`docs/state.md`,
+/// "Fiber home"). A session `close` deleted, never prompted, leaves
+/// nothing behind.
+fn close(
     session: Session,
     log: Arc<Log>,
     home: &Path,
@@ -1857,7 +1871,7 @@ pub(crate) fn close(
     workspace: &Path,
     clock: &dyn contract::clock::Clock,
     keeper: &crate::keeper::Host,
-) {
+) -> std::io::Result<()> {
     keeper.send_shutdown();
     let status = log
         .latest("session_status")
@@ -1865,12 +1879,31 @@ pub(crate) fn close(
     // The clone keeps the session lock held until the exited row is
     // published: without it the lock releases inside `close` before the
     // row lands, and an archive in between would be reset by the row.
-    session.close(Arc::clone(&log));
+    let copy_result = session.close(Arc::clone(&log));
     #[cfg(test)]
     pause_before_row();
     // A row that cannot be written loses only the listing, not the log.
     hub::append_exited(home, dir, workspace, status, clock).unwrap_or(());
     drop(log);
+    copy_result
+}
+
+fn combine_close_result(
+    result: Result<i32, Failure>,
+    copy_result: std::io::Result<()>,
+) -> Result<i32, Failure> {
+    match (result, copy_result) {
+        (Err(failure), _) => Err(failure),
+        (Ok(code), _) if code != 0 => Ok(code),
+        (Ok(_), Ok(())) => Ok(0),
+        (Ok(_), Err(source)) => match doors::stdout_write_exit_code(&source) {
+            0 => Ok(0),
+            _ => {
+                let error = doors::SessionError::StdoutFailed { source };
+                Err(failed(error.code(), error))
+            }
+        },
+    }
 }
 
 /// Test seam: armed once by the close-publication test; fires after the

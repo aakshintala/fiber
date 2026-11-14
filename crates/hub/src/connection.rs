@@ -73,6 +73,8 @@ pub(crate) struct Hub {
     /// The injected clock, for `ts`, `start`'s deadline and the idle wait.
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) diag: log::diag::Diag,
+    /// Exited sessions retained per project before automatic archival.
+    pub(crate) keep_exited: usize,
     /// The feed `feed`, `dismiss` and `recent` answer from.
     pub(crate) feed: Arc<Feed>,
     /// Pending pairing codes and authenticated connections.
@@ -329,6 +331,7 @@ impl Hub {
             starter,
             clock,
             diag,
+            keep_exited: 10,
             feed,
             pairing: crate::pairing::Pairing::new(),
             machine: None,
@@ -401,6 +404,12 @@ impl Hub {
     /// shared capture, and every other caller keeps the published default.
     pub(crate) fn with_environments(mut self, environments: Arc<crate::Environments>) -> Self {
         self.environments = environments;
+        self
+    }
+
+    /// The configured per-project retention count for exited sessions.
+    pub(crate) fn with_keep_exited(mut self, keep_exited: usize) -> Self {
+        self.keep_exited = keep_exited;
         self
     }
 
@@ -1134,7 +1143,12 @@ fn on_command(
         ),
         "feed" => on_feed(&line.id, &line.args, hub, writer, closer, &mut remote.fed),
         "dismiss" => answer(writer, hub, &line.id, hub.feed.dismiss(&line.args)),
-        "recent" => answer(writer, hub, &line.id, hub.feed.recent(&line.args)),
+        "recent" => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::feed::recent_for_hub(hub, &line.args),
+        ),
         "sessions" => {
             // The hub's own writer and clock travel as one pair, and only
             // at debug: at info no callable is built and no stamp is taken.
@@ -1143,13 +1157,7 @@ fn on_command(
                 writer,
                 hub,
                 &line.id,
-                crate::sessions::answer(
-                    &hub.feed,
-                    &hub.home,
-                    &line.args,
-                    hub.clock.as_ref(),
-                    timing.as_ref(),
-                ),
+                crate::sessions::answer(hub, &line.args, hub.clock.as_ref(), timing.as_ref()),
             )
         }
         "archive" => answer(

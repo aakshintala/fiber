@@ -572,7 +572,7 @@ fn with_no_files_the_configuration_is_the_built_in_defaults() {
             "reviewer": {"block_limits": {"consecutive": 3, "session": 20}},
             "hub": {"allowed_origins": [], "idle_exit_ms": 1800000},
             "sandbox": {"enabled": false, "allow_write": [], "deny_read": []},
-            "session": {"idle_exit_ms": 1800000},
+            "session": {"idle_exit_ms": 1800000, "keep_exited": 10},
             "skills": {"disabled": []},
             "tui": {
                 "attention": {"bell": true, "notification": true, "title": true},

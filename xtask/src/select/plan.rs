@@ -241,30 +241,27 @@ pub(crate) fn shard_timeout_minutes(count: u64) -> u64 {
 /// `mode` is the diff's selection mode, `packages` the selected packages,
 /// `event` the GitHub event name, `draft` whether the pull request is a
 /// draft, `bug` whether an issue the pull request resolves is labelled
-/// `bug`, `mutants` whether the pull request runs its mutants and
-/// `mutant_count` how many mutants its diff holds.
+/// `bug`, and `mutants` supplies labels, count and the reuse result.
 pub(crate) fn plan(
     mode: &str,
     packages: &[String],
     event: &str,
     draft: bool,
     bug: bool,
-    mutants: bool,
-    mutant_count: u64,
+    mutants: MutantPlanInput,
 ) -> Plan {
     let pr = event == "pull_request";
     let code = mode != "docs";
     let test = !pr || !packages.is_empty();
+    let eligible = pr && (!draft || mutants.labels.iter().any(|label| label == "mutants"));
     // The backstop runs no mutants: each pull request tested its own diff.
-    // A run that selects no tests runs no mutants either.
-    let shards = if pr && mutants && test {
-        mutant_shards(mutant_count)
+    // A run that selects no tests runs no mutants either. A matching pass
+    // reuses its shards; lookup failure is represented as no reuse.
+    let shards = if eligible && test && mutants.reuse.is_none() {
+        mutant_shards(mutants.count)
     } else {
         0
     };
-    // A draft selects the same jobs as a ready pull request (`docs/ci.md`,
-    // "The merge gate"), so the selection ignores it.
-    let _ = draft;
     let jobs = BTreeMap::from([
         ("clippy_macos", false),
         ("scripts_self_test_macos", false),
@@ -286,6 +283,14 @@ pub(crate) fn plan(
         ("release", !pr),
     ]);
     Plan { jobs, shards }
+}
+
+/// Inputs used to decide the final mutants selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MutantPlanInput {
+    pub(crate) labels: Vec<String>,
+    pub(crate) count: u64,
+    pub(crate) reuse: Option<super::reuse::MatchedReuse>,
 }
 
 /// Add the pull-request-only macOS selections from the head paths and their

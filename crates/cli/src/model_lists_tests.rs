@@ -299,6 +299,55 @@ fn bounded(
 }
 
 #[test]
+fn models_dev_deprecated_models_are_filtered_from_cached_and_refreshed_lists() {
+    let setup = Setup::new("fiber-models-dev-deprecated");
+    setup.install_data(
+        "acme-ext",
+        "acme",
+        &["retired", "active", "unknown"],
+        &json!({}),
+    );
+    add_models_dev_metadata(&setup, "acme-ext", "acme");
+    setup.write_config(&json!({"model_lists":{"refresh_after":"60s"}}));
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"acme":{"retired":{"status":"deprecated"},"active":{"status":"active"}}}"#,
+    )
+    .unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let home = setup.home();
+    let load = installed(&home, &clock);
+    let fetch = catalog_fetch(json!({
+        "acme": {
+            "retired": {"status": "deprecated"},
+            "active": {"status": "active"}
+        }
+    }))
+    .0;
+
+    for read in [ModelLists::Cached, ModelLists::Refresh { check_age: false }] {
+        let result = model_lists_with_fetch(
+            &setup.home(),
+            &setup.workspace(),
+            read,
+            &load,
+            &fakes::children::grouped_output,
+            &*clock,
+            &fetch,
+        )
+        .unwrap();
+        let listed = listed(result);
+        assert!(
+            !listed.models.iter().any(|model| model == "acme/retired"),
+            "read {read:?} returned {:?}",
+            listed.models
+        );
+        assert!(listed.models.iter().any(|model| model == "acme/active"));
+        assert!(listed.models.iter().any(|model| model == "acme/unknown"));
+    }
+}
+
+#[test]
 fn models_dev_stale_read_refreshes_only_past_the_age_boundary() {
     for (age, expected_calls, expected_context) in [
         (Duration::from_secs(59), 0, 150),

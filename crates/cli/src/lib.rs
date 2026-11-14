@@ -248,12 +248,16 @@ fn finish<E: Into<CliError>>(result: Result<(), E>) -> i32 {
 fn finish_code<E: Into<CliError>>(result: Result<i32, E>) -> i32 {
     match result.map_err(Into::into) {
         Ok(code) => code,
-        Err(CliError::StandardOutput(error) | CliError::DoctorReport(error))
-            if error.kind() == io::ErrorKind::BrokenPipe =>
-        {
-            0
+        Err(error) => {
+            if let CliError::StandardOutput(source) | CliError::DoctorReport(source) = &error {
+                match doors::stdout_write_exit_code(source) {
+                    0 => 0,
+                    _ => fail(error.into()),
+                }
+            } else {
+                fail(error.into())
+            }
         }
-        Err(error) => fail(error.into()),
     }
 }
 
@@ -289,4 +293,25 @@ fn with_dirs_code<E: Into<CliError>>(run: impl FnOnce(&Path, &Path) -> Result<i3
         Err(error) => Err(CliError::Forwarded(failed(error.code(), error))),
     };
     finish_code(ran)
+}
+
+#[cfg(test)]
+mod stdout_write_tests {
+    use super::{CliError, finish_code};
+
+    #[test]
+    fn finish_code_quiets_only_broken_pipe_for_both_stdout_errors() {
+        for error in [
+            CliError::StandardOutput(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+            CliError::DoctorReport(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+        ] {
+            assert_eq!(finish_code(Err::<i32, _>(error)), 0);
+        }
+        for error in [
+            CliError::StandardOutput(std::io::Error::other("full disk")),
+            CliError::DoctorReport(std::io::Error::other("full disk")),
+        ] {
+            assert_eq!(finish_code(Err::<i32, _>(error)), 1);
+        }
+    }
 }

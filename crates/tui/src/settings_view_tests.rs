@@ -1083,7 +1083,7 @@ fn editor_fake() -> Fake {
     )])
 }
 
-/// The fixture rows with `key` holding `shown` from `layer`.
+/// Builds settings rows with `key` set to `shown` at `layer` for tests.
 fn with(key: &str, shown: Shown, layer: &str) -> Vec<SettingRow> {
     rows()
         .into_iter()
@@ -1852,6 +1852,23 @@ fn a_repository_only_key_saves_to_the_repository_never_global() {
             r#"[{"path":"ext","required":false}]"#
         )]
     );
+}
+
+#[test]
+fn enter_on_an_unbounded_number_opens_its_text_field() {
+    let fake = Fake::new(vec![on(
+        SettingsTab::Advanced,
+        "Unbounded number",
+        "test.unbounded_number",
+        value("17"),
+        "project",
+        ANY,
+        SettingControl::Number,
+    )]);
+    let mut settings = at(&fake, "test.unbounded_number");
+    one(&mut settings, &fake, Key::Enter);
+    assert!(matches!(settings.mode, super::Mode::Field(_)));
+    assert!(fake.writes().is_empty());
 }
 
 #[test]
@@ -2847,6 +2864,7 @@ fn applies_by_key() {
         ("hubs.x.address", Applies::NextConnection),
         ("hub.default", Applies::NextConnection),
         ("hub.idle_exit_ms", Applies::HubStart),
+        ("session.keep_exited", Applies::HubStart),
         ("diagnostics.level", Applies::ProcessStart),
         ("model", Applies::NewSessions),
         ("thinking", Applies::NewSessions),
@@ -3177,6 +3195,7 @@ fn a_number_row_shows_its_unit_in_row_text() {
     let number = |key: &str, json: &str| text(key, Number, json);
     // Sliders: any value shows plain with its unit.
     assert_eq!(number("tui.rail.width", "15"), "15% of screen width");
+    assert_eq!(number("tui.rail.width", "40"), "40% of screen width");
     assert_eq!(number("tui.panel.width", "21"), "21% of screen width");
     assert_eq!(number("quota.notice_at", "80"), "80% used");
     // The stored value is a fraction: the built-in 0.7 reads as 70%.
@@ -3362,7 +3381,10 @@ fn numeric_controls_match_the_documented_values_and_include_defaults() {
         assert!(want.contains(&default), "{key}");
     }
     assert_eq!(number_list("hub.idle_exit_ms"), None);
-    assert_eq!(number_list("session.keep_exited"), None);
+    assert_eq!(
+        number_list("session.keep_exited"),
+        Some(&[0.0, 5.0, 10.0, 20.0, 50.0][..])
+    );
     assert_eq!(number_list("tui.rail.width"), None);
     assert_eq!(
         text_list("model_lists.refresh_after"),
@@ -3792,6 +3814,81 @@ fn slider_custom_values_step_to_nearest_tick_and_off_range_values_clamp() {
         super::slider_step(value, 0.5, 0.9, 0.05, true, false)
     });
     assert!((stepped - 0.9).abs() < 1e-12);
+}
+
+#[test]
+fn keep_exited_lists_and_persists_the_documented_session_counts() {
+    let row = |shown| {
+        on(
+            SettingsTab::Sessions,
+            "Keep exited",
+            "session.keep_exited",
+            shown,
+            "project",
+            ANY,
+            SettingControl::Number,
+        )
+    };
+    assert_eq!(super::number_text("session.keep_exited", "0"), "Keep all");
+    assert_eq!(super::number_text("session.keep_exited", "5"), "5 sessions");
+    assert_eq!(
+        super::number_text("session.keep_exited", "7"),
+        "7 sessions (custom)"
+    );
+    assert_eq!(
+        applies_text("session.keep_exited", None),
+        "Applies when the hub starts again."
+    );
+
+    let fake = Fake::new(vec![row(value("10"))]);
+    let mut settings = at(&fake, "session.keep_exited");
+    assert!(screen(&settings).contains("Keep exited"));
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "session.keep_exited", "20")]
+    );
+    assert_eq!(
+        next_number_value(number_list("session.keep_exited").unwrap(), 20.0, true),
+        Some(50.0)
+    );
+
+    let fake = Fake::new(vec![row(value("10"))]);
+    refuse(&fake, "session.keep_exited is read-only");
+    let mut settings = at(&fake, "session.keep_exited");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "session.keep_exited", "20")]
+    );
+    assert_eq!(settings.said, ["session.keep_exited is read-only"]);
+}
+
+#[test]
+fn listed_numbers_step_from_exact_middle_values_in_both_directions() {
+    let values = number_list("session.keep_exited").unwrap();
+    assert_eq!(next_number_value(values, 10.0, true), Some(20.0));
+    assert_eq!(next_number_value(values, 10.0, false), Some(5.0));
+}
+
+#[test]
+fn slider_steps_pin_exact_minimum_and_maximum_boundaries() {
+    let (minimum, maximum, step) = (0.5, 0.9, 0.05);
+    assert!(
+        (super::slider_step(maximum, minimum, maximum, step, false, false) - 0.85).abs() < 1e-12
+    );
+    assert_eq!(
+        super::slider_step(maximum, minimum, maximum, step, true, false),
+        maximum
+    );
+    assert_eq!(
+        super::slider_step(maximum, minimum, maximum, step, true, true),
+        minimum
+    );
+    assert_eq!(
+        super::slider_step(minimum, minimum, maximum, step, false, false),
+        minimum
+    );
 }
 
 /// A width row counts columns after region limits, read from terminal width
