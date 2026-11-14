@@ -175,12 +175,15 @@ pub fn merge_admission(
         return cautious(models);
     };
     let meta = meta_of(&file).unwrap_or_default();
-    let generated: Vec<ModelData> = file
-        .get("models")
+    let generated = generated_models(&file);
+    enrich(models, &generated, &meta, &catalog)
+}
+
+fn generated_models(file: &Value) -> Vec<ModelData> {
+    file.get("models")
         .cloned()
         .and_then(|models| serde_json::from_value(models).ok())
-        .unwrap_or_default();
-    enrich(models, &generated, &meta, &catalog)
+        .unwrap_or_default()
 }
 
 fn load_catalog(home: &Path, enabled: bool) -> Value {
@@ -200,15 +203,12 @@ fn cautious(models: Vec<ModelData>) -> Vec<ModelData> {
 
 fn cautious_model(mut model: ModelData) -> ModelData {
     model.is_new = true;
-    if model.input.is_empty() {
-        model.input.push("text".to_owned());
-    }
-    if model.context_window.is_none() {
-        model.context_window = Some(128_000);
-    }
-    if model.max_output_tokens.is_none() {
-        model.max_output_tokens = Some(8_192);
-    }
+    model.input = vec!["text".to_owned()];
+    model.context_window = Some(128_000);
+    model.max_output_tokens = Some(8_192);
+    model.cost = None;
+    model.thinking_levels.clear();
+    model.thinking_default = None;
     model
 }
 
@@ -349,11 +349,7 @@ pub fn apply(
         let Some(meta) = meta_of(&file) else {
             continue;
         };
-        let generated: Vec<ModelData> = file
-            .get("models")
-            .cloned()
-            .and_then(|models| serde_json::from_value(models).ok())
-            .unwrap_or_default();
+        let generated = generated_models(&file);
         let mut data = providers.data(&name);
         if fresh {
             for model in &data.models {

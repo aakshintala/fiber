@@ -828,9 +828,14 @@ fn a_provider_with_a_data_file_is_not_listed_twice() {
 }
 
 #[test]
-fn cached_model_reuses_generated_metadata_before_validation() {
+fn a_held_providers_cached_invalid_model_is_not_reported_twice() {
     let setup = Setup::new("fiber-model-list-cached-invalid");
-    setup.install_data("acme-ext", "acme", &["m1"], &json!({}));
+    setup.install_data(
+        "acme-ext",
+        "acme",
+        &["m1"],
+        &json!({"context_window": null}),
+    );
     config::write_model_cache(
         &setup.home(),
         "acme",
@@ -854,17 +859,13 @@ fn cached_model_reuses_generated_metadata_before_validation() {
         )
         .unwrap(),
     );
-    assert_eq!(references(&catalogue), ["acme/m1"]);
-    assert_eq!(catalogue.entries[0].context_window, Some(1_000));
-    assert!(!catalogue.entries[0].is_new);
-    assert!(
-        catalogue
-            .notices
-            .iter()
-            .all(|notice| !notice.message.contains("acme/m1")),
-        "{:?}",
-        catalogue.notices
-    );
+    assert!(catalogue.models.is_empty());
+    // The load reports each `model_invalid` once per reason
+    // (`docs/model-routing.md`, "Model discovery").
+    assert_eq!(catalogue.notices.len(), 1, "{:?}", catalogue.notices);
+    assert!(catalogue.notices[0].message.contains("acme/m1"));
+    assert!(catalogue.notices[0].message.contains("context_window"));
+    assert_eq!(catalogue.notices[0].code, ErrorCode::ModelInvalid);
 }
 
 #[test]
@@ -1319,8 +1320,7 @@ fn model_lists_apart_returns_the_placeholder_notices_beside_the_others() {
     );
     let setup = Setup::new("fiber-model-list-apart");
     install_placeholder(&setup, "acme-ext", "acme", HUB_ENV_HOST);
-    // Generated metadata supplies the cached model's context window.
-    setup.install_data("bad-ext", "bad", &["m1"], &json!({}));
+    setup.install_data("bad-ext", "bad", &["m1"], &json!({"context_window": null}));
     config::write_model_cache(
         &setup.home(),
         "bad",
@@ -1345,7 +1345,11 @@ fn model_lists_apart_returns_the_placeholder_notices_beside_the_others() {
         .unwrap()
     };
     let (_providers, _config, others, unconfigured) = read();
-    assert!(others.is_empty(), "{others:?}");
+    assert_eq!(others.len(), 1, "{others:?}");
+    assert!(others[0].message.contains("bad/m1"), "{others:?}");
+    assert!(others[0].message.contains("context_window"), "{others:?}");
+    assert_eq!(others[0].code, ErrorCode::ModelInvalid);
+    assert_eq!(others[0].extension.as_deref(), Some("bad-ext"));
     assert_eq!(unconfigured.len(), 1, "{unconfigured:?}");
     assert!(
         unconfigured[0].message.contains("acme/m"),
@@ -1682,8 +1686,7 @@ fn a_lookup_with_no_search_lists_only_credentialed_providers() {
     setup.install_data("acme-ext", "acme", &["m1"], &json!({}));
     setup.install_data("bare-ext", "bare", &["b1"], &json!({}));
     config::delete_credential(&setup.home(), "bare", "default").unwrap();
-    // Generated metadata repairs the cached model's missing context window.
-    setup.install_data("bad-ext", "bad", &["m1"], &json!({}));
+    setup.install_data("bad-ext", "bad", &["m1"], &json!({"context_window": null}));
     config::write_model_cache(
         &setup.home(),
         "bad",
@@ -1696,8 +1699,10 @@ fn a_lookup_with_no_search_lists_only_credentialed_providers() {
     )
     .unwrap();
     let catalogue = cached_list(&setup);
-    assert_eq!(references(&catalogue), ["acme/m1", "bad/m1"]);
-    assert!(catalogue.notices.is_empty(), "{:?}", catalogue.notices);
+    assert_eq!(references(&catalogue), ["acme/m1"]);
+    assert_eq!(catalogue.notices.len(), 1, "{:?}", catalogue.notices);
+    assert!(catalogue.notices[0].message.contains("bad/m1"));
+    assert_eq!(catalogue.notices[0].code, ErrorCode::ModelInvalid);
 }
 
 #[test]

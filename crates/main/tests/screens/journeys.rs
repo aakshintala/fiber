@@ -468,6 +468,8 @@ fn journey_vendor_only_model_runs_a_turn() {
     });
     assert!(shows(&answered, "Vendor answer."), "{answered:?}");
 
+    // `docs/testing/fakes.md`, “Model calls”: the fake serves one response
+    // per request in order and records every request it receives.
     let requests = server.requests();
     assert_eq!(requests.len(), 2, "the two turns reach the fake endpoint");
     assert_eq!(requests[0].path, "/v1/responses");

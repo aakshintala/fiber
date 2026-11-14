@@ -888,13 +888,7 @@ impl Providers {
                 }
             }
         };
-        let cached_models = (home.is_none() && provider.has_model_cache())
-            .then(|| self.data(&name).models)
-            .filter(|models| !models.is_empty());
-        let mut models = match cached_models
-            .map(Ok)
-            .unwrap_or_else(|| provider.models(&arg))
-        {
+        let mut models = match provider.models(&arg) {
             Ok(models) => models,
             Err(e) => {
                 // The programmatic record mirrors the notice below: the

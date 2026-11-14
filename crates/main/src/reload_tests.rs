@@ -1106,21 +1106,20 @@ fn provider_reload_models_error_keeps_the_old_catalogue() {
             std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 - 2 * 86_400),
         )
         .unwrap();
-    fixture.rewrite_fake_models(fake_models_with_levels());
     fixture.touch_fake_source();
     let prepared = fixture.prepare();
+    fixture.rewrite_fake_models(fake_models_with_levels());
     // The install moves `installed` out of the preparation, so the
     // installed notices are held before it runs.
     let notices = prepared.notices.clone();
     (prepared.installed)();
-    // The provider keeps its old list, while the current package table
-    // still supplies metadata for that listed model.
+    // The provider keeps its old cached list after the failed refresh.
     let snapshot = fixture.delegates.resolve_snapshot();
     assert_eq!((snapshot.lookup)("fiber:fake/m"), Ok("fake/m".to_owned()));
-    assert_eq!(
-        (snapshot.lookup)("fiber:fake/m:high"),
-        Ok("fake/m:high".to_owned())
-    );
+    let Err(reason) = (snapshot.lookup)("fiber:fake/m:high") else {
+        panic!("a level the cached model does not take resolves");
+    };
+    assert!(reason.contains("not one model `fake/m` takes"), "{reason}");
     // The failure reaches the session as a notice naming the extension.
     assert!(
         notices
