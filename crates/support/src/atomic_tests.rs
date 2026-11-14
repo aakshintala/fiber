@@ -269,3 +269,38 @@ fn reset_write_count_zeroes_after_writes() {
     reset_write_count();
     assert_eq!(write_count(), 0);
 }
+
+#[test]
+fn rename_noreplace_success() {
+    let dir = fakes::TempDir::new("fiber-support-rename-noreplace");
+    let source = dir.path().join("source");
+    let target = dir.path().join("target");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("data"), b"kept").unwrap();
+    rename_noreplace(&source, &target).unwrap();
+    assert!(!source.exists());
+    assert_eq!(fs::read(target.join("data")).unwrap(), b"kept");
+}
+
+#[test]
+fn rename_noreplace_existing_target_keeps_source() {
+    let dir = fakes::TempDir::new("fiber-support-rename-existing");
+    let source = dir.path().join("source");
+    let target = dir.path().join("target");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("data"), b"source").unwrap();
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("data"), b"target").unwrap();
+    let error = rename_noreplace(&source, &target).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read(source.join("data")).unwrap(), b"source");
+    assert_eq!(fs::read(target.join("data")).unwrap(), b"target");
+}
+
+#[test]
+fn rename_noreplace_idempotent() {
+    let dir = fakes::TempDir::new("fiber-support-rename-idempotent");
+    let error =
+        rename_noreplace(&dir.path().join("missing"), &dir.path().join("target")).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::NotFound);
+}

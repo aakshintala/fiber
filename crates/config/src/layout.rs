@@ -4,9 +4,133 @@
 //! (`docs/architecture.md`, "The call rules"); callers ask for them here
 //! instead of joining the segments themselves.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::ProjectKey;
+use crate::{ConfigError, ProjectKey};
+
+/// Ensures layout version 2 and lazily migrates this identity's legacy project directory.
+pub fn ensure_project_layout(home: &Path, identity: &Path) -> Result<(), ConfigError> {
+    let layout = home.join("layout");
+    match fs::read(&layout) {
+        Ok(bytes) if bytes == b"2" => {}
+        Ok(_) => {
+            return Err(io_error(
+                &layout,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "unsupported Fiber home layout",
+                ),
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            support::atomic::write_atomic(&layout, b"2", 0o600).map_err(|source| {
+                ConfigError::Io {
+                    file: layout.clone(),
+                    source,
+                }
+            })?;
+        }
+        Err(source) => {
+            return Err(ConfigError::Io {
+                file: layout,
+                source,
+            });
+        }
+    }
+
+    let projects = projects_dir(home);
+    fs::create_dir_all(&projects).map_err(|source| ConfigError::Io {
+        file: projects.clone(),
+        source,
+    })?;
+    let legacy = projects.join(support::project_key::legacy_project_slug(identity));
+    let target = projects.join(support::project_key::project_key(identity));
+    let source_meta = match fs::symlink_metadata(&legacy) {
+        Ok(metadata) if metadata.file_type().is_dir() => metadata,
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(ConfigError::Io {
+                file: legacy,
+                source,
+            });
+        }
+    };
+    let _ = source_meta;
+
+    let marker = legacy.join("legacy-key");
+    match fs::symlink_metadata(&marker) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            let bytes = fs::read(&marker).map_err(|source| ConfigError::Io {
+                file: marker.clone(),
+                source,
+            })?;
+            if bytes == support::project_key::legacy_project_slug(identity).as_bytes() {
+                return Ok(());
+            }
+            return Ok(());
+        }
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(ConfigError::Io {
+                file: marker,
+                source,
+            });
+        }
+    }
+    if plain_dir_exists(&target) {
+        return Ok(());
+    }
+    support::atomic::write_atomic(
+        &marker,
+        support::project_key::legacy_project_slug(identity).as_bytes(),
+        0o600,
+    )
+    .map_err(|source| ConfigError::Io {
+        file: marker,
+        source,
+    })?;
+    match support::atomic::rename_noreplace(&legacy, &target) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
+            if fs::symlink_metadata(&target).is_ok() {
+                return Ok(());
+            }
+            fs::rename(&legacy, &target).map_err(|source| ConfigError::Io {
+                file: legacy,
+                source,
+            })
+        }
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            if plain_dir_exists(&target) {
+                Ok(())
+            } else {
+                Err(ConfigError::Io {
+                    file: legacy,
+                    source,
+                })
+            }
+        }
+        Err(source) => Err(ConfigError::Io {
+            file: legacy,
+            source,
+        }),
+    }
+}
+
+fn io_error(file: &Path, source: std::io::Error) -> ConfigError {
+    ConfigError::Io {
+        file: file.to_path_buf(),
+        source,
+    }
+}
+
+fn plain_dir_exists(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_dir())
+}
 
 /// `<home>/extensions`: where extensions are installed.
 pub fn extensions_dir(home: &Path) -> PathBuf {
@@ -121,9 +245,13 @@ pub fn run_dir(home: &Path) -> PathBuf {
 mod tests {
     #![allow(clippy::unwrap_used, reason = "a failure is the test's")]
 
+    use std::fs;
     use std::path::PathBuf;
 
-    use super::{ProjectKey, project_protected_paths_dir, project_worktrees_dir, projects_dir};
+    use super::{
+        ProjectKey, ensure_project_layout, project_protected_paths_dir, project_worktrees_dir,
+        projects_dir,
+    };
 
     #[test]
     fn projects_dir_is_projects_under_home() {
@@ -149,5 +277,49 @@ mod tests {
             project_protected_paths_dir(&PathBuf::from("/h"), &project),
             PathBuf::from("/h/projects/proj/protected-paths")
         );
+    }
+
+    #[test]
+    fn layout_marker_missing_is_v1() {
+        let home = fakes::TempDir::new("config-layout-v1");
+        ensure_project_layout(home.path(), PathBuf::from("/none").as_path()).unwrap();
+        assert_eq!(fs::read(home.path().join("layout")).unwrap(), b"2");
+    }
+
+    #[test]
+    fn layout_marker_v2() {
+        let home = fakes::TempDir::new("config-layout-v2");
+        fs::write(home.path().join("layout"), b"2").unwrap();
+        ensure_project_layout(home.path(), PathBuf::from("/none").as_path()).unwrap();
+        assert_eq!(fs::read(home.path().join("layout")).unwrap(), b"2");
+    }
+
+    #[test]
+    fn legacy_project_migration_marker() {
+        let home = fakes::TempDir::new("config-layout-marker");
+        let identity = PathBuf::from("/a-b");
+        let legacy = projects_dir(home.path()).join("-a-b");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("config.json"), b"legacy").unwrap();
+        ensure_project_layout(home.path(), &identity).unwrap();
+        let target = projects_dir(home.path()).join(support::project_key::project_key(&identity));
+        assert_eq!(fs::read(target.join("legacy-key")).unwrap(), b"-a-b");
+        assert_eq!(fs::read(target.join("config.json")).unwrap(), b"legacy");
+        assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn legacy_project_migration_keeps_existing_target() {
+        let home = fakes::TempDir::new("config-layout-existing-target");
+        let identity = PathBuf::from("/a-b");
+        let legacy = projects_dir(home.path()).join("-a-b");
+        let target = projects_dir(home.path()).join(support::project_key::project_key(&identity));
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("data"), b"source").unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("data"), b"target").unwrap();
+        ensure_project_layout(home.path(), &identity).unwrap();
+        assert_eq!(fs::read(legacy.join("data")).unwrap(), b"source");
+        assert_eq!(fs::read(target.join("data")).unwrap(), b"target");
     }
 }
