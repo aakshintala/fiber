@@ -502,3 +502,5 @@ crates/main/src/keeper_tests.rs	fiber-4670	plan	2026-11-14T17:00:07Z	roundhouse-
 crates/main/src/keeper_child_tests.rs	fiber-4670	plan	2026-11-14T17:00:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tools/src/shell/hosted_tests.rs	fiber-4670	plan	2026-11-14T17:00:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/tui.md	fiber-4591	plan	2026-11-14T17:31:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+research/dependency-rss/Cargo.toml	fiber-452	plan	2026-11-14T18:28:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4841
+research/dependency-rss/Cargo.lock	fiber-452	plan	2026-11-14T18:28:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4841
