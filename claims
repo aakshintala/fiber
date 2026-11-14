@@ -244,9 +244,6 @@ crates/main/src/configure/remote_tests.rs	fiber-4583	plan	2026-11-13T21:41:17Z	A
 docs/invocation.md	fiber-4583	plan	2026-11-13T21:41:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/hooks.rs	fiber-4583	plan	2026-11-13T22:10:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/hooks_tests.rs	fiber-4583	plan	2026-11-13T22:10:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/src/skills.rs	fiber-4774	plan	2026-11-13T22:24:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/src/skills_tests.rs	fiber-4774	plan	2026-11-13T22:24:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/system-prompt.md	fiber-4774	plan	2026-11-13T22:24:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/ci.yml:57-58	fiber-4809	plan	2026-11-13T22:28:32Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4809-budget-breach-exempt	
 .github/workflows/ci.yml:150-151	fiber-4809	plan	2026-11-13T22:28:32Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4809-budget-breach-exempt	
 .github/workflows/ci.yml:249-249	fiber-4809	plan	2026-11-13T22:28:32Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4809-budget-breach-exempt	
@@ -446,3 +443,6 @@ crates/main/tests/commands/stdout_errors.rs:51-52	fiber-4786	plan	2026-11-14T00:
 crates/main/tests/commands/stdout_errors.rs:57-58	fiber-4786	plan	2026-11-14T00:48:40Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4786-doors-broken-pipe	
 crates/main/tests/commands/stdout_errors.rs:102-102	fiber-4786	plan	2026-11-14T00:48:40Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4786-doors-broken-pipe	
 docs/invocation.md:334-334	fiber-4786	plan	2026-11-14T00:48:40Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4786-doors-broken-pipe	
+crates/loop/src/skills.rs:150-151	fiber-4774	plan	2026-11-14T01:01:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4774-skills-home-overlap	
+crates/loop/src/skills_tests.rs:1509-1510	fiber-4774	plan	2026-11-14T01:01:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4774-skills-home-overlap	
+docs/system-prompt.md:325-325	fiber-4774	plan	2026-11-14T01:01:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4774-skills-home-overlap	
