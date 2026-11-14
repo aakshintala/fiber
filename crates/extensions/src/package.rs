@@ -445,15 +445,14 @@ impl Package {
                 format!("{}: its process has no registry", manifest.name),
             ));
         };
-        // A bare name runs on `PATH` and an absolute path as written;
-        // anything else joins onto the package directory, as the
-        // extension's own files do.
-        let program = std::path::Path::new(&process.program);
-        let program = if program.is_absolute() || program.components().count() == 1 {
-            program.to_path_buf()
-        } else {
-            options.dir.join(program)
-        };
+        let program = crate::host::resolve::resolve_in_package(&process.program, &canonical_dir)
+            .map_err(|message| {
+                (
+                    contract::ErrorCode::ExtensionFailed,
+                    format!("{}: cannot start its process: {message}", manifest.name),
+                )
+            })?;
+        let program = std::path::PathBuf::from(program);
         // Refresh resolves stored pairs from the home credential files.
         let home = context.home.clone();
         let extension = super::process::ProcessExtension::start(super::process::Launch {

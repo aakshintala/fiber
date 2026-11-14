@@ -126,8 +126,19 @@ impl NativeHostServices {
         // An absent working directory is the workspace; a relative one
         // joins it, and an absolute one is used as given, as in Lua.
         let cwd = context.workspace.join(cwd);
+        let resolved = crate::host::resolve::resolve_in_package(program, &context.package)
+            .map_err(|message| {
+                (
+                    contract::ErrorCode::ExtensionFailed,
+                    message.lines().next().unwrap_or_default().to_owned(),
+                )
+            })?;
         let request = crate::host::exec::ExecRequest {
-            program: program.to_owned(),
+            program: if self.host_script.is_none() {
+                resolved
+            } else {
+                program.to_owned()
+            },
             args: args.clone(),
             cwd,
             env,
@@ -188,7 +199,7 @@ impl NativeHostServices {
             self.runtime.emit(&contract::events::Event::ExtensionExec(
                 contract::events::ExtensionExec {
                     extension: context.extension.clone(),
-                    program: program.to_owned(),
+                    program: request.program.clone(),
                     args,
                     cwd: request.cwd.display().to_string(),
                     process: contract::shapes::Process {
