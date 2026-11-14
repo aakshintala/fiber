@@ -151,16 +151,6 @@ xtask/tests/cli.rs:354-355	fiber-4809	plan	2026-11-14T06:45:03Z	roundhouse-7010-
 xtask/tests/cli.rs:517-518	fiber-4809	plan	2026-11-14T06:45:03Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4809-budget-breach-exempt	
 crates/tui/src/snapshots/tui__settings_view__tests__settings_models_screen_rows.snap	fiber-4583	plan	2026-11-14T06:46:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4583-settings-rows	
 crates/tui/src/snapshots/tui__settings_view__tests__settings_permissions_screen_rows.snap	fiber-4583	plan	2026-11-14T06:46:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4583-settings-rows	
-crates/extensions/src/host.rs:900-901	fiber-4767	plan	2026-11-14T07:06:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4767-host-tool-oversize	
-crates/extensions/src/host.rs:935-935	fiber-4767	plan	2026-11-14T07:06:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4767-host-tool-oversize	
-crates/extensions/src/host_tests.rs:9-10	fiber-4767	plan	2026-11-14T07:06:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4767-host-tool-oversize	
-crates/extensions/src/host_tests.rs:10-11	fiber-4767	plan	2026-11-14T07:06:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4767-host-tool-oversize	
-crates/extensions/src/host_tests.rs:20-20	fiber-4767	plan	2026-11-14T07:06:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4767-host-tool-oversize	
-crates/extensions/src/host_tests.rs:887-888	fiber-4767	plan	2026-11-14T07:06:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4767-host-tool-oversize	
-crates/extensions/src/lua/schedule_tests.rs:2651-2652	fiber-4767	plan	2026-11-14T07:06:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4767-host-tool-oversize	
-crates/extensions/src/lua/vm.rs:134-134	fiber-4767	plan	2026-11-14T07:06:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4767-host-tool-oversize	
-crates/main/tests/extension_host/extension_codemode.rs:92-93	fiber-4767	plan	2026-11-14T07:06:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4767-host-tool-oversize	
-crates/main/tests/extension_host/extension_codemode.rs:1246-1247	fiber-4767	plan	2026-11-14T07:06:37Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4767-host-tool-oversize	
 crates/main/tests/screen_looks/swapped_panels_look.rs:1110-1110	fiber-4675	plan	2026-11-14T07:45:14Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-enter	
 crates/main/tests/screen_looks/swapped_panels_look.rs:1122-1124	fiber-4675	plan	2026-11-14T07:45:14Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-enter	
 crates/main/tests/screen_looks/swapped_panels_look.rs:1126-1126	fiber-4675	plan	2026-11-14T07:45:14Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-enter	
