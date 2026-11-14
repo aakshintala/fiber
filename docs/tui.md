@@ -3294,11 +3294,11 @@ the panel's scrolling. So every extension keeps what "History and paging" and
 itself is a separate client of the hub, not a TUI extension.
 
 ### The slots
-Not built yet (replaced input box, built-in views, and overlays): see #688.
+Not built yet (replaced input box): see #688.
 
 | Slot | What it draws |
 |---|---|
-| `layout` | Where each shown built-in region goes: the rail, conversation, working line, steering queue, input box and panel |
+| `layout` | Where each shown built-in region goes: rail, conversation, working line, steering queue, input box and panel |
 | `home` | Home |
 | `turn_card` | A turn's card and its ▣ line |
 | `prompt` | Only a person's prompt bubble: a non-driver message never calls it |
@@ -3563,27 +3563,27 @@ five-file cut does, and the replacement inherits the cap.
 | `lines` | The widget's lines |
 | `open` | Whether the person opened the widget |
 
-**Not built yet: see #688.**
-
 `layout` places regions and never draws them. It receives the terminal width
 and height in cells, `flat`, and `regions`: the names shown this frame, drawn
 from `rail`, `conversation`, `working_line`, `steering_queue`, `input_box` and
 `panel`. It returns exactly one `{x, y, width, height}` rectangle for each
-name. Rectangles are unique, at least one cell in each dimension, within the
-screen and non-overlapping. The built-in rail and panel rectangles come from
-`layout::split`; the conversation, working line, steering queue and input box
-come from shared vertical placement. Drawing and hit-testing use the same
+shown name. Rectangles are unique, at least one cell in each dimension, within
+the screen and non-overlapping. The built-in rail and panel rectangles come
+from `layout::split`; the conversation, working line, steering queue and input
+box come from shared vertical placement. Drawing and hit-testing use the same
 rectangles, and an extension replaces only this region map. The terminal keeps
 its own narrow-layout and shedding decisions: grip and narrow are not regions.
 The grip is column 0 while the rail is wanted but not drawn; narrow means the
 panel is absent. Invalid output falls back atomically to the complete built-in
-map and raises one notice. The "Fiber needs 40×10" floor stays the terminal's.
+map, raises one notice and caches the failure. Numeric coordinates must be
+integers in range; rectangle ends are checked without overflow. The "Fiber
+needs 40×10" floor stays the terminal's.
 
 | Field | What it holds |
 |---|---|
 | `width`, `height` | The terminal's size in cells |
 | `flat` | Whether the screen reader drops every style |
-| `regions` | The names shown this frame, from the six built-in regions above |
+| `regions` | Only the names shown this frame, from `rail`, `conversation`, `working_line`, `steering_queue`, `input_box` and `panel` |
 
 **`home`** draws Home. It receives only the source values the built-in renderer
 reads; its output keeps the existing line shape and targets. It does not receive
@@ -3595,8 +3595,8 @@ not apply, never `null`.
 | `version` | Fiber's version, shown beside the four-row logo |
 | `glyph` | The glyph before the name in the one-row logo |
 | `header` | `counts` (state role and text pairs) and optional `spend` |
-| `chips` | Each chip's `text`, `dim`, and `session_mark` |
-| `list` | The rows drawn by Home: `head` fields `name`, `live`, `spend`, `waiting`; `live` fields `number`, `glyph`, `name`, `word`, `tone`, `stop`, `id`, `turns`, `branch`, `spend`, `context`, `wait`; `exited_head` `count`; `exited` fields `stop`, `glyph`, `name`, `id`, `turns`, `spend`, `age`; `more` fields `count`; and `archived_head` `count` |
+| `chips` | Each chip's `text`, `dim`, `session_mark`, and existing click `spot` when present |
+| `list` | The rows drawn by Home: `head` fields `start`, `name`, `live`, `spend`, `waiting`; `live` fields `key`, `number`, `glyph`, `name`, `word`, `tone`, `stop`, `id`, `turns`, `branch`, `spend`, `context`, `wait`; `exited_head` `count`; `exited` fields `key`, `stop`, `glyph`, `name`, `id`, `turns`, `spend`, `age`; `more` fields `key`, `count`; and `archived_head` fields `key`, `count` |
 | `empty` | Whether there are no live, crashed or exited sessions |
 | `blockers`, `blocker_keys` | The blocker lines and matching booleans for credential-fix targets |
 | `picker` | When open, `escapes`, `recents`, `focus`, and optional `typed` with `text`, `completions` and `missing` |
@@ -3605,7 +3605,7 @@ not apply, never `null`.
 | `placeholder` | Whether the input box shows its placeholder |
 | `flat` | Whether the screen reader drops every style |
 
-**Not built yet (built-in views): see #688.**
+
 
 **Not built yet (extension-owned views and overlays): see #4833.**
 
