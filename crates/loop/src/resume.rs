@@ -32,6 +32,25 @@ use crate::{Error, Loop, Session, Step};
 /// answer (`docs/events.md`, `permission_resolved`).
 const NOBODY_TO_ANSWER: &str = "The session was resumed with nobody to answer.";
 
+/// The own-log Fiber starts whose keeper completion has no matching finish.
+/// Orphans follow their existing settle path; active jobs and already
+/// delivered results are unchanged.
+fn completed_delegates(
+    starts: &[(JobId, SessionId)],
+    completed: &HashSet<JobId>,
+    finished: &HashSet<JobId>,
+    orphans: &[JobCompleted],
+) -> Vec<(JobId, SessionId)> {
+    let orphan_ids: HashSet<_> = orphans.iter().map(|job| job.job_id.clone()).collect();
+    starts
+        .iter()
+        .filter(|(job_id, _)| {
+            completed.contains(job_id) && !finished.contains(job_id) && !orphan_ids.contains(job_id)
+        })
+        .cloned()
+        .collect()
+}
+
 /// The decision line's reason for a call settled on resume: the settled
 /// completion's first text part, naming the extension that refused it,
 /// failed it, or rewrote it into arguments the tool rejects.
@@ -118,6 +137,12 @@ pub struct Resumed {
     /// backfill resolves its jobs through this. Jobs with no mapping (another
     /// harness, a missing line) resolve to skip-and-continue.
     pub(crate) delegate_sessions: HashMap<JobId, SessionId>,
+    /// Fiber delegate starts in the current run, in parent-log order.
+    pub(crate) delegate_starts: Vec<(JobId, SessionId)>,
+    /// Jobs whose current delegate run already wrote `delegate_finished`.
+    pub(crate) delegate_finished: HashSet<JobId>,
+    /// Jobs whose current run already wrote `job_completed`.
+    pub(crate) completed_jobs: HashSet<JobId>,
     /// The settled finish's worktree inspection: `Some` on the
     /// session-process resume path, which reports the delegate's worktree
     /// at settle time; `None` (rewind, tests, any caller without a session
@@ -377,6 +402,9 @@ impl Loop {
             reviewed,
             orphans,
             delegate_sessions,
+            delegate_starts,
+            delegate_finished,
+            completed_jobs,
             thinking,
             offers,
             naming,
@@ -388,6 +416,12 @@ impl Loop {
             settle_finish,
             ..
         } = resumed;
+        let completed_delegates = completed_delegates(
+            &delegate_starts,
+            &completed_jobs,
+            &delegate_finished,
+            &orphans,
+        );
         let mut lines = crate::history::read_window(&session.log, window, end)?;
         let kept = crate::kept::collect(&lines)?;
         // The suspended turn, if any: its batch stays open, so the rebuild
@@ -481,12 +515,17 @@ impl Loop {
             },
         )?;
         resumed.kept = kept;
-        let backfill = resumed.prepare_backfill(&delegate_sessions, &orphans)?;
+        let backfill =
+            resumed.prepare_backfill(&delegate_sessions, &orphans, &completed_delegates)?;
         // Each orphan settled from its delegate's own log, before any
         // line this resume writes; what the settle cannot match keeps the
         // orphaned completion.
-        let settled =
-            resumed.settle_orphans(&delegate_sessions, &orphans, settle_finish.as_ref())?;
+        let settled = resumed.settle_orphans(
+            &delegate_sessions,
+            &orphans,
+            &completed_delegates,
+            settle_finish.as_ref(),
+        )?;
         resumed.mark_orphans(settled)?;
         // The backfill's missing copies, after the orphaned `job_completed`
         // lines and before `resumed_label` or any new turn write.
@@ -510,8 +549,8 @@ impl Loop {
 const WRITER_RETRY: Duration = Duration::from_millis(50);
 
 impl Loop {
-    /// Prepares the orphan backfill (`docs/delegates.md`, "Lifetime"): the
-    /// missing `usage_recorded` lines per mapped orphaned Fiber delegate, in
+    /// Prepares the delegate backfill (`docs/delegates.md`, "Lifetime"): the
+    /// missing `usage_recorded` lines per mapped ended Fiber delegate, in
     /// orphan order, each delegate once, each delegate's lines in
     /// delegate-log order. Runs before `mark_orphans` or any other resume
     /// write, so the snapshots below precede every line this resume writes.
@@ -521,12 +560,18 @@ impl Loop {
         &self,
         sessions: &HashMap<JobId, SessionId>,
         orphans: &[JobCompleted],
+        completed_delegates: &[(JobId, SessionId)],
     ) -> Result<Vec<(SessionId, Vec<UsageRecorded>)>, Error> {
         let mut delegates = Vec::new();
         for orphan in orphans {
             if let Some(session) = sessions.get(&orphan.job_id)
                 && !delegates.contains(session)
             {
+                delegates.push(session.clone());
+            }
+        }
+        for (_, session) in completed_delegates {
+            if !delegates.contains(session) && self.delegate_ended(session)? {
                 delegates.push(session.clone());
             }
         }
@@ -600,6 +645,18 @@ impl Loop {
         Ok(missing)
     }
 
+    /// Whether the delegate's latest run ended with `fiber_exited`.
+    fn delegate_ended(&self, session: &SessionId) -> Result<bool, Error> {
+        let Some(home) = self.log.dir().parent() else {
+            return Ok(false);
+        };
+        let dir = home.join(&session.0);
+        if !log::dir_exists(&dir) {
+            return Ok(false);
+        }
+        Ok(Self::settle_exit(&self.final_usage(&dir)?).is_some())
+    }
+
     /// The delegate log's final lines: waits out an old writer still
     /// holding the session lock, then reads under the held lock. `Busy`
     /// means the old writer may still append, so the loop parks through
@@ -646,17 +703,21 @@ impl Loop {
         }
     }
 
-    /// Settles each orphan from its delegate's own log (`docs/delegates.md`,
-    /// "Lifetime"): in orphan order, one [`OrphanEnd`] per orphan. An orphan
+    /// Settles each orphan and completed-but-undelivered delegate from its
+    /// own log (`docs/delegates.md`, "Lifetime"): in orphan order, one
+    /// [`OrphanEnd`] per orphan, then one finish-only end per keeper-completed
+    /// delegate whose result is still undelivered. An orphan
     /// with no `delegate_sessions` entry, a missing delegate directory, or
     /// no `fiber_exited` for the run the job started keeps its orphaned
     /// completion; any other shape resolves from the exit line, as a live
-    /// finish would. Shell jobs are unchanged: with no mapping they keep
-    /// the orphaned completion.
+    /// finish would. A keeper-completed job gets only its missing finish,
+    /// after its existing completion. Shell jobs are unchanged: with no
+    /// mapping they keep the orphaned completion.
     fn settle_orphans(
         &self,
         sessions: &HashMap<JobId, SessionId>,
         orphans: &[JobCompleted],
+        completed_delegates: &[(JobId, SessionId)],
         finish: Option<&contract::jobs::FinishWorktree>,
     ) -> Result<Vec<OrphanEnd>, Error> {
         let mut settled = Vec::with_capacity(orphans.len());
@@ -679,32 +740,58 @@ impl Loop {
                 settled.push(OrphanEnd::Orphaned(orphan.clone()));
                 continue;
             };
-            // No delivery hook runs on a settle, so the file holds the
-            // message as the delegate wrote it.
-            let mut finished = exited.delegate_finished(&orphan.job_id);
-            // A resumed run reports only; its session process owns removal
-            // (crates/doors/src/isolation.rs:190).
-            if let (Some(recorded), Some(finish)) = (Self::settle_worktree(&lines), finish) {
-                finished.worktree = Some(finish(contract::jobs::EndWorktree {
-                    path: PathBuf::from(recorded.path),
-                    branch: recorded.branch,
-                    base: None,
-                    remove: false,
-                }));
-            }
-            finished.artifact_absolute = Some(
-                dir.join(contract::events::FINAL_MESSAGE)
-                    .to_string_lossy()
-                    .into_owned(),
-            );
-            crate::deliveries::write_final_file(&mut finished, false);
-            let finished = crate::delegated::bounded(&self.log, finished);
+            let finished = self.settled_finish(&orphan.job_id, &dir, &lines, &exited, finish);
             settled.push(OrphanEnd::Settled(
                 finished,
                 Box::new(settle_completed(orphan, &exited)),
             ));
         }
+        // The keeper may have durably completed a delegate job before the
+        // parent had a chance to write `delegate_finished`. Deliver only
+        // those unmatched completed starts whose own delegate run exited.
+        for (job_id, session) in completed_delegates {
+            let Some(home) = self.log.dir().parent() else {
+                continue;
+            };
+            let dir = home.join(&session.0);
+            if !log::dir_exists(&dir) {
+                continue;
+            }
+            let lines = self.final_usage(&dir)?;
+            let Some(exited) = Self::settle_exit(&lines) else {
+                continue;
+            };
+            let finished = self.settled_finish(job_id, &dir, &lines, &exited, finish);
+            settled.push(OrphanEnd::FinishAfterCompleted(finished));
+        }
         Ok(settled)
+    }
+
+    fn settled_finish(
+        &self,
+        job_id: &JobId,
+        dir: &Path,
+        lines: &[Envelope],
+        exited: &FiberExited,
+        finish: Option<&contract::jobs::FinishWorktree>,
+    ) -> contract::events::DelegateFinished {
+        let mut finished = exited.delegate_finished(job_id);
+        // A resumed run reports only; its session process owns removal.
+        if let (Some(recorded), Some(finish)) = (Self::settle_worktree(lines), finish) {
+            finished.worktree = Some(finish(contract::jobs::EndWorktree {
+                path: PathBuf::from(recorded.path),
+                branch: recorded.branch,
+                base: None,
+                remove: false,
+            }));
+        }
+        finished.artifact_absolute = Some(
+            dir.join(contract::events::FINAL_MESSAGE)
+                .to_string_lossy()
+                .into_owned(),
+        );
+        crate::deliveries::write_final_file(&mut finished, false);
+        crate::delegated::bounded(&self.log, finished)
     }
 
     /// The delegate log's opening `session_started` worktree, when its first

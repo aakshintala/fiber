@@ -5797,6 +5797,50 @@ fn without_hooks_nothing_runs_and_the_completed_stays_raw() {
 }
 
 #[test]
+fn a_keeper_completed_job_gets_its_delegate_finish_after_its_end() {
+    // `docs/delegates.md`, "Events": the keeper's `job_completed` already
+    // exists, so resume writes the delegate's finish after it.
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    write_started(&mut world, JOB, Some("delegate"));
+    world
+        .looped
+        .as_mut()
+        .unwrap()
+        .write(&Event::JobCompleted(failed(JOB)), None, None)
+        .unwrap();
+    world
+        .looped
+        .as_mut()
+        .unwrap()
+        .mark_orphans(vec![OrphanEnd::FinishAfterCompleted(delegate_finished(
+            JOB,
+            "delegate result".into(),
+        ))])
+        .unwrap();
+    let lines = log::read(&world.dir).unwrap();
+    let kinds: Vec<_> = lines.iter().map(Envelope::kind).collect();
+    let completed = kinds
+        .iter()
+        .rposition(|kind| *kind == EventKind::JobCompleted)
+        .unwrap();
+    let finished = kinds
+        .iter()
+        .rposition(|kind| *kind == EventKind::DelegateFinished)
+        .unwrap();
+    assert!(
+        completed < finished,
+        "keeper completion precedes resume finish"
+    );
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| **kind == EventKind::DelegateFinished)
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn mark_orphans_runs_no_hook_and_writes_the_end_raw() {
     let hooks = Arc::new(RecordingHooks::default());
     hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));

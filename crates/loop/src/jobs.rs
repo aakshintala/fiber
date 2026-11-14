@@ -500,10 +500,11 @@ impl Loop {
             .collect()
     }
 
-    /// Writes `orphans` in start order ([`Orphans`]): each entry is the
-    /// orphaned completion as-is, or the settled pair the delegate's own
-    /// log supplied, `delegate_finished` immediately before its
-    /// `job_completed` (`docs/delegates.md`, "Lifetime"). The orphaned
+    /// Writes orphan ends in start order ([`Orphans`]): each orphan is its
+    /// orphaned completion as-is, or the settled pair the delegate's own log
+    /// supplied, `delegate_finished` immediately before `job_completed`;
+    /// a keeper-completed job gets its missing `delegate_finished` after its
+    /// existing completion (`docs/delegates.md`, "Lifetime"). The orphaned
     /// completion says the process that ran the job died with the one
     /// that wrote the log; a settled pair reports the exit the delegate
     /// wrote itself. Nothing touches a process (`docs/events.md`,
@@ -518,6 +519,21 @@ impl Loop {
             let (finished, completed) = match orphan {
                 OrphanEnd::Orphaned(completed) => (None, completed),
                 OrphanEnd::Settled(finished, completed) => (Some(finished), *completed),
+                OrphanEnd::FinishAfterCompleted(finished) => {
+                    if self.suspended.is_some() {
+                        let event = Event::DelegateFinished(finished.clone());
+                        self.log.append(&event, None, None)?;
+                    } else {
+                        self.write(&Event::DelegateFinished(finished.clone()), None, None)?;
+                    }
+                    if !self.compaction.carry.owned(&finished.job_id.0) {
+                        self.held.push(Input::User {
+                            text: delegate_text(&finished),
+                            images: Vec::new(),
+                        });
+                    }
+                    continue;
+                }
             };
             if self.suspended.is_some() {
                 if let Some(finished) = &finished {
@@ -563,9 +579,10 @@ fn name_job(input: &mut Vec<InputItem>, id: &JobId) {
     }
 }
 
-/// One orphan's resume write, in start order: the orphaned completion
-/// as-is, or the settled pair the delegate's own log supplied. The settle
-/// in [`Loop::resume`] builds the list; [`Loop::mark_orphans`] writes it.
+/// One resume end: the orphaned completion as-is, the settled pair the
+/// delegate's own exit line supplied, or the missing finish after an existing
+/// keeper completion. [`Loop::resume`] builds the list;
+/// [`Loop::mark_orphans`] writes it.
 pub(crate) enum OrphanEnd {
     /// No `fiber_exited` settled the job: the orphan marking stands.
     Orphaned(JobCompleted),
@@ -574,6 +591,9 @@ pub(crate) enum OrphanEnd {
     /// resume settles rarely, so the one allocation never lands on a hot
     /// path.
     Settled(DelegateFinished, Box<JobCompleted>),
+    /// The keeper already wrote `job_completed`; deliver only the finish
+    /// after it, from the delegate's own exited run.
+    FinishAfterCompleted(DelegateFinished),
 }
 
 /// The jobs a log started with no `job_completed`, folded one line at a
