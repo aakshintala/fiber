@@ -487,3 +487,9 @@ crates/tools/src/shell/sandbox/protected.rs	fiber-4842	plan	2026-11-14T21:28:31Z
 crates/tools/src/shell/sandbox/protected/baseline.rs	fiber-4842	plan	2026-11-14T21:28:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/log/src/search_tests.rs	fiber-4685	plan	2026-11-14T21:35:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tools/src/shell/keeper_lock_tests.rs,crates/tools/src/shell/command.rs,crates/tools/src/shell/sandbox/protected.rs,crates/tools/src/shell/sandbox/protected/baseline.rs	fiber-4842	grant	2026-11-14T21:42:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4842-keeper-lock-flake	
+crates/extensions/src/process/context.rs	fiber-4677	plan	2026-11-14T21:54:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/process/context/native.rs	fiber-4677	plan	2026-11-14T21:54:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/package.rs	fiber-4677	plan	2026-11-14T21:54:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/hooks.rs	fiber-4677	plan	2026-11-14T21:54:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/package_tests.rs	fiber-4677	plan	2026-11-14T21:54:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/process_tests.rs	fiber-4677	plan	2026-11-14T21:54:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
