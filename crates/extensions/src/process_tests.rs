@@ -6498,7 +6498,7 @@ fn sessionless_lines_carry_no_session_id() {
 #[test]
 fn sessionless_allowed_names_only_the_call_case_set() {
     use super::process::calls::{not_available, sessionless_allowed};
-    use contract::ErrorCode::InvalidArguments;
+    use contract::ErrorCode::NotAvailable;
     for call in [
         "host.http",
         "host.exec",
@@ -6546,10 +6546,7 @@ fn sessionless_allowed_names_only_the_call_case_set() {
     }
     assert_eq!(
         not_available("host.drive"),
-        (
-            InvalidArguments,
-            "host.drive: not available here".to_owned()
-        )
+        (NotAvailable, "host.drive: not available here".to_owned())
     );
 }
 
@@ -6568,10 +6565,10 @@ fn sessionless_host_calls_answer_only_the_call_case_set() {
         {"send": {"id": "c5", "command": "call", "args": {"call": "host.drive", "args": ["steer"]}}},
         {"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready"}}}},
         {"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "c1", "result": {}}}}},
-        {"read": {"expect": {"kind": "command_rejected", "payload": {"command_id": "c2", "code": "invalid_arguments", "message": "state.set: not available here"}}}},
-        {"read": {"expect": {"kind": "command_rejected", "payload": {"command_id": "c3", "code": "invalid_arguments", "message": "host.fs.write: not available here"}}}},
-        {"read": {"expect": {"kind": "command_rejected", "payload": {"command_id": "c4", "code": "invalid_arguments", "message": "host.config.get: not available here"}}}},
-        {"read": {"expect": {"kind": "command_rejected", "payload": {"command_id": "c5", "code": "invalid_arguments", "message": "host.drive: not available here"}}}},
+        {"read": {"expect": {"kind": "command_rejected", "payload": {"command_id": "c2", "code": "not_available", "message": "state.set: not available here"}}}},
+        {"read": {"expect": {"kind": "command_rejected", "payload": {"command_id": "c3", "code": "not_available", "message": "host.fs.write: not available here"}}}},
+        {"read": {"expect": {"kind": "command_rejected", "payload": {"command_id": "c4", "code": "not_available", "message": "host.config.get: not available here"}}}},
+        {"read": {"expect": {"kind": "command_rejected", "payload": {"command_id": "c5", "code": "not_available", "message": "host.drive: not available here"}}}},
     ])
     .to_string();
     let owner = Harness::start_call_with_services(

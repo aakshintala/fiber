@@ -306,7 +306,7 @@ impl NativeHostServices {
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
         if !callback.model_permitted() {
             return Err((
-                contract::ErrorCode::InvalidArguments,
+                contract::ErrorCode::NotAvailable,
                 "host.model: not available here".to_owned(),
             ));
         }
@@ -376,7 +376,7 @@ impl NativeHostServices {
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
         if !callback.delegate_permitted() {
             return Err((
-                contract::ErrorCode::InvalidArguments,
+                contract::ErrorCode::NotAvailable,
                 "host.delegate: not available here".to_owned(),
             ));
         }
