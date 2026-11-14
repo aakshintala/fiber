@@ -195,6 +195,52 @@ fn archive_hides_the_session_from_the_list_and_ends_its_log() {
     until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }
 
+// `docs/invocation.md`, "Archiving" promises these results.
+#[test]
+fn archive_command_archives_exited_delegate_descendants() {
+    let setup = Setup::new();
+    let _server = installed(&setup, vec![hello(), hello()]);
+    let (parent, child) = two_exited(&setup);
+    let recent_path = setup.home().join("recent.jsonl");
+    let rows: Vec<Value> = fs::read_to_string(&recent_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .map(|mut row: Value| {
+            if row["session_id"] == child {
+                row["status"]["parent"] = json!(parent);
+            }
+            row
+        })
+        .collect();
+    let mut text = String::new();
+    for row in rows {
+        text.push_str(&serde_json::to_string(&row).unwrap());
+        text.push('\n');
+    }
+    fs::write(&recent_path, text).unwrap();
+
+    assert_eq!(archived(&setup, &parent), parent);
+    // Recent listings omit delegates even when archived; their logs and
+    // derived rows still show the cascade.
+    assert_eq!(listed(&setup, &["--archived"]), vec![parent.clone()]);
+    assert_eq!(listed(&setup, &[]), Vec::<String>::new());
+    for id in [&parent, &child] {
+        assert_eq!(last_envelope(&setup, id)["kind"], "archived", "{id}");
+    }
+    let recent: Vec<Value> = fs::read_to_string(recent_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(
+        recent
+            .iter()
+            .any(|row| row["session_id"] == child && row["archived"] == true)
+    );
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
+}
+
 #[test]
 fn archive_accepts_a_unique_prefix_and_prints_the_full_id() {
     let setup = Setup::new();

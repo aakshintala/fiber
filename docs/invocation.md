@@ -1319,7 +1319,8 @@ required unless marked optional; unknown keys, wrong types and explicit
 
 | Operation | Arguments besides `operation` | Result |
 |---|---|---|
-| `settings` | `workspace` (string); optional `overrides` (array of strings) | `rows`, the setting rows described below; client-owned `keys` and `tui` rows are omitted. `overrides` are the run's `-c` arguments as `key=value`, in the order given: the last for a key wins and its row reads `-c` with no `file`. Omitting it means none; an explicit `null`, a non-array or a non-string member is `invalid_arguments` |
+| `settings` | `workspace` (string); optional `overrides` (array of strings) | `rows`, the setting rows described below; client-owned `keys`, `tui`, `hub.default` and `hubs.*` rows are omitted. `overrides` are the run's `-c` arguments as `key=value`, in the order given: the last for a key wins and its row reads `-c` with no `file`. Omitting it means none; an explicit `null`, a non-array or a non-string member is `invalid_arguments` |
+| `search_backends` | `workspace` (string) | `backends`, the installed search backend names for the workspace, sorted; `Default` is not included |
 | `set` | `workspace`, `layer`, `key`, `text` (strings) | `file` (string) and `warnings` (array of strings); `layer` is `global`, `project` or `repository`; a client-owned key is rejected `invalid_arguments` without writing |
 | `reset` | `workspace`, `layer`, `key`, `expected` (strings) | `file` (string) and `warnings` (array of strings); removes `key` from that layer's file so the value below applies, only when the file still holds `expected`, JSON text, compared under the file's lock. A layer that sets nothing succeeds without writing; a changed value is `stale_request` and nothing is written; `expected` that is not JSON, a key the layer may not hold and a client-owned key are `invalid_arguments` or the check's own refusal, without writing |
 | `global_file` | none | `file` (string), the hub's global configuration file |
@@ -1609,7 +1610,7 @@ session (`docs/tui.md`, "The session list"):
     in the project asked for; an archived row is not checked again.
   - in each project, every exited session past the `session.keep_exited`
     most recent (`docs/configuration.md`), 10 by default; 0 keeps them
-    all. Live sessions do not count.
+    all. Live sessions do not count. Delegates do not count; archiving a session by any route archives its delegates with it.
 
   It archives as `archive` does and asks nothing. A session whose lock
   another process holds is skipped and tried again at the next answer.

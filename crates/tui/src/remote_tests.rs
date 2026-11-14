@@ -668,6 +668,18 @@ fn logout_rows_returns_the_hubs_decoded_rows() {
 }
 
 #[test]
+fn search_backends_uses_the_configure_rpc_and_decodes_sorted_names() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    let names = hub.call(
+        "search_backends",
+        json!({"workspace":"/remote/ws"}),
+        json!({"backends":["alpha","zeta"]}),
+        |remote| remote.search_backends(Path::new("/remote/ws")),
+    );
+    assert_eq!(names, Ok(vec!["alpha".to_owned(), "zeta".to_owned()]));
+}
+
+#[test]
 fn delete_stored_returns_the_hubs_path() {
     let hub = Hub::new(Arc::new(Fake::new(vec![])));
     assert_eq!(
@@ -683,11 +695,39 @@ fn delete_stored_returns_the_hubs_path() {
 }
 
 #[test]
+fn configured_hubs_come_from_the_local_seam_without_a_hub_rpc() {
+    let mut fake = Fake::new(vec![]);
+    fake.hubs = vec!["alpha".to_owned(), "zeta".to_owned()];
+    let remote = Remote::new(Arc::new(fake), "/client".into(), Router::new());
+    assert_eq!(
+        remote.hubs(),
+        Ok(vec!["alpha".to_owned(), "zeta".to_owned()])
+    );
+}
+
+#[test]
 fn ownership_and_settings_merge_keep_the_clients_rows_on_the_client() {
-    for key in ["keys.quit", "tui.hover", "\"tui\".x", "\"tui\"", "keys"] {
+    for key in [
+        "keys.quit",
+        "tui.hover",
+        "\"tui\".x",
+        "\"tui\"",
+        "keys",
+        "hub.default",
+        "hubs.\"work\".address",
+    ] {
         assert!(client_owned(key), "{key}");
     }
-    for key in ["model", "tuix.y", "models.\"tui/x\".thinking", "", "\"tui"] {
+    for key in [
+        "model",
+        "tuix.y",
+        "models.\"tui/x\".thinking",
+        "hub.port",
+        "hub.allowed_origins",
+        "hub.idle_exit_ms",
+        "",
+        "\"tui",
+    ] {
         assert!(!client_owned(key), "{key}");
     }
     let row = |key: &str| {
@@ -709,13 +749,21 @@ fn ownership_and_settings_merge_keep_the_clients_rows_on_the_client() {
         .call(
             "settings",
             json!({"workspace":"/remote/ws","overrides":["model=a/b","thinking=low","model=c/d"]}),
-            json!({"rows":[hub_row("model","global","value","\"hub/m\""),hub_row("tui.hover","global","value","false"),hub_row("extra","default","unset","")]}),
+            json!({"rows":[hub_row("model","global","value","\"hub/m\""),hub_row("tui.hover","global","value","false"),hub_row("hub.default","global","value","\"remote\""),hub_row("hubs.remote.address","global","value","\"ws://127.0.0.1:1\""),hub_row("hub.port","global","value","45123"),hub_row("hub.allowed_origins","global","value","[]"),hub_row("hub.idle_exit_ms","global","value","1200"),hub_row("extra","default","unset","")]}),
             move |r| r.settings(Path::new("/remote/ws"), &overrides),
         )
         .unwrap();
     assert_eq!(
         rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
-        ["keys.quit", "model", "tui.hover", "extra"]
+        [
+            "keys.quit",
+            "model",
+            "tui.hover",
+            "hub.port",
+            "hub.allowed_origins",
+            "hub.idle_exit_ms",
+            "extra",
+        ]
     );
     assert_eq!(rows[1].value, Shown::Value("\"hub/m\"".into()));
     assert_eq!(rows[2].value, Shown::Unset);

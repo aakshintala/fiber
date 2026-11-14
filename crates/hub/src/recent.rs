@@ -3,7 +3,7 @@
 //! Nothing rewrites the file, and every reader skips a row whose session
 //! directory is gone.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::os::unix::fs::OpenOptionsExt;
@@ -154,13 +154,68 @@ pub(crate) enum PageError {
 /// Every exited session, newest first, newest row per session only:
 /// delegates' rows and rows whose directory is gone are skipped; with
 /// `project`, only that key.
+#[cfg(test)]
 pub(crate) fn listed(home: &Path, project: Option<&str>) -> Vec<RecentRow> {
-    newest_first(read_all(home))
+    listed_from_rows(home, read_all(home), project)
+}
+
+/// The visible recent rows derived from an already loaded file snapshot.
+pub(crate) fn listed_from_rows(
+    home: &Path,
+    rows: Vec<RecentRow>,
+    project: Option<&str>,
+) -> Vec<RecentRow> {
+    newest_first(rows)
         .into_iter()
         .filter(|row| project.is_none_or(|key| row.project == key))
         .filter(|row| !row.delegate())
         .filter(|row| row.dir_exists(home))
         .collect()
+}
+
+/// Sessions to auto-archive from one newest-first snapshot. Workspace
+/// metadata is read once for each eligible row; only NotFound means absent.
+pub(crate) fn archive_candidates(
+    rows: &[RecentRow],
+    project: Option<&str>,
+    keep: usize,
+    running: &BTreeSet<String>,
+    mut workspace_stat: impl FnMut(&str) -> io::Result<()>,
+) -> BTreeSet<SessionId> {
+    let mut missing = BTreeSet::new();
+    for row in rows {
+        if row.archived
+            || row.how != Left::Exited
+            || running.contains(&row.session_id.0)
+            || project.is_some_and(|key| row.project != key)
+        {
+            continue;
+        }
+        if !row.workspace.is_empty()
+            && workspace_stat(&row.workspace)
+                .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+        {
+            missing.insert(row.session_id.clone());
+        }
+    }
+    let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut selected = missing;
+    for row in rows {
+        if row.archived
+            || row.how != Left::Exited
+            || row.delegate()
+            || running.contains(&row.session_id.0)
+            || project.is_some_and(|key| row.project != key)
+        {
+            continue;
+        }
+        let ordinal = seen.entry(&row.project).or_default();
+        *ordinal += 1;
+        if keep > 0 && *ordinal > keep {
+            selected.insert(row.session_id.clone());
+        }
+    }
+    selected
 }
 
 /// One page of exited sessions and the query's total, from one read of
@@ -171,6 +226,7 @@ pub(crate) fn listed(home: &Path, project: Option<&str>) -> Vec<RecentRow> {
 /// filter applies to each session's newest row, so an older unarchived
 /// row never resurrects an archived session; `before` is resolved in the
 /// filtered list, so a filtered-out `before` is unknown.
+#[cfg(test)]
 pub(crate) fn page_with_total(
     home: &Path,
     before: Option<&str>,
@@ -178,7 +234,18 @@ pub(crate) fn page_with_total(
     running: &BTreeSet<String>,
     archived: bool,
 ) -> Result<(Vec<RecentRow>, usize), PageError> {
-    let listed: Vec<RecentRow> = listed(home, project)
+    page_from_rows(listed(home, project), before, running, archived)
+}
+
+/// A page from the loaded listing rows; unlike [`page_with_total`], this
+/// does not reopen `recent.jsonl`.
+pub(crate) fn page_from_rows(
+    rows: Vec<RecentRow>,
+    before: Option<&str>,
+    running: &BTreeSet<String>,
+    archived: bool,
+) -> Result<(Vec<RecentRow>, usize), PageError> {
+    let listed: Vec<RecentRow> = rows
         .into_iter()
         .filter(|row| row.archived == archived)
         .collect();

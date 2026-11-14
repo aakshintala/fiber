@@ -1184,6 +1184,51 @@ impl App {
         true
     }
 
+    /// Starts the home session requested by a settings screen, using the
+    /// same gates and start builder as Enter without requiring prompt text.
+    pub(super) fn start_session_for_settings(&mut self) -> Effect {
+        if self.first_run_no_credential && self.on_home() {
+            return self.open_first_run_login();
+        }
+        if self.home.no_workspace() {
+            return self.home_click(crate::home::Spot::Workspace);
+        }
+        if matches!(self.outbox.link, Link::Down | Link::Refused) {
+            return Effect::None;
+        }
+        self.start_session()
+    }
+
+    /// Starts the session with the current home selection, keeping the
+    /// normal session-only model and failure handling.
+    fn start_session(&mut self) -> Effect {
+        if self.home.launch.model.is_none() && self.model_picker.start_model.is_none() {
+            return self.open_model_picker(crate::model_picker::Mode::Choose);
+        }
+        let Some(mut start) = self.start_args() else {
+            return Effect::None;
+        };
+        self.with_start_model(&mut start);
+        self.panel_state
+            .note_start(&serde_json::to_value(&start).unwrap_or(serde_json::Value::Null));
+        let id = CommandId(support::mint("c_"));
+        let sent = Sent {
+            line: hub_line(&id, HubCommand::Start(start)),
+            id: id.clone(),
+        };
+        self.phase = Phase::Pending {
+            command_id: sent.id.0.clone(),
+        };
+        let draft = std::mem::take(&mut self.draft);
+        match self
+            .outbox
+            .send(sent.id.0.clone(), Kind::Start, draft, sent.line.clone())
+        {
+            Some(_) => Effect::SendTracked(vec![sent]),
+            None => Effect::None,
+        }
+    }
+
     /// Enter sends the draft: `start` with no session, `prompt` when
     /// idle, `steer` during a turn, and `shell` for a `!` command whenever
     /// attached. A draft holding an image sends its content as a prompt
@@ -1241,41 +1286,7 @@ impl App {
                 return Effect::None;
             }
             (Phase::Pending { .. }, None) => return Effect::None,
-            (Phase::Starting, None) => {
-                // With no model on the chip and none chosen, Enter opens
-                // the picker and keeps the draft, sending nothing.
-                if self.home.launch.model.is_none() && self.model_picker.start_model.is_none() {
-                    return self.open_model_picker(crate::model_picker::Mode::Choose);
-                }
-                let Some(mut start) = self.start_args() else {
-                    // Without a workspace the hub would refuse the
-                    // missing key as `invalid_arguments`: keep the
-                    // draft, as the link-down path does.
-                    return Effect::None;
-                };
-                // A session-only choice on home rides this `start`.
-                self.with_start_model(&mut start);
-                self.panel_state
-                    .note_start(&serde_json::to_value(&start).unwrap_or(serde_json::Value::Null));
-                let id = CommandId(id);
-                let sent = Sent {
-                    line: hub_line(&id, HubCommand::Start(start)),
-                    id: id.clone(),
-                };
-                self.phase = Phase::Pending {
-                    command_id: sent.id.0.clone(),
-                };
-                let draft = std::mem::take(&mut self.draft);
-                return match self.outbox.send(
-                    sent.id.0.clone(),
-                    Kind::Start,
-                    draft,
-                    sent.line.clone(),
-                ) {
-                    Some(_) => Effect::SendTracked(vec![sent]),
-                    None => Effect::None,
-                };
-            }
+            (Phase::Starting, None) => return self.start_session(),
             (Phase::Attached { session, .. }, Some((command, send))) => {
                 (Kind::Shell, shell::command(&id, session, command, send))
             }

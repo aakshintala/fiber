@@ -21,10 +21,9 @@ pub(crate) use changed_tests::{
 use compiled_in::{COMPILED_IN, PACKAGE_READERS};
 pub(crate) use compiled_in::{compiled_in_mismatches, package_reader_mismatches};
 use plan::BINARY_TESTS;
-pub(crate) use plan::MutantPlanInput;
-pub(crate) use plan::plan_with_changed_paths;
 pub(crate) use plan::{BaseOutcome, BaseResults, classify_base, new_breaks, parse_head_failures};
 pub(crate) use plan::{ChangedPath, PathState};
+pub(crate) use plan::{MutantPlanInput, plan_with_budget_breach_body, plan_with_changed_paths};
 pub(crate) use plan::{base_rows_skipped, plan, shard_timeout_minutes, ten_turns_runs, verdict};
 #[cfg(test)]
 pub(crate) use reuse::CommitSha;

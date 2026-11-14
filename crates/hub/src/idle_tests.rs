@@ -95,6 +95,7 @@ fn serve_mode(
                 move || {
                     Ok(crate::Settings {
                         idle_exit: idle,
+                        keep_exited: 10,
                         level,
                         port: None,
                     })
@@ -139,6 +140,7 @@ fn serve_mode_env(
                 move || {
                     Ok(crate::Settings {
                         idle_exit: idle,
+                        keep_exited: 10,
                         level,
                         port: None,
                     })

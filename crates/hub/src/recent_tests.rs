@@ -11,7 +11,7 @@
 use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -192,6 +192,25 @@ fn project_filters_by_exact_key() {
     assert_eq!(page_of(&temp.dir, None, Some("a")), [id(3), id(1)]);
     assert_eq!(page_of(&temp.dir, None, Some("ab")), [id(2)]);
     assert!(page_of(&temp.dir, None, Some("b")).is_empty());
+}
+
+// `docs/invocation.md`, "Archiving" promises these results.
+#[test]
+fn retention_candidates_include_only_unarchived_exited_rows_in_newest_order() {
+    let temp = Temp::new();
+    let live = temp.row(1, "p", Left::Crashed, None);
+    let exited = temp.row(2, "p", Left::Exited, None);
+    let archived = temp.row(3, "p", Left::Exited, None);
+    temp.append(&live);
+    temp.append(&exited);
+    let mut archived = archived;
+    archived.archived = true;
+    temp.append(&archived);
+    let newest = newest_first(read_all(&temp.dir));
+    assert_eq!(ids(&newest), [id(3), id(2), id(1)]);
+    assert!(newest[0].archived);
+    assert_eq!(newest[1].how, Left::Exited);
+    assert_eq!(newest[2].how, Left::Crashed);
 }
 
 #[test]
@@ -729,6 +748,138 @@ fn a_before_outside_the_partition_is_unknown() {
             .0
             .is_empty()
     );
+}
+
+// `docs/invocation.md`, "Archiving" promises these results.
+#[test]
+fn automatic_archive_candidates_union_missing_and_retention_without_recounting() {
+    let temp = Temp::new();
+    let mut rows = Vec::new();
+    for n in 1..=12 {
+        let mut row = temp.row(n, "p", Left::Exited, Some("idle"));
+        row.workspace = format!("/workspace/{n}");
+        rows.push(row);
+    }
+    rows.reverse();
+    let mut stats = Vec::new();
+    let selected = archive_candidates(&rows, None, 10, &BTreeSet::new(), |workspace| {
+        stats.push(workspace.to_owned());
+        if workspace.ends_with("/1") {
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        } else {
+            Ok(())
+        }
+    });
+    assert_eq!(
+        selected,
+        BTreeSet::from([SessionId(id(1)), SessionId(id(2))])
+    );
+    assert_eq!(stats.len(), 12);
+    assert!(stats.contains(&"/workspace/1".to_owned()));
+
+    let mut already_archived = rows.clone();
+    already_archived[0].archived = true;
+    let mut stats = Vec::new();
+    let selected = archive_candidates(
+        &already_archived,
+        Some("p"),
+        0,
+        &BTreeSet::new(),
+        |workspace| {
+            stats.push(workspace.to_owned());
+            if workspace.ends_with("/2") {
+                Err(io::Error::from(io::ErrorKind::NotFound))
+            } else if workspace.ends_with("/3") {
+                Err(io::Error::from(io::ErrorKind::PermissionDenied))
+            } else {
+                Ok(())
+            }
+        },
+    );
+    assert_eq!(selected, BTreeSet::from([SessionId(id(2))]));
+    assert_eq!(stats.len(), 11, "archived row is not statted");
+}
+
+// `docs/invocation.md`, "Archiving" promises these results.
+#[test]
+fn retention_skips_archived_crashed_delegate_running_and_other_project_rows() {
+    let temp = Temp::new();
+    let mut archived = temp.row(5, "p", Left::Exited, Some("idle"));
+    archived.archived = true;
+    let mut delegate = temp.row(4, "p", Left::Exited, Some("idle"));
+    delegate.status =
+        Some(serde_json::from_value(status("delegate", "/w", "idle", Some(&id(2)))).unwrap());
+    let rows = vec![
+        temp.row(8, "q", Left::Exited, Some("idle")),
+        temp.row(7, "q", Left::Exited, Some("idle")),
+        temp.row(6, "p", Left::Crashed, Some("idle")),
+        archived,
+        delegate,
+        temp.row(3, "p", Left::Exited, Some("idle")),
+        temp.row(2, "p", Left::Exited, Some("idle")),
+        temp.row(1, "p", Left::Exited, Some("idle")),
+    ];
+    let running = BTreeSet::from([id(3)]);
+    let selected = archive_candidates(&rows, Some("p"), 1, &running, |_| Ok(()));
+    assert_eq!(selected, BTreeSet::from([SessionId(id(1))]));
+}
+
+// `docs/invocation.md`, "Archiving" promises these results.
+#[test]
+fn a_missing_workspace_and_an_old_retention_row_are_independent_candidates() {
+    let temp = Temp::new();
+    let mut rows = Vec::new();
+    for n in 1..=3 {
+        rows.push(temp.row(n, "p", Left::Exited, Some("idle")));
+    }
+    rows[2].workspace = "/missing-newest".to_owned();
+    rows[0].workspace = "/existing-oldest".to_owned();
+    rows.reverse();
+    let selected = archive_candidates(&rows, None, 2, &BTreeSet::new(), |workspace| {
+        if workspace == "/missing-newest" {
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        } else {
+            Ok(())
+        }
+    });
+    assert_eq!(
+        selected,
+        BTreeSet::from([SessionId(id(1)), SessionId(id(3))])
+    );
+}
+
+// `docs/invocation.md`, "Archiving" promises these results.
+#[test]
+fn automatic_archive_zero_keeps_all_except_missing_and_scopes_stats() {
+    let temp = Temp::new();
+    let mut rows = vec![temp.row(1, "p", Left::Exited, None)];
+    rows[0].workspace = "/missing".to_owned();
+    rows.push(temp.row(2, "q", Left::Exited, None));
+    rows.push(temp.row(3, "p", Left::Crashed, None));
+    rows.push(temp.row(4, "p", Left::Exited, None));
+    let mut stats = Vec::new();
+    let selected = archive_candidates(&rows, Some("p"), 0, &BTreeSet::new(), |workspace| {
+        stats.push(workspace.to_owned());
+        Err(io::Error::from(io::ErrorKind::PermissionDenied))
+    });
+    assert!(
+        selected.is_empty(),
+        "unknown stat errors are non-destructive"
+    );
+    assert_eq!(
+        stats.len(),
+        2,
+        "crashed and other project rows are not statted"
+    );
+
+    let selected = archive_candidates(&rows, None, 0, &BTreeSet::new(), |workspace| {
+        if workspace == "/missing" {
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        } else {
+            Ok(())
+        }
+    });
+    assert_eq!(selected, BTreeSet::from([SessionId(id(1))]));
 }
 
 #[test]

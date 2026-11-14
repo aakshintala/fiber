@@ -68,7 +68,14 @@ fn screen_coverage_is_exact_and_disjoint() {
             path.starts_with("tools.*.")
                 || path.starts_with("mcp.servers.*.")
                 || path.starts_with("extensions.*.tools.")
-                || ["keys.*", "providers.*.credential", "skills.disabled"].contains(path)
+                || [
+                    "keys.*",
+                    "providers.*.credential",
+                    "reviewer.context",
+                    "scoped_models",
+                    "skills.disabled",
+                ]
+                .contains(path)
         })
         .collect();
     let mut got = covered();

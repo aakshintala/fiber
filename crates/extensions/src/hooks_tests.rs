@@ -2017,6 +2017,16 @@ fn two_backends_with_the_setting_name_the_second() {
 }
 
 #[test]
+fn search_backend_names_are_sorted_independent_of_the_selected_backend() {
+    let home = Home::new();
+    install_backend(&home, "one", "zebra", "zebra-hit");
+    install_backend(&home, "two", "apple", "apple-hit");
+    let session = home.load(&["web_search.backend=zebra"]);
+    assert_eq!(session.search_backend_names(), ["apple", "zebra"]);
+    assert_eq!(backend_title(&session), "zebra-hit");
+}
+
+#[test]
 fn a_setting_naming_a_missing_backend_is_not_declared_and_names_it() {
     let home = Home::new();
     install_backend(&home, "one", "brave", "brave-hit");

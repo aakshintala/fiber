@@ -12,9 +12,9 @@ use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 
 use super::{
-    Act, Applies, Ctx, Request, SCREEN_ROWS, Screen, ScreenRow, Settings, applies, applies_text,
-    as_typed, layers, next_number_value, next_text_value, number_list, number_slider, number_text,
-    refresh_millis, shown_value, slider_bar, slider_step, text_list,
+    Act, Applies, Ctx, Item, Request, SCREEN_ROWS, Screen, ScreenRow, Settings, applies,
+    applies_text, as_typed, layers, next_number_value, next_text_value, number_list, number_slider,
+    number_text, refresh_millis, shown_value, slider_bar, slider_step, text_list,
 };
 use crate::ThemeSetting;
 use crate::configure::{Layer, SettingControl, SettingRow, Shown, WriteScope};
@@ -42,6 +42,21 @@ fn on(
     control: SettingControl,
 ) -> SettingRow {
     placed(controlled(key, shown, layer, scope, control), tab, label)
+}
+
+fn row_on(
+    key: &str,
+    label: &str,
+    tab: SettingsTab,
+    shown: Shown,
+    layer: &str,
+    scope: WriteScope,
+    control: SettingControl,
+) -> Vec<SettingRow> {
+    let mut rows = rows();
+    rows.push(on(tab, label, key, shown, layer, scope, control));
+    rows.sort_by(|a, b| a.key.cmp(&b.key));
+    rows
 }
 
 fn fixed(names: &[&str]) -> SettingControl {
@@ -137,8 +152,8 @@ fn unsorted() -> Vec<SettingRow> {
             Permissions,
             "Sandbox writable paths",
             "sandbox.allow_write",
-            Shown::Unset,
-            "default",
+            value(r#"["a/b","c/d"]"#),
+            "global",
             ANY,
             StringList,
         ),
@@ -150,15 +165,6 @@ fn unsorted() -> Vec<SettingRow> {
             "default",
             WriteScope::RepoOnly,
             RepositoryExtensions,
-        ),
-        on(
-            Models,
-            "Scoped models",
-            "scoped_models",
-            value("[\"a/b\",\"c/d\"]"),
-            "global",
-            ANY,
-            StringList,
         ),
         on(
             Models,
@@ -206,6 +212,7 @@ fn unsorted() -> Vec<SettingRow> {
             Theme,
         ),
         // A key a screen row covers and a `*` instance have no tab.
+        row("reviewer.context", value("\"notes\""), "global", ANY),
         row(
             "skills.disabled",
             Shown::Union {
@@ -518,9 +525,9 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 |  Model list refresh  24 h
 |
-|  Scoped models       a/b, c/d ›
-|
 |  Thinking level      Default
+|
+|  Scoped models       Open /scoped-models ›
 |
 |  Credentials         Open /credential ›
 |
@@ -543,15 +550,15 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 |› Reviewer model          Default ›
 |
-|  Sandbox writable paths  Default ›
+|  Sandbox writable paths  a/b, c/d ›
 |
 |  Sandbox                 [x] On  repository
+|
+|  Reviewer notes          Edit with /reviewer-setup ›
 |
 |  Rules                   Open /rules ›
 |
 |  Tools                   Open /tools ›
-|
-|
 |
 |
 |
@@ -829,6 +836,11 @@ fn a_key_with_no_tab_has_no_row_and_every_tabbed_key_has_exactly_one() {
     let mut want: Vec<String> = rows()
         .into_iter()
         .filter(|row| row.presentation.tab.is_some())
+        .filter(|row| {
+            !SCREEN_ROWS
+                .iter()
+                .any(|screen| screen.covers.contains(&row.key.as_str()))
+        })
         .map(|row| row.key)
         .collect();
     drawn_keys.sort();
@@ -837,10 +849,67 @@ fn a_key_with_no_tab_has_no_row_and_every_tabbed_key_has_exactly_one() {
     want.retain(|key| key != "hub.port");
     assert_eq!(drawn_keys, want);
     assert!(
-        !drawn_keys
-            .iter()
-            .any(|key| key == "skills.disabled" || key == "roles.fast")
+        !drawn_keys.iter().any(|key| key == "skills.disabled"
+            || key == "reviewer.context"
+            || key == "roles.fast")
     );
+}
+
+#[test]
+fn screen_owned_keys_have_no_direct_setting_row() {
+    let mut fixture = rows();
+    fixture.extend([
+        on(
+            SettingsTab::Models,
+            "Scoped models setting",
+            "scoped_models",
+            value("[]"),
+            "global",
+            ANY,
+            SettingControl::StringList,
+        ),
+        on(
+            SettingsTab::Permissions,
+            "Reviewer context setting",
+            "reviewer.context",
+            value("\"notes\""),
+            "global",
+            ANY,
+            SettingControl::Text,
+        ),
+        on(
+            SettingsTab::Sessions,
+            "Disabled skills setting",
+            "skills.disabled",
+            value("[]"),
+            "global",
+            ANY,
+            SettingControl::StringList,
+        ),
+    ]);
+    let fake = Fake::new(fixture);
+    for (tab_, key, screen) in [
+        (SettingsTab::Models, "scoped_models", Screen::ScopedModels),
+        (
+            SettingsTab::Permissions,
+            "reviewer.context",
+            Screen::ReviewerNotes,
+        ),
+        (SettingsTab::Sessions, "skills.disabled", Screen::Skills),
+    ] {
+        let settings = tab(&fake, tab_);
+        assert!(
+            !settings.items().iter().any(|item| match item {
+                super::Item::Key(at) => settings.rows[*at].key == key,
+                super::Item::Screen(_) => false,
+            }),
+            "{key} has its own row"
+        );
+        assert!(
+            settings.items().contains(&super::Item::Screen(screen)),
+            "{screen:?} row is absent"
+        );
+    }
 }
 
 #[test]
@@ -857,8 +926,11 @@ fn screen_rows_end_their_tab_in_the_documented_order() {
             .collect()
     };
     assert_eq!(ends(SettingsTab::Appearance), ["Key bindings"]);
-    assert_eq!(ends(SettingsTab::Models), ["Credentials"]);
-    assert_eq!(ends(SettingsTab::Permissions), ["Rules", "Tools"]);
+    assert_eq!(ends(SettingsTab::Models), ["Scoped models", "Credentials"]);
+    assert_eq!(
+        ends(SettingsTab::Permissions),
+        ["Reviewer notes", "Rules", "Tools"]
+    );
     assert_eq!(ends(SettingsTab::Sessions), ["Skills", "MCP servers"]);
     assert!(ends(SettingsTab::Notifications).is_empty());
     assert!(ends(SettingsTab::Advanced).is_empty());
@@ -1020,13 +1092,13 @@ fn a_short_frame_drops_the_description_before_the_controls() {
 #[test]
 fn the_focused_row_stays_in_view_when_the_frame_shrinks() {
     let fake = Fake::new(rows());
-    let mut settings = at(&fake, "scoped_models");
+    let mut settings = at(&fake, "sandbox.allow_write");
     for height in [24usize, 14, 10, 8, 6, 5, 4, 3, 2, 1] {
         let screen = drawn(&settings, None, 80, u16::try_from(height).unwrap());
         assert!(screen.lines().count() <= height, "{height}");
         if height >= 8 {
             assert!(
-                screen.contains("› Scoped models"),
+                screen.contains("› Sandbox writable paths"),
                 "height {height}:\n{screen}"
             );
         }
@@ -1035,7 +1107,7 @@ fn the_focused_row_stays_in_view_when_the_frame_shrinks() {
     one(&mut settings, &fake, Key::Down);
     assert_eq!(
         settings.focus,
-        Some(super::Focus::Key("thinking".to_owned()))
+        Some(super::Focus::Key("sandbox.enabled".to_owned()))
     );
 }
 
@@ -1083,7 +1155,7 @@ fn editor_fake() -> Fake {
     )])
 }
 
-/// The fixture rows with `key` holding `shown` from `layer`.
+/// Builds settings rows with `key` set to `shown` at `layer` for tests.
 fn with(key: &str, shown: Shown, layer: &str) -> Vec<SettingRow> {
     rows()
         .into_iter()
@@ -1538,7 +1610,9 @@ fn the_screen_table_and_the_screens_agree() {
         commands,
         [
             "/keys",
+            "/scoped-models",
             "/credential",
+            "/reviewer-setup",
             "/rules",
             "/tools",
             "/skills",
@@ -1546,6 +1620,28 @@ fn the_screen_table_and_the_screens_agree() {
         ]
     );
     assert_eq!(Screen::ALL.len(), SCREEN_ROWS.len());
+}
+
+#[test]
+fn reviewer_notes_row_shows_its_command_and_first_line_or_none_yet() {
+    let fake = Fake::new(with(
+        "reviewer.context",
+        value("\"First line\\nSecond line\""),
+        "global",
+    ));
+    let mut settings = tab(&fake, SettingsTab::Permissions);
+    settings.focus = Some(super::Focus::Screen(Screen::ReviewerNotes));
+    settings.place(&ctx(&fake));
+    let shown = screen(&settings);
+    assert!(row_of(&shown, "Reviewer notes").contains("Edit with /reviewer-setup ›"));
+    assert!(shown.contains("First line"));
+    assert!(!shown.contains("Second line"));
+
+    let empty = Fake::new(with("reviewer.context", Shown::Unset, "default"));
+    let mut settings = tab(&empty, SettingsTab::Permissions);
+    settings.focus = Some(super::Focus::Screen(Screen::ReviewerNotes));
+    settings.place(&ctx(&empty));
+    assert!(screen(&settings).contains("None yet"));
 }
 
 #[test]
@@ -1572,7 +1668,7 @@ fn a_value_set_by_dash_c_is_read_only_whatever_opens_it() {
         "tui.rail.width",
         "model_lists.refresh_after",
         "model",
-        "scoped_models",
+        "sandbox.allow_write",
         "repository_extensions",
     ] {
         let value = match key {
@@ -1582,7 +1678,7 @@ fn a_value_set_by_dash_c_is_read_only_whatever_opens_it() {
             "tui.rail.width" => "30",
             "model_lists.refresh_after" => "\"1d\"",
             "model" => "\"a/b\"",
-            "scoped_models" => "[\"a/b\"]",
+            "sandbox.allow_write" => "[\"a/b\"]",
             _ => "[{\"path\":\"p\",\"required\":true}]",
         };
         let fake = Fake::new(with(key, super::Shown::Value(value.to_owned()), "-c"));
@@ -1855,6 +1951,23 @@ fn a_repository_only_key_saves_to_the_repository_never_global() {
 }
 
 #[test]
+fn enter_on_an_unbounded_number_opens_its_text_field() {
+    let fake = Fake::new(vec![on(
+        SettingsTab::Advanced,
+        "Unbounded number",
+        "test.unbounded_number",
+        value("17"),
+        "project",
+        ANY,
+        SettingControl::Number,
+    )]);
+    let mut settings = at(&fake, "test.unbounded_number");
+    one(&mut settings, &fake, Key::Enter);
+    assert!(matches!(settings.mode, super::Mode::Field(_)));
+    assert!(fake.writes().is_empty());
+}
+
+#[test]
 fn ctrl_g_opens_the_focused_rows_file_and_the_global_one_for_a_default() {
     let fake = Fake::new(rows());
     let mut settings = at(&fake, "model");
@@ -1929,7 +2042,7 @@ fn up_and_down_wrap_between_the_first_and_last_rows() {
 #[test]
 fn a_sub_page_wraps_up_and_down_past_either_end() {
     let fake = Fake::new(rows());
-    let mut settings = page(&fake, "scoped_models");
+    let mut settings = page(&fake, "sandbox.allow_write");
     assert_eq!(page_at(&settings), 0);
     // ↑ on the first entry wraps to "+ Add" past the last.
     one(&mut settings, &fake, Key::Up);
@@ -1969,20 +2082,23 @@ fn the_theme_choices_wrap_up_and_down_past_either_end() {
 #[test]
 fn a_reread_keeps_the_focused_key_where_it_is_and_a_vanished_one_falls_to_the_first() {
     let fake = Fake::new(rows());
-    let mut settings = at(&fake, "scoped_models");
+    let mut settings = at(&fake, "sandbox.allow_write");
     let mut fewer = rows();
     fewer.retain(|row| row.key != "model");
     *support::lock(&fake.rows) = Ok(fewer);
     settings.reread(&ctx(&fake));
     assert_eq!(
         settings.focus,
-        Some(super::Focus::Key("scoped_models".to_owned()))
+        Some(super::Focus::Key("sandbox.allow_write".to_owned()))
     );
     let mut none = rows();
-    none.retain(|row| row.key != "scoped_models");
+    none.retain(|row| row.key != "sandbox.allow_write");
     *support::lock(&fake.rows) = Ok(none);
     settings.reread(&ctx(&fake));
-    assert_eq!(settings.focus, Some(super::Focus::Key("model".to_owned())));
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("reviewer.model".to_owned()))
+    );
 }
 
 #[test]
@@ -2106,11 +2222,11 @@ fn extensions(shown: &str) -> Vec<SettingRow> {
 #[test]
 fn a_list_opens_its_own_page_titled_with_its_label() {
     let fake = Fake::new(rows());
-    let settings = page(&fake, "scoped_models");
+    let settings = page(&fake, "sandbox.allow_write");
     expect(
         &screen(&settings),
         r#"
-| Scoped models  /settings                                            Esc returns
+| Sandbox writable paths  /settings                                   Esc returns
 |› a/b
 |  c/d
 |  + Add
@@ -2136,12 +2252,15 @@ fn a_list_opens_its_own_page_titled_with_its_label() {
 |Enter edit · Delete remove · ⌥↑⌥↓ move · Esc back
 "#,
     );
-    assert_eq!(settings.frame(80, 24, None, 80).title, "Scoped models");
+    assert_eq!(
+        settings.frame(80, 24, None, 80).title,
+        "Sandbox writable paths"
+    );
 }
 
 #[test]
 fn an_empty_list_shows_only_add_and_an_object_list_shows_path_and_required() {
-    let fake = Fake::new(rows());
+    let fake = Fake::new(with("sandbox.allow_write", value("[]"), "global"));
     let empty = page(&fake, "sandbox.allow_write");
     expect(
         &screen(&empty),
@@ -2210,7 +2329,7 @@ fn an_empty_list_shows_only_add_and_an_object_list_shows_path_and_required() {
 #[test]
 fn the_pages_footer_has_the_documented_words_with_bold_keys() {
     let fake = Fake::new(rows());
-    let settings = page(&fake, "scoped_models");
+    let settings = page(&fake, "sandbox.allow_write");
     let frame = settings.frame(80, 24, None, 80);
     assert_eq!(
         frame.footer,
@@ -2229,13 +2348,17 @@ fn the_pages_footer_has_the_documented_words_with_bold_keys() {
 
 #[test]
 fn adding_saves_the_whole_list_once_at_the_layer_the_value_comes_from() {
-    let fake = Fake::new(with("scoped_models", value(r#"["a/b","c/d"]"#), "project"));
-    let mut settings = page(&fake, "scoped_models");
+    let fake = Fake::new(with(
+        "sandbox.allow_write",
+        value(r#"["a/b","c/d"]"#),
+        "project",
+    ));
+    let mut settings = page(&fake, "sandbox.allow_write");
     press(&mut settings, &fake, &[Key::Down, Key::Down, Key::Enter]);
     expect(
         &screen(&settings),
         r#"
-| Scoped models  /settings                                            Esc returns
+| Sandbox writable paths  /settings                                   Esc returns
 |  a/b
 |  c/d
 |›
@@ -2265,7 +2388,11 @@ fn adding_saves_the_whole_list_once_at_the_layer_the_value_comes_from() {
     one(&mut settings, &fake, Key::Enter);
     assert_eq!(
         writes(&fake),
-        [w(Layer::Project, "scoped_models", r#"["a/b","c/d","e/f"]"#)]
+        [w(
+            Layer::Project,
+            "sandbox.allow_write",
+            r#"["a/b","c/d","e/f"]"#
+        )]
     );
     assert_eq!(entries(&settings).len(), 3);
     assert!(settings.page.as_ref().unwrap().field.is_none());
@@ -2276,7 +2403,7 @@ fn adding_saves_the_whole_list_once_at_the_layer_the_value_comes_from() {
 #[test]
 fn editing_opens_the_entrys_text_and_saves_the_whole_list() {
     let fake = Fake::new(rows());
-    let mut settings = page(&fake, "scoped_models");
+    let mut settings = page(&fake, "sandbox.allow_write");
     one(&mut settings, &fake, Key::Down);
     one(&mut settings, &fake, Key::Enter);
     assert_eq!(
@@ -2296,18 +2423,18 @@ fn editing_opens_the_entrys_text_and_saves_the_whole_list() {
     one(&mut settings, &fake, Key::Enter);
     assert_eq!(
         writes(&fake),
-        [w(Layer::Global, "scoped_models", r#"["a/b","c/x"]"#)]
+        [w(Layer::Global, "sandbox.allow_write", r#"["a/b","c/x"]"#)]
     );
 }
 
 #[test]
 fn delete_removes_the_focused_entry_and_the_last_one_leaves_an_empty_list() {
     let fake = Fake::new(rows());
-    let mut settings = page(&fake, "scoped_models");
+    let mut settings = page(&fake, "sandbox.allow_write");
     edit(&mut settings, &fake, Edit::Delete);
     assert_eq!(
         writes(&fake),
-        [w(Layer::Global, "scoped_models", r#"["c/d"]"#)]
+        [w(Layer::Global, "sandbox.allow_write", r#"["c/d"]"#)]
     );
     assert!(
         resets(&fake).is_empty(),
@@ -2316,7 +2443,7 @@ fn delete_removes_the_focused_entry_and_the_last_one_leaves_an_empty_list() {
     edit(&mut settings, &fake, Edit::Delete);
     assert_eq!(
         writes(&fake).last(),
-        Some(&w(Layer::Global, "scoped_models", "[]"))
+        Some(&w(Layer::Global, "sandbox.allow_write", "[]"))
     );
     assert!(entries(&settings).is_empty());
     // Delete on "+ Add" removes nothing.
@@ -2327,15 +2454,19 @@ fn delete_removes_the_focused_entry_and_the_last_one_leaves_an_empty_list() {
 
 #[test]
 fn option_up_and_down_move_the_focused_entry_one_place_and_stop_at_the_ends() {
-    let fake = Fake::new(with("scoped_models", value(r#"["a","b","c"]"#), "global"));
-    let mut settings = page(&fake, "scoped_models");
+    let fake = Fake::new(with(
+        "sandbox.allow_write",
+        value(r#"["a","b","c"]"#),
+        "global",
+    ));
+    let mut settings = page(&fake, "sandbox.allow_write");
     // Up at the top, and either key on "+ Add", move nothing.
     one(&mut settings, &fake, Key::AltUp);
     assert!(fake.writes().is_empty());
     one(&mut settings, &fake, Key::AltDown);
     assert_eq!(
         writes(&fake),
-        [w(Layer::Global, "scoped_models", r#"["b","a","c"]"#)]
+        [w(Layer::Global, "sandbox.allow_write", r#"["b","a","c"]"#)]
     );
     assert_eq!(
         settings.page.as_ref().unwrap().list.selected(),
@@ -2345,7 +2476,7 @@ fn option_up_and_down_move_the_focused_entry_one_place_and_stop_at_the_ends() {
     one(&mut settings, &fake, Key::AltDown);
     assert_eq!(
         writes(&fake).last(),
-        Some(&w(Layer::Global, "scoped_models", r#"["b","c","a"]"#))
+        Some(&w(Layer::Global, "sandbox.allow_write", r#"["b","c","a"]"#))
     );
     // Down at the last entry moves nothing.
     let count = writes(&fake).len();
@@ -2354,7 +2485,7 @@ fn option_up_and_down_move_the_focused_entry_one_place_and_stop_at_the_ends() {
     one(&mut settings, &fake, Key::AltUp);
     assert_eq!(
         writes(&fake).last(),
-        Some(&w(Layer::Global, "scoped_models", r#"["b","a","c"]"#))
+        Some(&w(Layer::Global, "sandbox.allow_write", r#"["b","a","c"]"#))
     );
     assert_eq!(settings.page.as_ref().unwrap().list.selected(), 1);
     // On "+ Add" neither moves.
@@ -2366,9 +2497,9 @@ fn option_up_and_down_move_the_focused_entry_one_place_and_stop_at_the_ends() {
 
 #[test]
 fn a_refused_save_keeps_the_entries_the_focus_and_an_open_field() {
-    let fake = Fake::new(with("scoped_models", value(r#"["a","b"]"#), "global"));
-    let mut settings = page(&fake, "scoped_models");
-    refuse(&fake, "scoped_models must be strings");
+    let fake = Fake::new(with("sandbox.allow_write", value(r#"["a","b"]"#), "global"));
+    let mut settings = page(&fake, "sandbox.allow_write");
+    refuse(&fake, "sandbox.allow_write must be strings");
     // Remove, reorder and flip fail without losing the entry or its place.
     one(&mut settings, &fake, Key::Down);
     edit(&mut settings, &fake, Edit::Delete);
@@ -2385,11 +2516,11 @@ fn a_refused_save_keeps_the_entries_the_focus_and_an_open_field() {
     one(&mut settings, &fake, Key::Enter);
     let field = settings.page.as_ref().unwrap().field.as_ref().unwrap();
     assert_eq!(field.draft.expand(), "zz");
-    assert_eq!(settings.said, ["scoped_models must be strings"]);
+    assert_eq!(settings.said, ["sandbox.allow_write must be strings"]);
     expect(
         &screen(&settings),
         r#"
-| Scoped models  /settings                                            Esc returns
+| Sandbox writable paths  /settings                                   Esc returns
 |  a
 |  b
 |› zz
@@ -2411,7 +2542,7 @@ fn a_refused_save_keeps_the_entries_the_focus_and_an_open_field() {
 |
 |
 |
-|scoped_models must be strings
+|sandbox.allow_write must be strings
 |Enter save · Esc cancel
 "#,
     );
@@ -2420,14 +2551,18 @@ fn a_refused_save_keeps_the_entries_the_focus_and_an_open_field() {
     one(&mut settings, &fake, Key::Enter);
     assert_eq!(
         writes(&fake).last(),
-        Some(&w(Layer::Global, "scoped_models", r#"["a","b","zz"]"#))
+        Some(&w(
+            Layer::Global,
+            "sandbox.allow_write",
+            r#"["a","b","zz"]"#
+        ))
     );
 }
 
 #[test]
 fn esc_closes_the_field_first_then_the_page_with_the_list_row_focused() {
     let fake = Fake::new(rows());
-    let mut settings = page(&fake, "scoped_models");
+    let mut settings = page(&fake, "sandbox.allow_write");
     press(&mut settings, &fake, &[Key::Enter, Key::Char('x')]);
     one(&mut settings, &fake, Key::Esc);
     let open = settings.page.as_ref().unwrap();
@@ -2439,16 +2574,16 @@ fn esc_closes_the_field_first_then_the_page_with_the_list_row_focused() {
     assert!(settings.page.is_none());
     assert_eq!(
         settings.focus,
-        Some(super::Focus::Key("scoped_models".to_owned()))
+        Some(super::Focus::Key("sandbox.allow_write".to_owned()))
     );
-    assert!(screen(&settings).contains("› Scoped models"));
+    assert!(screen(&settings).contains("› Sandbox writable paths"));
 }
 
 #[test]
 fn an_empty_entry_is_the_schemas_to_judge() {
     // `fiber config set` takes an empty string member, so the page sends it
     // as typed instead of refusing it first.
-    let fake = Fake::new(rows());
+    let fake = Fake::new(with("sandbox.allow_write", value("[]"), "global"));
     let mut settings = page(&fake, "sandbox.allow_write");
     press(&mut settings, &fake, &[Key::Enter, Key::Enter]);
     assert_eq!(
@@ -2457,7 +2592,7 @@ fn an_empty_entry_is_the_schemas_to_judge() {
     );
     assert!(settings.page.as_ref().unwrap().field.is_none());
     // A refusal from the schema keeps the field and says why.
-    let refused = Fake::new(rows());
+    let refused = Fake::new(with("sandbox.allow_write", value("[]"), "global"));
     let mut settings = page(&refused, "sandbox.allow_write");
     *support::lock(&refused.refuse) = Some("sandbox.allow_write is refused".to_owned());
     press(&mut settings, &refused, &[Key::Enter, Key::Enter]);
@@ -2533,7 +2668,7 @@ fn editing_an_object_changes_its_path_and_keeps_its_other_members() {
     );
     // Space on a string list does nothing.
     let fake = Fake::new(rows());
-    let mut strings = page(&fake, "scoped_models");
+    let mut strings = page(&fake, "sandbox.allow_write");
     one(&mut strings, &fake, Key::Char(' '));
     assert!(fake.writes().is_empty());
 }
@@ -2556,15 +2691,19 @@ fn each_kind_of_change_saves_the_whole_list_once() {
         ("remove", vec![], Some(Edit::Delete), r#"["b"]"#),
         ("move", vec![Key::AltDown], None, r#"["b","a"]"#),
     ] {
-        let fake = Fake::new(with("scoped_models", value(r#"["a","b"]"#), "project"));
-        let mut settings = page(&fake, "scoped_models");
+        let fake = Fake::new(with(
+            "sandbox.allow_write",
+            value(r#"["a","b"]"#),
+            "project",
+        ));
+        let mut settings = page(&fake, "sandbox.allow_write");
         press(&mut settings, &fake, &keys);
         if let Some(edit_) = edit_ {
             edit(&mut settings, &fake, edit_);
         }
         assert_eq!(
             writes(&fake),
-            [w(Layer::Project, "scoped_models", want)],
+            [w(Layer::Project, "sandbox.allow_write", want)],
             "{label}"
         );
     }
@@ -2577,11 +2716,11 @@ fn each_kind_of_change_saves_the_whole_list_once() {
 #[test]
 fn deleting_the_list_row_resets_it_and_deleting_in_the_page_removes_an_entry() {
     let fake = Fake::new(rows());
-    let mut settings = at(&fake, "scoped_models");
+    let mut settings = at(&fake, "sandbox.allow_write");
     edit(&mut settings, &fake, Edit::Delete);
     assert_eq!(
         resets(&fake),
-        [w(Layer::Global, "scoped_models", r#"["a/b","c/d"]"#)]
+        [w(Layer::Global, "sandbox.allow_write", r#"["a/b","c/d"]"#)]
     );
     assert!(fake.writes().is_empty());
 }
@@ -2589,7 +2728,7 @@ fn deleting_the_list_row_resets_it_and_deleting_in_the_page_removes_an_entry() {
 #[test]
 fn the_pages_clicks_and_wheel_move_its_focus_only_outside_a_field() {
     let fake = Fake::new(rows());
-    let mut settings = page(&fake, "scoped_models");
+    let mut settings = page(&fake, "sandbox.allow_write");
     settings.click(Spot::Row(1), &ctx(&fake));
     assert_eq!(settings.page.as_ref().unwrap().list.selected(), 1);
     one(&mut settings, &fake, Key::Enter);
@@ -2625,6 +2764,118 @@ fn choice_at(settings: &Settings) -> usize {
         panic!("no choices");
     };
     list.selected()
+}
+
+#[test]
+fn backend_and_hub_values_advertise_their_dynamic_picker() {
+    for key in ["web_search.backend", "hub.default"] {
+        let row = controlled(key, value("\"alpha\""), "global", ANY, SettingControl::Text);
+        assert_eq!(shown_value(&row).0, "alpha ›", "{key}");
+        let unset = controlled(key, Shown::Unset, "default", ANY, SettingControl::Text);
+        assert_eq!(shown_value(&unset).0, "Default ›", "{key}");
+    }
+}
+
+#[test]
+fn search_backend_picker_shows_default_then_installed_names_and_saves_or_cancels() {
+    let mut fake = Fake::new(row_on(
+        "web_search.backend",
+        "Web search backend",
+        SettingsTab::Models,
+        value("\"alpha\""),
+        "global",
+        WriteScope::GlobalOnly,
+        SettingControl::Text,
+    ));
+    fake.search_backends = vec!["alpha".to_owned(), "zeta".to_owned()];
+    let mut settings = at(&fake, "web_search.backend");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(names(&settings), ["Default", "alpha", "zeta"]);
+    assert_eq!(choice_at(&settings), 1);
+    one(&mut settings, &fake, Key::Down);
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "web_search.backend", "\"zeta\"")]
+    );
+
+    let mut cancel = at(&fake, "web_search.backend");
+    one(&mut cancel, &fake, Key::Enter);
+    one(&mut cancel, &fake, Key::Esc);
+    assert_eq!(writes(&fake).len(), 1, "cancel wrote a value");
+    assert!(resets(&fake).is_empty(), "cancel reset a value");
+}
+
+#[test]
+fn search_backend_picker_default_resets_the_current_value() {
+    let mut fake = Fake::new(row_on(
+        "web_search.backend",
+        "Web search backend",
+        SettingsTab::Models,
+        value("\"alpha\""),
+        "global",
+        WriteScope::GlobalOnly,
+        SettingControl::Text,
+    ));
+    fake.search_backends = vec!["alpha".to_owned(), "zeta".to_owned()];
+    let mut settings = at(&fake, "web_search.backend");
+    one(&mut settings, &fake, Key::Enter);
+    one(&mut settings, &fake, Key::Up);
+    one(&mut settings, &fake, Key::Enter);
+    assert!(writes(&fake).is_empty());
+    assert_eq!(
+        resets(&fake),
+        [w(Layer::Global, "web_search.backend", "alpha")]
+    );
+}
+
+#[test]
+fn hub_picker_uses_local_names_with_default_first_and_saves() {
+    let mut fake = Fake::new(row_on(
+        "hub.default",
+        "Default hub",
+        SettingsTab::Advanced,
+        Shown::Unset,
+        "default",
+        WriteScope::GlobalOnly,
+        SettingControl::Text,
+    ));
+    fake.hubs = vec!["alpha".to_owned(), "zeta".to_owned()];
+    let mut settings = at(&fake, "hub.default");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(names(&settings), ["Default", "alpha", "zeta"]);
+    assert_eq!(choice_at(&settings), 0);
+    one(&mut settings, &fake, Key::Down);
+    one(&mut settings, &fake, Key::Down);
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(writes(&fake), [w(Layer::Global, "hub.default", "\"zeta\"")]);
+
+    let mut cancel = at(&fake, "hub.default");
+    one(&mut cancel, &fake, Key::Enter);
+    one(&mut cancel, &fake, Key::Esc);
+    assert_eq!(writes(&fake).len(), 1, "cancel wrote a value");
+    assert!(resets(&fake).is_empty(), "cancel reset a value");
+}
+
+#[test]
+fn hub_picker_default_on_an_unset_key_closes_without_a_write() {
+    let mut fake = Fake::new(row_on(
+        "hub.default",
+        "Default hub",
+        SettingsTab::Advanced,
+        Shown::Unset,
+        "default",
+        WriteScope::GlobalOnly,
+        SettingControl::Text,
+    ));
+    fake.hubs = vec!["alpha".to_owned()];
+    let mut settings = at(&fake, "hub.default");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(names(&settings), ["Default", "alpha"]);
+    one(&mut settings, &fake, Key::Enter);
+    assert!(matches!(settings.mode, super::Mode::Rows));
+    assert!(fake.writes().is_empty());
+    assert!(resets(&fake).is_empty());
 }
 
 #[test]
@@ -2779,6 +3030,7 @@ fn applies_by_key() {
         ("hubs.x.address", Applies::NextConnection),
         ("hub.default", Applies::NextConnection),
         ("hub.idle_exit_ms", Applies::HubStart),
+        ("session.keep_exited", Applies::HubStart),
         ("diagnostics.level", Applies::ProcessStart),
         ("model", Applies::NewSessions),
         ("thinking", Applies::NewSessions),
@@ -2858,7 +3110,7 @@ type Contract = (
     &'static [&'static str],
 );
 
-const SCREENS: [Contract; 6] = [
+const SCREENS: [Contract; 8] = [
     (
         "Key bindings",
         SettingsTab::Appearance,
@@ -2866,10 +3118,22 @@ const SCREENS: [Contract; 6] = [
         &["keys.*"],
     ),
     (
+        "Scoped models",
+        SettingsTab::Models,
+        "/scoped-models",
+        &["scoped_models"],
+    ),
+    (
         "Credentials",
         SettingsTab::Models,
         "/credential",
         &["providers.*.credential"],
+    ),
+    (
+        "Reviewer notes",
+        SettingsTab::Permissions,
+        "/reviewer-setup",
+        &["reviewer.context"],
     ),
     ("Rules", SettingsTab::Permissions, "/rules", &[]),
     (
@@ -2975,15 +3239,150 @@ fn settings_metadata_screen_commands_are_registered() {
             .command
             .strip_prefix('/')
             .unwrap_or_else(|| panic!("`{}` is not a slash command", row.command));
-        assert!(
-            contract::commands::BUILT_IN_COMMANDS.contains(&name),
-            "`{}` is not a built-in command",
-            row.command
-        );
+        if row.metadata.label == "Reviewer notes" {
+            assert_eq!(name, "reviewer-setup");
+        } else {
+            assert!(
+                contract::commands::BUILT_IN_COMMANDS.contains(&name),
+                "`{}` is not a built-in command",
+                row.command
+            );
+        }
     }
 }
 
 // Stored whole-screen snapshots for ordinary, slider and stepped-list rows.
+
+#[test]
+fn screen_row_details_show_scoped_model_and_disabled_skill_counts() {
+    let fake = Fake::new(row_on(
+        "scoped_models",
+        "Scoped models setting",
+        SettingsTab::Models,
+        value(r#"["a/b", "c/d"]"#),
+        "global",
+        ANY,
+        SettingControl::StringList,
+    ));
+    let settings = Settings::open(&ctx(&fake), Vec::new());
+    assert!(
+        settings
+            .details(Item::Screen(Screen::ScopedModels), None)
+            .contains(&"2 models".to_owned())
+    );
+    assert!(
+        settings
+            .details(Item::Screen(Screen::Skills), None)
+            .contains(&"1 off".to_owned())
+    );
+
+    let mut empty_rows = rows();
+    empty_rows.extend(row_on(
+        "scoped_models",
+        "Scoped models setting",
+        SettingsTab::Models,
+        value("[]"),
+        "global",
+        ANY,
+        SettingControl::StringList,
+    ));
+    empty_rows
+        .iter_mut()
+        .find(|row| row.key == "skills.disabled")
+        .unwrap()
+        .value = value("[]");
+    let empty = Fake::new(empty_rows);
+    let settings = Settings::open(&ctx(&empty), Vec::new());
+    assert!(
+        settings
+            .details(Item::Screen(Screen::ScopedModels), None)
+            .contains(&"All models".to_owned())
+    );
+    assert!(
+        settings
+            .details(Item::Screen(Screen::Skills), None)
+            .contains(&"0 off".to_owned())
+    );
+}
+
+#[test]
+fn models_tab_with_screen_rows() {
+    let fake = Fake::new(rows());
+    let mut settings = tab(&fake, SettingsTab::Models);
+    settings.focus = Some(super::Focus::Screen(Screen::ScopedModels));
+    insta::assert_snapshot!(
+        "settings_models_screen_rows",
+        drawn(&settings, None, 80, 24)
+    );
+}
+
+#[test]
+fn permissions_tab_with_screen_rows() {
+    let fake = Fake::new(rows());
+    let mut settings = tab(&fake, SettingsTab::Permissions);
+    settings.focus = Some(super::Focus::Screen(Screen::ReviewerNotes));
+    insta::assert_snapshot!(
+        "settings_permissions_screen_rows",
+        drawn(&settings, None, 80, 24)
+    );
+}
+
+#[test]
+fn logo_glyph_steps_through_its_choices_wraps_and_starts_at_the_first_when_unset() {
+    let fake = Fake::new(row_on(
+        "tui.logo_glyph",
+        "Logo glyph",
+        SettingsTab::Appearance,
+        value("\"⌇\""),
+        "global",
+        PERSON,
+        fixed(&["⌇", "≈"]),
+    ));
+    let mut settings = at(&fake, "tui.logo_glyph");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(writes(&fake), [w(Layer::Global, "tui.logo_glyph", "\"≈\"")]);
+    let wrap = Fake::new(row_on(
+        "tui.logo_glyph",
+        "Logo glyph",
+        SettingsTab::Appearance,
+        value("\"≈\""),
+        "global",
+        PERSON,
+        fixed(&["⌇", "≈"]),
+    ));
+    let mut settings = at(&wrap, "tui.logo_glyph");
+    one(&mut settings, &wrap, Key::Enter);
+    assert_eq!(writes(&wrap), [w(Layer::Global, "tui.logo_glyph", "\"⌇\"")]);
+
+    let unset = Fake::new(row_on(
+        "tui.logo_glyph",
+        "Logo glyph",
+        SettingsTab::Appearance,
+        Shown::Unset,
+        "default",
+        PERSON,
+        fixed(&["⌇", "≈"]),
+    ));
+    let mut settings = at(&unset, "tui.logo_glyph");
+    assert!(screen(&settings).contains("Default"));
+    one(&mut settings, &unset, Key::Enter);
+    assert_eq!(
+        writes(&unset),
+        [w(Layer::Global, "tui.logo_glyph", "\"⌇\"")]
+    );
+    let set = Fake::new(row_on(
+        "tui.logo_glyph",
+        "Logo glyph",
+        SettingsTab::Appearance,
+        value("\"⌇\""),
+        "global",
+        PERSON,
+        fixed(&["⌇", "≈"]),
+    ));
+    let mut settings = at(&set, "tui.logo_glyph");
+    edit(&mut settings, &set, Edit::Delete);
+    assert_eq!(resets(&set), [w(Layer::Global, "tui.logo_glyph", "\"⌇\"")]);
+}
 
 #[test]
 fn settings_80x24() {
@@ -3109,6 +3508,7 @@ fn a_number_row_shows_its_unit_in_row_text() {
     let number = |key: &str, json: &str| text(key, Number, json);
     // Sliders: any value shows plain with its unit.
     assert_eq!(number("tui.rail.width", "15"), "15% of screen width");
+    assert_eq!(number("tui.rail.width", "40"), "40% of screen width");
     assert_eq!(number("tui.panel.width", "21"), "21% of screen width");
     assert_eq!(number("quota.notice_at", "80"), "80% used");
     // The stored value is a fraction: the built-in 0.7 reads as 70%.
@@ -3294,7 +3694,10 @@ fn numeric_controls_match_the_documented_values_and_include_defaults() {
         assert!(want.contains(&default), "{key}");
     }
     assert_eq!(number_list("hub.idle_exit_ms"), None);
-    assert_eq!(number_list("session.keep_exited"), None);
+    assert_eq!(
+        number_list("session.keep_exited"),
+        Some(&[0.0, 5.0, 10.0, 20.0, 50.0][..])
+    );
     assert_eq!(number_list("tui.rail.width"), None);
     assert_eq!(
         text_list("model_lists.refresh_after"),
@@ -3726,6 +4129,81 @@ fn slider_custom_values_step_to_nearest_tick_and_off_range_values_clamp() {
     assert!((stepped - 0.9).abs() < 1e-12);
 }
 
+#[test]
+fn keep_exited_lists_and_persists_the_documented_session_counts() {
+    let row = |shown| {
+        on(
+            SettingsTab::Sessions,
+            "Keep exited",
+            "session.keep_exited",
+            shown,
+            "project",
+            ANY,
+            SettingControl::Number,
+        )
+    };
+    assert_eq!(super::number_text("session.keep_exited", "0"), "Keep all");
+    assert_eq!(super::number_text("session.keep_exited", "5"), "5 sessions");
+    assert_eq!(
+        super::number_text("session.keep_exited", "7"),
+        "7 sessions (custom)"
+    );
+    assert_eq!(
+        applies_text("session.keep_exited", None),
+        "Applies when the hub starts again."
+    );
+
+    let fake = Fake::new(vec![row(value("10"))]);
+    let mut settings = at(&fake, "session.keep_exited");
+    assert!(screen(&settings).contains("Keep exited"));
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "session.keep_exited", "20")]
+    );
+    assert_eq!(
+        next_number_value(number_list("session.keep_exited").unwrap(), 20.0, true),
+        Some(50.0)
+    );
+
+    let fake = Fake::new(vec![row(value("10"))]);
+    refuse(&fake, "session.keep_exited is read-only");
+    let mut settings = at(&fake, "session.keep_exited");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "session.keep_exited", "20")]
+    );
+    assert_eq!(settings.said, ["session.keep_exited is read-only"]);
+}
+
+#[test]
+fn listed_numbers_step_from_exact_middle_values_in_both_directions() {
+    let values = number_list("session.keep_exited").unwrap();
+    assert_eq!(next_number_value(values, 10.0, true), Some(20.0));
+    assert_eq!(next_number_value(values, 10.0, false), Some(5.0));
+}
+
+#[test]
+fn slider_steps_pin_exact_minimum_and_maximum_boundaries() {
+    let (minimum, maximum, step) = (0.5, 0.9, 0.05);
+    assert!(
+        (super::slider_step(maximum, minimum, maximum, step, false, false) - 0.85).abs() < 1e-12
+    );
+    assert_eq!(
+        super::slider_step(maximum, minimum, maximum, step, true, false),
+        maximum
+    );
+    assert_eq!(
+        super::slider_step(maximum, minimum, maximum, step, true, true),
+        minimum
+    );
+    assert_eq!(
+        super::slider_step(minimum, minimum, maximum, step, false, false),
+        minimum
+    );
+}
+
 /// A width row counts columns after region limits, read from terminal width
 /// while draw width keeps room and cut (`docs/tui.md`, `/settings`, "Controls").
 #[test]
@@ -3813,7 +4291,7 @@ fn a_list_pages_path_column_stops_eighteen_short_of_the_width() {
 #[test]
 fn a_list_page_keeps_the_controls_rows_over_what_was_said() {
     let fake = Fake::new(rows());
-    let mut settings = page(&fake, "scoped_models");
+    let mut settings = page(&fake, "sandbox.allow_write");
     settings.said = (0..6).map(|at| format!("said {at}")).collect();
     let page = settings.page.as_ref().unwrap();
     // Nine rows less the title, the footer and three controls' rows.
@@ -3825,11 +4303,11 @@ fn a_list_page_keeps_the_controls_rows_over_what_was_said() {
 fn a_list_page_scrolls_its_focus_into_the_rows_the_lines_below_leave() {
     let names: Vec<String> = (0..20).map(|at| format!("\"e{at:02}\"")).collect();
     let fake = Fake::new(with(
-        "scoped_models",
+        "sandbox.allow_write",
         value(&format!("[{}]", names.join(","))),
         "global",
     ));
-    let mut settings = page(&fake, "scoped_models");
+    let mut settings = page(&fake, "sandbox.allow_write");
     settings.page_select(20, &ctx(&fake));
     settings.said = vec!["note".to_owned()];
     // Ten rows less the title, the footer and one line below leave seven
@@ -3890,12 +4368,12 @@ fn a_field_and_a_page_print_without_their_draft() {
     assert!(!field.contains("sekret"), "{field}");
 
     let fake = Fake::new(rows());
-    let mut settings = page(&fake, "scoped_models");
+    let mut settings = page(&fake, "sandbox.allow_write");
     press(&mut settings, &fake, &[Key::Enter]);
     typed(&mut settings, &fake, "sekret");
     let page = format!("{:?}", settings.page);
     assert!(page.contains("Page"), "{page}");
-    assert!(page.contains("scoped_models"), "{page}");
+    assert!(page.contains("sandbox.allow_write"), "{page}");
     assert!(page.contains("PageField"), "{page}");
     assert!(page.contains("redacted"), "{page}");
     assert!(!page.contains("sekret"), "{page}");
@@ -3972,37 +4450,35 @@ fn assert_annotation(settings: &Settings, width: u16, height: u16, name: &str) {
 #[test]
 fn settings_search_matches_label_and_path_across_tabs() {
     let fake = Fake::new(rows());
-    // `reviewer` matches the label, `reviewer.model` the key path: both
-    // land on the Permissions row from Appearance.
-    for query in ["reviewer", "reviewer.model"] {
-        let settings = searched(&fake, query);
-        let items = settings.items();
-        assert_eq!(items.len(), 1, "{query}");
-        assert!(
-            matches!(&items[0], super::Item::Key(at) if settings.rows[*at].key == "reviewer.model"),
-            "{query}: {items:?}"
-        );
-        assert_eq!(
-            settings.focus,
-            Some(super::Focus::Key("reviewer.model".to_owned())),
-            "{query}"
-        );
-        // The search holds the opening tab while its rows span tabs.
-        assert_eq!(settings.tab, SettingsTab::Appearance, "{query}");
-        let shown = screen(&settings);
-        assert_eq!(
-            row_of(&shown, "Reviewer model"),
-            "› Reviewer model Default › Permissions",
-            "{query}"
-        );
-    }
+    // `reviewer.model` matches the key path from Appearance.
+    let query = "reviewer.model";
+    let settings = searched(&fake, query);
+    let items = settings.items();
+    assert_eq!(items.len(), 1, "{query}");
+    assert!(
+        matches!(&items[0], super::Item::Key(at) if settings.rows[*at].key == "reviewer.model"),
+        "{query}: {items:?}"
+    );
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("reviewer.model".to_owned())),
+        "{query}"
+    );
+    // The search holds the opening tab while its rows span tabs.
+    assert_eq!(settings.tab, SettingsTab::Appearance, "{query}");
+    let shown = screen(&settings);
+    assert_eq!(
+        row_of(&shown, "Reviewer model"),
+        "› Reviewer model Default › Permissions",
+        "{query}"
+    );
     expect(
-        &screen(&searched(&fake, "reviewer")),
+        &screen(&searched(&fake, "reviewer.model")),
         r#"
 | Settings  /settings                                                 Esc returns
 |Changes save automatically
 |
-|/ reviewer
+|/ reviewer.model
 |
 |› Reviewer model  Default ›                                          Permissions
 |
@@ -4068,7 +4544,7 @@ fn settings_search_matches_letter_activation_and_slash_empty_query() {
     assert_eq!(query_of(&settings), "");
     // One result per eligible key and screen row (`docs/tui.md`,
     // `/settings`, "Rows"); count and order are contractual.
-    assert_eq!(settings.items().len(), 21);
+    assert_eq!(settings.items().len(), 22);
     assert_eq!(
         settings.focus,
         Some(super::Focus::Key("tui.hover".to_owned()))
@@ -4147,7 +4623,7 @@ fn settings_search_matches_case_insensitively_and_by_substring_with_backspace_an
     one(&mut settings, &fake, Key::Char('/'));
     one(&mut settings, &fake, Key::Backspace);
     assert_eq!(query_of(&settings), "");
-    assert_eq!(settings.items().len(), 21);
+    assert_eq!(settings.items().len(), 22);
     // A paste lands as one line: the newline and the tab go.
     let mut settings = open(&fake);
     one(&mut settings, &fake, Key::Char('/'));
@@ -4350,7 +4826,7 @@ fn settings_search_matches_narrow_annotation_cuts_the_value_short() {
 |
 |
 |About sandbox.allow_write.
-|sandbox.allow_write · not set · changing
+|sandbox.allow_write · set in global · ch
 |←→ tab · / search · Enter change · Tab l
 "#,
     );
@@ -4558,17 +5034,19 @@ fn settings_search_escape_reread_keeps_result_and_falls_back_without_it() {
     let fake = Fake::new(rows());
     let mut settings = at(&fake, "tui.rail.width");
     one(&mut settings, &fake, Key::Char('/'));
-    typed(&mut settings, &fake, "reviewer");
+    typed(&mut settings, &fake, "reviewer.model");
     // A reread keeps the focused result and the query.
     settings.reread(&ctx(&fake));
-    assert_eq!(query_of(&settings), "reviewer");
+    assert_eq!(query_of(&settings), "reviewer.model");
     assert_eq!(
         settings.focus,
         Some(super::Focus::Key("reviewer.model".to_owned()))
     );
     // A reread that removes the focused result leaves no match: Esc
     // restores the origin.
-    *support::lock(&fake.rows) = Ok(without("reviewer.model"));
+    let mut without_reviewer_model = without("reviewer.model");
+    without_reviewer_model.retain(|row| row.key != "reviewer.context");
+    *support::lock(&fake.rows) = Ok(without_reviewer_model);
     settings.reread(&ctx(&fake));
     assert!(settings.items().is_empty());
     assert_eq!(settings.focus, None);
