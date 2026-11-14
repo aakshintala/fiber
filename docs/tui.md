@@ -3563,8 +3563,6 @@ five-file cut does, and the replacement inherits the cap.
 | `lines` | The widget's lines |
 | `open` | Whether the person opened the widget |
 
-**Not built yet: see #688.**
-
 `layout` places regions and never draws them. It receives the terminal width
 and height in cells, `flat`, and `regions`: the names shown this frame, drawn
 from `rail`, `conversation`, `working_line`, `steering_queue`, `input_box` and
@@ -3599,7 +3597,7 @@ not apply, never `null`.
 | `header` | `counts` (state role and text pairs) and optional `spend` |
 | `chips` | Each chip's `text`, `dim`, `session_mark`, and existing click `spot` when present |
 | `list` | The rows drawn by Home: `head` fields `start`, `name`, `live`, `spend`, `waiting`; `live` fields `key`, `number`, `glyph`, `name`, `word`, `tone`, `stop`, `id`, `turns`, `branch`, `spend`, `context`, `wait`; `exited_head` `count`; `exited` fields `key`, `stop`, `glyph`, `name`, `id`, `turns`, `spend`, `age`; `more` fields `key`, `count`; and `archived_head` fields `key`, `count` |
-| `empty` | Whether there are no live, crashed or exited sessions |
+| `empty` | Whether there are no live, crashed, exited or archived sessions |
 | `blockers`, `blocker_keys` | The blocker lines and matching booleans for credential-fix targets |
 | `picker` | When open, `escapes`, `recents`, `focus`, and optional `typed` with `text`, `completions` and `missing` |
 | `foot` | The key hint, as text and style spans |
@@ -3622,8 +3620,10 @@ a file that sets colours only ("Themes").
 
 ### What a renderer returns
 
-A renderer receives the slot's input and the width, and returns lines. Each
-line is a list of spans:
+A line renderer receives the slot's input and the width, and returns lines.
+Each line is a list of spans. The `layout` renderer is the exception: it
+returns a map from region names to rectangles, and its `builtin(input, width)`
+returns the built-in map.
 
 ```lua
 { text = " exit 0 ", fg = "success", bg = "surface", bold = true,
