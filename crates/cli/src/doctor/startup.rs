@@ -12,7 +12,7 @@ use config::{
 };
 use contract::ErrorCode;
 use contract::shapes::Failure;
-use extensions::{Model, Providers, is_enabled};
+use extensions::{Model, Providers, Unconfigured, is_enabled};
 
 use super::files::clean;
 use crate::project_of;
@@ -44,6 +44,10 @@ pub(crate) struct Startup {
     pub secrets: Vec<String>,
     /// The configuration and extension notices for stderr.
     pub notices: Vec<contract::events::Notice>,
+    /// Per-model notices for credentialed providers whose host value is invalid.
+    pub model_notices: Vec<contract::events::Notice>,
+    /// Missing-host groups for credentialed providers.
+    pub unconfigured: Vec<Unconfigured>,
 }
 
 impl Startup {
@@ -58,6 +62,8 @@ impl Startup {
             }),
             secrets: Vec::new(),
             notices: Vec::new(),
+            model_notices: Vec::new(),
+            unconfigured: Vec::new(),
         }
     }
 }
@@ -120,11 +126,15 @@ pub(crate) fn startup(
                 blocker: Some(blocker),
                 secrets: Vec::new(),
                 notices,
+                model_notices: Vec::new(),
+                unconfigured: Vec::new(),
             };
         }
     };
-    match enabled.fill_placeholders(&config, env) {
-        Ok(filled) => notices.extend(filled),
+    let mut presentation = enabled.clone();
+    presentation.retain_credentialed(&config);
+    let (model_notices, unconfigured) = match presentation.fill_placeholders_grouped(&config, env) {
+        Ok((notices, groups)) => (notices, groups),
         Err(error) => {
             let blocker = extension_blocker(&error);
             return Startup {
@@ -132,6 +142,24 @@ pub(crate) fn startup(
                 blocker: Some(blocker),
                 secrets: Vec::new(),
                 notices,
+                model_notices: Vec::new(),
+                unconfigured: Vec::new(),
+            };
+        }
+    };
+    // Resolver state keeps its per-model removals for blocker checks. The
+    // report uses only the credential-filtered presentation fill above.
+    match enabled.fill_placeholders(&config, env) {
+        Ok(_) => {}
+        Err(error) => {
+            let blocker = extension_blocker(&error);
+            return Startup {
+                lines: vec![blocker.line.clone()],
+                blocker: Some(blocker),
+                secrets: Vec::new(),
+                notices,
+                model_notices: Vec::new(),
+                unconfigured: Vec::new(),
             };
         }
     }
@@ -166,6 +194,8 @@ pub(crate) fn startup(
         blocker: checked.blocker,
         secrets,
         notices,
+        model_notices,
+        unconfigured,
     }
 }
 

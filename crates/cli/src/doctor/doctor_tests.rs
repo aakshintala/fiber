@@ -459,6 +459,21 @@ fn doctor_groups_missing_host_models_for_a_credentialed_provider() {
 }
 
 #[test]
+fn doctor_keeps_other_notices_beside_the_grouped_host_notice() {
+    let setup = Setup::new();
+    setup.place_templated_fake(Setup::templated_models(&["one", "two"]), true);
+    setup.write_config(&json!({"model": "fake/one"}));
+    setup.write_repo(&json!({"zzz_unknown": 1}));
+
+    let (_, _, err) = setup.report(&env_of(&[]));
+    assert!(
+        err.contains("`fake`: 2 models need the setting `workspace`"),
+        "{err:?}"
+    );
+    assert!(err.contains("zzz_unknown"), "{err:?}");
+}
+
+#[test]
 fn doctor_suppresses_missing_host_for_an_uncredentialed_provider() {
     let setup = Setup::new();
     setup.place_templated_fake(Setup::templated_models(&["one"]), false);
