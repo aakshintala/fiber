@@ -382,6 +382,7 @@ impl Offer {
                 }
                 OfferKey::Handled
             }
+            Spot::Item(_) => OfferKey::Handled,
             Spot::Send => OfferKey::Send,
             Spot::Close => {
                 if self.close_source() {

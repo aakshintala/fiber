@@ -367,6 +367,26 @@ fn enter_on_send_sends() {
     assert_eq!(press(&mut offer, &Key::Enter, 40), Some(OfferKey::Send));
 }
 
+#[test]
+fn space_uses_the_enter_action_for_an_item_and_send() {
+    let mut item = holding(1);
+    assert_eq!(
+        press(&mut item, &Key::Char(' '), 40),
+        Some(OfferKey::Source)
+    );
+    let mut send = holding(1);
+    press(&mut send, &Key::Down, 40);
+    assert_eq!(press(&mut send, &Key::Char(' '), 40), Some(OfferKey::Send));
+}
+
+#[test]
+fn clicking_an_item_selects_it_and_opens_its_source() {
+    let mut offer = holding(2);
+    assert_eq!(offer.click(Spot::Item(1)), OfferKey::Source);
+    assert_eq!(press(&mut offer, &Key::Enter, 40), Some(OfferKey::Source));
+    assert_eq!(offer.click(Spot::Item(2)), OfferKey::Handled);
+}
+
 fn source_offer() -> Offer {
     let mut item = item("hook", "db", None, "hook", None);
     item["files"] = json!(["tools/db.sh", "tools/b.sh"]);
