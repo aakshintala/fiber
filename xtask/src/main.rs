@@ -268,19 +268,17 @@ fn run(args: &[String]) -> Result<bool, String> {
             let body = optional(rest, "--pr-body").unwrap_or_default();
             let plan = select::plan_with_budget_breach_body(plan, bug, &body);
             let budget_breach = bug_red_was_selected && plan.jobs.get("bug_red") == Some(&false);
-            if budget_breach {
-                if let Some(summary) = std::env::var_os("GITHUB_STEP_SUMMARY") {
-                    use std::io::Write;
-                    let mut file = std::fs::OpenOptions::new()
-                        .append(true)
-                        .open(summary)
-                        .map_err(|e| format!("GITHUB_STEP_SUMMARY: {e}"))?;
-                    writeln!(
-                        file,
-                        "Budget breach exemption: bug-red legs skipped; reviewers judge Base/Head measurements."
-                    )
+            if budget_breach && let Some(summary) = std::env::var_os("GITHUB_STEP_SUMMARY") {
+                use std::io::Write;
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(summary)
                     .map_err(|e| format!("GITHUB_STEP_SUMMARY: {e}"))?;
-                }
+                writeln!(
+                    file,
+                    "Budget breach exemption: bug-red legs skipped; reviewers judge Base/Head measurements."
+                )
+                .map_err(|e| format!("GITHUB_STEP_SUMMARY: {e}"))?;
             }
             let plan =
                 select::plan_with_changed_paths(plan, event == "pull_request", &changed_paths);

@@ -411,7 +411,7 @@ fn budget_breach_suppression_does_not_change_mutant_or_reuse_selection() {
         },
     );
     let suppressed = plan_with_budget_breach_body(ordinary.clone(), true, body);
-    assert_eq!(suppressed.jobs["bug_red"], false);
+    assert!(!suppressed.jobs["bug_red"]);
     assert_eq!(suppressed.jobs["mutants"], ordinary.jobs["mutants"]);
     assert_eq!(suppressed.shards, ordinary.shards);
     for (job, selected) in ordinary.jobs {
