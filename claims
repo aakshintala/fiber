@@ -333,3 +333,8 @@ crates/main/tests/completion/zsh-capture.zsh:10-10	fiber-452	plan	2026-11-14T13:
 docs/dependencies.md:146-146	fiber-452	plan	2026-11-14T13:35:48Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/cli/452-value-completion	
 docs/dependencies.md:219-227	fiber-452	plan	2026-11-14T13:35:48Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/cli/452-value-completion	
 docs/invocation.md:170-170	fiber-452	plan	2026-11-14T13:35:48Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/cli/452-value-completion	
+crates/loop/src/compaction.rs	fiber-4684	plan	2026-11-14T13:47:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/compaction/note.rs	fiber-4684	plan	2026-11-14T13:47:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/timing_tests.rs	fiber-4684	plan	2026-11-14T13:47:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/lifecycle_tests.rs	fiber-4684	plan	2026-11-14T13:47:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/tests/compaction.rs	fiber-4684	plan	2026-11-14T13:47:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
