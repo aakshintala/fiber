@@ -55,7 +55,6 @@ jobs:
       shard_timeout: ${{ steps.plan.outputs.shard_timeout }}
       ten_turns: ${{ steps.plan.outputs.ten_turns }}
       base_skip: ${{ steps.plan.outputs.base_skip }}
-      budget_breach: ${{ steps.plan.outputs.budget_breach }}
     steps:
       - &checkout-full
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

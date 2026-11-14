@@ -76,8 +76,8 @@ nextest's status to the `bug_red` collector, which is in the verdict's
 `needs`; their raw results are not selection entries. A budget-breach pull
 request may exempt these legs by including an unfenced `## Budget breach`
 section in its body with both `Base:` and `Head:` measurements. Selection
-skips the legs only for that complete section; the aggregate `bug_red` check
-still runs and reports the exemption without collecting skipped leg results. The docs check fails
+skips the bug-red legs and collector only for that complete section, and
+writes the exemption message to the selection summary. The docs check fails
 when any other job is missing from `needs`, so a new job, such as a new
 shard, cannot run without gating the merge.
 

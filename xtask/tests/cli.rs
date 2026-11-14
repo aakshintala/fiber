@@ -397,6 +397,71 @@ fn plan_prints_the_jobs_and_shards() {
 }
 
 #[test]
+fn plan_reports_budget_breach_exemption_and_preserves_mutant_selection() {
+    let dir = workspace();
+    let summary = dir.path().join("summary.md");
+    std::fs::write(&summary, "").unwrap();
+    let summary_path = summary.to_str().unwrap();
+    let args = [
+        "plan",
+        "--base",
+        "main",
+        "--mode",
+        "crates",
+        "--packages",
+        "a b",
+        "--event",
+        "pull_request",
+        "--draft",
+        "false",
+        "--bug",
+        "true",
+        "--mutants",
+        "true",
+        "--mutant-count",
+        "40",
+        "--pr-body",
+        "## Budget breach\nCause\nBase: 10 bytes\nHead: 12 bytes",
+    ];
+    let (code, out) = xtask(&dir, &args, &[("GITHUB_STEP_SUMMARY", summary_path)], "");
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("budget_breach=true\n"), "{out}");
+    assert!(out.contains("jobs={\"bug_red\":false"), "{out}");
+    assert!(out.contains("\"mutants\":true"), "{out}");
+    assert!(out.contains("shards=[0,1,2]\n"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(&summary).unwrap(),
+        "Budget breach exemption: bug-red legs skipped; reviewers judge Base/Head measurements.\n"
+    );
+
+    let (code, ordinary) = xtask(&dir, &args[..args.len() - 2], &[], "");
+    assert_eq!(code, 0, "{ordinary}");
+    assert!(!ordinary.contains("budget_breach="), "{ordinary}");
+    assert!(ordinary.contains("jobs={\"bug_red\":true"), "{ordinary}");
+
+    std::fs::write(&summary, "").unwrap();
+    let mut non_bug = args.to_vec();
+    non_bug[12] = "false";
+    let (code, non_bug_out) = xtask(&dir, &non_bug, &[("GITHUB_STEP_SUMMARY", summary_path)], "");
+    assert_eq!(code, 0, "{non_bug_out}");
+    assert!(!non_bug_out.contains("budget_breach="), "{non_bug_out}");
+    assert!(
+        non_bug_out.contains("jobs={\"bug_red\":false"),
+        "{non_bug_out}"
+    );
+    assert!(non_bug_out.contains("\"mutants\":true"), "{non_bug_out}");
+    assert!(non_bug_out.contains("shards=[0,1,2]\n"), "{non_bug_out}");
+    assert_eq!(std::fs::read_to_string(&summary).unwrap(), "");
+
+    let (code, unset_summary) = xtask_without(&dir, &args, &[], &["GITHUB_STEP_SUMMARY"], "");
+    assert_eq!(code, 0, "{unset_summary}");
+    assert!(
+        unset_summary.contains("budget_breach=true\n"),
+        "{unset_summary}"
+    );
+}
+
+#[test]
 fn plan_does_not_select_scripts_job_for_deleted_script_path() {
     let dir = workspace();
     std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
