@@ -76,7 +76,7 @@ impl Picker {
     pub(crate) fn key(&mut self, key: &Key, height: usize) -> Pick {
         match key {
             Key::Esc => Pick::Close,
-            Key::Enter => self.choose(false),
+            Key::Enter | Key::Char(' ') => self.choose(false),
             Key::Char(_)
             | Key::Backspace
             | Key::CtrlC
