@@ -125,15 +125,8 @@ pub(crate) fn startup(
     };
     let mut presentation = enabled.clone();
     presentation.retain_credentialed(&config);
-    match presentation.fill_placeholders_grouped(&config, env) {
-        Ok((model_notices, unconfigured)) => {
-            notices.extend(model_notices);
-            notices.extend(
-                unconfigured
-                    .iter()
-                    .filter_map(|group| group.notice(&|_| true)),
-            );
-        }
+    let (model_notices, unconfigured) = match presentation.fill_placeholders_grouped(&config, env) {
+        Ok(filled) => filled,
         Err(error) => {
             let blocker = extension_blocker(&error);
             return Startup {
@@ -144,6 +137,12 @@ pub(crate) fn startup(
             };
         }
     };
+    notices.extend(model_notices);
+    notices.extend(
+        unconfigured
+            .iter()
+            .filter_map(|group| group.notice(&|_| true)),
+    );
     // Resolver state keeps its per-model removals for blocker checks. The
     // report uses only the credential-filtered presentation fill above.
     if let Err(error) = enabled.fill_placeholders(&config, env) {
