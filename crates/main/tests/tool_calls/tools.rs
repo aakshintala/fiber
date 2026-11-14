@@ -1718,11 +1718,7 @@ fn compaction_trigger(setup: &Setup) {
     );
 }
 
-fn above_trigger_stream(events: &[Value]) -> Response {
-    fakes::wire::stream_with_usage(events, json!({"input_tokens": 1200, "output_tokens": 3}))
-}
-
-/// A turn whose first reply reads a file, then compacts on the five-token
+/// A turn whose first reply reads a file, then compacts on the 1,000-token
 /// trigger and answers from the new context, to the end of the process.
 const COMPACTION_TURN: &[&str] = &[
     "turn_started",
@@ -1766,7 +1762,7 @@ fn compaction_configuration_reaches_a_new_session() {
     let setup = Setup::new_with_started_deadline();
     fs::write(setup.workspace().join("note.txt"), "alpha line\n").unwrap();
     let server = ProviderServer::start([
-        above_trigger_stream(&[function_call(
+        fakes::wire::stream_above_trigger(&[function_call(
             "call_read",
             "read",
             &json!({"path": "note.txt"}),
@@ -1813,7 +1809,7 @@ fn compaction_configuration_reaches_a_resumed_session() {
     fs::write(setup.workspace().join("note.txt"), "alpha line\n").unwrap();
     let server = ProviderServer::start([
         hello(),
-        above_trigger_stream(&[function_call(
+        fakes::wire::stream_above_trigger(&[function_call(
             "call_read",
             "read",
             &json!({"path": "note.txt"}),

@@ -540,20 +540,36 @@ impl Loop {
                 let artifact = self.log.write_artifact(&name, text.as_bytes());
                 match artifact {
                     Ok((path, _)) => path,
-                    Err(log::Error::Io { source, .. }) => {
-                        let relative = format!("artifacts/{}.txt", action.0);
+                    Err(error) => {
+                        // Every write failure raises the notice: `write_artifact`
+                        // writes one plain-named file, so only `Io` escapes it,
+                        // and a `Poisoned` or `Ended` log would fail the notice's
+                        // own append below just the same. The `Io` message names
+                        // the refusing source, as the tests pin.
+                        let detail = match &error {
+                            log::Error::Io { source, .. } => source.to_string(),
+                            log::Error::Held { .. }
+                            | log::Error::Poisoned { .. }
+                            | log::Error::Ended { .. }
+                            | log::Error::NotFound(_)
+                            | log::Error::Ambiguous { .. }
+                            | log::Error::Exists(_)
+                            | log::Error::Pointer { .. }
+                            | log::Error::Unreadable { .. }
+                            | log::Error::Encode(_) => error.to_string(),
+                        };
+                        let relative = format!("artifacts/{name}");
                         return (
                             None,
                             Some(Notice {
                                 code: ErrorCode::IoFailed,
                                 message: format!(
-                                    "Could not write artifact {relative}: {source}. The result stays in the note request."
+                                    "Could not write artifact {relative}: {detail}. The result stays in the note request."
                                 ),
                                 extension: None,
                             }),
                         );
                     }
-                    Err(_) => return (None, None),
                 }
             }
         };

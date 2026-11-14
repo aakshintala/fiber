@@ -2019,7 +2019,7 @@ fn a_compaction_runs_session_start_with_reason_compaction() {
            run = function(call) return { context = \"reason:\" .. call.reason } end })\n",
     );
     let server = ProviderServer::start([
-        above_fresh_estimate_stream(&[function_call(
+        fakes::wire::stream_above_trigger(&[function_call(
             "call_read",
             "read",
             &json!({"path": "note.txt"}),
@@ -2105,7 +2105,7 @@ fn a_blocking_session_start_failure_at_a_compaction_fails_the_compaction_and_the
              return {} end })\n",
     );
     let server = ProviderServer::start([
-        above_fresh_estimate_stream(&[function_call(
+        fakes::wire::stream_above_trigger(&[function_call(
             "call_read",
             "read",
             &json!({"path": "note.txt"}),
@@ -2200,12 +2200,8 @@ fn noting_hook(on_failure: &str, body: &str) -> String {
     )
 }
 
-/// Runs `fiber ask` where the model reads a file, then the five-token
+/// Runs `fiber ask` where the model reads a file, then the 1,000-token
 /// trigger compacts, with `init` installed and `extra` configured.
-fn above_fresh_estimate_stream(events: &[Value]) -> Response {
-    fakes::wire::stream_with_usage(events, json!({"input_tokens": 1200, "output_tokens": 3}))
-}
-
 fn compaction_run(
     setup: &Setup,
     init: &str,
@@ -2375,7 +2371,7 @@ fn a_non_blocking_before_compaction_hook_with_a_bad_return_leaves_the_note_to_th
         &setup,
         &noting_hook("non-blocking", r#"return "x""#),
         vec![
-            above_fresh_estimate_stream(&[function_call(
+            fakes::wire::stream_above_trigger(&[function_call(
                 "call_read",
                 "read",
                 &json!({"path": "note.txt"}),
@@ -2432,7 +2428,7 @@ fn a_blocking_before_compaction_failure_fails_the_compaction_hook_failed() {
         &setup,
         &noting_hook("blocking", r#"error("boom")"#),
         vec![
-            above_fresh_estimate_stream(&[function_call(
+            fakes::wire::stream_above_trigger(&[function_call(
                 "call_read",
                 "read",
                 &json!({"path": "note.txt"}),
@@ -2462,7 +2458,7 @@ fn a_hook_note_survives_resume() {
             r#"return { note = "Hook note: " .. #h.messages .. " messages" }"#,
         ),
         vec![
-            above_fresh_estimate_stream(&[function_call(
+            fakes::wire::stream_above_trigger(&[function_call(
                 "call_read",
                 "read",
                 &json!({"path": "note.txt"}),
