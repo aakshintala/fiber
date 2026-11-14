@@ -687,6 +687,18 @@ fn save_keys_refuses_a_keys_that_is_no_object_leaving_the_file() {
 }
 
 #[test]
+fn hubs_returns_sorted_configured_names_through_the_seam() {
+    use tui::Configure;
+    let dirs = Dirs::new();
+    write(
+        &dirs.home().join("config.json"),
+        r#"{"hubs":{"zeta":{"address":"ws://z"},"alpha":{"address":"ws://a"}}}"#,
+    );
+    let seam = Seam::new(dirs.home());
+    assert_eq!(seam.hubs().unwrap(), ["alpha", "zeta"]);
+}
+
+#[test]
 fn reviewer_notes_reads_each_layers_own_context_with_its_version() {
     use tui::Configure;
     let dirs = Dirs::new();

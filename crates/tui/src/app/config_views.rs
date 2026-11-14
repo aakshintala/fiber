@@ -832,11 +832,7 @@ impl App {
                 Screen::Keys => self.open_keys(),
                 Screen::ScopedModels => self.scoped_models_command(),
                 Screen::ReviewerNotes | Screen::Credentials => {
-                    let command = if screen == Screen::ReviewerNotes {
-                        "/reviewer-setup"
-                    } else {
-                        "/credential"
-                    };
+                    let command = screen.row().map_or("", |row| row.command);
                     self.config_screen_command(command)
                 }
                 Screen::Rules => self.open_config_view(ConfigView::Rules),

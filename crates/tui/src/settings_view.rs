@@ -23,6 +23,7 @@ use crate::theme::Role;
 /// The themes offered before the theme files: following the terminal,
 /// then the built-ins.
 pub(crate) const BUILT_IN_THEMES: [&str; 3] = ["auto", "dark", "light"];
+const REVIEWER_NOTES_LABEL: &str = "Reviewer notes";
 
 /// A screen the `/settings` view lists as a row of its own, because the
 /// keys it stands for have a `*` in their path or are not keys at all
@@ -84,7 +85,7 @@ pub const SCREEN_ROWS: [ScreenRow; 8] = [
     ),
     screen(
         SettingsTab::Permissions,
-        "Reviewer notes",
+        REVIEWER_NOTES_LABEL,
         "Edit the notes reviewers use when reviewing a change.",
         "/reviewer-setup",
         &["reviewer.context"],
@@ -660,9 +661,7 @@ impl Settings {
                         .enumerate()
                         .filter(|(_, row)| {
                             row.key != "hub.port"
-                                && !SCREEN_ROWS
-                                    .iter()
-                                    .any(|screen| screen.covers.contains(&row.key.as_str()))
+                                && !covered(&row.key)
                                 && row.presentation.tab == Some(tab)
                                 && key_matches(row, &needle)
                         })
@@ -687,9 +686,7 @@ impl Settings {
             .enumerate()
             .filter(|(_, row)| {
                 row.key != "hub.port"
-                    && !SCREEN_ROWS
-                        .iter()
-                        .any(|screen| screen.covers.contains(&row.key.as_str()))
+                    && !covered(&row.key)
                     && row.presentation.tab == Some(self.tab)
             })
             .map(|(at, _)| Item::Key(at))
@@ -919,13 +916,32 @@ impl Settings {
                 vec!["Edit with /reviewer-setup ›".to_owned(), preview]
             }
             Item::Screen(screen) => screen.row().map_or_else(Vec::new, |row| {
-                vec![
+                let mut lines = vec![
                     row.metadata.description.to_owned(),
                     format!("{} · opens its own screen", row.command),
-                ]
+                ];
+                if screen == Screen::ScopedModels {
+                    let count = self
+                        .rows
+                        .iter()
+                        .find(|setting| setting.key == "scoped_models")
+                        .and_then(|setting| setting_count(setting));
+                    lines.push(
+                        count.map_or_else(|| "All models".to_owned(), |n| format!("{n} models")),
+                    );
+                } else if screen == Screen::Skills {
+                    let count = self
+                        .rows
+                        .iter()
+                        .find(|setting| setting.key == "skills.disabled")
+                        .and_then(|setting| setting_count(setting))
+                        .unwrap_or_default();
+                    lines.push(format!("{count} off"));
+                }
+                lines
             }),
             Item::Key(at) => self.row(at).map_or_else(Vec::new, |row| {
-                vec![
+                let lines = vec![
                     row.presentation.description.clone(),
                     format!(
                         "{} · {} · {}",
@@ -933,7 +949,8 @@ impl Settings {
                         origin(row),
                         applies_text(&row.key, usage)
                     ),
-                ]
+                ];
+                lines
             }),
         }
     }
@@ -968,9 +985,25 @@ fn key_matches(row: &SettingRow, needle: &str) -> bool {
 
 /// Whether a screen row matches the lowercased query: its label or one
 /// of the key paths it covers, either as a substring.
+fn covered(key: &str) -> bool {
+    SCREEN_ROWS
+        .iter()
+        .any(|screen| screen.covers.contains(&key))
+}
+
 fn screen_matches(row: &ScreenRow, needle: &str) -> bool {
     row.metadata.label.to_lowercase().contains(needle)
         || row.covers.iter().any(|covered| covered.contains(needle))
+}
+
+fn setting_count(row: &SettingRow) -> Option<usize> {
+    match &row.value {
+        Shown::Value(text) => serde_json::from_str::<Vec<Value>>(text)
+            .ok()
+            .map(|values| values.len()),
+        Shown::Union { names, .. } => Some(names.len()),
+        Shown::Unset | Shown::Redacted(_) => None,
+    }
 }
 
 /// Where a row's value comes from, as the line under the list says it.
@@ -1452,28 +1485,28 @@ impl Settings {
                 let next = next_choice(&names, current_text(value).as_deref());
                 self.step(ctx, layer, &row.key, next)
             }
-            (SettingControl::Text, _) if row.key == "web_search.backend" => {
-                let mut names = vec!["Default".to_owned()];
-                match ctx.seam.search_backends(ctx.workspace) {
-                    Ok(backends) => names.extend(backends),
-                    Err(error) => {
-                        self.said = vec![error.message];
-                        return Act::Stay;
+            (SettingControl::Text, _)
+                if matches!(row.key.as_str(), "web_search.backend" | "hub.default") =>
+            {
+                let names = if row.key == "web_search.backend" {
+                    ctx.seam.search_backends(ctx.workspace)
+                } else {
+                    ctx.seam.hubs()
+                };
+                match names {
+                    Ok(names) => {
+                        let mut choices = vec!["Default".to_owned()];
+                        choices.extend(names);
+                        self.open_dynamic_choices(
+                            row.key,
+                            layer,
+                            choices,
+                            current_text(&row.value),
+                            ctx,
+                        )
                     }
+                    Err(error) => self.said = vec![error.message],
                 }
-                self.open_dynamic_choices(row.key, layer, names, current_text(&row.value), ctx);
-                Act::Stay
-            }
-            (SettingControl::Text, _) if row.key == "hub.default" => {
-                let mut names = vec!["Default".to_owned()];
-                match ctx.seam.hubs() {
-                    Ok(hubs) => names.extend(hubs),
-                    Err(error) => {
-                        self.said = vec![error.message];
-                        return Act::Stay;
-                    }
-                }
-                self.open_dynamic_choices(row.key, layer, names, current_text(&row.value), ctx);
                 Act::Stay
             }
             (SettingControl::Model, _) => {
@@ -1764,19 +1797,7 @@ impl Settings {
                 .into_iter()
                 .filter(|name| !BUILT_IN_THEMES.contains(&name.as_str())),
         );
-        let mut list = List::gutter();
-        let at = names
-            .iter()
-            .position(|name| Some(name) == current.as_ref())
-            .unwrap_or(0);
-        list.select(at, names.len(), self.shown(ctx));
-        self.mode = Mode::Choices {
-            key: THEME.to_owned(),
-            layer: Layer::Global,
-            names,
-            current,
-            list,
-        };
+        self.open_dynamic_choices(THEME.to_owned(), Layer::Global, names, current, ctx);
     }
 
     fn open_dynamic_choices(
@@ -2941,14 +2962,14 @@ fn shown_value(row: &SettingRow) -> (String, Option<String>) {
         }
         (SettingControl::Model, Shown::Unset) => "Default ›".to_owned(),
         (SettingControl::Model, Shown::Value(text)) => format!("{} ›", as_typed(text)),
-        (SettingControl::Text, Shown::Unset)
-            if matches!(row.key.as_str(), "web_search.backend" | "hub.default") =>
-        {
+        (SettingControl::Text, Shown::Unset) if row.key == "web_search.backend" => {
             "Default ›".to_owned()
         }
-        (SettingControl::Text, Shown::Value(text))
-            if matches!(row.key.as_str(), "web_search.backend" | "hub.default") =>
-        {
+        (SettingControl::Text, Shown::Value(text)) if row.key == "web_search.backend" => {
+            format!("{} ›", as_typed(text))
+        }
+        (SettingControl::Text, Shown::Unset) if row.key == "hub.default" => "Default ›".to_owned(),
+        (SettingControl::Text, Shown::Value(text)) if row.key == "hub.default" => {
             format!("{} ›", as_typed(text))
         }
         (SettingControl::StringList | SettingControl::RepositoryExtensions, Shown::Unset) => {

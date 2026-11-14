@@ -12,9 +12,9 @@ use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 
 use super::{
-    Act, Applies, Ctx, Request, SCREEN_ROWS, Screen, ScreenRow, Settings, applies, applies_text,
-    as_typed, layers, next_number_value, next_text_value, number_list, number_slider, number_text,
-    refresh_millis, shown_value, slider_bar, slider_step, text_list,
+    Act, Applies, Ctx, Item, Request, SCREEN_ROWS, Screen, ScreenRow, Settings, applies,
+    applies_text, as_typed, layers, next_number_value, next_text_value, number_list, number_slider,
+    number_text, refresh_millis, shown_value, slider_bar, slider_step, text_list,
 };
 use crate::ThemeSetting;
 use crate::configure::{Layer, SettingControl, SettingRow, Shown, WriteScope};
@@ -3224,6 +3224,30 @@ fn settings_metadata_screen_commands_are_registered() {
 }
 
 // Stored whole-screen snapshots for ordinary, slider and stepped-list rows.
+
+#[test]
+fn screen_row_details_show_scoped_model_and_disabled_skill_counts() {
+    let fake = Fake::new(row_on(
+        "scoped_models",
+        "Scoped models setting",
+        SettingsTab::Models,
+        value(r#"["a/b", "c/d"]"#),
+        "global",
+        ANY,
+        SettingControl::StringList,
+    ));
+    let settings = Settings::open(&ctx(&fake), Vec::new());
+    assert!(
+        settings
+            .details(Item::Screen(Screen::ScopedModels), None)
+            .contains(&"2 models".to_owned())
+    );
+    assert!(
+        settings
+            .details(Item::Screen(Screen::Skills), None)
+            .contains(&"1 off".to_owned())
+    );
+}
 
 #[test]
 fn models_tab_with_screen_rows() {
