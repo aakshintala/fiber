@@ -773,6 +773,7 @@ fn recent_listing_defers_a_held_lock_without_archiving_it() {
         .unwrap()
         .unwrap();
     assert_eq!(answer["total"], 1);
+    assert!(answer["sessions"][0].get("archived").is_none());
     assert_eq!(archived_lines(&temp.log_text(23)).len(), 0);
 }
 
