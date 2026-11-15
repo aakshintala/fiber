@@ -300,7 +300,7 @@ fn a_keeper_child_output_write_failure_drains_and_reports_io_failed() {
         let mut reader = reader;
         rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty()).expect("output FIFO blocks");
         let mut bytes = [0_u8; 256];
-        let _ = first.send(reader.read(&mut bytes).expect("read output FIFO"));
+        let _sent = first.send(reader.read(&mut bytes).expect("read output FIFO"));
     });
     assert!(
         Deadline::after(Duration::from_secs(10))
@@ -424,7 +424,7 @@ fn a_keeper_child_stderr_write_failure_keeps_stdout() {
         let mut reader = reader;
         rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty()).expect("errors FIFO blocks");
         let mut bytes = [0_u8; 256];
-        let _ = first.send(reader.read(&mut bytes).expect("read errors FIFO"));
+        let _sent = first.send(reader.read(&mut bytes).expect("read errors FIFO"));
     });
     assert!(
         Deadline::after(Duration::from_secs(10))
@@ -565,7 +565,7 @@ fn a_keeper_child_stdout_write_failure_keeps_stderr() {
         let mut reader = reader;
         rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty()).expect("output FIFO blocks");
         let mut bytes = [0_u8; 256];
-        let _ = first.send(reader.read(&mut bytes).expect("read output FIFO"));
+        let _sent = first.send(reader.read(&mut bytes).expect("read output FIFO"));
     });
     assert!(
         Deadline::after(Duration::from_secs(10))
@@ -1421,7 +1421,7 @@ fn keeper_written_write_failure_wins_over_keeper_timeout() {
         let mut reader = reader;
         rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty()).expect("output FIFO blocks");
         let mut bytes = [0_u8; 256];
-        let _ = first.send(reader.read(&mut bytes).expect("read output FIFO"));
+        let _sent = first.send(reader.read(&mut bytes).expect("read output FIFO"));
     });
     assert!(
         Deadline::after(Duration::from_secs(10))
