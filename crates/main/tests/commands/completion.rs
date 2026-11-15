@@ -355,8 +355,8 @@ fn receive_stdout(
 /// Runs `command` to its exit, in its own process group, with stdin a pipe
 /// the test holds open and never writes to: a run that read stdin would
 /// block until `fakes::WHOLE_SUBSYSTEM_WITHIN` expires. After the exit, the
-/// group and every process
-/// whose command line holds `tag` must be gone within the outer wait; each
+/// group and every process whose command line holds `tag` must be gone within
+/// the outer wait; each
 /// step's child wait is half the outer, so the inner step expires first.
 /// On expiry, both are killed and reaped before the test fails.
 #[track_caller]
