@@ -340,3 +340,8 @@ crates/tui/src/mcp_view_tests.rs:441-441	fiber-4675	plan	2026-11-15T22:34:22Z	ro
 crates/tui/src/mcp_view_tests.rs:444-448	fiber-4675	plan	2026-11-15T22:34:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-enter	
 crates/tui/src/view/request_tests.rs:795-796	fiber-4675	plan	2026-11-15T22:34:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-enter	
 crates/main/src/keeper_child_tests.rs	fiber-4646	plan	2026-11-15T22:42:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/keeper_restore_tests.rs	fiber-4936	plan	2026-11-15T22:46:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/src/keeper_restore.rs	fiber-4936	plan	2026-11-15T22:46:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing/running.md	fiber-4936	plan	2026-11-15T22:46:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing.md	fiber-4936	plan	2026-11-15T22:46:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/workflow.md	fiber-4936	plan	2026-11-15T22:46:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
