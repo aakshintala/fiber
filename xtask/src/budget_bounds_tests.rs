@@ -230,6 +230,7 @@ fn a_short_named_bound_passes() {
     for after in [
         "MUST_SUCCEED_WITHIN",
         "fakes::MUST_SUCCEED_WITHIN",
+        "fakes::WHOLE_SUBSYSTEM_WITHIN",
         "Duration::ZERO",
     ] {
         let source = format!("fn a() {{ Deadline::after({after}); }}");
@@ -238,17 +239,6 @@ fn a_short_named_bound_passes() {
             "{after} passes"
         );
     }
-}
-
-#[test]
-fn the_documented_subsystem_bound_passes_on_a_changed_line() {
-    let failures = check(
-        "crates/x/tests/a.rs",
-        "tests/a.rs",
-        "fn a() { Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN); }",
-        &[1],
-    );
-    assert!(failures.is_empty(), "{failures:?}");
 }
 
 #[test]
