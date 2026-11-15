@@ -1072,6 +1072,7 @@ fn rules_selection_runs_a_prototype_diff_as_crates_without_packages() {
 #[test]
 fn rules_selection_runs_docs_only_diffs_as_docs() {
     for files in [
+        &[][..],
         &["README.md"][..],
         &["docs/notes.md", "research/x/run.sh"][..],
     ] {
@@ -1079,10 +1080,4 @@ fn rules_selection_runs_docs_only_diffs_as_docs() {
         assert_eq!(selection, Selection::Docs, "{files:?}");
         assert_eq!(selection.mode(), "docs", "{files:?}");
     }
-}
-
-// `docs/workflow.md`, "Rules by path".
-#[test]
-fn rules_selection_runs_an_empty_diff_as_docs() {
-    assert_eq!(rules_selection(&[], &members()), Selection::Docs);
 }

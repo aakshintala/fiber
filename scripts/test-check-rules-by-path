@@ -9,7 +9,7 @@ top=$PWD
 fail() { echo "test-check-rules-by-path: $1" >&2; exit 1; }
 
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+trap 'git worktree remove --force "${proto_wt-}" 2>/dev/null || true; rm -rf "$work" "${proto_parent-}"' EXIT
 
 # A flag conflict prints usage and exits 2, like any unknown flag.
 code=0
@@ -93,5 +93,31 @@ echo true >"$fixture/scripts/noop"
 narrowed=$(cd "$fixture" && "$top/target/debug/xtask" select --base HEAD --rules-by-path)
 packages=$(sed -n 's/^packages=//p' <<<"$narrowed")
 [ "$packages" = "a" ] || fail "a scripts file changed the narrowed packages to '$packages'"
+
+# A prototype-only diff through scripts/check prints the prototype step
+# (`docs/workflow.md`, "Rules by path"): a scratch worktree at HEAD plus one
+# untracked prototype file is a prototype-only diff against HEAD. cargo is
+# stubbed except for `xtask select`, so the prototype trio and check-docs
+# succeed without building; the `== tui-prototype` line comes from the rules
+# branch itself, so a deleted branch or a changed `changed` computation fails
+# this test.
+proto_parent=$(mktemp -d)
+proto_wt="$proto_parent/wt"
+git worktree add -q --detach "$proto_wt" HEAD
+touch "$proto_wt/research/tui-prototype/.rules-selftest-probe"
+mkdir -p "$work/bin"
+real_cargo=$(command -v cargo)
+cat >"$work/bin/cargo" <<STUB
+#!/bin/bash
+if [[ " \$* " == *" xtask select "* || " \$* " == *" metadata "* ]]; then
+  exec "$real_cargo" "\$@"
+fi
+exit 0
+STUB
+chmod +x "$work/bin/cargo"
+code=0
+(cd "$proto_wt" && PATH="$work/bin:$PATH" CARGO_TARGET_DIR="$top/target" bash "$top/scripts/check" --rules-by-path --base HEAD >"$work/proto" 2>&1) || code=$?
+[ "$code" -eq 0 ] || { cat "$work/proto" >&2; fail "prototype-only scripts/check exited $code, not 0"; }
+grep -q "== tui-prototype" "$work/proto" || { cat "$work/proto" >&2; fail "prototype-only diff printed no '== tui-prototype'"; }
 
 echo "test-check-rules-by-path: ok"

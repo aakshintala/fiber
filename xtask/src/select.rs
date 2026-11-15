@@ -259,6 +259,7 @@ fn touched(
 /// manifest) maps to its crate; only globally-scoped runs-all paths with no
 /// crate owner (`scripts/`, `.github/`, the root manifests) select no crate.
 pub(crate) fn rules_selection(files: &[String], members: &Members) -> Selection {
+    // debt: same docs-only preamble as classify_with (select.rs:347-352); fold both onto one helper when classify_with next changes.
     let is_listed = |path: &str| COMPILED_IN.iter().any(|(p, _)| *p == path);
     // A package file is checked before the docs rule, so a `.md` inside a
     // package is not a docs-only diff (`docs/ci.md`, "Selection").
