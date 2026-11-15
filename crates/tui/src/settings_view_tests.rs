@@ -2743,7 +2743,7 @@ fn the_pages_clicks_and_wheel_move_its_focus_only_outside_a_field() {
     settings.click(Spot::Row(1), &ctx(&fake));
     assert_eq!(settings.page.as_ref().unwrap().list.selected(), 1);
     assert!(settings.page.as_ref().unwrap().field.is_some());
-    settings.click(Spot::Row(1), &ctx(&fake));
+    settings.click(Spot::Row(0), &ctx(&fake));
     assert_eq!(
         settings.page.as_ref().unwrap().list.selected(),
         1,
