@@ -2926,6 +2926,29 @@ fn choosing_the_current_hub_choice_still_saves_it() {
 }
 
 #[test]
+fn a_gui_named_choice_on_a_non_editor_key_does_not_add_wait() {
+    let fake = Fake::new(row_on(
+        "hub.default",
+        "Default hub",
+        SettingsTab::Advanced,
+        Shown::Unset,
+        "default",
+        WriteScope::GlobalOnly,
+        SettingControl::Text,
+    ));
+    let mut settings = at(&fake, "hub.default");
+    settings.open_dynamic_choices(
+        "hub.default".to_owned(),
+        Layer::Global,
+        vec!["Default".to_owned(), "code".to_owned()],
+        None,
+        &ctx(&fake),
+    );
+    settings.choose("code", &ctx(&fake));
+    assert_eq!(writes(&fake), [w(Layer::Global, "hub.default", "\"code\"")]);
+}
+
+#[test]
 fn hub_picker_default_on_an_unset_key_closes_without_a_write() {
     let mut fake = Fake::new(row_on(
         "hub.default",
@@ -2948,17 +2971,27 @@ fn hub_picker_default_on_an_unset_key_closes_without_a_write() {
 
 #[test]
 fn opening_editor_settings_focuses_its_sessions_row() {
-    let fake = Fake::new(row_on(
+    let mut fixture = row_on(
         "tui.editor",
         "Editor",
-        SettingsTab::Sessions,
+        SettingsTab::Advanced,
         value("\"vim\""),
         "global",
         PERSON,
         SettingControl::Text,
+    );
+    fixture.push(on(
+        SettingsTab::Advanced,
+        "Earlier row",
+        "a.earlier",
+        Shown::Unset,
+        "default",
+        ANY,
+        SettingControl::Text,
     ));
+    let fake = Fake::new(fixture);
     let settings = Settings::open_on(&ctx(&fake), Vec::new(), "tui.editor");
-    assert_eq!(settings.tab, SettingsTab::Sessions);
+    assert_eq!(settings.tab, SettingsTab::Advanced);
     assert_eq!(
         settings.focus,
         Some(super::Focus::Key("tui.editor".to_owned()))
