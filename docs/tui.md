@@ -653,8 +653,10 @@ design:
 - **Esc** is named once. A swapped view names it in its top row, "Esc
   returns", or "Esc back" on a sub-page, and its footer leaves it out. An
   overlay has no top row, so its footer ends "Esc close".
-- **The main action** on the focused row is Enter, and Space does the same.
-  Delete removes or resets the row; Backspace is a synonym only where no
+- **The main action** on the focused row is Enter, and Space does the same,
+  except in an approval, where Space does nothing. An approval takes the
+  keyboard as it opens, so a space meant for the input box would otherwise
+  approve the call. Delete removes or resets the row; Backspace is a synonym only where no
   text field is open.
 - **A footer** names every key the view takes, keys bold and words dim,
   joined by " · ", on the last row. A view that takes only ↑↓ and Esc has
