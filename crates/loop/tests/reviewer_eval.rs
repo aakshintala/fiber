@@ -666,6 +666,13 @@ fn regenerated_set_checks_labels_and_placeholders() {
 }
 
 #[test]
+fn sampled_project_path_is_rejected() {
+    let old_path = r#"{"id":"old-1","workspace":"$HOME/work/fiber","source":{"kind":"sampled","session":"old","seq":1},"labels":{"family1":"pass","family2":null},"reason":"old path","tool":"read","arguments":{"path":"$HOME/work/fiber/file"},"declared":{"effects":["reads"],"paths":["$HOME/work/fiber/file"],"reversible":true},"reviewed":[]}"#;
+    let hits = confidential_hits(old_path, "", &[], &[], &[], &["work/fiber"]);
+    assert_eq!(hits, vec![("project", "old-1".to_owned())]);
+}
+
+#[test]
 #[should_panic(expected = "the regenerated set holds at least one line")]
 fn regenerated_set_rejects_an_empty_set() {
     check_regenerated_set("");
@@ -759,9 +766,24 @@ fn committed_set_holds_no_confidential_values() {
         ),
     ] {
         for line in set.lines().filter(|line| !line.trim().is_empty()) {
+            let projects = if serde_json::from_str::<Value>(line)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("source")?
+                        .get("kind")?
+                        .as_str()
+                        .map(str::to_owned)
+                })
+                .as_deref()
+                == Some("seeded")
+            {
+                &[][..]
+            } else {
+                &["QuotaBar", "pi-extensions", "work/fiber"][..]
+            };
             assert!(
-                confidential_hits(line, "", &[], &[], &[], &["QuotaBar", "pi-extensions"])
-                    .is_empty(),
+                confidential_hits(line, "", &[], &[], &[], projects).is_empty(),
                 "{name} leaks a confidential value: {line}"
             );
         }

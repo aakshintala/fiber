@@ -126,4 +126,12 @@ if grep -q "SCAN-DROP" "$TMP/scan.txt"; then
   exit 1
 fi
 "$FIX_DIR/check_confidential.sh" --project QuotaBar --project pi-extensions "$OUT" "$SEEDED"
+python3 - "$OUT" "$TMP/sampled-only.jsonl" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as source, open(sys.argv[2], "w") as sampled:
+    for line in source:
+        if json.loads(line)["source"]["kind"] != "seeded":
+            sampled.write(line)
+PYEOF
+"$FIX_DIR/check_confidential.sh" --project work/fiber "$TMP/sampled-only.jsonl"
 wc -l "$OUT"
