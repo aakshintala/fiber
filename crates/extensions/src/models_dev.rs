@@ -78,6 +78,53 @@ pub fn should_fetch(
     }
 }
 
+struct ProviderVisitor<'a>(&'a BTreeSet<String>);
+impl<'de> Visitor<'de> for ProviderVisitor<'_> {
+    type Value = Value;
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a provider object")
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
+        let mut rows = serde_json::Map::new();
+        while let Some(id) = map.next_key::<String>()? {
+            if self.0.contains(&id) {
+                rows.insert(id, map.next_value::<Value>()?);
+            } else {
+                map.next_value::<IgnoredAny>()?;
+            }
+        }
+        Ok(Value::Object(rows))
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(Value::Object(Default::default()))
+    }
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Value, E> {
+        Ok(Value::Object(Default::default()))
+    }
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Value, E> {
+        Ok(Value::Object(Default::default()))
+    }
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Value, E> {
+        Ok(Value::Object(Default::default()))
+    }
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Value, E> {
+        Ok(Value::Object(Default::default()))
+    }
+    fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Value, E> {
+        Ok(Value::Object(Default::default()))
+    }
+    fn visit_string<E: serde::de::Error>(self, _: String) -> Result<Value, E> {
+        Ok(Value::Object(Default::default()))
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Value, E> {
+        Ok(Value::Object(Default::default()))
+    }
+    fn visit_none<E: serde::de::Error>(self) -> Result<Value, E> {
+        Ok(Value::Object(Default::default()))
+    }
+}
+
 fn retained_rows(
     reader: impl Read,
     models: &[ModelData],
@@ -128,52 +175,6 @@ fn retained_rows(
             deserializer.deserialize_any(ProviderVisitor(self.0))
         }
     }
-    struct ProviderVisitor<'a>(&'a BTreeSet<String>);
-    impl<'de> Visitor<'de> for ProviderVisitor<'_> {
-        type Value = Value;
-        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("a provider object")
-        }
-        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
-            let mut rows = serde_json::Map::new();
-            while let Some(id) = map.next_key::<String>()? {
-                if self.0.contains(&id) {
-                    rows.insert(id, map.next_value::<Value>()?);
-                } else {
-                    map.next_value::<IgnoredAny>()?;
-                }
-            }
-            Ok(Value::Object(rows))
-        }
-        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
-            while seq.next_element::<IgnoredAny>()?.is_some() {}
-            Ok(Value::Object(Default::default()))
-        }
-        fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Value, E> {
-            Ok(Value::Object(Default::default()))
-        }
-        fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Value, E> {
-            Ok(Value::Object(Default::default()))
-        }
-        fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Value, E> {
-            Ok(Value::Object(Default::default()))
-        }
-        fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Value, E> {
-            Ok(Value::Object(Default::default()))
-        }
-        fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Value, E> {
-            Ok(Value::Object(Default::default()))
-        }
-        fn visit_string<E: serde::de::Error>(self, _: String) -> Result<Value, E> {
-            Ok(Value::Object(Default::default()))
-        }
-        fn visit_unit<E: serde::de::Error>(self) -> Result<Value, E> {
-            Ok(Value::Object(Default::default()))
-        }
-        fn visit_none<E: serde::de::Error>(self) -> Result<Value, E> {
-            Ok(Value::Object(Default::default()))
-        }
-    }
     let mut deserializer = serde_json::Deserializer::from_reader(reader);
     let catalog = CatalogSeed(meta, models).deserialize(&mut deserializer)?;
     deserializer.end()?;
@@ -181,6 +182,10 @@ fn retained_rows(
 }
 
 fn valid_catalog(reader: impl Read) -> bool {
+    validate_catalog(reader).is_ok()
+}
+
+fn validate_catalog(reader: impl Read) -> Result<(), serde_json::Error> {
     struct ObjectOnly;
     impl<'de> serde::de::Visitor<'de> for ObjectOnly {
         type Value = bool;
@@ -196,8 +201,8 @@ fn valid_catalog(reader: impl Read) -> bool {
         }
     }
     let mut deserializer = serde_json::Deserializer::from_reader(reader);
-    let valid = serde::de::Deserializer::deserialize_map(&mut deserializer, ObjectOnly);
-    matches!(valid, Ok(true)) && deserializer.end().is_ok()
+    serde::de::Deserializer::deserialize_map(&mut deserializer, ObjectOnly)?;
+    deserializer.end()
 }
 
 fn with_lock(home: &Path, blocking: bool, action: impl FnOnce()) {

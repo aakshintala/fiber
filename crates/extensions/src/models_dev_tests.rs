@@ -1,7 +1,7 @@
 use serde_json::json;
 
 // This pins parity with the whole-document serde_json parse the streaming path replaced.
-use super::{CatalogMeta, retained_rows, valid_catalog};
+use super::{CatalogMeta, ProviderVisitor, retained_rows, valid_catalog, validate_catalog};
 
 #[test]
 fn streaming_projection_keeps_duplicate_keys_last_wins_and_mistyped_siblings() {
@@ -47,8 +47,6 @@ fn streaming_visitors_report_expected_object_shapes_and_ignore_non_map_providers
         sources: vec!["provider".into()],
         ..Default::default()
     };
-    let error = retained_rows(&b"[]"[..], &models, &meta).unwrap_err();
-    assert!(error.to_string().contains("a JSON object"), "{error}");
     for value in [
         "[]",
         "true",
@@ -65,6 +63,36 @@ fn streaming_visitors_report_expected_object_shapes_and_ignore_non_map_providers
             "{value}"
         );
     }
+}
+
+#[test]
+fn catalog_visitor_error_names_expected_json_object() {
+    let models: Vec<config::ModelData> = serde_json::from_value(json!([
+        {"id": "x", "protocol": "openai-responses", "base_url": "https://example.test"}
+    ]))
+    .unwrap();
+    let meta = CatalogMeta {
+        sources: vec!["provider".into()],
+        ..Default::default()
+    };
+    let error = retained_rows(&b"[]"[..], &models, &meta).unwrap_err();
+    assert!(error.to_string().contains("a JSON object"), "{error}");
+}
+
+#[test]
+fn provider_visitor_error_names_expected_provider_object() {
+    let ids = std::collections::BTreeSet::new();
+    let error = <serde_json::Error as serde::de::Error>::invalid_type(
+        serde::de::Unexpected::Bool(true),
+        &ProviderVisitor(&ids),
+    );
+    assert!(error.to_string().contains("a provider object"), "{error}");
+}
+
+#[test]
+fn valid_catalog_error_names_expected_json_object() {
+    let error = validate_catalog(&b"[]"[..]).unwrap_err();
+    assert!(error.to_string().contains("a JSON object"), "{error}");
 }
 
 #[test]
