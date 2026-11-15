@@ -199,6 +199,23 @@ impl FakeStarter {
         (starter, exit)
     }
 
+    pub(crate) fn exited_before_rejected_subscribe(home: &Path, line: String) -> Self {
+        let (starter, exit) = Self::bind_then_exit_rejecting_subscribe(home, line);
+        lock(&exit.controlled.state).released = true;
+        starter
+    }
+
+    pub(crate) fn exited_before_first_later_failure(home: &Path, line: String) -> Self {
+        let (starter, exit) = Self::bind_then_exit(home, line);
+        lock(&exit.controlled.state).released = true;
+        *lock(&starter.handshake) = Some(Handshake {
+            accept: true,
+            code: String::new(),
+            message: String::new(),
+        });
+        starter
+    }
+
     fn with_controlled_exit(mut self, controlled: Arc<ControlledExit>) -> Self {
         self.controlled_exit = Some(controlled);
         self

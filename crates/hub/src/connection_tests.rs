@@ -492,6 +492,28 @@ fn start_cancels_pre_session_exit_after_summary_rejection() {
 }
 
 #[test]
+fn start_forwards_buffered_pre_session_exit_instead_of_summary_rejection() {
+    let temp = Temp::new();
+    let line = pre_session_exit_line();
+    let starter =
+        crate::fake::FakeStarter::exited_before_rejected_subscribe(&temp.dir, line.clone());
+    let hub = temp.hub(starter);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command(
+        "c_start",
+        "start",
+        json!({"workspace": temp.workspace(), "content": content()}),
+    ));
+    let (outcome, received) = client.read_deadline_with(
+        "the buffered verdict instead of the summary rejection",
+        crate::start::START_DEADLINE,
+    );
+    outcome.expect("the child verdict is terminal");
+    assert_eq!(received, line);
+}
+
+#[test]
 fn start_cancels_pre_session_exit_when_first_prompt_cannot_start() {
     let temp = Temp::new();
     let line = pre_session_exit_line();
@@ -520,6 +542,29 @@ fn start_cancels_pre_session_exit_when_first_prompt_cannot_start() {
         client.read_deadline_with("no post-rejection verdict", crate::start::START_DEADLINE);
     assert!(outcome.is_err());
     assert!(text.is_empty());
+}
+
+#[test]
+fn start_forwards_buffered_pre_session_exit_instead_of_first_prompt_rejection() {
+    let temp = Temp::new();
+    let line = pre_session_exit_line();
+    let starter =
+        crate::fake::FakeStarter::exited_before_first_later_failure(&temp.dir, line.clone());
+    let hub = temp.hub(starter);
+    hub.fail_first_later.store(true, Ordering::SeqCst);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command(
+        "c_start",
+        "start",
+        json!({"workspace": temp.workspace(), "content": content()}),
+    ));
+    let (outcome, received) = client.read_deadline_with(
+        "the buffered verdict instead of the first prompt rejection",
+        crate::start::START_DEADLINE,
+    );
+    outcome.expect("the child verdict is terminal");
+    assert_eq!(received, line);
 }
 
 #[test]

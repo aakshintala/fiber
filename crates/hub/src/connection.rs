@@ -1333,6 +1333,20 @@ impl PreSessionForwarder {
         }
     }
 
+    fn reject_or_forward(&self) -> bool {
+        let pending = {
+            let mut state = lock(&self.state);
+            state.cancelled = Some(false);
+            state.pending.take()
+        };
+        if let Some(line) = pending {
+            self.write_line(&line);
+            true
+        } else {
+            false
+        }
+    }
+
     fn write_line(&self, line: &str) {
         let bytes = line.as_bytes();
         let mut writer = lock(&self.writer);
@@ -1399,8 +1413,9 @@ fn on_start(
     ) {
         Outcome::Accepted { session_id, first } => (session_id, first),
         Outcome::Rejected(refused) => {
-            forwarder.cancel(false);
-            reject(writer, hub, Some(id), &refused.code, &refused.message);
+            if !forwarder.reject_or_forward() {
+                reject(writer, hub, Some(id), &refused.code, &refused.message);
+            }
             return;
         }
     };
@@ -1411,11 +1426,11 @@ fn on_start(
                 .awaiting
                 .push((session_id.0.clone(), Arc::clone(&first)));
             if crate::first::later(hub, relays, *held, Arc::clone(&first)).is_err() {
-                forwarder.cancel(false);
+                let forwarded = forwarder.reject_or_forward();
                 crate::first::forget(relays, &first);
                 let failed =
                     start::io_failed(hub, &session_id, "its first prompt could not be sent.");
-                if let Outcome::Rejected(refused) = failed {
+                if !forwarded && let Outcome::Rejected(refused) = failed {
                     reject(writer, hub, Some(id), &refused.code, &refused.message);
                 }
                 return;
