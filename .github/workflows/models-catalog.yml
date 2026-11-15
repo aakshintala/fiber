@@ -1,0 +1,116 @@
+name: Model catalog
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  update:
+    name: Update generated model lists
+    runs-on: ubuntu-24.04
+    # No history; use a generous bound.
+    timeout-minutes: 15
+    steps:
+      - name: Require the token
+        env:
+          GH_TOKEN: ${{ secrets.TOOLCHAIN_BUMP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::The TOOLCHAIN_BUMP_TOKEN secret is not set, so the model-list pull request would not run CI"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          token: ${{ secrets.TOOLCHAIN_BUMP_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Use the latest main commit
+        run: |
+          git fetch origin main
+          git switch --detach origin/main
+
+      - name: Install the toolchain
+        run: rustup toolchain install
+
+      - name: Generate model lists
+        run: cargo xtask models-dev
+
+      - name: Check for changes
+        id: changes
+        run: |
+          set -euo pipefail
+          git add -A
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Generated model lists match main"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Generated model lists differ from main"
+          fi
+
+      - name: Reset and push the model-list branch
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.TOOLCHAIN_BUMP_TOKEN }}
+        run: |
+          set -euo pipefail
+          branch=models-catalog
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update generated model lists"
+          expected=$(git ls-remote origin "refs/heads/$branch" | awk 'NR == 1 { print $1 }')
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
+          git -c http.extraheader="AUTHORIZATION: basic $auth" push \
+            --force-with-lease="refs/heads/$branch:$expected" \
+            origin "HEAD:refs/heads/$branch"
+
+      - name: Open or update the pull request
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.TOOLCHAIN_BUMP_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          branch=models-catalog
+          title="Update generated model lists"
+          body=$(printf 'Generated model lists from models.dev.\n\nRun: %s' "$RUN_URL")
+          pr=$(gh pr list --state open --head "$GITHUB_REPOSITORY_OWNER:$branch" --json number --jq '.[0].number // empty')
+          if [ -n "$pr" ]; then
+            gh pr edit "$pr" --title "$title" --body "$body"
+          else
+            gh pr create --head "$branch" --title "$title" --body "$body"
+          fi
+
+      - name: Close a stale pull request
+        if: steps.changes.outputs.changed == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.TOOLCHAIN_BUMP_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          branch=models-catalog
+          pr=$(gh pr list --state open --head "$GITHUB_REPOSITORY_OWNER:$branch" --json number --jq '.[0].number // empty')
+          if [ -z "$pr" ]; then
+            echo "No stale model-list pull request"
+            exit 0
+          fi
+          gh pr close "$pr" --comment "Generated model lists match main; closing this stale pull request. Run: $RUN_URL"
+          expected=$(git ls-remote origin "refs/heads/$branch" | awk 'NR == 1 { print $1 }')
+          if [ -n "$expected" ]; then
+            auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
+            git -c http.extraheader="AUTHORIZATION: basic $auth" push \
+              --force-with-lease="refs/heads/$branch:$expected" \
+              origin ":refs/heads/$branch"
+          fi
