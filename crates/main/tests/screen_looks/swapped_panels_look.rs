@@ -445,6 +445,18 @@ fn focused_label(grid: &Grid) -> Option<String> {
     })
 }
 
+fn focus_row_with_down(run: &mut Run, mut grid: Grid, target: &str, step_cap: usize) -> Grid {
+    for _ in 0..step_cap {
+        let on = focused_label(&grid);
+        if on.as_deref() == Some(target) {
+            return grid;
+        }
+        run.write(b"\x1b[B");
+        grid = run.wait_screen("the focus moved", |next| focused_label(next) != on);
+    }
+    grid
+}
+
 #[test]
 fn the_settings_view_matches_the_doc() {
     let setup = tools_setup(json!({}));
@@ -518,12 +530,12 @@ fn the_settings_view_matches_the_doc() {
         find_row(grid, "Reviewer model").is_some()
             && find_row(grid, "Permissions").is_some_and(|row| is_bold(grid, row, "Permissions"))
     });
-    run.write(b"\x1b[B");
-    run.write(b"\x1b[B");
-    run.write(b"\x1b[B");
-    let mut grid = run.wait_screen("the focused Reviewer model row", |grid| {
-        focused_label(grid).as_deref() == Some("Reviewer model")
+    let mut grid = run.wait_screen("the focused Consecutive blocks row", |grid| {
+        focused_label(grid).as_deref() == Some("Consecutive blocks")
+            && find_row(grid, "Permissions").is_some_and(|row| is_bold(grid, row, "Permissions"))
     });
+    grid = focus_row_with_down(&mut run, grid, "Reviewer model", 10);
+    assert_eq!(focused_label(&grid).as_deref(), Some("Reviewer model"));
     let reviewer_model = find_row(&grid, "Reviewer model").unwrap();
     assert!(is_focused_row(&grid, reviewer_model, "Reviewer model"));
     // Move to Sessions; walk the focus to `compaction.tokens` below.
