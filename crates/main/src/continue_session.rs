@@ -49,7 +49,7 @@ pub(crate) fn session_continues(
     // or its unmoved legacy slug. Select only a candidate derived from the
     // requested workspace, then validate the recorded worktree below.
     let expected_project = worktree::project(workspace);
-    let Some(old_dir) = log::candidate_sessions_dirs(&home, &expected_project)
+    let Some(old_dir) = log::candidate_sessions_dirs(home, &expected_project)
         .into_iter()
         .map(|sessions| log::SessionDir::new(&sessions, &old))
         .find(|dir| recorded_project_matches(dir.path(), &expected_project, workspace))
