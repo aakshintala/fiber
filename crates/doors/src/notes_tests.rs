@@ -171,15 +171,15 @@ fn counts_span_projects_with_here_only_for_this_one() {
 }
 
 #[test]
-fn a_shared_slug_still_files_by_resolved_identity() {
+fn colliding_legacy_slugs_file_by_distinct_resolved_identity_keys() {
     let root = fakes::TempDir::new("doors-notes-slug");
     let home = root.path().join("home");
-    // `<tmp>/a-b` and `<tmp>/a/b` share one project slug.
+    // `<tmp>/a-b` and `<tmp>/a/b` share a legacy slug but have distinct keys.
     let outside = repo(root.path(), "a-b");
     let inner = repo(&root.path().join("a"), "b");
     let left = log::project_key(&worktree::project(&outside));
     let right = log::project_key(&worktree::project(&inner));
-    assert_eq!(left, right);
+    assert_ne!(left, right);
     seed(
         &home,
         &left,

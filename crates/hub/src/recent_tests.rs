@@ -38,7 +38,13 @@ impl Temp {
     /// A row for session `n` in `project`, with its directory made.
     fn row(&self, n: u64, project: &str, how: Left, state: Option<&str>) -> RecentRow {
         let row = row(n, project, how, state);
-        fs::create_dir_all(session_dir(&self.dir, project, &row.session_id)).unwrap();
+        let dir = session_dir(&self.dir, project, &row.session_id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("events.jsonl"),
+            b"{\"kind\":\"session_started\",\"payload\":{\"workspace\":\"/w\"}}\n",
+        )
+        .unwrap();
         row
     }
 
@@ -195,6 +201,39 @@ fn project_filters_by_exact_key() {
 }
 
 // `docs/invocation.md`, "Archiving" promises these results.
+#[test]
+fn a_hashed_recent_key_falls_back_to_its_legacy_directory_without_a_log() {
+    let temp = Temp::new();
+    let identity = Path::new("/w");
+    let key = log::project_key(identity);
+    let legacy = support::project_key::legacy_project_slug(identity);
+    let row = row(16, &key, Left::Exited, Some("idle"));
+    fs::create_dir_all(session_dir(&temp.dir, &legacy, &row.session_id)).unwrap();
+    temp.append(&row);
+
+    let listed = listed(&temp.dir, Some(&key));
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].session_id, row.session_id);
+    assert_eq!(listed[0].project, key);
+}
+
+#[test]
+fn stale_recent_key_lists_the_marker_validated_migrated_directory() {
+    let temp = Temp::new();
+    let row = temp.row(17, "-w", Left::Exited, Some("idle"));
+    let legacy_project = temp.dir.join("projects/-w");
+    let identity = Path::new("/w");
+    let hashed = log::project_key(identity);
+    fs::write(legacy_project.join("legacy-key"), b"-w").unwrap();
+    fs::rename(&legacy_project, temp.dir.join("projects").join(&hashed)).unwrap();
+    temp.append(&row);
+
+    let listed = listed(&temp.dir, Some(&hashed));
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].session_id, row.session_id);
+    assert_eq!(listed[0].project, hashed);
+}
+
 #[test]
 fn retention_candidates_include_only_unarchived_exited_rows_in_newest_order() {
     let temp = Temp::new();

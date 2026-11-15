@@ -713,14 +713,18 @@ renamed in the new release fails it, because `unknown_lints` is denied
 
 ## The model catalog
 
-A workflow runs `cargo xtask models-dev` every night at 03:00 UTC on `main`
-and opens a pull request when a committed model list or
-`providers/models-corrections.toml` changes (`docs/model-routing.md`,
-"What a provider extension declares"). It fetches models.dev's public catalog and needs no secret. Its
-pull request passes CI like any other. When an open pull request from an
-earlier run exists, the workflow updates that branch instead of opening a
-second one. This is the only CI job that fetches over the network outside a
-build's dependencies.
+`.github/workflows/models-catalog.yml` runs `cargo xtask models-dev` every
+night at 03:00 UTC on `main` and opens a pull request when a committed model
+list or `providers/models-corrections.toml` changes
+(`docs/model-routing.md`, "What a provider extension declares"). It fetches
+models.dev's public catalog with no credential, and opens its pull request
+with the toolchain bump token so that CI runs ("Toolchain"). When an open
+pull request from an earlier run exists, the workflow updates its branch
+instead of opening a second one. On each changed run, it resets the
+bot-managed `models-catalog` branch from `main` and overwrites it, so nobody
+should push to it by hand. When generated files match `main`, the workflow
+closes any stale pull request with
+a comment naming the run and deletes the branch.
 
 ## Releases
 
@@ -816,7 +820,7 @@ regenerates it and fails when the committed copy differs.
 
 ## Manually dispatched workflows
 
-Four workflows never run on a push or a pull request. Someone starts them with
+Five workflows never run on a push or a pull request. Someone starts them with
 `gh workflow run <file> --ref <branch>`, and GitHub allows that only once the
 workflow file is on `main`.
 
@@ -837,6 +841,9 @@ workflow file is on `main`.
   x86_64 and macOS arm64 from a warm dependency cache, times an incremental
   rebuild after touching one file each in `crates/tui` and `crates/support`,
   and uploads both timing reports as artifacts (#3789, step 1).
+- `models-catalog.yml` regenerates model lists from models.dev on a manual
+  dispatch, and opens or updates a pull request only when generated files
+  differ from `main`.
 
 ## Job time limits
 

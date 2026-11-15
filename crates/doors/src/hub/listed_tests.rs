@@ -376,6 +376,7 @@ fn load_target_uses_the_workspaces_layered_config_and_propagates_load_errors() {
     write(&project_file, json!({"hub":{"default":"project"}}));
     assert_eq!(listed_name(resolve(None).unwrap()), "project");
     assert_eq!(listed_name(resolve(Some("global")).unwrap()), "global");
+    assert!(!home.join("layout").exists());
     write(&project_file, json!({"hub":{"default":12}}));
     assert_eq!(resolve(None).unwrap_err().code(), ErrorCode::ConfigInvalid);
 }

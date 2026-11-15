@@ -128,7 +128,7 @@ fn slow_idle(setup: &support::Setup) {
 /// The sessions directory for a session in `workspace`.
 fn sessions_in(home: &Path, workspace: &Path) -> PathBuf {
     let workspace = fs::canonicalize(workspace).unwrap();
-    let key = workspace.to_string_lossy().replace('/', "-");
+    let key = log::project_key(&workspace);
     home.join("projects").join(key).join("sessions")
 }
 

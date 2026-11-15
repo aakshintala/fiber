@@ -345,10 +345,10 @@ pub fn select_session(
 ) -> Result<Option<SessionId>, Failure> {
     let Some(id) = explicit else {
         let project = worktree::project(workspace);
-        let sessions = log::sessions_dir(home, &project);
-        return Ok(log::most_recent(&sessions, &|started| {
-            worktree::project(Path::new(started)) == project
-        }));
+        let in_project = |started: &str| worktree::project(Path::new(started)) == project;
+        let latest =
+            log::most_recent_in(&log::candidate_sessions_dirs(home, &project), &in_project);
+        return Ok(latest);
     };
     let usable = log::find_logged_session(home, &id)
         .is_some_and(|(_, dir)| log::started_first(&dir).is_ok_and(|started| !started.delegate));

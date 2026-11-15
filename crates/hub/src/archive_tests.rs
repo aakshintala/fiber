@@ -6,7 +6,7 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
@@ -56,7 +56,10 @@ impl Temp {
     }
 
     fn dir_of(&self, n: u64) -> PathBuf {
-        log::session_dir(&self.dir, "-w", &SessionId(testkit::id(n)))
+        let id = SessionId(testkit::id(n));
+        log::find_session(&self.dir, &id)
+            .map(|(_, dir)| dir)
+            .unwrap_or_else(|| log::session_dir(&self.dir, &project_key(), &id))
     }
 
     /// Writes session `n`'s log with `kinds` after `session_started`,
@@ -64,7 +67,15 @@ impl Temp {
     /// `fiber_exited` last line needs no further payload: open only
     /// parses folded kinds, and neither started nor exited is one.
     fn logged(&self, n: u64, kinds: &[&str]) -> PathBuf {
-        let dir = self.dir_of(n);
+        self.logged_in_project(n, kinds, &project_key())
+    }
+
+    fn logged_for_workspace(&self, n: u64, kinds: &[&str], workspace: &str) -> PathBuf {
+        self.logged_in_project(n, kinds, &log::project_key(Path::new(workspace)))
+    }
+
+    fn logged_in_project(&self, n: u64, kinds: &[&str], project: &str) -> PathBuf {
+        let dir = log::session_dir(&self.dir, project, &SessionId(testkit::id(n)));
         fs::create_dir_all(&dir).unwrap();
         let mut text = String::new();
         let mut seq = 0u64;
@@ -108,7 +119,7 @@ impl Temp {
         let row = crate::recent::RecentRow {
             session_id: SessionId(testkit::id(n)),
             ts: n,
-            project: "-w".to_owned(),
+            project: log::project_key(Path::new(workspace)),
             workspace: workspace.to_owned(),
             name: format!("session {n}"),
             how: crate::recent::Left::Exited,
@@ -178,6 +189,10 @@ impl Drop for Temp {
 }
 
 /// A running `session_status` line for session `n`, as the session sends it.
+fn project_key() -> String {
+    log::project_key(Path::new("/w"))
+}
+
 fn running_line(n: u64) -> String {
     status_line(&testkit::id(n), &status("n", "/w", "idle", None))
 }
@@ -323,7 +338,7 @@ fn a_crashed_session_without_a_row_archives_from_its_opening() {
     assert_eq!(rows[0]["session_id"], testkit::id(2));
     assert_eq!(rows[0]["how"], "crashed");
     assert_eq!(rows[0]["archived"], true);
-    assert_eq!(rows[0]["project"], "-w");
+    assert_eq!(rows[0]["project"], project_key());
     assert_eq!(rows[0]["workspace"], "/w");
     assert_eq!(rows[0]["name"], "");
     assert_eq!(rows[0]["status"], Value::Null);
@@ -516,7 +531,11 @@ fn a_retry_after_a_failed_index_repairs_the_row_without_a_new_event() {
     // Resolution skips it for continue but still finds it explicitly.
     assert_eq!(
         log::resolve(
-            &temp.dir.join("projects").join("-w").join("sessions"),
+            &temp
+                .dir
+                .join("projects")
+                .join(project_key())
+                .join("sessions"),
             &testkit::id(8),
             &|_| true
         )
@@ -526,7 +545,11 @@ fn a_retry_after_a_failed_index_repairs_the_row_without_a_new_event() {
     );
     assert!(
         log::most_recent(
-            &temp.dir.join("projects").join("-w").join("sessions"),
+            &temp
+                .dir
+                .join("projects")
+                .join(project_key())
+                .join("sessions"),
             &|_| true
         )
         .is_none_or(|id| id.0 != testkit::id(8))
@@ -819,7 +842,7 @@ fn recent_listing_archives_missing_workspaces_and_archived_mode_counts_it() {
         .unwrap()
         .unwrap();
     assert_eq!(unarchived, serde_json::json!({"sessions": [], "total": 0}));
-    sub.forgot("session_archived", &testkit::id(12), "-w");
+    sub.forgot("session_archived", &testkit::id(12), &project_key());
     assert_eq!(archived_lines(&temp.log_text(12)).len(), 1);
 
     let archived = feed::recent_for_hub(&hub, &args(serde_json::json!({"archived": true})))
@@ -844,18 +867,20 @@ fn archived_cursor_uses_the_post_archive_position_in_the_same_answer() {
     let hub = temp.hub();
     let workspace = temp.dir.join("workspace");
     fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.to_string_lossy().into_owned();
+    let missing_workspace = temp
+        .dir
+        .join("missing-workspace")
+        .to_string_lossy()
+        .into_owned();
     temp.logged(1, &["fiber_exited"]);
     temp.logged(2, &["fiber_exited", "archived"]);
     let rows = [
         crate::recent::RecentRow {
             session_id: SessionId(testkit::id(1)),
             ts: 1,
-            project: "-w".to_owned(),
-            workspace: temp
-                .dir
-                .join("missing-workspace")
-                .to_string_lossy()
-                .into_owned(),
+            project: project_key(),
+            workspace: missing_workspace,
             name: "newly archived".to_owned(),
             how: crate::recent::Left::Exited,
             status: None,
@@ -864,8 +889,8 @@ fn archived_cursor_uses_the_post_archive_position_in_the_same_answer() {
         crate::recent::RecentRow {
             session_id: SessionId(testkit::id(2)),
             ts: 2,
-            project: "-w".to_owned(),
-            workspace: workspace.to_string_lossy().into_owned(),
+            project: project_key(),
+            workspace,
             name: "already archived".to_owned(),
             how: crate::recent::Left::Exited,
             status: None,
@@ -928,8 +953,8 @@ fn a_cascaded_missing_delegate_is_not_appended_twice_in_one_listing() {
         .join("missing-workspace")
         .to_string_lossy()
         .into_owned();
-    temp.logged(20, &["fiber_exited"]);
-    temp.logged(21, &["fiber_exited"]);
+    temp.logged_for_workspace(20, &["fiber_exited"], &missing);
+    temp.logged_for_workspace(21, &["fiber_exited"], &missing);
     temp.indexed(21, &missing, Some(&testkit::id(20)));
     temp.indexed(20, &missing, None);
 
@@ -954,8 +979,6 @@ fn a_cascaded_missing_delegate_is_not_appended_twice_in_one_listing() {
 fn recent_cursor_uses_pre_archive_position_in_the_same_answer() {
     let temp = Temp::new();
     let hub = temp.hub();
-    temp.logged(1, &["fiber_exited"]);
-    temp.logged(2, &["fiber_exited"]);
     let workspace = temp.dir.join("workspace-one");
     fs::create_dir_all(&workspace).unwrap();
     for (n, path) in [
@@ -968,12 +991,13 @@ fn recent_cursor_uses_pre_archive_position_in_the_same_answer() {
                 .into_owned(),
         ),
     ] {
+        temp.logged(n, &["fiber_exited"]);
         crate::recent::append(
             &temp.dir,
             &crate::recent::RecentRow {
                 session_id: SessionId(testkit::id(n)),
                 ts: n,
-                project: "-w".to_owned(),
+                project: project_key(),
                 workspace: path,
                 name: format!("session {n}"),
                 how: crate::recent::Left::Exited,
@@ -1001,7 +1025,11 @@ fn keep_ten_returns_ten_rows_and_total_after_twelve_exited_sessions() {
     let workspace = workspace.to_string_lossy().into_owned();
     let hub = temp.hub_with_keep(10);
     for n in 1..=12 {
-        temp.logged(n, &["fiber_exited"]);
+        temp.logged_in_project(
+            n,
+            &["fiber_exited"],
+            &log::project_key(Path::new(&workspace)),
+        );
         temp.indexed(n, &workspace, None);
     }
 
@@ -1020,7 +1048,11 @@ fn keep_two_archives_the_three_oldest_top_level_sessions() {
     let workspace = workspace.to_string_lossy().into_owned();
     let hub = temp.hub_with_keep(2);
     for n in 1..=5 {
-        temp.logged(n, &["fiber_exited"]);
+        temp.logged_in_project(
+            n,
+            &["fiber_exited"],
+            &log::project_key(Path::new(&workspace)),
+        );
         temp.indexed(n, &workspace, None);
     }
 
@@ -1054,7 +1086,11 @@ fn keep_two_archives_oldest_parent_and_its_exited_delegates_only() {
     let workspace = workspace.to_string_lossy().into_owned();
     let hub = temp.hub_with_keep(2);
     for n in 1..=5 {
-        temp.logged(n, &["fiber_exited"]);
+        temp.logged_in_project(
+            n,
+            &["fiber_exited"],
+            &log::project_key(Path::new(&workspace)),
+        );
         let parent = (n == 4 || n == 5).then(|| testkit::id(1));
         temp.indexed(n, &workspace, parent.as_deref());
     }
@@ -1082,7 +1118,10 @@ fn keep_two_archives_oldest_parent_and_its_exited_delegates_only() {
         sub.read.read_line(&mut text).unwrap();
         let line: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(line["kind"], "session_archived");
-        assert_eq!(line["payload"]["project"], "-w");
+        assert_eq!(
+            line["payload"]["project"],
+            log::project_key(Path::new(&workspace))
+        );
         archived_ids.push(line["payload"]["session_id"].as_str().unwrap().to_owned());
     }
     archived_ids.sort();
@@ -1110,8 +1149,8 @@ fn a_running_delegate_does_not_block_archiving_its_parent() {
     fs::create_dir_all(&workspace).unwrap();
     let workspace = workspace.to_string_lossy().into_owned();
     let hub = temp.hub();
-    temp.logged(1, &["fiber_exited"]);
-    temp.logged(2, &["fiber_exited"]);
+    temp.logged_for_workspace(1, &["fiber_exited"], &workspace);
+    temp.logged_for_workspace(2, &["fiber_exited"], &workspace);
     temp.indexed(1, &workspace, None);
     temp.indexed(2, &workspace, Some(&testkit::id(1)));
     temp.running(2);
@@ -1134,8 +1173,8 @@ fn a_parent_archive_does_not_reappend_an_already_archived_delegate() {
     fs::create_dir_all(&workspace).unwrap();
     let workspace = workspace.to_string_lossy().into_owned();
     let hub = temp.hub();
-    temp.logged(1, &["fiber_exited"]);
-    temp.logged(2, &["fiber_exited"]);
+    temp.logged_for_workspace(1, &["fiber_exited"], &workspace);
+    temp.logged_for_workspace(2, &["fiber_exited"], &workspace);
     temp.indexed(1, &workspace, None);
     temp.indexed(2, &workspace, Some(&testkit::id(1)));
     assert_eq!(
@@ -1172,8 +1211,8 @@ fn a_missing_workspace_delegate_is_archived_independently_of_retention() {
     fs::create_dir_all(&workspace).unwrap();
     let workspace = workspace.to_string_lossy().into_owned();
     let hub = temp.hub_with_keep(0);
-    temp.logged(1, &["fiber_exited"]);
-    temp.logged(2, &["fiber_exited"]);
+    temp.logged_for_workspace(1, &["fiber_exited"], &workspace);
+    temp.logged_for_workspace(2, &["fiber_exited"], "/missing-delegate-workspace");
     temp.indexed(1, &workspace, None);
     temp.indexed(2, "/missing-delegate-workspace", Some(&testkit::id(1)));
 
@@ -1193,13 +1232,14 @@ fn cursor_after_multiple_pre_archive_rows_keeps_its_exact_page_position() {
     fs::create_dir_all(&workspace).unwrap();
     let workspace = workspace.to_string_lossy().into_owned();
     for n in 1..=4 {
-        temp.logged(n, &["fiber_exited"]);
         let path = if n == 3 {
             temp.dir.join("removed-cursor-workspace")
         } else {
             PathBuf::from(&workspace)
         };
-        temp.indexed(n, &path.to_string_lossy(), None);
+        let path = path.to_string_lossy().into_owned();
+        temp.logged_for_workspace(n, &["fiber_exited"], &path);
+        temp.indexed(n, &path, None);
     }
 
     let page = feed::recent_for_hub(&hub, &args(serde_json::json!({"before": testkit::id(2)})))
@@ -1234,7 +1274,7 @@ fn two_clients_see_fresh_and_retry_archive_lines() {
         Ok(None)
     );
     for sub in [&mut first, &mut second] {
-        sub.forgot("session_archived", &testkit::id(9), "-w");
+        sub.forgot("session_archived", &testkit::id(9), &project_key());
     }
     // (`docs/invocation.md`, "What the hub speaks"): a retry that writes
     // nothing still tells every feed subscriber, so the second call site
@@ -1244,6 +1284,6 @@ fn two_clients_see_fresh_and_retry_archive_lines() {
         Ok(None)
     );
     for sub in [&mut first, &mut second] {
-        sub.forgot("session_archived", &testkit::id(9), "-w");
+        sub.forgot("session_archived", &testkit::id(9), &project_key());
     }
 }

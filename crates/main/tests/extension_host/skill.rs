@@ -446,7 +446,7 @@ fn a_skill_linked_into_credentials_is_denied() {
     // The marker is in no file under the session's directory.
     let running = lines[0]["session_id"].as_str().unwrap();
     let workspace = fs::canonicalize(setup.root.path()).unwrap();
-    let key = workspace.to_string_lossy().replace('/', "-");
+    let key = log::project_key(&workspace);
     let session = setup
         .home()
         .join("projects")
@@ -572,7 +572,7 @@ fn a_skill_that_became_a_credentials_link_is_not_sent_again_at_a_compaction() {
     }
     assert!(!stdout.contains(MARKER), "{stdout}");
     let workspace = fs::canonicalize(setup.root.path()).unwrap();
-    let key = workspace.to_string_lossy().replace('/', "-");
+    let key = log::project_key(&workspace);
     let session = setup
         .home()
         .join("projects")

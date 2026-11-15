@@ -316,6 +316,10 @@ pub(crate) fn run(args: cli::SessionArgs, process: &crate::startup::Process) -> 
         );
     }
     if let Some(old) = args.continues {
+        let (home, _) = match crate::startup::startup() {
+            Ok(directories) => directories,
+            Err(e) => return ask_failed(e),
+        };
         // The original spelling rides along for the identity compare:
         // `current_dir` above already normalized slashes and symlinks
         // away, while the hub enforced the exact string. A `continues`
@@ -325,6 +329,7 @@ pub(crate) fn run(args: cli::SessionArgs, process: &crate::startup::Process) -> 
             SessionId(args.id),
             SessionId(old),
             crate::per_run(args.model, args.overrides),
+            &home,
             &args.workspace,
             clock,
             &signals,
@@ -1432,6 +1437,9 @@ pub(crate) fn assemble_session(
                 &workspace,
                 crate::session_extensions::fetch(&clock),
             ));
+            let identity = worktree::project(&workspace);
+            config::ensure_project_layout(&home, &identity)
+                .map_err(|error| failed(error.code(), error))?;
             let log = match Log::create(&sessions, id.clone(), Arc::clone(&clock)) {
                 Ok(log) => Arc::new(log),
                 Err(e) => {
