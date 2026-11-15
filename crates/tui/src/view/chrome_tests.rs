@@ -297,18 +297,18 @@ fn invalid_extension_layout_falls_back_whole_and_notices_once() {
 
     let placed = crate::view::placement(&app).expect("fallback placement");
     assert_eq!(placed.regions, builtin);
-    assert_eq!(renderer.layout_inputs.borrow().len(), 1);
+    assert_eq!(renderer.layout_inputs.borrow().len(), 1); // `docs/tui.md:3700-3703`, `How a TUI extension runs`: one call per cache miss or frame advance, none on a hit.
 
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
     assert!(app.drawn(&targets));
-    assert_eq!(app.notices().len(), 1);
+    assert_eq!(app.notices().len(), 1); // `docs/tui.md:3578-3580`: invalid output raises one notice and caches the failure.
 
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
     assert!(!app.drawn(&targets));
-    assert_eq!(app.notices().len(), 1);
-    assert_eq!(renderer.layout_inputs.borrow().len(), 1);
+    assert_eq!(app.notices().len(), 1); // `docs/tui.md:3578-3580`: invalid output raises one notice and caches the failure.
+    assert_eq!(renderer.layout_inputs.borrow().len(), 1); // `docs/tui.md:3700-3703`, `How a TUI extension runs`: one call per cache miss or frame advance, none on a hit.
 }
 
 #[test]
@@ -325,7 +325,7 @@ fn builtin_layout_cache_refreshes_when_input_rows_change_placement() {
     let before = crate::view::placement(&app)
         .expect("attached screen has a placement")
         .regions;
-    assert_eq!(renderer.layout_inputs.borrow().len(), 1);
+    assert_eq!(renderer.layout_inputs.borrow().len(), 1); // `docs/tui.md:3700-3703`, `How a TUI extension runs`: one call per cache miss or frame advance, none on a hit.
 
     for _ in 0..3 {
         app.on_edit(crate::keys::Edit::ShiftEnter);
@@ -336,7 +336,7 @@ fn builtin_layout_cache_refreshes_when_input_rows_change_placement() {
 
     assert_ne!(after.input_box, before.input_box);
     assert_ne!(after.conversation, before.conversation);
-    assert_eq!(renderer.layout_inputs.borrow().len(), 4);
+    assert_eq!(renderer.layout_inputs.borrow().len(), 4); // `docs/tui.md:3700-3703`, `How a TUI extension runs`: one call per cache miss or frame advance, none on a hit.
 }
 
 #[test]
