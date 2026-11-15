@@ -413,3 +413,12 @@ crates/extensions/src/manage.rs	fiber-4888	plan	2026-11-15T15:43:29Z	Amoghs-MacB
 crates/extensions/src/installed.rs	fiber-4888	plan	2026-11-15T15:43:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/bug-red	fiber-4420	plan	2026-11-15T15:41:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/tools/src/shell/drive.rs	fiber-4420	plan	2026-11-15T15:41:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/cli/src/models.rs	fiber-4888	plan	2026-11-15T15:53:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/src/hooks.rs	fiber-4888	plan	2026-11-15T15:53:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/fakes/src/clock.rs	fiber-4888	plan	2026-11-15T15:53:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/support/src/clock.rs	fiber-4888	plan	2026-11-15T15:53:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing/running.md	fiber-4888	plan	2026-11-15T15:53:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing.md	fiber-4888	plan	2026-11-15T15:53:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/workflow.md	fiber-4888	plan	2026-11-15T15:53:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/ci.md	fiber-4888	plan	2026-11-15T15:53:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+scripts/check	fiber-4888	plan	2026-11-15T15:53:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
