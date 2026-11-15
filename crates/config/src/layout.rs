@@ -256,7 +256,7 @@ mod tests {
 
     use super::{
         ProjectKey, ensure_project_layout, ensure_project_layout_with, project_protected_paths_dir,
-        project_worktrees_dir, projects_dir,
+        project_worktrees_dir, projects_dir, rename_project_dir,
     };
 
     #[test]
@@ -283,6 +283,103 @@ mod tests {
             project_protected_paths_dir(&PathBuf::from("/h"), &project),
             PathBuf::from("/h/projects/proj/protected-paths")
         );
+    }
+
+    #[test]
+    fn layout_layout_not_found_is_created_and_other_read_errors_are_reported() {
+        let home = fakes::TempDir::new("config-layout-read-errors");
+        ensure_project_layout_with(
+            home.path(),
+            PathBuf::from("/none").as_path(),
+            |_, _| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(fs::read(home.path().join("layout")).unwrap(), b"2");
+
+        let home = fakes::TempDir::new("config-layout-read-error");
+        fs::create_dir(home.path().join("layout")).unwrap();
+        assert!(
+            ensure_project_layout_with(home.path(), PathBuf::from("/none").as_path(), |_, _| {
+                unreachable!()
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn projects_not_found_returns_ok_but_other_errors_are_reported() {
+        let home = fakes::TempDir::new("config-layout-projects-absent");
+        ensure_project_layout(home.path(), PathBuf::from("/none").as_path()).unwrap();
+        assert!(!projects_dir(home.path()).exists());
+
+        let home = fakes::TempDir::new("config-layout-projects-not-dir");
+        fs::write(projects_dir(home.path()), b"file").unwrap();
+        assert!(ensure_project_layout(home.path(), PathBuf::from("/none").as_path()).is_err());
+    }
+
+    #[test]
+    fn legacy_entry_requires_directory_and_not_found_is_ignored() {
+        let identity = PathBuf::from("/a-b");
+        let home = fakes::TempDir::new("config-layout-legacy-absent");
+        fs::create_dir_all(projects_dir(home.path())).unwrap();
+        ensure_project_layout(home.path(), &identity).unwrap();
+        let legacy = projects_dir(home.path()).join("-a-b");
+        fs::write(&legacy, b"file").unwrap();
+        ensure_project_layout(home.path(), &identity).unwrap();
+        assert!(legacy.is_file());
+    }
+
+    #[test]
+    fn rename_project_dir_unsupported_and_race_guards_have_both_outcomes() {
+        let home = fakes::TempDir::new("config-layout-rename-guards");
+        let source = home.path().join("source");
+        let target = home.path().join("target");
+        fs::create_dir(&source).unwrap();
+        rename_project_dir(&source, &target, |_, _| {
+            Err(std::io::ErrorKind::Unsupported.into())
+        })
+        .unwrap();
+        assert!(target.is_dir());
+        assert!(!source.exists());
+
+        let source = home.path().join("source-file");
+        let target = home.path().join("target-file");
+        fs::write(&source, b"source").unwrap();
+        fs::write(&target, b"target").unwrap();
+        let error = rename_project_dir(&source, &target, |_, _| {
+            Err(std::io::ErrorKind::Unsupported.into())
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+
+        let source = home.path().join("fallback-race-source");
+        let target = home.path().join("fallback-race-target");
+        fs::create_dir(&source).unwrap();
+        let error = rename_project_dir(&source, &target, |source, _| {
+            fs::remove_dir(source)?;
+            Err(std::io::ErrorKind::Unsupported.into())
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+
+        let source = home.path().join("race-source");
+        let target = home.path().join("race-target");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&target).unwrap();
+        rename_project_dir(&source, &target, |_, _| {
+            Err(std::io::ErrorKind::AlreadyExists.into())
+        })
+        .unwrap();
+        assert!(source.is_dir());
+
+        let source = home.path().join("plain-source");
+        let target = home.path().join("plain-target");
+        fs::create_dir(&source).unwrap();
+        let error = rename_project_dir(&source, &target, |_, _| {
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
     #[test]
