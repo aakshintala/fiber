@@ -129,6 +129,11 @@ struct Candidate {
     stream: UnixStream,
 }
 
+/// The predecessor closes the lifeline before the kernel releases its flock.
+/// The five-second limit is not a measured value.
+pub(crate) const TAKEOVER_LOCK_WAIT: Duration = Duration::from_secs(5);
+pub(super) const ACCEPT_BACKOFF_MAX: Duration = Duration::from_secs(1);
+
 /// Test-only pause and notification points, each with the race it forces.
 #[cfg(test)]
 #[derive(Default)]
@@ -136,6 +141,8 @@ struct Hooks {
     /// Runs just before a recovery opens the log, so a test decides which
     /// of two recoveries reaches the lock first (the lock-loss race).
     before_open: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Injects an accept error, when set, to test the acceptor's backoff.
+    accept_error: Option<Box<dyn Fn() -> Option<io::ErrorKind> + Send + Sync>>,
     /// Runs once a recovery holds the log and accepts candidates.
     held: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs after a takeover opens the log and before it appends its start
@@ -258,13 +265,14 @@ impl Runtime {
                     if let Some(pause) = &self.hooks.before_open {
                         pause();
                     }
-                    match Log::open_as(
+                    match Log::open_as_takeover(
                         sessions,
                         self.id.clone(),
                         Arc::clone(&self.clock),
                         &format!("keeper {}", std::process::id()),
+                        self.clock.now() + TAKEOVER_LOCK_WAIT,
                     ) {
-                        Ok(held) => {
+                        Ok(Some(held)) => {
                             #[cfg(test)]
                             if let Some(hook) = &self.hooks.before_start_append {
                                 hook(&held);
@@ -310,7 +318,7 @@ impl Runtime {
                                 held();
                             }
                         }
-                        Err(log::Error::Held { .. }) => {
+                        Ok(None) | Err(log::Error::Held { .. }) => {
                             self.discard();
                             let steps = lock(&self.supervisor).lock_lost();
                             return self.apply(log, steps);
@@ -756,11 +764,38 @@ impl Runtime {
         });
         let runtime = Arc::clone(self);
         thread::spawn(move || {
-            for accepted in listener.incoming() {
+            let backoff = Arc::new(support::clock::Parker::new());
+            let waker: Arc<dyn Wake> = backoff.clone();
+            runtime.clock.subscribe(Arc::downgrade(&waker));
+            let mut delay = Duration::from_millis(10);
+            let mut incoming = listener.incoming();
+            loop {
                 if stop.load(Ordering::Acquire) {
                     break;
                 }
-                let Ok(stream) = accepted else { break };
+                #[cfg(test)]
+                let injected = runtime.hooks.accept_error.as_ref().and_then(|hook| hook());
+                #[cfg(not(test))]
+                let injected: Option<io::ErrorKind> = None;
+                let accepted = injected.map_or_else(
+                    || {
+                        incoming
+                            .next()
+                            .unwrap_or_else(|| Err(io::Error::other("listener ended")))
+                    },
+                    |kind| Err(io::Error::from(kind)),
+                );
+                let Ok(stream) = accepted else {
+                    if stop.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let seen = backoff.generation();
+                    let until = runtime.clock.now() + delay;
+                    backoff.park(&*runtime.clock, Some(until), seen);
+                    delay = delay.saturating_mul(2).min(ACCEPT_BACKOFF_MAX);
+                    continue;
+                };
+                delay = Duration::from_millis(10);
                 // One thread per candidate: a stalled one holds up nothing.
                 let runtime = Arc::clone(&runtime);
                 thread::spawn(move || runtime.candidate(stream));

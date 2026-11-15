@@ -11,7 +11,7 @@ publish = false
 skrifa = "0.48"
 tiny-skia = { version = "0.12", default-features = false, features = ["std"] }
 clap = { version = "4", features = ["derive"] }
-clap_complete = "4"
+clap_complete = "=4.6.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

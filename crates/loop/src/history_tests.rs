@@ -381,6 +381,135 @@ fn requested_permission(id: &str) -> Event {
     })
 }
 
+// debt: requested_review, settled, allowed_with_grant, denied_by, session_blocks_escalation and reviewer_failed_escalation stay duplicated with resume.rs helpers, ceiling: two test files with the same builders and no documented rule covering test helpers, upgrade trigger: fold into shared support if a third test file needs the same builders
+/// A review escalation request: the reviewer handed the call to a person.
+/// The block counts at this raise, whatever settles the request or
+/// whether anything settles it.
+fn requested_review(id: &str, escalation: contract::events::Escalation) -> Event {
+    Event::PermissionRequested(contract::events::PermissionRequested {
+        always_reviewed: false,
+        request_id: contract::RequestId(id.to_owned()),
+        declared: contract::shapes::DeclaredEffects {
+            effects: vec![contract::shapes::Effect::Executes],
+            reversible: false,
+            paths: None,
+            confined: false,
+        },
+        step: contract::events::AskStep::Review {
+            escalation: Some(escalation),
+            rule: None,
+        },
+        arguments: None,
+        changed_by: None,
+    })
+}
+
+fn consecutive_blocks() -> contract::events::Escalation {
+    contract::events::Escalation::ConsecutiveBlocks {
+        reason: "it writes".to_owned(),
+    }
+}
+
+fn session_blocks_escalation() -> contract::events::Escalation {
+    contract::events::Escalation::SessionBlocks {
+        reason: "it writes".to_owned(),
+    }
+}
+
+fn reviewer_failed_escalation() -> contract::events::Escalation {
+    contract::events::Escalation::ReviewerFailed {
+        error: contract::shapes::Failure {
+            code: contract::ErrorCode::NoModel,
+            message: "no model".to_owned(),
+            retry_after_ms: None,
+            provider: None,
+        },
+    }
+}
+
+/// A denial settling `id`, decided by `decided_by`: a person's answer, a
+/// cancel, a hook or a credential deny.
+fn settled(id: &str, decided_by: DecidedBy) -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        call: None,
+        request_id: Some(RequestId(id.to_owned())),
+        decision: Decision::Deny,
+        decided_by,
+        reason: Some("no".to_owned()),
+        feedback: None,
+        grant: None,
+        rule: None,
+        reviewer: None,
+        hosts: None,
+    })
+}
+
+/// A person's allow settling `id`, carrying a session grant: counted at
+/// its raise, and still pushed to grants.
+fn allowed_with_grant(id: &str) -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        call: None,
+        request_id: Some(RequestId(id.to_owned())),
+        decision: Decision::Allow,
+        decided_by: DecidedBy::Person,
+        reason: None,
+        feedback: None,
+        grant: Some(Grant {
+            tool: "shell".to_owned(),
+            prefix: "cargo".to_owned(),
+        }),
+        rule: None,
+        reviewer: None,
+        hosts: None,
+    })
+}
+
+/// A reviewer denial with no request, decided by `decided_by`: the live
+/// reviewer's own block line.
+fn denied_by(decided_by: DecidedBy) -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        call: None,
+        request_id: None,
+        decision: Decision::Deny,
+        decided_by,
+        reason: Some("no".to_owned()),
+        feedback: None,
+        grant: None,
+        rule: None,
+        reviewer: None,
+        hosts: None,
+    })
+}
+
+/// Folds a one-segment log holding `events` after `session_started`.
+fn fold_own(name: &str, events: &[Event]) -> Resumed {
+    let (_home, sessions) = sessions(name);
+    let mut lines = vec![envelope(A, 0, None, None, &started("/w", None))];
+    for (index, event) in events.iter().enumerate() {
+        lines.push(envelope(A, index as u64 + 1, None, None, event));
+    }
+    write_log(&sessions, A, &lines);
+    resumed(&sessions.join(A)).unwrap()
+}
+
+/// Folds `parent` lines in the parent segment with `own` lines in the own
+/// segment, continuing the parent after its last line.
+fn fold_chain(name: &str, parent: &[Event], own: &[Event]) -> Resumed {
+    let (_home, sessions) = sessions(name);
+    let mut parent_lines = vec![envelope(A, 0, None, None, &started("/w", None))];
+    for (index, event) in parent.iter().enumerate() {
+        parent_lines.push(envelope(A, index as u64 + 1, None, None, event));
+    }
+    write_log(&sessions, A, &parent_lines);
+    let point = parent_lines.len() as u64 - 1;
+    let mut own_lines = vec![envelope(B, 0, None, None, &started("/w", Some((A, point))))];
+    for (index, event) in own.iter().enumerate() {
+        own_lines.push(envelope(B, index as u64 + 1, None, None, event));
+    }
+    write_log(&sessions, B, &own_lines);
+    resumed(&sessions.join(B)).unwrap()
+}
+
 fn asked(id: &str, extension: Option<&str>) -> Event {
     Event::InteractionRequested(contract::events::InteractionRequested {
         request_id: contract::RequestId(id.to_owned()),
@@ -3147,6 +3276,7 @@ fn person_input_turn_snapshot_keeps_staged_request() {
         previous_workspace: None,
         parent_ledger: crate::usage::Ledger::default(),
         asks: crate::reviewer::PendingAsks::default(),
+        staged: HashMap::new(),
         running: crate::compaction::Carry::default(),
         starts: HashMap::new(),
         orphans: crate::jobs::Orphans::default(),
@@ -3194,4 +3324,252 @@ fn person_input_turn_snapshot_keeps_staged_request() {
             "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\"",
         ]
     );
+}
+
+#[test]
+fn restored_block_consecutive_raise_counts() {
+    // A review escalation counts at its raise, with no settlement yet:
+    // the pending-at-exit and idle-unwound shadows. `docs/permissions.md`,
+    // "What happens on a block": 3 consecutive blocks hand the call to a
+    // person as an escalation.
+    let folded = fold_own(
+        "restored-consecutive",
+        &[requested_review("r_1", consecutive_blocks())],
+    );
+    assert_eq!(folded.session_blocks, 1);
+}
+
+#[test]
+fn restored_block_session_raise_counts() {
+    // `docs/permissions.md`, "What happens on a block": 20 in a session
+    // hand the call to a person as an escalation.
+    let folded = fold_own(
+        "restored-session",
+        &[requested_review("r_1", session_blocks_escalation())],
+    );
+    assert_eq!(folded.session_blocks, 1);
+}
+
+#[test]
+fn restored_block_reviewer_failed_raise_counts() {
+    // A failed reviewer counted live before escalating: the later lines'
+    // reviewer object never matters. `docs/permissions.md`, "What happens
+    // on a block": a reviewer that fails is a block, escalating to a
+    // human.
+    let folded = fold_own(
+        "restored-failed",
+        &[requested_review("r_1", reviewer_failed_escalation())],
+    );
+    assert_eq!(folded.session_blocks, 1);
+}
+
+#[test]
+fn restored_block_reviewer_failed_unreadable_error_counts() {
+    // `docs/permissions.md`, "What happens on a block": a reviewer that
+    // fails is a block. Only the escalation's tag is parsed, so a line
+    // whose `error` no longer reads still counts.
+    let mut raise = envelope(
+        A,
+        1,
+        None,
+        None,
+        &requested_review("r_1", reviewer_failed_escalation()),
+    );
+    raise.payload["escalation"]["error"] = json!("boom");
+    let (_home, sessions) = sessions("restored-failed-raw");
+    write_log(
+        &sessions,
+        A,
+        &[envelope(A, 0, None, None, &started("/w", None)), raise],
+    );
+    let folded = resumed(&sessions.join(A)).unwrap();
+    assert_eq!(folded.session_blocks, 1);
+}
+
+#[test]
+fn restored_block_person_answered_counts() {
+    // `docs/permissions.md`, "What happens on a block": the block that
+    // reaches the count goes to a person instead, and counts.
+    let folded = fold_own(
+        "restored-answered",
+        &[
+            requested_review("r_1", consecutive_blocks()),
+            settled("r_1", DecidedBy::Person),
+        ],
+    );
+    assert_eq!(folded.session_blocks, 1);
+}
+
+#[test]
+fn restored_block_person_allowed_counts_and_keeps_its_grant() {
+    // `docs/permissions.md`, "What happens on a block": the person's
+    // answer ends the run, and the allow still counts as the block it
+    // answers.
+    let folded = fold_own(
+        "restored-allowed",
+        &[
+            requested_review("r_1", consecutive_blocks()),
+            allowed_with_grant("r_1"),
+        ],
+    );
+    assert_eq!(folded.session_blocks, 1);
+    assert_eq!(
+        folded.grants,
+        [Grant {
+            tool: "shell".to_owned(),
+            prefix: "cargo".to_owned(),
+        }]
+    );
+}
+
+#[test]
+fn restored_block_cancel_ended_counts() {
+    // `docs/permissions.md`, "What happens on a block": the escalation
+    // counts at its raise, whatever ends it.
+    let folded = fold_own(
+        "restored-cancel",
+        &[
+            requested_review("r_1", consecutive_blocks()),
+            settled("r_1", DecidedBy::Cancel),
+        ],
+    );
+    assert_eq!(folded.session_blocks, 1);
+}
+
+#[test]
+fn restored_block_hook_ended_counts() {
+    // `docs/permissions.md`, "What happens on a block": the escalation
+    // counts at its raise, so the own hook settlement adds nothing.
+    let folded = fold_own(
+        "restored-hook-own",
+        &[
+            requested_review("r_1", consecutive_blocks()),
+            settled("r_1", DecidedBy::Hook),
+        ],
+    );
+    assert_eq!(folded.session_blocks, 1);
+}
+
+#[test]
+fn restored_block_credential_deny_ended_counts() {
+    // `docs/permissions.md`, "What happens on a block": the escalation
+    // counts at its raise, so the own credential-deny settlement adds
+    // nothing.
+    let folded = fold_own(
+        "restored-credential-own",
+        &[
+            requested_review("r_1", consecutive_blocks()),
+            settled("r_1", DecidedBy::CredentialDeny),
+        ],
+    );
+    assert_eq!(folded.session_blocks, 1);
+}
+
+#[test]
+fn restored_block_reraise_counts_once() {
+    // The parent raise only records the id; the own re-raise counts it,
+    // and settling the counted id adds nothing. `docs/permissions.md`,
+    // "What happens on a block": one escalation, one block.
+    let folded = fold_chain(
+        "restored-reraise",
+        &[requested_review("r_1", consecutive_blocks())],
+        &[
+            requested_review("r_1", consecutive_blocks()),
+            settled("r_1", DecidedBy::Cancel),
+        ],
+    );
+    assert_eq!(folded.session_blocks, 1);
+}
+
+#[test]
+fn restored_block_parent_hook_settlement_counts() {
+    // A hook settled the parent escalation with no own re-raise.
+    // `docs/permissions.md`, "What happens on a block": the escalation
+    // is the block, so its settlement counts it.
+    let folded = fold_chain(
+        "restored-hook",
+        &[requested_review("r_1", consecutive_blocks())],
+        &[settled("r_1", DecidedBy::Hook)],
+    );
+    assert_eq!(folded.session_blocks, 1);
+}
+
+#[test]
+fn restored_block_parent_credential_deny_settlement_counts() {
+    // A credential deny refused the parent escalation with no re-raise.
+    // `docs/permissions.md`, "What happens on a block": the escalation
+    // is the block, so its settlement counts it.
+    let folded = fold_chain(
+        "restored-credential",
+        &[requested_review("r_1", consecutive_blocks())],
+        &[settled("r_1", DecidedBy::CredentialDeny)],
+    );
+    assert_eq!(folded.session_blocks, 1);
+}
+
+#[test]
+fn restored_block_standing_ask_settlement_counts_zero() {
+    // A standing ask never increments live, so its answer counts nothing.
+    // `docs/permissions.md`, "What happens on a block": only a block
+    // hands the call to a person as an escalation.
+    let folded = fold_own(
+        "restored-standing",
+        &[
+            requested_permission("r_1"),
+            settled("r_1", DecidedBy::Person),
+        ],
+    );
+    assert_eq!(folded.session_blocks, 0);
+}
+
+#[test]
+fn restored_block_parent_standing_raise_settled_own_counts_zero() {
+    // A parent standing raise records nothing: the step gate keeps the
+    // own settlement from counting. `docs/permissions.md`, "What happens
+    // on a block": only a block hands the call to a person as an
+    // escalation.
+    let folded = fold_chain(
+        "restored-parent-standing",
+        &[requested_permission("r_1")],
+        &[settled("r_1", DecidedBy::Person)],
+    );
+    assert_eq!(folded.session_blocks, 0);
+}
+
+#[test]
+fn restored_block_unknown_settlement_counts_zero() {
+    // `docs/permissions.md`, "What happens on a block": an id never
+    // raised never incremented live, so its settlement counts nothing.
+    let folded = fold_own("restored-unknown", &[settled("r_9", DecidedBy::Person)]);
+    assert_eq!(folded.session_blocks, 0);
+}
+
+#[test]
+fn restored_block_budget_denial_counts_zero() {
+    // `docs/permissions.md`, "What happens on a block": the spending
+    // budget is not a block, so its denial counts nothing.
+    let folded = fold_own("restored-budget", &[denied_by(DecidedBy::Budget)]);
+    assert_eq!(folded.session_blocks, 0);
+}
+
+#[test]
+fn restored_block_cancel_without_request_counts_zero() {
+    // A cancelled review with no request never incremented live.
+    // `docs/permissions.md`, "What happens on a block": with no
+    // escalation, there is no block to count.
+    let folded = fold_own("restored-cancel-none", &[denied_by(DecidedBy::Cancel)]);
+    assert_eq!(folded.session_blocks, 0);
+}
+
+#[test]
+fn restored_block_parent_only_escalation_counts_zero() {
+    // The old segment's blocks are the old session's.
+    // `docs/permissions.md`, "What happens on a block": 20 in a
+    // session, one session's own.
+    let folded = fold_chain(
+        "restored-parent-only",
+        &[requested_review("r_1", consecutive_blocks())],
+        &[],
+    );
+    assert_eq!(folded.session_blocks, 0);
 }

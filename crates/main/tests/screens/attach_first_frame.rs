@@ -215,8 +215,8 @@ fn seed(setup: &Setup) {
     );
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200},
-            "tui": {"rail": {"shown": false}}}),
+        &json!({"model": "scripted/s.json", "compaction": {"tokens": 900_000, "window_fraction": 1.0},
+            "hub": {"idle_exit_ms": 200}, "tui": {"rail": {"shown": false}}}),
     );
 }
 

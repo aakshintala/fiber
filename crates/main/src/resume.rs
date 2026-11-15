@@ -383,6 +383,9 @@ fn in_launch_project(dir: &Path, in_project: &dyn Fn(&str) -> bool) -> bool {
     in_project(identity)
 }
 
+/// Refuses only when the worktree cannot be recreated and its recorded
+/// workspace is outside the launch project. Recreation requires a recorded
+/// repository and a worktree path absent with `NotFound`.
 fn resume_refused(
     recorded: Option<&Worktree>,
     dir: &Path,
@@ -392,12 +395,9 @@ fn resume_refused(
 }
 
 fn attach_stdout_exit_code(source: io::Error) -> i32 {
-    match doors::stdout_write_exit_code(&source) {
-        0 => 0,
-        _ => {
-            let error = doors::SessionError::StdoutFailed { source };
-            crate::fail(failed(error.code(), error))
-        }
+    match doors::stdout_write_outcome(source) {
+        Ok(()) => 0,
+        Err(error) => crate::fail(failed(error.code(), error)),
     }
 }
 

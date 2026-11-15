@@ -139,10 +139,10 @@ pub fn attach(
                     if code != 0 {
                         return Ok(code);
                     }
-                    match crate::stdout_write_exit_code(&source) {
-                        0 => return Ok(0),
-                        _ => return Err(SessionError::StdoutFailed { source }),
-                    }
+                    return match crate::stdout_write_outcome(source) {
+                        Ok(()) => Ok(0),
+                        Err(error) => Err(error),
+                    };
                 }
                 return Ok(code);
             }
@@ -525,14 +525,18 @@ mod stdout_tests {
 
     #[test]
     fn emit_uses_shared_stdout_error_decision() {
-        for (kind, code) in [
-            (io::ErrorKind::BrokenPipe, 0),
-            (io::ErrorKind::StorageFull, 1),
+        for (kind, quiet) in [
+            (io::ErrorKind::BrokenPipe, true),
+            (io::ErrorKind::StorageFull, false),
         ] {
             let error = super::emit(&mut FailedWriter(kind), b"line")
                 .expect_err("the writer failure is retained");
             assert_eq!(error.kind(), kind);
-            assert_eq!(crate::stdout_write_exit_code(&error), code);
+            let outcome = crate::stdout_write_outcome(error);
+            assert_eq!(outcome.is_ok(), quiet);
+            if let Err(crate::SessionError::StdoutFailed { source }) = outcome {
+                assert_eq!(source.kind(), kind);
+            }
         }
     }
 }

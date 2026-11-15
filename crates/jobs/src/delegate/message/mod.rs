@@ -582,6 +582,7 @@ impl DelegateMessage {
             | ErrorCode::NoMatch
             | ErrorCode::NoModel
             | ErrorCode::NonzeroExit
+            | ErrorCode::NotAvailable
             | ErrorCode::NotFound
             | ErrorCode::NotStepBoundary
             | ErrorCode::NotSubscribed
