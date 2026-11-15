@@ -125,7 +125,7 @@ if [ "$rules" = 1 ]; then
     scripts_touched=1
   fi
   if [ -n "$packages" ]; then
-    # debt: same nonce and fakes pre-build as the full-mode block (~line 518); fold both into one function when either changes.
+    # debt: duplicated nonce and fakes pre-build (full-mode block ~line 518), fold both into one function when either changes.
     # A per-run nonce in the environment: every descendant inherits it, so
     # the EXIT trap's scan names only this run's leaked processes. uuidgen
     # ships on Linux CI and macOS; the fallback needs only bash and date.
