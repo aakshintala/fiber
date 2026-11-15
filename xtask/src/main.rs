@@ -204,12 +204,7 @@ fn run(args: &[String]) -> Result<bool, String> {
         "select" => {
             let members = workspace_members()?;
             let rules = rest.iter().any(|arg| arg == "--rules-by-path");
-            let args: Vec<String> = rest
-                .iter()
-                .filter(|arg| arg.as_str() != "--rules-by-path")
-                .cloned()
-                .collect();
-            let changed = changed_files(&flag(&args, "--base")?)?;
+            let changed = changed_files(&flag(rest, "--base")?)?;
             let selection = if rules {
                 select::rules_selection(&changed, &members)
             } else {

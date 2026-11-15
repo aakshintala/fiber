@@ -972,6 +972,7 @@ pub(super) fn package_members() -> Members {
     members
 }
 
+// `docs/workflow.md`, "Rules by path".
 #[test]
 fn rules_selection_runs_a_touched_crate_without_dependents() {
     let files = strings(&["crates/contract/src/lib.rs"]);
@@ -985,6 +986,7 @@ fn rules_selection_runs_a_touched_crate_without_dependents() {
     );
 }
 
+// `docs/workflow.md`, "Rules by path".
 #[test]
 fn rules_selection_runs_every_crate_a_doc_table_names() {
     let selection = rules_selection(&strings(&["docs/errors.md"]), &members_with_tools());
@@ -992,6 +994,7 @@ fn rules_selection_runs_every_crate_a_doc_table_names() {
     assert_eq!(selection.mode(), "crates");
 }
 
+// `docs/workflow.md`, "Rules by path".
 #[test]
 fn rules_selection_maps_a_crate_manifest_to_its_crate() {
     let files = strings(&["crates/tui/Cargo.toml"]);
@@ -1005,6 +1008,7 @@ fn rules_selection_maps_a_crate_manifest_to_its_crate() {
     );
 }
 
+// `docs/workflow.md`, "Rules by path".
 #[test]
 fn rules_selection_keeps_listed_support_files_with_their_owner() {
     for (path, crates) in [
@@ -1020,6 +1024,7 @@ fn rules_selection_keeps_listed_support_files_with_their_owner() {
     }
 }
 
+// `docs/workflow.md`, "Rules by path".
 #[test]
 fn rules_selection_runs_no_crate_for_globally_scoped_runs_all_paths() {
     for path in [
@@ -1035,6 +1040,7 @@ fn rules_selection_runs_no_crate_for_globally_scoped_runs_all_paths() {
     }
 }
 
+// `docs/workflow.md`, "Rules by path".
 #[test]
 fn rules_selection_ignores_globally_scoped_paths_beside_a_crate_change() {
     let selection = rules_selection(
@@ -1044,6 +1050,7 @@ fn rules_selection_ignores_globally_scoped_paths_beside_a_crate_change() {
     assert_eq!(selection, Selection::Crates(strings(&["log"])));
 }
 
+// `docs/workflow.md`, "Rules by path".
 #[test]
 fn rules_selection_runs_no_crate_for_a_package_only_diff() {
     let selection = rules_selection(&strings(&["providers/opencode/extension.json"]), &members());
@@ -1051,6 +1058,7 @@ fn rules_selection_runs_no_crate_for_a_package_only_diff() {
     assert_eq!(selection.mode(), "crates");
 }
 
+// `docs/workflow.md`, "Rules by path".
 #[test]
 fn rules_selection_runs_a_prototype_diff_as_crates_without_packages() {
     let selection = rules_selection(
@@ -1060,6 +1068,7 @@ fn rules_selection_runs_a_prototype_diff_as_crates_without_packages() {
     assert_eq!(selection, Selection::Crates(vec![]));
 }
 
+// `docs/workflow.md`, "Rules by path".
 #[test]
 fn rules_selection_runs_docs_only_diffs_as_docs() {
     for files in [
@@ -1072,6 +1081,7 @@ fn rules_selection_runs_docs_only_diffs_as_docs() {
     }
 }
 
+// `docs/workflow.md`, "Rules by path".
 #[test]
 fn rules_selection_runs_an_empty_diff_as_docs() {
     assert_eq!(rules_selection(&[], &members()), Selection::Docs);

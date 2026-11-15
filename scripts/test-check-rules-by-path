@@ -1,6 +1,6 @@
 #!/bin/bash
-# Self-test for the `scripts/check --rules-by-path` branch (issue #4861):
-# usage conflicts, closed invalid base, seven-name coupling against the doc,
+# Self-test for the `scripts/check --rules-by-path` branch (`docs/workflow.md`,
+# "Rules by path"; issue #4861): usage conflicts, closed invalid base, seven-name coupling against the doc,
 # and crate-list narrowing through the built xtask.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
@@ -40,6 +40,20 @@ diff "$expected" "$work/branch" || fail "branch xtask names differ from the doc 
 while IFS= read -r name; do
   grep -q "cargo xtask $name" docs/workflow.md || fail "docs/workflow.md names no cargo xtask $name"
 done <"$expected"
+
+# The prototype trigger matches a prototype-only changed list with a single
+# slash: `prototype` carries no trailing slash, so the grep tests for
+# `^research/tui-prototype/`, never `^research/tui-prototype//`
+# (`docs/workflow.md`, "Rules by path").
+pattern=$(sed -n 's/^  prototype=//p' scripts/check | head -1)
+[ -n "$pattern" ] || fail "no prototype= line in scripts/check"
+case "$pattern" in
+*/ ) fail "prototype '$pattern' carries a trailing slash" ;;
+esac
+printf '%s\n' "research/tui-prototype/src/main.rs" >"$work/changed"
+grep -q "^$pattern/" "$work/changed" || fail "a prototype-only diff trips no trigger"
+printf '%s\n' "crates/log/src/lib.rs" >"$work/unchanged"
+grep -q "^$pattern/" "$work/unchanged" && fail "a non-prototype file trips the prototype trigger"
 
 # A narrowed smoke run through the built xtask carries no dependent crate.
 cargo build -q -p xtask
