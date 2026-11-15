@@ -25,6 +25,66 @@ fn check_holder(work: impl FnOnce() + Send + 'static) {
 }
 
 #[test]
+fn takeover_open_waits_for_the_predecessor_and_sets_its_holder_label() {
+    let sessions = fakes::TempDir::new("log-takeover-open-wait");
+    let id = SessionId("s_takeover".into());
+    let clock = fakes::clock::FakeClock::new();
+    let predecessor = Log::create(sessions.path(), id.clone(), clock.clone()).unwrap();
+    let dir = predecessor.dir().to_path_buf();
+    let until = clock.origin() + Duration::from_secs(10);
+    let sessions_path = sessions.path().to_path_buf();
+    let worker_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+    let (waiter_tx, waiter_rx) = mpsc::channel();
+    let (result_tx, result_rx) = mpsc::channel();
+    thread::spawn(move || {
+        waiter_tx.send(thread::current().id()).unwrap();
+        let result = Log::open_as_takeover(&sessions_path, id, worker_clock, "keeper 4242", until);
+        result_tx.send(result).unwrap();
+    });
+
+    let waiter =
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&waiter_rx, "takeover open waiter");
+    assert!(clock.await_thread_parked(waiter, Some(until), Deadline::after(MUST_SUCCEED_WITHIN),));
+    drop(predecessor);
+
+    let takeover = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&result_rx, "takeover open")
+        .expect("takeover open succeeds")
+        .expect("the lock is acquired before its deadline");
+    assert_eq!(lock_label(&dir).as_deref(), Some("keeper 4242"));
+    drop(takeover);
+}
+
+#[test]
+fn takeover_open_returns_none_for_expired_deadlines_without_taking_the_lock() {
+    let sessions = fakes::TempDir::new("log-takeover-open-expired");
+    let id = SessionId("s_takeover".into());
+    let clock = fakes::clock::FakeClock::new();
+    let predecessor = Log::create(sessions.path(), id.clone(), clock.clone()).unwrap();
+    let dir = predecessor.dir().to_path_buf();
+    let holder = std::process::id().to_string();
+    let before = clock
+        .origin()
+        .checked_sub(Duration::from_nanos(1))
+        .expect("the fake clock origin is at least one nanosecond after monotonic zero");
+
+    for until in [before, clock.origin()] {
+        assert!(
+            Log::open_as_takeover(
+                sessions.path(),
+                id.clone(),
+                clock.clone(),
+                "keeper 4242",
+                until,
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(lock_label(&dir).as_deref(), Some(holder.as_str()));
+    }
+}
+
+#[test]
 fn a_keeper_label_names_only_a_live_holder() {
     check_holder(|| {
         let sessions = fakes::TempDir::new("log-keeper-holder");

@@ -68,14 +68,18 @@ fn stdout_copy_preserves_the_writer_error_kind() {
         clock.as_ref(),
         &Event::Clients(Clients { count: 0 }),
     );
-    for (kind, code) in [
-        (io::ErrorKind::BrokenPipe, 0),
-        (io::ErrorKind::StorageFull, 1),
+    for (kind, quiet) in [
+        (io::ErrorKind::BrokenPipe, true),
+        (io::ErrorKind::StorageFull, false),
     ] {
         let error = write_until_stop(&mut FailedStdout(kind), &line)
             .expect_err("the copy returns the original write error");
         assert_eq!(error.kind(), kind);
-        assert_eq!(crate::stdout_write_exit_code(&error), code);
+        let outcome = crate::stdout_write_outcome(error);
+        assert_eq!(outcome.is_ok(), quiet);
+        if let Err(crate::SessionError::StdoutFailed { source }) = outcome {
+            assert_eq!(source.kind(), kind);
+        }
     }
 }
 

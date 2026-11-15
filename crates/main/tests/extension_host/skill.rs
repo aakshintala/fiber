@@ -508,11 +508,14 @@ fn a_skill_that_became_a_credentials_link_is_not_sent_again_at_a_compaction() {
     // the resend refuses the link.
     fs::write(setup.root.path().join("note.txt"), "a note\n").unwrap();
     let server = ProviderServer::start([
-        stream(&[function_call(
-            "call_read",
-            "read",
-            &json!({"path": "note.txt"}),
-        )]),
+        fakes::wire::stream_with_usage(
+            &[function_call(
+                "call_read",
+                "read",
+                &json!({"path": "note.txt"}),
+            )],
+            json!({"input_tokens": 1200, "output_tokens": 3}),
+        ),
         text_reply("The note."),
         hello(),
     ])
@@ -520,7 +523,7 @@ fn a_skill_that_became_a_credentials_link_is_not_sent_again_at_a_compaction() {
     setup.provider(&server);
     fs::write(
         setup.home().join("config.json"),
-        json!({"model": "fake/m", "compaction": {"tokens": 10, "nudge": false}}).to_string(),
+        json!({"model": "fake/m", "compaction": {"tokens": 1000, "nudge": false}}).to_string(),
     )
     .unwrap();
     let output = run_to_exit(

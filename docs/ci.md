@@ -28,10 +28,11 @@ touches `scripts/`; the latter two
 run on the macOS arm64 runner ("On every pull request that changes code")).
 Each macOS job holds one macOS slot against the 5-slot cap while it runs; no
 Linux-side job changes. The scripts job is selected only for pull requests
-with a path under `scripts/`, never on the backstop. A bug pull request with a valid `## Budget breach` section stating a break or
-budget breach skips the bug-red legs, with the exemption message in the
-selection summary. CI checks only that the section and both
-lines are present; reviewers judge the measurements. Draft and ready pull requests select
+with a path under `scripts/`, never on the backstop. A pull request that fixes
+a break or budget breach may exempt its bug-red legs only with an unfenced
+`## Budget breach` section; see "The merge gate" for the required measurements
+and effect. CI checks only that the section and both lines are present;
+reviewers judge the measurements. Draft and ready pull requests select
 the same jobs. The Linux arm64 and macOS arm64 test legs, `stress` and
 `release` run on the backstop, which is a push to `main`. A bug pull request
 uses a macOS job (`bug_red_macos`); so does any pull request whose diff
@@ -849,8 +850,9 @@ varies. A job with too little history gets a generous bound. There are two
 exceptions. The `bug_red` legs are bounded at about twice their slowest recent
 red commit, not their median, because a red commit that changes a signature
 rebuilds every package that depends on it. Run 42403359939's red commit touched
-ten packages: its Linux leg took 10m48s and its macOS leg was cancelled at the
-old 17-minute bound, so both legs get 30 minutes. The other exception
+ten packages, and its Linux leg took 10m48s. Over the week after #4376, the
+slowest macOS leg took 20m43s (run 42907824464). So the Linux leg gets 25
+minutes and the macOS leg 45. The other exception
 is a mutants shard: a shard of `crates/main` mutants, whose tests drive the
 binary, takes about 20 minutes (run 38420177975), so its bound is twice that
 slow group, not twice the median. A shard of up to 15 mutants gets 40 minutes.
