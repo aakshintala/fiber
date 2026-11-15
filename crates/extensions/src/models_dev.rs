@@ -176,7 +176,30 @@ pub fn merge_admission(
     };
     let meta = meta_of(&file).unwrap_or_default();
     let generated = generated_models(&file);
-    enrich(models, &generated, &meta, &catalog)
+    retain_capable_models(enrich(models, &generated, &meta, &catalog), &meta, &catalog)
+}
+
+fn retain_capable_models(
+    models: Vec<ModelData>,
+    meta: &CatalogMeta,
+    catalog: &Value,
+) -> Vec<ModelData> {
+    models
+        .into_iter()
+        .filter(|model| {
+            let (source, id) = resolve(&model.id, meta);
+            let Some(entry) = catalog.get(&source).and_then(|provider| provider.get(&id)) else {
+                return true;
+            };
+            let outputs_text = entry
+                .get("modalities")
+                .and_then(|modalities| modalities.get("output"))
+                .and_then(Value::as_array)
+                .is_none_or(|output| output.iter().any(|kind| kind == "text"));
+            let calls_tools = entry.get("tool_call").and_then(Value::as_bool) != Some(false);
+            outputs_text && calls_tools
+        })
+        .collect()
 }
 
 fn generated_models(file: &Value) -> Vec<ModelData> {
