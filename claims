@@ -351,7 +351,6 @@ crates/tui/src/configure.rs	fiber-4675	plan	2026-11-15T16:57:16Z	roundhouse-7010
 crates/tui/src/view/request.rs	fiber-4675	plan	2026-11-15T16:57:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/tui.md	fiber-4675	plan	2026-11-15T16:57:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing.md	fiber-4675	plan	2026-11-15T16:57:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/tests/commands/completion.rs	fiber-4902	plan	2026-11-15T17:10:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/fakes/src/within.rs	fiber-4902	plan	2026-11-15T17:29:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/fakes/src/lib.rs	fiber-4902	plan	2026-11-15T17:29:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/ci.md	fiber-4902	plan	2026-11-15T17:29:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
@@ -416,3 +415,8 @@ xtask/src/docs.rs	fiber-4029	plan	2026-11-15T18:52:47Z	Amoghs-MacBook-Pro:/Users
 xtask/src/docs_tests.rs	fiber-4029	plan	2026-11-15T18:52:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 xtask/src/main.rs	fiber-4029	plan	2026-11-15T18:52:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 xtask/tests/cli.rs	fiber-4029	plan	2026-11-15T18:52:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/main/tests/commands/completion.rs:36-38	fiber-4902	plan	2026-11-15T19:38:17Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
+crates/main/tests/commands/completion.rs:360-361	fiber-4902	plan	2026-11-15T19:38:17Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
+crates/main/tests/commands/completion.rs:388-388	fiber-4902	plan	2026-11-15T19:38:17Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
+crates/main/tests/commands/completion.rs:424-424	fiber-4902	plan	2026-11-15T19:38:17Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
+crates/main/tests/commands/completion.rs:426-426	fiber-4902	plan	2026-11-15T19:38:17Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
