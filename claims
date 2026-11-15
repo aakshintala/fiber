@@ -687,3 +687,7 @@ crates/tui/src/settings_view_tests.rs:5146-5146	fiber-4591	plan	2026-11-15T05:43
 crates/tui/src/snapshots/tui__rebind__view_tests__keys_focus_project_scrolled_80x24.snap:2-3	fiber-4591	plan	2026-11-15T05:43:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4591-editor-setting	
 crates/tui/src/snapshots/tui__rebind__view_tests__keys_focus_project_scrolled_80x24.snap:20-20	fiber-4591	plan	2026-11-15T05:43:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4591-editor-setting	
 docs/tui.md:1175-1175	fiber-4591	plan	2026-11-15T05:43:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4591-editor-setting	
+crates/cli/src/models_tests.rs	fiber-4755	plan	2026-11-15T05:52:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/parts_tests.rs	fiber-4755	plan	2026-11-15T05:52:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/parts.rs	fiber-4755	plan	2026-11-15T05:52:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/model_lists_tests.rs	fiber-4755	plan	2026-11-15T05:52:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
