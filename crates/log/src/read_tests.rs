@@ -475,6 +475,59 @@ fn project_lookup_resolves_hashed_and_legacy_directories_without_crossing_projec
 }
 
 #[test]
+fn find_logged_session_matching_reads_the_session_first_line_in_each_project() {
+    let home = fakes::TempDir::new("log-find-matching");
+    let id = SessionId("s_aaaaaaaaaaaaaaaa".into());
+    let key = "project-key";
+    let workspace = "/workspace";
+    let dir = home
+        .path()
+        .join("projects")
+        .join(key)
+        .join("sessions")
+        .join(&id.0);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("events.jsonl"),
+        format!("{{\"kind\":\"session_started\",\"payload\":{{\"workspace\":\"{workspace}\"}}}}\n"),
+    )
+    .unwrap();
+    assert_eq!(
+        find_logged_session_matching(home.path(), &id, &|started| started.workspace.as_deref()
+            == Some(workspace)),
+        Some((key.to_owned(), dir.clone()))
+    );
+    assert_eq!(
+        find_logged_session_matching(home.path(), &id, &|started| started.workspace.as_deref()
+            == Some("/other")),
+        None
+    );
+}
+
+#[test]
+fn find_session_in_project_resolves_slugged_hashed_key_and_absent_id() {
+    let home = fakes::TempDir::new("log-find-project-key");
+    let id = SessionId("s_aaaaaaaaaaaaaaaa".into());
+    let legacy = "a";
+    let key = "a-0123456789abcdef";
+    let dir = home
+        .path()
+        .join("projects")
+        .join(legacy)
+        .join("sessions")
+        .join(&id.0);
+    std::fs::create_dir_all(&dir).unwrap();
+    assert_eq!(
+        find_session_in_project(home.path(), key, &id),
+        Some((key.to_owned(), dir))
+    );
+    assert_eq!(
+        find_session_in_project(home.path(), key, &SessionId("s_missing".into())),
+        None
+    );
+}
+
+#[test]
 fn malformed_project_key_suffix_does_not_select_a_legacy_slug() {
     let home = fakes::TempDir::new("log-project-key-invalid-suffix");
     let id = SessionId("s_0123456789abcdef".into());
@@ -486,6 +539,13 @@ fn malformed_project_key_suffix_does_not_select_a_legacy_slug() {
         project(home.path(), key, &id.0, false);
         assert!(find_session_in_project(home.path(), "-a-b-0123456789abcdef", &id).is_none());
     }
+}
+
+#[test]
+fn legacy_slug_accepts_only_a_hash_suffixed_key() {
+    assert_eq!(legacy_slug("a-0123456789abcdef"), Some("a"));
+    assert_eq!(legacy_slug("a-b"), None);
+    assert_eq!(legacy_slug("a"), None);
 }
 
 fn line() -> Envelope {

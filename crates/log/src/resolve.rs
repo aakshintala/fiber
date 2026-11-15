@@ -283,6 +283,14 @@ mod tests {
             resolve_in(&candidates, "s_legacy", &predicate).unwrap(),
             SessionId("s_legacy".into())
         );
+        assert_eq!(
+            resolve_in(&candidates[..1], "s_legacy", &predicate).unwrap(),
+            SessionId("s_legacy".into())
+        );
+        assert!(matches!(
+            resolve_in(&[], "s_missing", &predicate),
+            Err(Error::NotFound(_))
+        ));
     }
 
     #[test]

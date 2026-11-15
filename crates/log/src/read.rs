@@ -232,7 +232,10 @@ pub fn find_logged_session_matching(
         home,
         id,
         true,
-        Some(&|_, dir| crate::started_first(dir).is_ok_and(|started| matches(&started))),
+        Some(&|_, project| {
+            let dir = project.join("sessions").join(&id.0);
+            crate::started_first(&dir).is_ok_and(|started| matches(&started))
+        }),
     )
 }
 
