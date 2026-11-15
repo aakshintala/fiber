@@ -900,6 +900,8 @@ pub(crate) fn execute_confined(
     )
 }
 
+// Mutants run on Linux, where this is not compiled.
+#[cfg_attr(false, mutants::skip)]
 #[cfg(target_os = "macos")]
 #[allow(
     clippy::too_many_arguments,
