@@ -71,7 +71,16 @@ const CRASHED_STOP_LINE: &str = "{\"shutdown\":true}";
 enum Sink {
     Control,
     Hold(Vec<(Stream, Vec<u8>)>),
-    Files { output: File, errors: Option<File> },
+    Files {
+        /// `None` once the file failed: every stream writing to it is
+        /// skipped, while a separate healthy errors file keeps
+        /// receiving stderr. `errors_declared` remembers a declared
+        /// errors file, so its death discards stderr instead of
+        /// falling back to the output file.
+        output: Option<File>,
+        errors: Option<File>,
+        errors_declared: bool,
+    },
     Discard,
 }
 struct Adoption {
@@ -86,6 +95,7 @@ struct State {
     cap: u64,
     timed_out: bool,
     output_cap: bool,
+    write_failure: Option<(PathBuf, io::Error)>,
     stopping: Option<Instant>,
     ended: bool,
     readers: usize,
@@ -121,6 +131,39 @@ impl Drop for HeldLog {
 struct Listening {
     stop: Arc<AtomicBool>,
     socket: PathBuf,
+}
+
+/// Kills the handle for the failed file: stdout always writes the output
+/// file; stderr writes the errors file when the job declared one, else
+/// the output file. A separate healthy file keeps its stream; a declared
+/// but dead errors file discards stderr instead of falling back.
+/// `destinations` is always `Some` here: `files()` builds `Sink::Files`
+/// only for an adopted process, and the reader passes `None` only when
+/// there is no adoption, where the sink is never `Files` and there is
+/// nothing to kill.
+fn fail_handle(
+    sink: &mut Sink,
+    destinations: Option<(PathBuf, Option<PathBuf>)>,
+    failed: Option<PathBuf>,
+) {
+    let (Some((output, errors)), Some(failed)) = (destinations, failed) else {
+        return;
+    };
+    let errors_path = errors.as_deref().unwrap_or(&output);
+    if let Sink::Files {
+        output: live_output,
+        errors: live_errors,
+        errors_declared,
+    } = sink
+    {
+        if failed == output {
+            *live_output = None;
+        }
+        if failed == *errors_path {
+            *live_errors = None;
+            *errors_declared = true;
+        }
+    }
 }
 
 /// A candidate that asked for the handover and awaits the serialized decision.
@@ -161,6 +204,9 @@ struct Hooks {
     /// Runs immediately before a handover switches each job's sink from its
     /// files to the session, so a test lands a write in that window.
     before_switch: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Runs once a runner stores its first output write failure, so a test
+    /// waits on the store instead of spinning on the runner's state.
+    write_failed: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs as a bound watcher ends, with its generation.
     watcher_done: Option<Box<dyn Fn(u64) + Send + Sync>>,
 }
@@ -352,7 +398,16 @@ impl Runtime {
                         continue;
                     }
                     if let Some(log) = log.as_ref() {
-                        let mut completed = tools::kept_end(job_id, &exit);
+                        // The timeout end is selected before the write
+                        // override, so `kept_end` must not apply it on this
+                        // path: strip the stored failure, overwrite the
+                        // timeout status and error, then invoke the shared
+                        // helper once so a stored failure stays reported as
+                        // `failed` `io_failed` with `replaced end:
+                        // keeper_timeout`.
+                        let mut without_failure = exit.clone();
+                        without_failure.output_write_failure = None;
+                        let mut completed = tools::kept_end(job_id, &without_failure);
                         completed.status = contract::events::Outcome::Failed;
                         completed.error = Some(contract::shapes::Failure {
                             code: contract::ErrorCode::KeeperTimeout,
@@ -360,6 +415,13 @@ impl Runtime {
                             retry_after_ms: None,
                             provider: None,
                         });
+                        if let Some(path) = &exit.output_write_failure {
+                            completed.error = Some(tools::override_write_failure(
+                                tools::ReplacedEnd::KeeperTimeout,
+                                path,
+                                false,
+                            ));
+                        }
                         log.log
                             .append(
                                 &contract::events::Event::JobCompleted(completed),
@@ -401,22 +463,61 @@ impl Runtime {
     }
 
     fn files(&self) -> io::Result<()> {
+        // One job's bad file never stops the keeper ending every other
+        // job: each process stores its own first path-bearing failure,
+        // discards every stream writing to that file, and the sweep
+        // moves on and returns `Ok(())`.
         for process in lock(&self.processes).values() {
             let mut state = lock(&process.state);
             let old = std::mem::replace(&mut state.sink, Sink::Discard);
             let Some(adoption) = state.adoption.as_ref() else {
                 continue;
             };
-            let output = OpenOptions::new().append(true).open(&adoption.output)?;
-            let errors = adoption
-                .errors
-                .as_ref()
-                .map(|path| OpenOptions::new().append(true).open(path))
-                .transpose()?;
-            let mut sink = Sink::Files { output, errors };
+            let output_path = adoption.output.clone();
+            let errors_path = adoption.errors.clone();
+            let output = match OpenOptions::new().append(true).open(&output_path) {
+                Ok(file) => Some(file),
+                Err(error) => {
+                    state
+                        .write_failure
+                        .get_or_insert_with(|| (output_path.clone(), error));
+                    None
+                }
+            };
+            let errors = match &errors_path {
+                None => None,
+                Some(path) => match OpenOptions::new().append(true).open(path) {
+                    Ok(file) => Some(file),
+                    Err(error) => {
+                        state
+                            .write_failure
+                            .get_or_insert_with(|| (path.clone(), error));
+                        // The errors file is dead: stderr is discarded,
+                        // never redirected into the output file.
+                        None
+                    }
+                },
+            };
+            let mut sink = Sink::Files {
+                output,
+                errors,
+                errors_declared: errors_path.is_some(),
+            };
             if let Sink::Hold(held) = old {
                 for (stream, bytes) in held {
-                    write_sink(&mut sink, stream, &bytes)?;
+                    if let Err(error) = write_sink(&mut sink, stream, &bytes) {
+                        let destinations = Some((output_path.clone(), errors_path.clone()));
+                        let failed = match stream {
+                            Stream::Out => output_path.clone(),
+                            Stream::Err => {
+                                errors_path.clone().unwrap_or_else(|| output_path.clone())
+                            }
+                        };
+                        state
+                            .write_failure
+                            .get_or_insert_with(|| (failed.clone(), error));
+                        fail_handle(&mut sink, destinations, Some(failed));
+                    }
                 }
             }
             state.sink = sink;
@@ -463,6 +564,7 @@ impl Runtime {
                 cap: spec.output_cap,
                 timed_out: false,
                 output_cap: false,
+                write_failure: None,
                 stopping: None,
                 ended: false,
                 readers: if streams.errors.is_some() { 2 } else { 1 },
@@ -550,6 +652,10 @@ impl Runtime {
                     signal: status.signal(),
                     timed_out: state.timed_out,
                     output_cap: state.output_cap,
+                    output_write_failure: state
+                        .write_failure
+                        .as_ref()
+                        .map(|(path, _)| path.clone()),
                 };
                 drop(state);
                 // Reader completion precedes exit, and the log mutex precedes sup.
@@ -603,7 +709,7 @@ impl Runtime {
                     if count > room {
                         state.output_cap = true;
                     }
-                    match &mut state.sink {
+                    let write_result = match &mut state.sink {
                         Sink::Control => {
                             match runtime.send(FromKeeper::Output {
                                 id: id.clone(),
@@ -612,11 +718,37 @@ impl Runtime {
                             }) {
                                 Ok(()) | Err(_) => {}
                             }
+                            Ok(())
                         }
-                        Sink::Hold(held) => held.push((stream, kept.to_vec())),
+                        Sink::Hold(held) => {
+                            held.push((stream, kept.to_vec()));
+                            Ok(())
+                        }
                         sink @ (Sink::Files { .. } | Sink::Discard) => {
-                            write_sink(sink, stream, kept)?
+                            write_sink(sink, stream, kept)
                         }
+                    };
+                    if let Err(error) = write_result {
+                        // The first failure wins, with its destination
+                        // path; every stream writing to that file is
+                        // discarded, while a separate healthy file keeps
+                        // its stream.
+                        let destinations = state
+                            .adoption
+                            .as_ref()
+                            .map(|adoption| (adoption.output.clone(), adoption.errors.clone()));
+                        let failed = destinations.as_ref().map(|(output, errors)| match stream {
+                            Stream::Out => output.clone(),
+                            Stream::Err => errors.clone().unwrap_or_else(|| output.clone()),
+                        });
+                        if let (Some(path), true) = (&failed, state.write_failure.is_none()) {
+                            state.write_failure = Some((path.clone(), error));
+                            #[cfg(test)]
+                            if let Some(write_failed) = &runtime.hooks.write_failed {
+                                write_failed();
+                            }
+                        }
+                        fail_handle(&mut state.sink, destinations, failed);
                     }
                     let capped = state.output_cap;
                     drop(state);
@@ -1091,13 +1223,25 @@ impl Runtime {
 }
 
 fn write_sink(sink: &mut Sink, stream: Stream, bytes: &[u8]) -> io::Result<()> {
-    if let Sink::Files { output, errors } = sink {
-        if stream == Stream::Err
-            && let Some(errors) = errors
-        {
-            return errors.write_all(bytes);
+    if let Sink::Files {
+        output,
+        errors,
+        errors_declared,
+    } = sink
+    {
+        if stream == Stream::Err {
+            if let Some(errors) = errors {
+                return errors.write_all(bytes);
+            }
+            // A declared errors file died: stderr is discarded, never
+            // redirected into the output file.
+            if *errors_declared {
+                return Ok(());
+            }
         }
-        output.write_all(bytes)?;
+        if let Some(output) = output {
+            output.write_all(bytes)?;
+        }
     }
     Ok(())
 }

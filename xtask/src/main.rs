@@ -5,13 +5,15 @@
 //!
 //! Commands:
 //!
-//! - `select --base REV`: what a diff from the merge base with REV runs,
+//! - `select --base REV [--rules-by-path]`: what a diff from the merge base with REV runs,
 //!   uncommitted and untracked files included, as `key=value` lines;
 //!   `packages` are bare names (for tools that only match
 //!   workspace members, such as `cargo fmt -p`), `package_specs` and
 //!   `library_specs` are `name@version` (for `cargo -p`, which resolves a
 //!   bare name against the whole dependency graph and can be ambiguous), and
-//!   `extension_packages` are first-party package directories with cases
+//!   `extension_packages` are first-party package directories with cases.
+//!   With `--rules-by-path`, the set narrows to the `docs/workflow.md`,
+//!   "Rules by path" touched crates plus docs-row crates, with no dependents.
 //! - `plan --base REV --mode M --packages "A B" --event E --draft true|false --bug true|false --mutant-count N [--labels "L1 L2" --lookup-ok true|false --head H --run-id R --runs FILE --jobs DIR --pr N]`:
 //!   which CI jobs run, the mutant shards and each shard's time limit,
 //!   as `key=value` lines
@@ -109,7 +111,7 @@
 //! - `budget-bounds --base REV`: whether any line changed against the merge
 //!   base with REV raises `WAITS`, `BUDGET` or `CLEANUP`, or adds a
 //!   `Deadline::after` of 60 s or more in a test — except the known-short
-//!   bounds (`WAIT`, `DEADLINE`, `MUST_SUCCEED_WITHIN`, `Duration::ZERO`) and direct literals below 60 s — without `// ruling: #N`
+//!   bounds (`WAIT`, `DEADLINE`, `MUST_SUCCEED_WITHIN`, `WHOLE_SUBSYSTEM_WITHIN`, `Duration::ZERO`) and direct literals below 60 s — without `// ruling: #N`
 //! - `narrating-comments --base REV`: reports ruled history phrases on added
 //!   source comment lines (`docs/code-quality.md`, "Comments")
 //! - `screen-ratchet`: reads the inline per-file maxima from stdin as one
@@ -201,7 +203,13 @@ fn run(args: &[String]) -> Result<bool, String> {
         "journey-streak" => journey_streak::run(rest),
         "select" => {
             let members = workspace_members()?;
-            let selection = select::classify(&changed_files(&flag(rest, "--base")?)?, &members);
+            let rules = rest.iter().any(|arg| arg == "--rules-by-path");
+            let changed = changed_files(&flag(rest, "--base")?)?;
+            let selection = if rules {
+                select::rules_selection(&changed, &members)
+            } else {
+                select::classify(&changed, &members)
+            };
             let package_specs: Vec<String> = selection
                 .packages()
                 .iter()

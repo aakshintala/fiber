@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use contract::JobId;
 use contract::clock::Clock;
 use contract::emit::Emit;
-use contract::events::{Event, JobDelta, Progress};
+use contract::events::{Event, JobDelta, Outcome, Progress};
 use contract::jobs::{End, Opened, Stop};
 use contract::keeper::{HostEvent, Stream};
 
@@ -27,6 +27,7 @@ struct Sinks {
     /// `None` once the handover was abandoned.
     output: Option<File>,
     errors: Option<File>,
+    write_failure: Option<PathBuf>,
 }
 
 /// A revocable handle to a runner's append files: closing takes both files
@@ -85,6 +86,7 @@ impl AdoptedRun {
             sinks: Arc::new(Mutex::new(Sinks {
                 output: Some(opened.file),
                 errors,
+                write_failure: None,
             })),
             end: Some(opened.end),
             emit: opened.emit,
@@ -104,7 +106,7 @@ impl AdoptedRun {
     /// A live connection lost before an exit returns the uncalled `End`
     /// for the launcher to route; a revoked or unstarted run reports
     /// nothing.
-    pub fn run(mut self) -> Option<End> {
+    pub fn run(mut self) -> Option<(End, Option<contract::events::JobCompleted>)> {
         let mut feed = self.feed.take();
         let mut text = Text::default();
         loop {
@@ -116,7 +118,33 @@ impl AdoptedRun {
                     self.forget_end();
                     return None;
                 }
-                return self.end.take();
+                let failure = support::lock(&self.sinks).write_failure.clone();
+                return self.end.take().map(|end| {
+                    // A stored write failure replaces the indeterminate
+                    // close: without one, dropping the end stays
+                    // indeterminate. The helper runs once, here.
+                    let completed = failure.map(|path| {
+                        let mut completed = super::hosted::adopted_end(
+                            self.job_id.clone(),
+                            &self.output_path,
+                            &contract::keeper::Exit {
+                                code: None,
+                                signal: None,
+                                timed_out: false,
+                                output_cap: false,
+                                output_write_failure: None,
+                            },
+                        );
+                        completed.status = Outcome::Failed;
+                        completed.error = Some(super::hosted::override_write_failure(
+                            super::ReplacedEnd::Indeterminate,
+                            &path,
+                            false,
+                        ));
+                        completed
+                    });
+                    (end, completed)
+                });
             };
             // What is already queued goes out together, up to a bounded
             // burst: one delta per burst keeps a flood from becoming one
@@ -153,12 +181,22 @@ impl AdoptedRun {
                             feed.flooded()
                         });
                         if let Some(end) = self.end.take() {
-                            let ended = if flooded {
-                                adopted_flooded_end
+                            // The keeper wrote its output before the
+                            // session's post-handover appends, so its stored
+                            // path wins when both sides failed; a lone
+                            // failure supplies its own path. The adopted
+                            // builder applies the single override itself.
+                            let mut exit = exit;
+                            if exit.output_write_failure.is_none() {
+                                exit.output_write_failure =
+                                    support::lock(&self.sinks).write_failure.clone();
+                            }
+                            let completed = if flooded {
+                                adopted_flooded_end(self.job_id.clone(), &self.output_path, &exit)
                             } else {
-                                adopted_end
+                                adopted_end(self.job_id.clone(), &self.output_path, &exit)
                             };
-                            (end.0)(ended(self.job_id.clone(), &self.output_path, &exit));
+                            (end.0)(completed);
                         }
                         return None;
                     }
@@ -181,15 +219,21 @@ impl AdoptedRun {
         if stream == Stream::Err
             && let Some(errors) = &mut sinks.errors
         {
-            match errors.write_all(bytes) {
-                Ok(()) | Err(_) => {}
+            if let Err(error) = errors.write_all(bytes) {
+                if sinks.write_failure.is_none() {
+                    sinks.write_failure = Some(super::background::errors_path(&self.output_path));
+                }
+                drop(error);
             }
             return Some(Vec::new());
         }
-        if let Some(output) = &mut sinks.output {
-            match output.write_all(bytes) {
-                Ok(()) | Err(_) => {}
+        if let Some(output) = &mut sinks.output
+            && let Err(error) = output.write_all(bytes)
+        {
+            if sinks.write_failure.is_none() {
+                sinks.write_failure = Some(self.output_path.clone());
             }
+            drop(error);
         }
         Some(bytes.to_vec())
     }

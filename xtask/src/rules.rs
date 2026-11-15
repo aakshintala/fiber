@@ -1256,6 +1256,8 @@ const HOME_ALLOWANCES: &[SourceAllowance] = &[
     source_allowance!("crates/diag/src/diag.rs", "fn new|root:home", "join:logs", "#1720"),
     source_allowance!("crates/log/src/lib.rs", "fn session_dir|root:home", "join:projects", "#1720"),
     source_allowance!("crates/log/src/lib.rs", "fn sessions_dir|root:home", "join:projects", "#1720"),
+    source_allowance!("crates/log/src/lib.rs", "fn candidate_sessions_dirs|root:home", "join:projects", "#4685"),
+    source_allowance!("crates/log/src/lib.rs", "fn sessions_dir_for_key|root:home", "join:projects", "#4685"),
     source_allowance!("crates/log/src/name.rs", "fn session_name|root:home", "join:projects", "#1720"),
     source_allowance!("crates/log/src/name.rs", "fn session_dirs|root:home", "join:projects", "#1720"),
     source_allowance!("crates/log/src/read.rs", "fn walk|root:home", "join:projects", "#1725"),
@@ -1966,9 +1968,27 @@ fn function_context(tokens: &[SourceToken], at: usize) -> String {
         }) else {
             continue;
         };
-        let Some(open) = (i + 2..tokens.len())
-            .find(|j| punct(tokens.get(*j), '{') || punct(tokens.get(*j), ';'))
-        else {
+        let mut depth = 0usize;
+        let mut open = None;
+        for (j, token) in tokens.iter().enumerate().skip(i + 2) {
+            match token.kind {
+                SourceKind::Punct('(' | '[') => depth += 1,
+                SourceKind::Punct(')' | ']') => {
+                    let Some(next_depth) = depth.checked_sub(1) else {
+                        break;
+                    };
+                    depth = next_depth;
+                }
+                // A semicolon in brackets or parentheses does not end a signature.
+                // Only top-level braces or semicolons delimit the function header.
+                SourceKind::Punct('{') | SourceKind::Punct(';') if depth == 0 => {
+                    open = Some(j);
+                    break;
+                }
+                SourceKind::Ident(_) | SourceKind::String(_) | SourceKind::Punct(_) => {}
+            }
+        }
+        let Some(open) = open else {
             continue;
         };
         if !punct(tokens.get(open), '{') {
@@ -2459,7 +2479,7 @@ fn source_failures(files: &[RustFile], allowances: &[SourceAllowance], home: boo
                     token_budget,
                     &mut failures,
                     site.line,
-                    format!("{}:{}: {message}", site.path, site.line),
+                    format!("{}:{}: {}: {message}", site.path, site.line, site.context),
                 ) {
                     return vec![stalled];
                 }

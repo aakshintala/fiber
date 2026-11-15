@@ -34,7 +34,7 @@ struct Verdict(Mutex<Decision>);
 
 enum Decision {
     /// Not decided; the reports of runners that lost the connection wait.
-    Pending(Vec<End>),
+    Pending(Vec<(End, Option<contract::events::JobCompleted>)>),
     /// The session owns the jobs for good.
     Kept,
     /// The session gave the handover up.
@@ -42,6 +42,15 @@ enum Decision {
 }
 
 impl Verdict {
+    /// Delivers a held report once the handover is kept: the ending ships
+    /// when the runner wrote one, otherwise the uncalled end drops.
+    fn deliver(end: End, completed: Option<contract::events::JobCompleted>) {
+        if let Some(completed) = completed {
+            (end.0)(completed);
+        } else {
+            drop(end);
+        }
+    }
     fn pending() -> Arc<Self> {
         Arc::new(Self(Mutex::new(Decision::Pending(Vec::new()))))
     }
@@ -49,13 +58,14 @@ impl Verdict {
     /// A runner's connection closed with no ending: the registry records
     /// the job failed `indeterminate` if the session keeps the handover,
     /// and nothing if it gave it up.
-    fn lost(&self, end: End) {
+    fn lost(&self, report: (End, Option<contract::events::JobCompleted>)) {
+        let (end, completed) = report;
         let mut decision = lock(&self.0);
         match &mut *decision {
-            Decision::Pending(ends) => ends.push(end),
+            Decision::Pending(ends) => ends.push((end, completed)),
             Decision::Kept => {
                 drop(decision);
-                drop(end);
+                Self::deliver(end, completed);
             }
             Decision::Abandoned => {
                 drop(decision);
@@ -74,9 +84,9 @@ impl Verdict {
         let Decision::Pending(ends) = std::mem::replace(&mut *lock(&self.0), next) else {
             return;
         };
-        for end in ends {
+        for (end, completed) in ends {
             if kept {
-                drop(end);
+                Self::deliver(end, completed);
             } else {
                 std::mem::forget(end);
             }

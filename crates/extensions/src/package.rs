@@ -145,6 +145,17 @@ pub struct Package {
     extension: Option<Arc<super::process::ProcessExtension>>,
 }
 
+pub(crate) fn canonicalize_package_dir(
+    dir: &std::path::Path,
+) -> Result<std::path::PathBuf, (contract::ErrorCode, String)> {
+    dir.canonicalize().map_err(|source| {
+        (
+            contract::ErrorCode::IoFailed,
+            format!("{}: {source}", dir.display()),
+        )
+    })
+}
+
 impl Package {
     /// Loads the package in `options.dir`: its manifest must read and
     /// name this Fiber's extension API, and a process package must
@@ -245,6 +256,12 @@ impl Package {
         name: &str,
         workspace: &std::path::Path,
     ) -> Result<config::ProjectKey, (contract::ErrorCode, String)> {
+        if workspace.as_os_str().is_empty() {
+            return Err((
+                contract::ErrorCode::InvalidArguments,
+                format!("{name}: cannot key its project data from an empty workspace"),
+            ));
+        }
         let identity = workspace
             .canonicalize()
             .unwrap_or_else(|_| workspace.to_path_buf());
@@ -308,7 +325,8 @@ impl Package {
         mode: ProcessProviderMode,
         host: Option<ProcessProviderHost>,
     ) -> Result<StartedProcessProvider, (contract::ErrorCode, String)> {
-        let manifest = config::read_manifest(&options.dir).map_err(|source| {
+        let canonical_dir = canonicalize_package_dir(&options.dir)?;
+        let manifest = config::read_manifest(&canonical_dir).map_err(|source| {
             (
                 contract::ErrorCode::IoFailed,
                 format!(
@@ -371,7 +389,7 @@ impl Package {
                 // runs under the CLI, never under the package.
                 let (home, workspace) = match host.as_ref() {
                     Some(host) => (host.home.clone(), host.cwd.clone()),
-                    None => Self::cli_context(&options.dir),
+                    None => Self::cli_context(&canonical_dir),
                 };
                 let project = Self::sessionless_project(&manifest.name, &workspace)?;
                 let state = super::host::state::StateRegistry::standalone().store(&manifest.name);
@@ -386,6 +404,7 @@ impl Package {
                 let context = super::process::context::ProcessContext {
                     run: super::process::context::ProcessRun::Call,
                     workspace,
+                    package: canonical_dir.clone(),
                     data_dirs,
                     state: serde_json::Map::new(),
                     extension: manifest.name.clone(),
@@ -426,7 +445,7 @@ impl Package {
         });
         let loaded = Self::load_with_runtime(
             PackageOptions {
-                dir: options.dir.clone(),
+                dir: canonical_dir.clone(),
                 clock: Arc::clone(&options.clock),
             },
             runtime.clone(),
@@ -438,15 +457,14 @@ impl Package {
                 format!("{}: its process has no registry", manifest.name),
             ));
         };
-        // A bare name runs on `PATH` and an absolute path as written;
-        // anything else joins onto the package directory, as the
-        // extension's own files do.
-        let program = std::path::Path::new(&process.program);
-        let program = if program.is_absolute() || program.components().count() == 1 {
-            program.to_path_buf()
-        } else {
-            options.dir.join(program)
-        };
+        let program = crate::host::resolve::resolve_in_package(&process.program, &canonical_dir)
+            .map_err(|message| {
+                (
+                    contract::ErrorCode::ExtensionFailed,
+                    format!("{}: cannot start its process: {message}", manifest.name),
+                )
+            })?;
+        let program = std::path::PathBuf::from(program);
         // Refresh resolves stored pairs from the home credential files.
         let home = context.home.clone();
         let extension = super::process::ProcessExtension::start(super::process::Launch {

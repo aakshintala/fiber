@@ -2131,25 +2131,34 @@ fn a_reread_keeps_the_focused_key_where_it_is_and_a_vanished_one_falls_to_the_fi
 #[test]
 fn a_click_focuses_a_row_and_a_blank_line_or_the_header_changes_nothing() {
     let fake = Fake::new(rows());
-    let mut settings = tab(&fake, SettingsTab::Models);
+    let mut settings = at(&fake, "model_lists.models_dev");
     let layout = settings.layout(80, 24, None);
     let second = layout.takes[1];
-    settings.click(Spot::Row(second), &ctx(&fake));
-    assert_eq!(
-        settings.focus,
-        Some(super::Focus::Key("model_lists.models_dev".to_owned()))
-    );
-    // The line between two rows is not a row.
-    settings.click(Spot::Row(second + 1), &ctx(&fake));
-    assert_eq!(
-        settings.focus,
-        Some(super::Focus::Key("model_lists.models_dev".to_owned()))
-    );
+    let blank = layout
+        .lines
+        .iter()
+        .position(|line| matches!(line, super::Line::Blank))
+        .unwrap();
+    let original_focus = settings.focus.clone();
+    settings.click(Spot::Row(blank), &ctx(&fake));
     settings.click(Spot::Row(500), &ctx(&fake));
+    assert_eq!(settings.focus, original_focus);
+    assert!(settings.page.is_none());
+    assert!(fake.writes().is_empty());
+
+    let enter_fake = Fake::new(rows());
+    let mut by_enter = at(&enter_fake, "model_lists.models_dev");
+    let enter_act = by_enter.key(&Key::Enter, &ctx(&enter_fake));
+    let click_act = settings.click(Spot::Row(second), &ctx(&fake));
+    assert!(matches!(click_act, Act::Stay));
+    assert!(matches!(enter_act, Act::Stay));
+    assert_eq!(settings.focus, by_enter.focus);
+    assert_eq!(settings.page.is_some(), by_enter.page.is_some());
     assert_eq!(
-        settings.focus,
-        Some(super::Focus::Key("model_lists.models_dev".to_owned()))
+        writes(&fake),
+        [w(Layer::Global, "model_lists.models_dev", "false")]
     );
+    assert_eq!(writes(&fake), writes(&enter_fake));
     assert!(matches!(
         settings.click(Spot::Close, &ctx(&fake)),
         Act::Close
@@ -2755,10 +2764,12 @@ fn deleting_the_list_row_resets_it_and_deleting_in_the_page_removes_an_entry() {
 #[test]
 fn the_pages_clicks_and_wheel_move_its_focus_only_outside_a_field() {
     let fake = Fake::new(rows());
+    // Clicking a string-list entry opens its field and keeps it focused
+    // against clicks and the wheel.
     let mut settings = page(&fake, "sandbox.allow_write");
     settings.click(Spot::Row(1), &ctx(&fake));
     assert_eq!(settings.page.as_ref().unwrap().list.selected(), 1);
-    one(&mut settings, &fake, Key::Enter);
+    assert!(settings.page.as_ref().unwrap().field.is_some());
     settings.click(Spot::Row(0), &ctx(&fake));
     assert_eq!(
         settings.page.as_ref().unwrap().list.selected(),
@@ -2767,6 +2778,35 @@ fn the_pages_clicks_and_wheel_move_its_focus_only_outside_a_field() {
     );
     assert!(fake.writes().is_empty());
     settings.wheel(true, &ctx(&fake));
+    assert!(fake.writes().is_empty());
+}
+
+#[test]
+fn clicking_the_scoped_models_screen_row_opens_its_screen() {
+    let mut fixture = rows();
+    fixture.extend([on(
+        SettingsTab::Models,
+        "Scoped models setting",
+        "scoped_models",
+        value("[]"),
+        "global",
+        ANY,
+        SettingControl::StringList,
+    )]);
+    let fake = Fake::new(fixture);
+    let mut settings = tab(&fake, SettingsTab::Models);
+    let layout = settings.layout(80, 24, None);
+    let row = layout
+        .lines
+        .iter()
+        .position(|line| *line == super::Line::Item(Item::Screen(Screen::ScopedModels)))
+        .unwrap();
+
+    settings.click(Spot::Row(row), &ctx(&fake));
+    assert_eq!(
+        settings.take_request(),
+        Some(Request::Screen(Screen::ScopedModels))
+    );
     assert!(fake.writes().is_empty());
 }
 
@@ -3240,6 +3280,20 @@ fn the_current_theme_is_marked_and_selected() {
         panic!("no choices");
     };
     assert_eq!(list.selected(), 4);
+}
+
+#[test]
+fn space_and_enter_choose_the_same_theme() {
+    let fake = themed(rows());
+    let mut by_enter = theme_choices(&fake);
+    one(&mut by_enter, &fake, Key::Enter);
+    let enter_writes = writes(&fake);
+
+    let fake = themed(rows());
+    let mut by_space = theme_choices(&fake);
+    one(&mut by_space, &fake, Key::Char(' '));
+    assert_eq!(writes(&fake), enter_writes);
+    assert!(names(&by_space).is_empty());
 }
 
 #[test]
@@ -3958,8 +4012,9 @@ fn numeric_controls_match_the_documented_values_and_include_defaults() {
     for (key, want, default) in sliders {
         assert_eq!(number_slider(key), Some(want), "{key}");
         assert!((want.0..=want.1).contains(&default), "{key}");
+        assert!(number_list(key).is_none(), "{key}");
     }
-    let lists: [(&str, &[f64], f64); 7] = [
+    let lists: [(&str, &[f64], f64); 9] = [
         (
             "compaction.tokens",
             &[
@@ -3998,17 +4053,46 @@ fn numeric_controls_match_the_documented_values_and_include_defaults() {
             &[300_000.0, 900_000.0, 1_800_000.0, 3_600_000.0, 7_200_000.0],
             1_800_000.0,
         ),
+        (
+            "hub.idle_exit_ms",
+            &[300_000.0, 900_000.0, 1_800_000.0, 3_600_000.0, 7_200_000.0],
+            1_800_000.0,
+        ),
+        ("session.keep_exited", &[0.0, 5.0, 10.0, 20.0, 50.0], 10.0),
     ];
     for (key, want, default) in lists {
         assert_eq!(number_list(key), Some(want), "{key}");
         assert!(want.contains(&default), "{key}");
+        assert!(number_slider(key).is_none(), "{key}");
     }
-    assert_eq!(number_list("hub.idle_exit_ms"), None);
-    assert_eq!(
-        number_list("session.keep_exited"),
-        Some(&[0.0, 5.0, 10.0, 20.0, 50.0][..])
-    );
-    assert_eq!(number_list("tui.rail.width"), None);
+    for key in [
+        "compaction.tokens",
+        "budget.usd",
+        "reviewer.block_limits.consecutive",
+        "reviewer.block_limits.session",
+        "retry.initial_delay_ms",
+        "retry.max_delay_ms",
+        "hub.idle_exit_ms",
+        "session.idle_exit_ms",
+        "session.keep_exited",
+    ] {
+        assert!(number_list(key).is_some(), "documented number list: {key}");
+        assert!(
+            number_slider(key).is_none(),
+            "documented number list: {key}"
+        );
+    }
+    for key in [
+        "tui.rail.width",
+        "tui.panel.width",
+        "quota.notice_at",
+        "compaction.window_fraction",
+        "cache.warm_cap",
+        "retry.attempts",
+    ] {
+        assert!(number_slider(key).is_some(), "documented slider: {key}");
+        assert!(number_list(key).is_none(), "documented slider: {key}");
+    }
     assert_eq!(
         text_list("model_lists.refresh_after"),
         Some(&["1h", "6h", "12h", "24h", "3d", "7d"][..])
@@ -4439,6 +4523,29 @@ fn slider_custom_values_step_to_nearest_tick_and_off_range_values_clamp() {
     assert!((stepped - 0.9).abs() < 1e-12);
 }
 
+/// Enter follows the documented list order (`docs/tui.md`, `/settings`, "Controls").
+#[test]
+fn hub_idle_exit_steps_and_persists() {
+    let row = on(
+        SettingsTab::Sessions,
+        "Hub idle exit",
+        "hub.idle_exit_ms",
+        value("1800000"),
+        "default",
+        ANY,
+        SettingControl::Number,
+    );
+    let fake = Fake::new(vec![row]);
+    let mut settings = at(&fake, "hub.idle_exit_ms");
+    assert_eq!(shown_value(settings.selected().unwrap()).0, "30 min");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "hub.idle_exit_ms", "3600000")]
+    );
+}
+
+/// Enter follows the documented list order (`docs/tui.md`, `/settings`, "Controls").
 #[test]
 fn keep_exited_lists_and_persists_the_documented_session_counts() {
     let row = |shown| {
@@ -4474,6 +4581,14 @@ fn keep_exited_lists_and_persists_the_documented_session_counts() {
     assert_eq!(
         next_number_value(number_list("session.keep_exited").unwrap(), 20.0, true),
         Some(50.0)
+    );
+
+    let fake = Fake::new(vec![row(value("50"))]);
+    let mut settings = at(&fake, "session.keep_exited");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "session.keep_exited", "0")]
     );
 
     let fake = Fake::new(vec![row(value("10"))]);
@@ -4629,11 +4744,22 @@ fn a_list_page_scrolls_its_focus_into_the_rows_the_lines_below_leave() {
 }
 
 #[test]
-fn space_on_the_add_row_of_an_object_list_writes_nothing() {
+fn space_and_enter_on_the_add_row_of_an_object_list_open_the_entry_field() {
     let fake = Fake::new(extensions(r#"[{"path":"a","required":false}]"#));
     let mut settings = page(&fake, "repository_extensions");
     one(&mut settings, &fake, Key::Down);
     one(&mut settings, &fake, Key::Char(' '));
+    let page = settings.page.as_ref().unwrap();
+    assert!(page.field.is_some(), "Space should open the + Add field");
+    assert_eq!(page.field.as_ref().unwrap().at, None);
+    one(&mut settings, &fake, Key::Esc);
+    one(&mut settings, &fake, Key::Enter);
+    let page = settings.page.as_ref().unwrap();
+    assert!(
+        page.field.is_some(),
+        "Enter should still open the + Add field"
+    );
+    assert_eq!(page.field.as_ref().unwrap().at, None);
     assert!(fake.writes().is_empty(), "{:?}", fake.writes());
 }
 
@@ -5409,7 +5535,7 @@ fn settings_search_controls_save_through_the_existing_control_and_layer() {
     assert_eq!(settings.said, ["Saved to global config.".to_owned()]);
     // A filtered fixed row steps in the schema's order, as on its tab.
     let mut settings = searched(&fake, "thinking");
-    one(&mut settings, &fake, Key::Char(' '));
+    one(&mut settings, &fake, Key::Enter);
     assert_eq!(
         writes(&fake),
         [
@@ -5422,6 +5548,16 @@ fn settings_search_controls_save_through_the_existing_control_and_layer() {
         settings.focus,
         Some(super::Focus::Key("thinking".to_owned()))
     );
+}
+
+#[test]
+fn space_in_search_remains_query_text() {
+    let fake = Fake::new(rows());
+    let mut settings = searched(&fake, "thinking");
+    let before = writes(&fake);
+    one(&mut settings, &fake, Key::Char(' '));
+    assert_eq!(query_of(&settings), "thinking ");
+    assert_eq!(writes(&fake), before);
 }
 
 #[test]

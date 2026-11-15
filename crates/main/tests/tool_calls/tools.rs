@@ -390,7 +390,7 @@ impl StdoutRun {
     /// The session's directory, from its id.
     fn tools_session_dir(&self, setup: &Setup) -> PathBuf {
         let workspace = fs::canonicalize(setup.workspace()).unwrap();
-        let key = workspace.to_string_lossy().replace('/', "-");
+        let key = log::project_key(&workspace);
         setup
             .home()
             .join("projects")
@@ -2421,10 +2421,7 @@ fn markdown_writes_in_extension_data_directories_take_the_fast_path() {
     // Absolute paths: the tools join relative paths to the workspace.
     let machine = setup.home().join("data/notes/a.md").display().to_string();
     // The project key, as `Run::session_dir` derives it.
-    let key = fs::canonicalize(setup.workspace())
-        .unwrap()
-        .to_string_lossy()
-        .replace('/', "-");
+    let key = log::project_key(&worktree::project(&setup.workspace()));
     let project_file = setup
         .home()
         .join("projects")
@@ -3347,9 +3344,9 @@ fn a_reviewed_call_carries_the_notes_after_the_shared_instructions() {
             "reviewer": {"model": "fake/m", "context": "Our org is acme."}}),
     );
     // The per-project file in Fiber home names the same project as the
-    // session's directory logic does: the workspace with `/` as `-`.
+    // session's directory logic does.
     let workspace = fs::canonicalize(setup.workspace()).unwrap();
-    let key = workspace.to_string_lossy().replace('/', "-");
+    let key = log::project_key(&workspace);
     write(
         &setup.home().join("projects").join(key).join("config.json"),
         &json!({"reviewer": {"context": "Never touch infra/prod."}}),
@@ -3514,7 +3511,8 @@ fn foreground_output_past_a_mebibyte_keeps_peak_rss_growth_bounded() {
     };
     let before = hwm(completed[0]);
     let after = hwm(completed[2]);
-    assert!(before > 0 && after >= before, "{before} {after}");
+    // VmHWM can read lower: update_hiwater_rss() samples approximate per-CPU RSS before drops.
+    assert!(before > 0, "{before} {after}");
     // Without the spill the buffer alone is at least 64 MiB.
     assert!(
         after <= before + 4096,

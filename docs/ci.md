@@ -380,7 +380,7 @@ On Linux x86_64 alone:
 - `cargo fmt --check`
 - a process signal appears only in the guarded helpers (`cargo xtask signal-sites`); the check scans Rust tokens, so comments never count, and its allowlist is a trust list: the files it names may send signals, every other file may not
 - no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, in a `const`, a `Deadline::after` or `.within`, a wait call such as `await_requests`, a `.min` cap or a socket timeout setter (`cargo xtask must-succeed`, `docs/testing.md`, "Waits and timeouts"); the check scans Rust tokens, so comments never count, and its allow-list names only each kept bound (a poll slice, a fake-clock grace or step, a bound the code under test reads, a "nothing arrives" check); it reports each site by file path, then line
-- a raised `WAITS`, `BUDGET` or `CLEANUP` bound, and a `Deadline::after` in a test that is 60 s or more or that the check cannot read, fail (`cargo xtask budget-bounds --base "$base"`, `xtask/src/budget_bounds.rs`); only lines changed against the merge base are scanned, as Rust tokens, so comments never count and unchanged lines never fail. A bound the check cannot read — a shared name outside its known list, or a computed `Duration` — fails closed: the long names (`WAITS`, `BUDGET`, `CLEANUP`, `MAX`) fail while the short ones (`WAIT`, `DEADLINE`, `MUST_SUCCEED_WITHIN`, `ZERO`) pass unruled, and anything else fails as not shown below 60 s; the check reports `Deadline::after({spelling}) is 60 s or more`, or `Deadline::after({spelling}) (readable: WAIT, DEADLINE, MUST_SUCCEED_WITHIN, Duration::ZERO) is not shown below 60 s`. A site is cleared by `// ruling: #N` on the source line holding the `after` ident, as in `crates/main/tests/support/mod.rs` (`Deadline::after(fakes::MUST_SUCCEED_WITHIN * 2) // ruling: #4075`); the doubled bound is the relation (`docs/testing.md`, "Waits and timeouts") asks for
+- a raised `WAITS`, `BUDGET` or `CLEANUP` bound, and a `Deadline::after` in a test that is 60 s or more or that the check cannot read, fail (`cargo xtask budget-bounds --base "$base"`, `xtask/src/budget_bounds.rs`); only lines changed against the merge base are scanned, as Rust tokens, so comments never count and unchanged lines never fail. A bound the check cannot read — a shared name outside its known list, or a computed `Duration` — fails closed: the long names (`WAITS`, `BUDGET`, `CLEANUP`, `MAX`) fail while the short ones (`WAIT`, `DEADLINE`, `MUST_SUCCEED_WITHIN`, `WHOLE_SUBSYSTEM_WITHIN`, `ZERO`) pass unruled, and anything else fails as not shown below 60 s; the check reports `Deadline::after({spelling}) is 60 s or more`, or `Deadline::after({spelling}) (readable: WAIT, DEADLINE, MUST_SUCCEED_WITHIN, WHOLE_SUBSYSTEM_WITHIN, Duration::ZERO) is not shown below 60 s`. A site is cleared by `// ruling: #N` on the source line holding the `after` ident, as in `crates/main/tests/support/mod.rs` (`Deadline::after(fakes::MUST_SUCCEED_WITHIN * 2) // ruling: #4075`); the doubled bound is the relation (`docs/testing.md`, "Waits and timeouts") asks for
 - `narrating-comments --base "$base"` (`xtask/src/narrating_comments.rs`); checks added comment lines in Rust, shell, Python, TOML and YAML sources, plus files under `scripts/`, using the stateless line rules in [`docs/code-quality/lints.md`](code-quality/lints.md)
 - the compiled-in list matches the files crates compile in, Markdown
   anywhere or any file outside the crate, every include argument is a
@@ -713,14 +713,18 @@ renamed in the new release fails it, because `unknown_lints` is denied
 
 ## The model catalog
 
-A workflow runs `cargo xtask models-dev` every night at 03:00 UTC on `main`
-and opens a pull request when a committed model list or
-`providers/models-corrections.toml` changes (`docs/model-routing.md`,
-"What a provider extension declares"). It fetches models.dev's public catalog and needs no secret. Its
-pull request passes CI like any other. When an open pull request from an
-earlier run exists, the workflow updates that branch instead of opening a
-second one. This is the only CI job that fetches over the network outside a
-build's dependencies.
+`.github/workflows/models-catalog.yml` runs `cargo xtask models-dev` every
+night at 03:00 UTC on `main` and opens a pull request when a committed model
+list or `providers/models-corrections.toml` changes
+(`docs/model-routing.md`, "What a provider extension declares"). It fetches
+models.dev's public catalog with no credential, and opens its pull request
+with the toolchain bump token so that CI runs ("Toolchain"). When an open
+pull request from an earlier run exists, the workflow updates its branch
+instead of opening a second one. On each changed run, it resets the
+bot-managed `models-catalog` branch from `main` and overwrites it, so nobody
+should push to it by hand. When generated files match `main`, the workflow
+closes any stale pull request with
+a comment naming the run and deletes the branch.
 
 ## Releases
 
@@ -816,7 +820,7 @@ regenerates it and fails when the committed copy differs.
 
 ## Manually dispatched workflows
 
-Four workflows never run on a push or a pull request. Someone starts them with
+Five workflows never run on a push or a pull request. Someone starts them with
 `gh workflow run <file> --ref <branch>`, and GitHub allows that only once the
 workflow file is on `main`.
 
@@ -837,6 +841,9 @@ workflow file is on `main`.
   x86_64 and macOS arm64 from a warm dependency cache, times an incremental
   rebuild after touching one file each in `crates/tui` and `crates/support`,
   and uploads both timing reports as artifacts (#3789, step 1).
+- `models-catalog.yml` regenerates model lists from models.dev on a manual
+  dispatch, and opens or updates a pull request only when generated files
+  differ from `main`.
 
 ## Job time limits
 

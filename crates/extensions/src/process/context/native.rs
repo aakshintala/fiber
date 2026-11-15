@@ -126,8 +126,20 @@ impl NativeHostServices {
         // An absent working directory is the workspace; a relative one
         // joins it, and an absolute one is used as given, as in Lua.
         let cwd = context.workspace.join(cwd);
+        // This is a refusal check even for scripted calls, matching `lua/vm.rs::host_request`.
+        let resolved = crate::host::resolve::resolve_in_package(program, &context.package)
+            .map_err(|message| {
+                (
+                    contract::ErrorCode::ExtensionFailed,
+                    message.lines().next().unwrap_or_default().to_owned(),
+                )
+            })?;
         let request = crate::host::exec::ExecRequest {
-            program: program.to_owned(),
+            program: if self.host_script.is_none() {
+                resolved
+            } else {
+                program.to_owned()
+            },
             args: args.clone(),
             cwd,
             env,
@@ -188,7 +200,7 @@ impl NativeHostServices {
             self.runtime.emit(&contract::events::Event::ExtensionExec(
                 contract::events::ExtensionExec {
                     extension: context.extension.clone(),
-                    program: program.to_owned(),
+                    program: request.program.clone(),
                     args,
                     cwd: request.cwd.display().to_string(),
                     process: contract::shapes::Process {
@@ -270,14 +282,14 @@ impl NativeHostServices {
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
         if callback.tool_anchor().is_none() {
             return Err((
-                contract::ErrorCode::InvalidArguments,
+                contract::ErrorCode::NotAvailable,
                 "host.tool: called outside a running tool call".to_owned(),
             ));
         }
         let runner = callback.inner_calls.clone();
         let Some(runner) = runner else {
             return Err((
-                contract::ErrorCode::InvalidArguments,
+                contract::ErrorCode::NotAvailable,
                 "host.tool: called outside a running tool call".to_owned(),
             ));
         };

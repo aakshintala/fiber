@@ -605,7 +605,8 @@ fn exec_in_init_fails_loading_with_the_entry_script_error() {
     let ext = exec_extension(
         &setup,
         "exec",
-        "local r = host.exec(\"sh\", {\"-c\", \"true\"})\n",
+        "local ok, err = pcall(host.exec, \"sh\", {\"-c\", \"true\"})\n\
+         error(tostring(ok) .. \"/\" .. tostring(err.code) .. \"/\" .. tostring(err), 0)\n",
         clock,
     );
     let err = exec_call(&ext, "pwd").unwrap_err();
@@ -613,7 +614,7 @@ fn exec_in_init_fails_loading_with_the_entry_script_error() {
         panic!("{err:?}")
     };
     assert!(
-        message.contains("host.exec: not available while init.lua runs"),
+        message.contains("false/not_available/host.exec: not available while init.lua runs"),
         "{message}"
     );
 }

@@ -45,6 +45,9 @@ pub mod id;
 /// cap on held text (`docs/tools.md`, "Progress").
 pub mod pace;
 
+/// Stable persisted project identity keys.
+pub mod project_key;
+
 /// The stoppable read: a socket reader that a `Stop` ends on demand.
 pub mod stoppable;
 

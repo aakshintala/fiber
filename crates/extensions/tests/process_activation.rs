@@ -467,6 +467,35 @@ fn registered_session(
     (session, captured)
 }
 
+/// A session refuses to start a process whose program escapes its package.
+#[test]
+fn session_process_start_refuses_package_escape() {
+    let env = Env::new("fiber-process-session-escape");
+    env.install_process(
+        "proc",
+        &json!({"process": {"program": "../outside"}}),
+        &json!({}),
+    );
+
+    let session = env.load(ExtensionReason::New, 0);
+    assert!(
+        !session
+            .loaded_names()
+            .iter()
+            .any(|name| name == "fiber.test/proc"),
+        "the refused process extension is not loaded: {:?}",
+        session.loaded_names()
+    );
+    assert!(
+        session.notices().iter().any(|notice| {
+            notice.extension.as_deref() == Some("fiber.test/proc")
+                && notice.message.contains("cannot start its process")
+        }),
+        "the session reports the package escape: {:?}",
+        session.notices()
+    );
+}
+
 /// Loading starts the process package: the hello carries the session's
 /// identity, reason, workspace, data directories and folded state, the
 /// tool and hook register as a Lua extension's do, and both run.
@@ -815,7 +844,7 @@ fn services_plan(markers: &Path) -> Value {
 /// Installed session services answer the process host calls, and calls
 /// without a session fail with the existing sentences: the model, the
 /// delegate and the driver reply through fakes, while `host.tool` with no
-/// runner fails `invalid_arguments`.
+/// runner fails `not_available`.
 #[test]
 fn process_host_calls_reach_session_services_and_unset_ones_fail_closed() {
     let env = Env::new("fiber-process-host-services");
@@ -895,7 +924,7 @@ fn process_host_calls_reach_session_services_and_unset_ones_fail_closed() {
     assert_eq!(ack("tool-ack.json")["kind"], json!("command_rejected"));
     assert_eq!(
         ack("tool-ack.json")["payload"]["code"],
-        json!("invalid_arguments")
+        json!("not_available")
     );
     let cancel = CancelToken::new();
     session.finish_processes(&cancel);
@@ -1039,7 +1068,7 @@ fn process_host_tool_model_delegate_live_and_sealed() {
     );
     let watcher_tool = read_marker(&markers.join("watch-tool.json"));
     assert_eq!(watcher_tool["kind"], "command_rejected");
-    assert_eq!(watcher_tool["payload"]["code"], "invalid_arguments");
+    assert_eq!(watcher_tool["payload"]["code"], "not_available");
     assert_eq!(
         watcher_tool["payload"]["message"],
         "host.tool: called outside a running tool call"

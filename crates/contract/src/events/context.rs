@@ -195,7 +195,7 @@ const BULK_LEADS: &[(ErrorCode, &str)] = &[
     (ErrorCode::SkillShadowed, "skills are shadowed"),
     (ErrorCode::ExtensionShadowed, "extensions are shadowed"),
     (ErrorCode::SkillInvalid, "skills are invalid"),
-    (ErrorCode::IoFailed, "reads failed"),
+    (ErrorCode::IoFailed, "I/O failures"),
     (ErrorCode::CommandConflict, "command conflicts"),
     (ErrorCode::HookFailed, "hooks failed"),
     (ErrorCode::ModelUnconfigured, "models are unconfigured"),

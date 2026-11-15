@@ -22,7 +22,7 @@ const DRIVE: &str = r#"
 local host, tag, in_entry, failure = ...
 function host.drive(command, args)
   if in_entry() then
-    error(failure("closing", "host.drive: not available while init.lua runs"), 0)
+    error(failure("not_available", "host.drive: not available while init.lua runs"), 0)
   end
   if type(command) ~= "string" then
     error("host.drive: `command` must be a string", 2)

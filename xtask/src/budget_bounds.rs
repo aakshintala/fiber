@@ -3,7 +3,8 @@
 //! test, fails unless the line carries `// ruling: #N`. A bound the check
 //! cannot read — a shared name like `fakes::deadline::BUDGET`, or a computed
 //! `Duration` — fails the same way: only the known short bounds (`WAIT`,
-//! `DEADLINE`, `MUST_SUCCEED_WITHIN`, `Duration::ZERO`) and direct literals
+//! `DEADLINE`, `MUST_SUCCEED_WITHIN`, `WHOLE_SUBSYSTEM_WITHIN`,
+//! `Duration::ZERO`) and direct literals
 //! below 60 s pass unruled. Only lines changed against the merge base are
 //! scanned, as
 //! Rust tokens like `must-succeed` does (comments never count); unchanged
@@ -26,6 +27,13 @@ pub(crate) const CLEANUP: std::time::Duration = std::time::Duration::from_secs(1
 
 /// A `Deadline::after` bound at or above this in a test file fails.
 const AFTER_FLOOR_MS: u128 = 60_000;
+const SHORT_BOUND_NAMES: &[&str] = &[
+    "WAIT",
+    "DEADLINE",
+    "MUST_SUCCEED_WITHIN",
+    "WHOLE_SUBSYSTEM_WITHIN",
+    "Duration::ZERO",
+];
 
 /// Runs `budget-bounds --base REV`: the violations on lines changed against
 /// the merge base with REV, as `path:line` lines.
@@ -246,7 +254,8 @@ fn site_at(trees: &[TokenTree], i: usize, scan: &Scan, test: bool) -> Option<Sit
         None => Some(Site {
             line,
             what: format!(
-                "Deadline::after({spelling}) (readable: WAIT, DEADLINE, MUST_SUCCEED_WITHIN, Duration::ZERO) is not shown below 60 s"
+                "Deadline::after({spelling}) (readable: {}) is not shown below 60 s",
+                SHORT_BOUND_NAMES.join(", ")
             ),
         }),
     }
@@ -318,7 +327,8 @@ fn const_site(trees: &[TokenTree], i: usize, scan: &Scan) -> Option<Site> {
 fn known_ms(name: &str) -> Option<bool> {
     match name {
         "WAITS" | "BUDGET" | "CLEANUP" | "MAX" => Some(true),
-        "WAIT" | "DEADLINE" | "MUST_SUCCEED_WITHIN" | "ZERO" => Some(false),
+        "ZERO" => Some(false),
+        name if SHORT_BOUND_NAMES.contains(&name) => Some(false),
         _ => None,
     }
 }

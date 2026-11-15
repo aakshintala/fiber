@@ -1055,3 +1055,59 @@ fn check_fresh_refuses_what_held_write_refuses() {
         ))
     );
 }
+
+/// The entry script refuses the waiting calls before anything else: each
+/// names the running callback it needs, raised as `not_available`.
+#[test]
+fn entry_script_refusals_are_not_available() {
+    struct Sealed;
+    impl Browser for Sealed {
+        fn open(&self, _url: &str) {}
+        fn show(&self, _url: &str, _code: &str) {}
+        fn attended(&self) -> bool {
+            false
+        }
+    }
+    let lua = mlua::Lua::new();
+    let failures = crate::host::failure::install(&lua).unwrap();
+    let host = lua.create_table().unwrap();
+    let tag = lua.create_table().unwrap();
+    let entry = std::rc::Rc::new(std::cell::Cell::new(true));
+    super::install(
+        &lua,
+        &host,
+        &tag,
+        super::Context {
+            browser: Arc::new(Sealed),
+            script: None,
+        },
+        entry,
+        failures.failure,
+        failures.note_failure,
+    )
+    .unwrap();
+    lua.globals().set("host", host).unwrap();
+    for (call, probe) in [
+        ("callback", "host.oauth.callback({ port = 1 })"),
+        (
+            "poll",
+            "host.oauth.poll({ url = \"https://example.test/token\" })",
+        ),
+        ("refresh", "host.oauth.refresh(function() end)"),
+    ] {
+        let verdict: String = lua
+            .load(format!(
+                "local ok, err = pcall(function() {probe} end)\n\
+                 return tostring(ok) .. \"/\" .. tostring(err.code) .. \"/\" .. tostring(err)"
+            ))
+            .eval()
+            .unwrap();
+        assert_eq!(
+            verdict,
+            format!(
+                "false/not_available/host.oauth.{call}: needs a running callback, not the entry script"
+            ),
+            "{call} refuses while the entry script runs"
+        );
+    }
+}

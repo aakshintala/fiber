@@ -1061,7 +1061,7 @@ impl Settings {
                 list,
                 ..
             } => {
-                if *key == Key::Enter {
+                if key.is_enter_or_space() {
                     let name = names.get(list.selected()).cloned();
                     return name.map_or(Act::Stay, |name| self.choose(&name, ctx));
                 }
@@ -1105,7 +1105,11 @@ impl Settings {
             }
             return Act::Open(file.unwrap_or_else(|| ctx.seam.global_file()));
         }
-        if *key == Key::Enter || *key == Key::Char(' ') {
+        if *key == Key::Char(' ') && self.search.is_some() {
+            self.mutate_query(ctx, |query| query.insert(' '));
+            return Act::Stay;
+        }
+        if key.is_enter_or_space() {
             return self.change(ctx);
         }
         if *key == Key::Tab {
@@ -1374,6 +1378,7 @@ impl Settings {
                 && at <= page.entries.len()
             {
                 self.page_select(at, ctx);
+                self.page_key(&Key::Enter, ctx);
             }
             return Act::Stay;
         }
@@ -1385,9 +1390,13 @@ impl Settings {
                 None => Act::Stay,
             },
             (Spot::Row(at), Mode::Rows) => {
+                let layout = self.layout(ctx.width, ctx.height, ctx.usage);
+                if !matches!(layout.lines.get(at), Some(Line::Item(_))) {
+                    return Act::Stay;
+                }
                 self.focus_line(at, ctx);
                 self.said.clear();
-                Act::Stay
+                self.change(ctx)
             }
             (Spot::Row(_), Mode::Field(_)) => Act::Stay,
             // Only the model picker draws cells with targets of their
@@ -2016,7 +2025,9 @@ impl Settings {
         if *key == Key::Esc {
             self.page = None;
             self.said.clear();
-        } else if *key == Key::Enter {
+        } else if key.is_enter_or_space()
+            && (!page.objects || *key == Key::Enter || at == page.entries.len())
+        {
             let entry = page.entries.get(at);
             let mut draft = Draft::default();
             draft.set(&entry.map(entry_path).unwrap_or_default());
@@ -2776,6 +2787,12 @@ const NUMERIC_SPECS: &[NumericSpec] = &[
         format: NumberFormat::Milliseconds,
     },
     NumericSpec {
+        key: "hub.idle_exit_ms",
+        default: Some("1800000"),
+        kind: NumericKind::NumberList(SESSION_IDLE_VALUES),
+        format: NumberFormat::Milliseconds,
+    },
+    NumericSpec {
         key: "session.keep_exited",
         default: Some("10"),
         kind: NumericKind::NumberList(KEEP_EXITED_VALUES),
@@ -2976,11 +2993,7 @@ fn number_text(key: &str, text: &str) -> String {
         return as_typed(text);
     };
     let Some(spec) = numeric_spec(key) else {
-        return if key == "hub.idle_exit_ms" {
-            listed(n, SESSION_IDLE_VALUES, ms_text(n))
-        } else {
-            as_typed(text)
-        };
+        return as_typed(text);
     };
     match spec.format {
         NumberFormat::Width => format!("{}% of screen width", trimmed(n)),
