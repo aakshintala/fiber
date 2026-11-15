@@ -1382,20 +1382,28 @@ fn the_final_steps_summary_shows_at_the_end_of_turn() {
 }
 
 #[test]
-fn space_toggles_the_summary_checkbox() {
+fn space_matches_enter_on_the_selected_row() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = attached();
     let lines = open(&mut app, &clock);
     accept(&mut app, &lines[0]["id"], segment_a());
     assert!(rows(&app).contains(&CHECK.to_owned()));
-    // Space toggles wherever the cursor sits.
-    app.on_key(crate::keys::Key::Char(' '), clock.now());
-    assert!(rows(&app).contains(&CHECKED.to_owned()));
-    // Enter on the checkbox row toggles it back.
+    let before = shot(&app);
+    // The selected turn opens into its boundaries, as Enter does.
+    assert_eq!(
+        app.on_key(crate::keys::Key::Char(' '), clock.now()),
+        Effect::None
+    );
+    assert_ne!(shot(&app), before);
+    assert!(rows(&app).iter().any(|row| row.contains("start of turn")));
+    assert!(rows(&app).contains(&CHECK.to_owned()));
+    assert!(!rows(&app).contains(&CHECKED.to_owned()));
+
+    // Space on the checkbox row also performs its Enter action.
     let check = rows(&app).len() - 2;
     goto(&mut app, &clock, check);
-    app.on_key(crate::keys::Key::Enter, clock.now());
-    assert!(rows(&app).contains(&CHECK.to_owned()));
+    app.on_key(crate::keys::Key::Char(' '), clock.now());
+    assert!(rows(&app).contains(&CHECKED.to_owned()));
 }
 
 #[test]
@@ -1476,17 +1484,17 @@ fn rewind_is_disabled_with_no_turns() {
 }
 
 #[test]
-fn clicks_select_toggle_and_close() {
+fn clicking_a_turn_opens_it_while_control_cells_keep_their_actions() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = attached();
     let lines = open(&mut app, &clock);
     accept(&mut app, &lines[0]["id"], segment_a());
-    // A click selects the row: the default sat on the second turn.
+    // A click on the first turn performs its Enter action and opens it.
     app.session_view_click(crate::swapped::Spot::Row(0));
     let frame = app.session_view_screen(80).expect("the view is open");
-    // Step boundaries and the default point (`docs/tui.md`, "Rewind").
     assert_eq!(frame.list.selected(), 0);
-    // A click on the checkbox cell toggles it.
+    assert!(rows(&app).iter().any(|row| row.contains("start of turn")));
+    // The checkbox's explicit cell remains a direct toggle control.
     let at = frame.rows.len() - 2;
     app.session_view_click(crate::swapped::Spot::Cell(at, 0));
     assert!(rows(&app).contains(&CHECKED.to_owned()));
@@ -1496,7 +1504,7 @@ fn clicks_select_toggle_and_close() {
 }
 
 #[test]
-fn clicking_a_boundary_then_sending_from_the_action_row_sends_the_clicked_point() {
+fn clicking_a_boundary_sends_from_the_clicked_point() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = attached();
     let lines = open(&mut app, &clock);
@@ -1520,13 +1528,12 @@ fn clicking_a_boundary_then_sending_from_the_action_row_sends_the_clicked_point(
     app.on_key(crate::keys::Key::Enter, clock.now());
     let bounds = app.rewind.turn_bounds(0);
     let wanted = bounds.get(1).cloned().expect("a second boundary");
-    app.session_view_click(crate::swapped::Spot::Row(2));
-    let frame = app.session_view_screen(80).expect("the view is open");
+    let out = sent(app.session_view_click(crate::swapped::Spot::Row(2)));
+    let frame = app
+        .session_view_screen(80)
+        .expect("the view stays open while sending");
     assert_eq!(frame.list.selected(), 2);
-    // The Rewind row's cell sends from the clicked point, not the
-    // default: the list never crosses a content row on the way there.
-    let action = rows(&app).len() - 1;
-    let out = sent(app.session_view_click(crate::swapped::Spot::Cell(action, 0)));
+    // Clicking the boundary itself runs its Enter action immediately.
     // The point names the holding session and seq (`docs/tui.md`, "Rewind").
     assert_eq!(out.len(), 1);
     assert_eq!(out[0]["command"], "rewind");
@@ -2130,8 +2137,7 @@ fn entering_the_second_turn_keeps_the_cursor_on_its_row() {
     assert_eq!(frame.list.selected(), 2);
 }
 
-/// Clicking a boundary row through the view keeps the cursor on the
-/// selected boundary, rather than reseating it onto the turn row.
+/// A boundary click keeps that boundary selected while its send waits.
 #[test]
 fn clicking_a_boundary_keeps_its_row_selected() {
     let clock = fakes::clock::FakeClock::new();
@@ -2146,12 +2152,12 @@ fn clicking_a_boundary_keeps_its_row_selected() {
     // a person can. The view should keep the clicked rows selected.
     goto(&mut app, &clock, 1);
     app.on_key(crate::keys::Key::Enter, clock.now());
-    for at in [3, 4] {
-        app.session_view_click(crate::swapped::Spot::Row(at));
-        let frame = app.session_view_screen(80).expect("the view is open");
-        // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
-        assert_eq!(frame.list.selected(), at);
-    }
+    let at = 3;
+    let out = sent(app.session_view_click(crate::swapped::Spot::Row(at)));
+    assert_eq!(out.len(), 1, "a boundary click sends immediately");
+    let frame = app.session_view_screen(80).expect("the send is pending");
+    assert_eq!(frame.list.selected(), at);
+    assert_eq!(out[0]["command"], "rewind");
 }
 
 /// The retry choice survives the next page while the walk runs on: a
@@ -2608,6 +2614,20 @@ fn clicking_the_action_row_sends() {
     let out = sent(app.session_view_click(crate::swapped::Spot::Cell(at, 0)));
     assert_eq!(out.len(), 1);
     assert_eq!(out[0]["command"], "rewind");
+}
+
+#[test]
+fn clicking_the_action_row_runs_its_enter_action() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], segment_a());
+    let at = rows(&app).len() - 1;
+    let before = shot(&app);
+    let out = sent(app.session_view_click(crate::swapped::Spot::Row(at)));
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["command"], "rewind");
+    assert_ne!(shot(&app), before);
 }
 
 /// Clicking the retry choice sends with the summary on.
