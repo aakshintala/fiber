@@ -582,10 +582,6 @@ crates/log/src/write.rs	fiber-4822	plan	2026-11-15T07:40:12Z	Amoghs-MacBook-Pro:
 crates/loop/tests/turn.rs	fiber-4822	plan	2026-11-15T09:00:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/connection.rs	fiber-4042	plan	2026-11-15T09:48:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/session_turns/continue_session.rs	fiber-4685	plan	2026-11-15T10:16:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/ci.md	fiber-4881	plan	2026-11-15T10:18:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-xtask/src/budget_bounds.rs	fiber-4881	plan	2026-11-15T10:18:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-xtask/src/budget_bounds_tests.rs	fiber-4881	plan	2026-11-15T10:18:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-xtask/src/main.rs	fiber-4881	plan	2026-11-15T10:18:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/event_loop_tests.rs	fiber-4852	plan	2026-11-15T10:25:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/cli/src/sessions_tests.rs	fiber-4881	plan	2026-11-15T10:34:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/process_tests.rs	fiber-4881	plan	2026-11-15T10:34:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
@@ -636,3 +632,11 @@ docs/model-routing.md	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/U
 docs/extensions.md	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 docs/testing/fakes.md	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 docs/ci.md	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+docs/ci.md:383-383	fiber-4881	plan	2026-11-15T11:37:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
+xtask/src/budget_bounds.rs:6-6	fiber-4881	plan	2026-11-15T11:37:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
+xtask/src/budget_bounds.rs:249-249	fiber-4881	plan	2026-11-15T11:37:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
+xtask/src/budget_bounds.rs:321-321	fiber-4881	plan	2026-11-15T11:37:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
+xtask/src/budget_bounds_tests.rs:43-44	fiber-4881	plan	2026-11-15T11:37:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
+xtask/src/budget_bounds_tests.rs:238-239	fiber-4881	plan	2026-11-15T11:37:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
+xtask/src/budget_bounds_tests.rs:275-275	fiber-4881	plan	2026-11-15T11:37:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
+xtask/src/main.rs:114-114	fiber-4881	plan	2026-11-15T11:37:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
