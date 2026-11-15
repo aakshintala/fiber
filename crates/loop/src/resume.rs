@@ -108,6 +108,8 @@ pub struct Resumed {
     pub(crate) known_hosts: crate::known_hosts::KnownHosts,
     /// The reviewer's blocks this session.
     pub(crate) session_blocks: u64,
+    /// The own session's consecutive reviewer-block run.
+    pub(crate) consecutive: u64,
     /// What the reviewer is shown: the latest `reviewer_kept`'s messages,
     /// then what followed (`docs/permissions.md`, "At a compaction").
     pub(crate) reviewed: Vec<Reviewed>,

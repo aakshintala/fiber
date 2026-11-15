@@ -696,6 +696,62 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
     );
 }
 
+#[test]
+fn resumed_after_two_consecutive_blocks_escalates_next_block() {
+    // `docs/permissions.md`, "What happens on a block": 3 consecutive
+    // blocks interrupt the person with an escalation.
+    let mut history = History::new(vec![
+        support::tool_call_reply("Go.", &["exec"]),
+        Scripted::text("After."),
+    ]);
+    let mut tool = support::TestTool::declaring(
+        "exec",
+        "done",
+        vec![contract::shapes::Effect::Executes],
+        None,
+    );
+    tool.subject = Some("run tests".into());
+    let tool = Arc::new(tool);
+    history.write(reviewer_denied(), Some("a_old"));
+    history.write(reviewer_denied(), Some("a_old"));
+    history.freeze();
+
+    let reviewer = Arc::new(ScriptedProvider::new(vec![
+        Scripted::text("check"),
+        Scripted::text("it writes\\nblock"),
+    ]));
+    let looped = history
+        .resume_headless(vec![("builtin".into(), tool as Arc<dyn Tool>)])
+        .reviewer(
+            Ok(r#loop::Reviewer {
+                provider: reviewer,
+                model: Model {
+                    reference: "fake/reviewer-1".into(),
+                    cost: None,
+                    subscription: false,
+                },
+                cache_lifetime: contract::events::CacheLifetime::OneHour,
+                context_window: fakes::CONTEXT_WINDOW,
+                thinking_levels: Vec::new(),
+            }),
+            r#loop::BlockLimits::default(),
+        );
+    let (delivery, seen) = reply_delivery("r_9", Decision::Deny);
+    let inbox = history.inbox_tx.clone();
+    let replied = on_reraise(&history, move || inbox.send(delivery).unwrap());
+    let outcome = history.run(looped, "two");
+    replied.join().unwrap();
+
+    assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+    assert!(is_accepted(&seen), "the escalation answer was accepted");
+    let raises = new_of(&history, "permission_requested");
+    assert_eq!(raises.len(), 1);
+    assert_eq!(
+        raises[0].payload["escalation"]["cause"],
+        "consecutive_blocks"
+    );
+}
+
 // debt: restored_block_mix_matches_live_limit plus review_request_with stay beside the 15 fold rows and the sibling loop test, ceiling: one loop test and one helper pinning the 20-live-block mix, headless resume and 21st-block Failed, upgrade trigger: drop only if the acceptance no longer requires a loop test holding each kind of block
 #[test]
 fn restored_block_mix_matches_live_limit() {

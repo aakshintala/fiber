@@ -87,6 +87,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         seen_files: BTreeMap::new(),
         known_hosts: crate::known_hosts::KnownHosts::default(),
         session_blocks: 0,
+        consecutive: 0,
         // The reviewer's input follows the session's compactions
         // (`docs/permissions.md`, "At a compaction").
         reviewed: Vec::new(),
