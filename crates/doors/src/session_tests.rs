@@ -3669,6 +3669,59 @@ fn history_append_failure_is_logged_without_prompt_text() {
 }
 
 #[test]
+fn rejected_and_dropped_prompts_write_no_history_diagnostic() {
+    // The history file cannot be appended: a rejected or dropped prompt
+    // never attempts the append, so no diagnostic names the failure.
+    let opened = Opened::open(Vec::new());
+    let path = opened.home.join("projects/p/history.jsonl");
+    fs::create_dir_all(&path).unwrap();
+    let gate = &opened.session.gate;
+    let rejected_id = CommandId("c_history_rejected".into());
+    gate.prompts
+        .register(rejected_id.clone(), text_part("private rejected"));
+    let (rejected_tx, rejected_rx) = mpsc::channel();
+    let rejected_ack = contract::inbox::Ack(Box::new(move |answer| {
+        drop(rejected_tx.send(answer));
+    }));
+    let rejected_wrapper =
+        crate::prompt_history::recorded(rejected_ack, path.clone(), gate, rejected_id);
+    (rejected_wrapper.0)(Err(busy()));
+    assert!(
+        Deadline::after(DEADLINE)
+            .recv_or_fail(&rejected_rx, "rejected prompt acknowledgement")
+            .is_err()
+    );
+    let dropped_id = CommandId("c_history_dropped".into());
+    gate.prompts
+        .register(dropped_id.clone(), text_part("private dropped"));
+    let (dropped_tx, dropped_rx) = mpsc::channel();
+    let dropped_ack = contract::inbox::Ack(Box::new(move |answer| {
+        drop(dropped_tx.send(answer));
+    }));
+    let dropped_wrapper =
+        crate::prompt_history::recorded(dropped_ack, path.clone(), gate, dropped_id);
+    drop(dropped_wrapper);
+    assert!(
+        matches!(
+            Deadline::after(DEADLINE).recv(&dropped_rx),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ),
+        "a dropped wrapper answers nothing"
+    );
+    let diagnostic = fs::read_to_string(
+        opened
+            .home
+            .join("logs")
+            .join(format!("session-{}.log", opened.id.0)),
+    )
+    .unwrap_or_default();
+    assert!(!diagnostic.contains("io_failed"), "{diagnostic}");
+    assert!(!diagnostic.contains("private rejected"), "{diagnostic}");
+    assert!(!diagnostic.contains("private dropped"), "{diagnostic}");
+    close_within(opened.session, opened.log);
+}
+
+#[test]
 fn a_full_subscriber_sees_the_kept_ui_line_before_a_later_one() {
     // The seed and the registration sit under one lock: emit status A,
     // connect a client whose subscribe parks at the seed probe, append

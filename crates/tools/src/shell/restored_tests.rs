@@ -703,6 +703,86 @@ fn adopted_write_failure_survives_connection_close() {
 }
 
 #[test]
+fn revoked_close_before_exit_with_a_stored_failure_reports_nothing() {
+    let (_sink_root, reader, sink) = failing_sink("restored-revoked-close-write");
+    let (run, mut case) = run_for_with_sinks(
+        "restored-revoked-close-write-run",
+        "j_revoked_close",
+        b"",
+        true,
+        false,
+        Some(sink),
+        None,
+    );
+    drop(reader);
+    let revoke: AdoptedSink = run.sink();
+    let (send, returned) = mpsc::channel();
+    std::thread::spawn(move || match send.send(run.run()) {
+        Ok(()) | Err(_) => {}
+    });
+    // The runner stores the failure when it appends the burst: the
+    // delivery proves the append ran, with no spin on the runner's
+    // state. Then the handover is revoked and the connection closes
+    // before any exit: the stored failure stays stored, never reported.
+    burst(&mut case, "bytes\n");
+    let line = delivered(&case);
+    assert_eq!(line.lines, "bytes");
+    revoke.close();
+    drop(take_events(&mut case));
+    assert!(
+        deadline()
+            .recv_or_fail(&returned, "the revoked runner to return")
+            .is_none(),
+        "a revoked close reports nothing, stored failure or not"
+    );
+    assert!(
+        matches!(case.completions.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "a revoked close with a stored failure reports nothing"
+    );
+}
+
+#[test]
+fn revoked_exit_with_a_stored_failure_reports_nothing() {
+    let (_sink_root, reader, sink) = failing_sink("restored-revoked-exit-write");
+    let (run, mut case) = run_for_with_sinks(
+        "restored-revoked-exit-write-run",
+        "j_revoked_exit",
+        b"",
+        true,
+        false,
+        Some(sink),
+        None,
+    );
+    drop(reader);
+    let revoke: AdoptedSink = run.sink();
+    let (send, returned) = mpsc::channel();
+    std::thread::spawn(move || match send.send(run.run()) {
+        Ok(()) | Err(_) => {}
+    });
+    // The runner stores the failure when it appends the burst: the
+    // delivery proves the append ran, with no spin on the runner's
+    // state. Then the handover is revoked before the exit lands: the
+    // exit belongs to a job the keeper still holds, so the stored
+    // failure stays stored, never reported.
+    burst(&mut case, "bytes\n");
+    let line = delivered(&case);
+    assert_eq!(line.lines, "bytes");
+    revoke.close();
+    case.events.send(exit(0)).unwrap();
+    drop(take_events(&mut case));
+    assert!(
+        deadline()
+            .recv_or_fail(&returned, "the revoked runner to return")
+            .is_none(),
+        "a revoked exit reports nothing, stored failure or not"
+    );
+    assert!(
+        matches!(case.completions.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "a revoked exit with a stored failure reports nothing"
+    );
+}
+
+#[test]
 fn take_burst_takes_at_most_the_bound_and_stops_after_an_ending() {
     use super::take_burst;
     // A full queue behind a stalled runner: one pass takes the bound and

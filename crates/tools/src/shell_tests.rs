@@ -126,6 +126,66 @@ fn shell_call_write_failure_replaces_nonzero_exit() {
 }
 
 #[test]
+fn shell_call_write_failure_replaces_output_cap() {
+    let path = std::path::PathBuf::from("/tmp/job.log");
+    let status = Command::new("sh").args(["-c", "exit 0"]).status().unwrap();
+    let output = super::assemble(
+        None,
+        super::Finished {
+            output: super::command::Kept::Whole(Vec::new()),
+            status: Some(status),
+            stop: None,
+            indeterminate: false,
+            held_open: false,
+            sent_signal: false,
+            capped: true,
+            flooded: false,
+            write_failure: Some(super::output::WriteFailure {
+                path: path.clone(),
+                source: std::io::Error::other("private OS detail"),
+            }),
+        },
+        None,
+        None,
+    );
+    assert_eq!(code(&output), Some(ErrorCode::IoFailed));
+    let failure = output.error.unwrap();
+    assert!(failure.message.contains(&path.display().to_string()));
+    assert!(failure.message.contains("replaced end: output_cap"));
+    assert!(!failure.message.contains("private OS detail"));
+}
+
+#[test]
+fn shell_call_write_failure_replaces_timeout() {
+    let path = std::path::PathBuf::from("/tmp/job.log");
+    let status = Command::new("sh").args(["-c", "exit 0"]).status().unwrap();
+    let output = super::assemble(
+        None,
+        super::Finished {
+            output: super::command::Kept::Whole(Vec::new()),
+            status: Some(status),
+            stop: Some(super::command::StopKind::Timeout),
+            indeterminate: false,
+            held_open: false,
+            sent_signal: false,
+            capped: false,
+            flooded: false,
+            write_failure: Some(super::output::WriteFailure {
+                path: path.clone(),
+                source: std::io::Error::other("private OS detail"),
+            }),
+        },
+        None,
+        None,
+    );
+    assert_eq!(code(&output), Some(ErrorCode::IoFailed));
+    let failure = output.error.unwrap();
+    assert!(failure.message.contains(&path.display().to_string()));
+    assert!(failure.message.contains("replaced end: timeout"));
+    assert!(!failure.message.contains("private OS detail"));
+}
+
+#[test]
 fn nullable_optional_arguments_parse_as_absent() {
     let dir = fakes::TempDir::new("fiber-shell-nullable");
     let arguments = fakes::tool_args(json!({"command": "ls", "workdir": null, "timeout_ms": null,
