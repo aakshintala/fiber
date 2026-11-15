@@ -645,7 +645,7 @@ impl Loop {
         let started = session.log.append(
             &Event::SessionStarted(SessionStarted {
                 workspace: session.permissions.workspace.clone(),
-                variables: variables(),
+                variables: variables(session.log.session_id()),
                 parent,
                 forked_from: None,
                 rewind: None,

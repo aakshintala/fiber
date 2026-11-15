@@ -10,7 +10,7 @@ use contract::events::{
 };
 use contract::provider::Input;
 use contract::shapes::Failure;
-use contract::{ActionId, TurnId};
+use contract::{ActionId, SessionId, TurnId};
 use log::Log;
 
 use crate::Error;
@@ -42,8 +42,11 @@ pub fn variables_source() -> VariablesSource {
 /// This process's environment, as `session_started` records it: the `PATH`
 /// and the other names, never a value (`docs/invocation.md`, "A session's
 /// environment").
-pub(crate) fn variables() -> Variables {
-    Variables::of(std::env::vars_os(), variables_source())
+pub(crate) fn variables(_session_id: &SessionId) -> Variables {
+    let mut variables = Variables::of(std::env::vars_os(), variables_source());
+    variables.names.push("FIBER_SESSION_ID".into());
+    variables.names.sort();
+    variables
 }
 
 /// The render sinks every durable line is written into.

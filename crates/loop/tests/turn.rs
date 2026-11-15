@@ -1101,10 +1101,12 @@ fn session_started_records_the_path_and_the_other_names_without_values() {
         .map(|name| name.as_str().unwrap())
         .collect();
     assert!(!names.contains(&"PATH"));
+    assert!(names.contains(&"FIBER_SESSION_ID"));
     let mut expected: Vec<String> = std::env::vars_os()
         .map(|(name, _)| name.to_string_lossy().into_owned())
-        .filter(|name| name != "PATH")
+        .filter(|name| name != "PATH" && name != "FIBER_SESSION_ID")
         .collect();
+    expected.push("FIBER_SESSION_ID".into());
     expected.sort();
     assert_eq!(names, expected);
 }
