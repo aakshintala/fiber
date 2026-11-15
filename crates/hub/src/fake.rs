@@ -180,6 +180,25 @@ impl FakeStarter {
         )
     }
 
+    pub(crate) fn bind_then_exit_with_handshake(
+        home: &Path,
+        line: String,
+        handshake: Handshake,
+    ) -> (Self, BindThenExit) {
+        let (starter, exit) = Self::bind_then_exit(home, line);
+        *lock(&starter.handshake) = Some(handshake);
+        (starter, exit)
+    }
+
+    pub(crate) fn bind_then_exit_rejecting_subscribe(
+        home: &Path,
+        line: String,
+    ) -> (Self, BindThenExit) {
+        let (mut starter, exit) = Self::bind_then_exit(home, line);
+        starter.closing = Closing::Every;
+        (starter, exit)
+    }
+
     fn with_controlled_exit(mut self, controlled: Arc<ControlledExit>) -> Self {
         self.controlled_exit = Some(controlled);
         self

@@ -247,6 +247,9 @@ pub(crate) struct Hub {
     /// effects, 1011 closes and `io_failed` answers, not thrift.
     #[cfg(test)]
     pub(crate) fail_spawn: Mutex<Option<&'static str>>,
+    /// Tests only: refuses the next first-prompt thread creation.
+    #[cfg(test)]
+    pub(crate) fail_first_later: AtomicBool,
     /// Tests only: a one-shot signal fired after a competing old-exit
     /// callback sees this child's start guard already held, before it
     /// blocks on that guard. The retry test arms it to prove the second
@@ -392,6 +395,8 @@ impl Hub {
             before_abort_answer: Mutex::new(None),
             #[cfg(test)]
             fail_spawn: Mutex::new(None),
+            #[cfg(test)]
+            fail_first_later: AtomicBool::new(false),
             #[cfg(test)]
             on_retry_contended: Mutex::new(None),
             #[cfg(test)]
