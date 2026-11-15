@@ -30,6 +30,8 @@ pub(crate) struct ProcessContext {
     pub run: ProcessRun,
     /// The session's workspace, resolving relative paths.
     pub workspace: PathBuf,
+    /// The canonical extension package root for relative executable resolution.
+    pub package: PathBuf,
     /// The paths `host.data_dir` returns.
     pub data_dirs: contract::events::ExtensionDataDirs,
     /// The extension's folded state, as `state.get` reads it.

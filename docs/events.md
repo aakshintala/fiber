@@ -1336,7 +1336,7 @@ Durable. A program an extension ran outside a tool call.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `extension` | string | yes | the extension's name |
-| `program` | string | yes | the program |
+| `program` | string | yes | the program as Fiber ran it: a relative path containing `/` resolved inside the extension's directory (`docs/extensions.md`, `host.exec`), a bare name or an absolute path as written |
 | `args` | array of strings | yes | its arguments |
 | `cwd` | string | yes | its working directory |
 | `process` | `process` | yes | how it ended |

@@ -45,6 +45,8 @@ pub(crate) enum Spot {
         item: usize,
         decision: OfferDecision,
     },
+    /// An item's header row.
+    Item(usize),
     /// The Send row.
     Send,
     /// The header's ✕: puts the offer aside.
@@ -280,12 +282,17 @@ impl Offer {
         }
         let send = held.items.len();
         let page = height.saturating_sub(1).max(1);
+        if key.is_enter_or_space() {
+            return Some(if held.cursor == send {
+                OfferKey::Send
+            } else {
+                OfferKey::Source
+            });
+        }
         match key {
             Key::Esc | Key::F1 | Key::AltA | Key::CtrlC => return None,
             Key::Up => held.cursor = crate::swapped::wrap_step(held.cursor, send + 1, -1),
             Key::Down => held.cursor = crate::swapped::wrap_step(held.cursor, send + 1, 1),
-            Key::Enter if held.cursor == send => return Some(OfferKey::Send),
-            Key::Enter => return Some(OfferKey::Source),
             Key::PageUp => {
                 held.top = held.top.saturating_sub(page);
                 return Some(OfferKey::Handled);
@@ -295,7 +302,8 @@ impl Offer {
                 held.top = held.top.saturating_add(page).min(last);
                 return Some(OfferKey::Handled);
             }
-            Key::Char(_)
+            Key::Enter
+            | Key::Char(_)
             | Key::Backspace
             | Key::CtrlO
             | Key::End
@@ -377,6 +385,15 @@ impl Offer {
                 {
                     *chosen = decision;
                     held.cursor = item;
+                }
+                OfferKey::Handled
+            }
+            Spot::Item(item) => {
+                if let Some(held) = self.held.as_mut()
+                    && item < held.items.len()
+                {
+                    held.cursor = item;
+                    return OfferKey::Source;
                 }
                 OfferKey::Handled
             }
@@ -629,7 +646,8 @@ fn layout(held: &Held, width: u16) -> (Vec<Row>, Vec<usize>) {
     let mut cursor_rows = Vec::with_capacity(held.items.len().saturating_add(1));
     for (at, (item, decision)) in held.items.iter().zip(&held.decisions).enumerate() {
         cursor_rows.push(rows.len());
-        rows.push(Row::text(header_line(item, held.cursor == at)));
+        let header = header_line(item, held.cursor == at);
+        rows.push(clipped(header, vec![(0, u16::MAX, Spot::Item(at))], width));
         rows.extend(
             item.summary
                 .lines()

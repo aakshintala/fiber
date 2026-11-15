@@ -112,6 +112,11 @@ struct RefreshCompletionPause {
 
 #[cfg(test)]
 impl Shared {
+    /// Test-only read of the package directory the child runs as.
+    pub(crate) fn context_package(&self) -> std::path::PathBuf {
+        support::lock(&self.context).package.clone()
+    }
+
     /// Pauses the next refresh after its holder is dropped and before it answers.
     pub(crate) fn pause_next_refresh_completion(
         &self,
