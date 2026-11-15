@@ -597,7 +597,7 @@ fn tool_in_the_entry_script_raises_before_it_yields() {
     std::fs::write(
         dir.path().join("init.lua"),
         "local ok, err = pcall(host.tool, \"read\", {})\n\
-         ENTRY = tostring(ok) .. \"/\" .. tostring(err:find(\"host.tool\") ~= nil)\n\
+         ENTRY = tostring(ok) .. \"/\" .. tostring(err.code) .. \"/\" .. tostring(err)\n\
          fiber.command(\"go\", { timeout = 5000, run = function() return ENTRY end })\n",
     )
     .unwrap();
@@ -609,7 +609,7 @@ fn tool_in_the_entry_script_raises_before_it_yields() {
     ));
     let (runner, _entered) = FakeRunner::scripted(vec![]);
     let runner_calls = runner.clone();
-    // The entry script ran: `host.tool` raised a string before any yield.
+    // The entry script ran: `host.tool` raised the coded refusal before any yield.
     let held = Arc::clone(&ext);
     assert_eq!(
         fakes::within(
@@ -618,7 +618,7 @@ fn tool_in_the_entry_script_raises_before_it_yields() {
             move || held.command("go", "")
         )
         .unwrap(),
-        "false/true"
+        "false/not_available/host.tool: not available while init.lua runs"
     );
     assert!(runner_calls.calls().is_empty());
 }
@@ -714,9 +714,9 @@ fn wait_parked(clock: &FakeClock, caller: std::thread::ThreadId, until: Instant)
     );
 }
 
-/// What a `host.tool` outside a running tool call answers: an error in the
-/// calling code, which `pcall` catches as a string.
-const OUTSIDE: &str = "false|host.tool: called outside a running tool call";
+/// What a `host.tool` outside a running tool call answers: a coded
+/// refusal, which `pcall` catches as the `{ code, message }` table.
+const OUTSIDE: &str = "false|not_available|host.tool: called outside a running tool call";
 
 #[test]
 fn tool_from_a_hook_timer_effects_search_provider_or_command_is_an_error() {
@@ -725,27 +725,27 @@ fn tool_from_a_hook_timer_effects_search_provider_or_command_is_an_error() {
         &format!(
             "TIMER_RESULT = \"unfired\"\n\
              fiber.hook(\"before_tool\", {{ timeout = 5000, on_failure = \"blocking\",\n\
-             run = function() local ok, err = pcall(host.tool, \"read\", {{}}) return tostring(ok) .. \"|\" .. err end }})\n\
+             run = function() local ok, err = pcall(host.tool, \"read\", {{}}) return tostring(ok) .. \"|\" .. tostring(err.code) .. \"|\" .. tostring(err) end }})\n\
              fiber.command(\"via_command\", {{ timeout = 5000,\n\
-             run = function() local ok, err = pcall(host.tool, \"read\", {{}}) return tostring(ok) .. \"|\" .. err end }})\n\
+             run = function() local ok, err = pcall(host.tool, \"read\", {{}}) return tostring(ok) .. \"|\" .. tostring(err.code) .. \"|\" .. tostring(err) end }})\n\
              fiber.command(\"arm\", {{ timeout = 5000, run = function()\n\
              host.after(100, function() local ok, err = pcall(host.tool, \"read\", {{}})\n\
-             TIMER_RESULT = tostring(ok) .. \"|\" .. err end, {{ timeout = 5000 }})\n\
+             TIMER_RESULT = tostring(ok) .. \"|\" .. tostring(err.code) .. \"|\" .. tostring(err) end, {{ timeout = 5000 }})\n\
              return \"armed\" end }})\n\
              fiber.command(\"read_timer\", {{ timeout = 5000, run = function() return TIMER_RESULT end }})\n\
              fiber.search_backend(\"via_search\", {{ timeout = 5000,\n\
              run = function() local ok, err = pcall(host.tool, \"read\", {{}})\n\
-             SEARCH_RESULT = tostring(ok) .. \"|\" .. err\n\
+             SEARCH_RESULT = tostring(ok) .. \"|\" .. tostring(err.code) .. \"|\" .. tostring(err)\n\
              return {{}} end }})\n\
              SEARCH_RESULT = \"unfired\"\n\
              fiber.command(\"read_search\", {{ timeout = 5000, run = function() return SEARCH_RESULT end }})\n\
              {}",
             tool(
                 "via_tool",
-                "function() local ok, err = pcall(host.tool, \"read\", {}) return tostring(ok) .. \"|\" .. err end",
+                "function() local ok, err = pcall(host.tool, \"read\", {}) return tostring(ok) .. \"|\" .. tostring(err.code) .. \"|\" .. tostring(err) end",
             ) + "fiber.tool(\"via_effects\", { description = \"d\", input_schema = { type = \"object\" },\n\
              effects = function() local ok, err = pcall(host.tool, \"read\", {})\n\
-             EFFECTS_RESULT = tostring(ok) .. \"|\" .. err\n\
+             EFFECTS_RESULT = tostring(ok) .. \"|\" .. tostring(err.code) .. \"|\" .. tostring(err)\n\
              return { effects = {}, reversible = true } end,\n\
              timeout = 5000, run = function() return \"\" end })\n\
              EFFECTS_RESULT = \"unfired\"\n\
@@ -757,7 +757,7 @@ fn tool_from_a_hook_timer_effects_search_provider_or_command_is_an_error() {
     std::fs::write(
         dir.path().join("providers/p.lua"),
         "fiber.provider(\"p\", { sign = { timeout = 5000,\n\
-         run = function() local ok, err = pcall(host.tool, \"read\", {}) return tostring(ok) .. \"|\" .. err end } })\n",
+         run = function() local ok, err = pcall(host.tool, \"read\", {}) return tostring(ok) .. \"|\" .. tostring(err.code) .. \"|\" .. tostring(err) end } })\n",
     )
     .unwrap();
     let (runner, _entered) = FakeRunner::scripted(vec![]);
