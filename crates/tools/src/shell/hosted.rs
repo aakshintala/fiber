@@ -270,12 +270,11 @@ pub fn kept_end(job_id: JobId, exit: &Exit) -> JobCompleted {
 /// flags, with no stored write failure inside, so the one override the
 /// caller applies stays the only one. `flooded` selects the flooded end
 /// before any override, never after it.
-///
-/// The `sent_signal` conjunction is unobservable: where exactly one flag
-/// differs, the completion builders return through the timeout or the cap
-/// before reading `sent_signal`, and where neither differs both operators
-/// agree. A mutant swapping the operator changes no behaviour a consumer
-/// sees (`docs/testing/mutants.md`, "a mutant that changes no behaviour").
+// The `sent_signal` conjunction is unobservable: where exactly one flag
+// differs, the completion builders return through the timeout or the cap
+// before reading `sent_signal`, and where neither differs both operators
+// agree. A mutant swapping the operator changes no behaviour a consumer
+// sees.
 #[cfg_attr(false, mutants::skip)]
 fn keeper_finished(exit: &Exit, flooded: bool) -> Finished {
     Finished {
