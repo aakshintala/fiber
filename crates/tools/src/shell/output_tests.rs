@@ -11,10 +11,10 @@ use fakes::TempDir;
 use fakes::clock::FakeClock;
 use fakes::jobs::JobDeltas;
 
+use super::super::background::finish_inline;
 use super::super::command::MoveReason;
 use super::super::drive::{Phase, Run};
 use super::super::moved::Moved;
-use super::super::background::finish_inline;
 use super::{
     Errors, HELD_MAX, PacedStream, Pending, Shared, escaped_len, lock, note_eof, read_errors,
     read_output,

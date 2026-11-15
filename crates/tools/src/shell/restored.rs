@@ -221,8 +221,7 @@ impl AdoptedRun {
         {
             if let Err(error) = errors.write_all(bytes) {
                 if sinks.write_failure.is_none() {
-                    sinks.write_failure =
-                        Some(super::background::errors_path(&self.output_path));
+                    sinks.write_failure = Some(super::background::errors_path(&self.output_path));
                 }
                 drop(error);
             }

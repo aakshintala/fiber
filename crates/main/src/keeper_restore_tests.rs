@@ -499,9 +499,7 @@ fn a_keeper_that_vanishes_after_an_adopted_write_failure_reports_io_failed_once_
                 .expect("first read");
         });
         assert!(
-            deadline()
-                .recv_or_fail(&first_rx, "the adopted writer did not write")
-                > 0,
+            deadline().recv_or_fail(&first_rx, "the adopted writer did not write") > 0,
             "the adopted writer closed the output FIFO without writing"
         );
     });

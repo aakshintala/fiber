@@ -405,12 +405,11 @@ impl Runtime {
                             provider: None,
                         });
                         if let Some(path) = &exit.output_write_failure {
-                            completed.error =
-                                Some(tools::override_write_failure(
-                                    tools::ReplacedEnd::KeeperTimeout,
-                                    path,
-                                    false,
-                                ));
+                            completed.error = Some(tools::override_write_failure(
+                                tools::ReplacedEnd::KeeperTimeout,
+                                path,
+                                false,
+                            ));
                         }
                         log.log
                             .append(
@@ -744,12 +743,7 @@ impl Runtime {
                         }
                         match (destinations, failed) {
                             (Some((output, errors)), Some(failed)) => {
-                                fail_handle(
-                                    &mut state.sink,
-                                    &output,
-                                    errors.as_deref(),
-                                    &failed,
-                                )
+                                fail_handle(&mut state.sink, &output, errors.as_deref(), &failed)
                             }
                             (None, _) => {
                                 if let Sink::Files {

@@ -223,12 +223,10 @@ impl Inner {
     ) -> Option<String> {
         if let Some(spill) = self.spill.take() {
             let (sink, line, write_error) = spill.into_job(path, file);
-            self.keep_write_failure(
-                write_error.map(|source| WriteFailure {
-                    path: path.to_path_buf(),
-                    source,
-                }),
-            );
+            self.keep_write_failure(write_error.map(|source| WriteFailure {
+                path: path.to_path_buf(),
+                source,
+            }));
             self.output_path = Some(path.to_path_buf());
             self.cap = cap;
             self.written = sink.metadata().map(|file| file.len()).unwrap_or(0);

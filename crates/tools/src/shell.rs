@@ -1349,7 +1349,11 @@ pub(crate) fn assemble(
 
 /// Reports a stored output write failure on a finished command's output,
 /// replacing whatever end it had: the failure is the completion.
-fn apply_write_failure(output: &mut Output, pre_end: ReplacedEnd, write_failure: output::WriteFailure) {
+fn apply_write_failure(
+    output: &mut Output,
+    pre_end: ReplacedEnd,
+    write_failure: output::WriteFailure,
+) {
     output.error = Some(Failure::from(&ToolError::from(ShellError::OutputWrite {
         path: write_failure.path,
         replaced: pre_end,
