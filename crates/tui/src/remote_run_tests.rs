@@ -46,6 +46,7 @@ fn client_models(calls: Arc<Mutex<usize>>) -> crate::ReadModels {
                 default_level: None,
                 configured: None,
                 roles: Vec::new(),
+                is_new: false,
                 price: None,
             }],
             notices: Vec::new(),

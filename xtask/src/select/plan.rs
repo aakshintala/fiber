@@ -293,6 +293,58 @@ pub(crate) struct MutantPlanInput {
     pub(crate) reuse: Option<super::reuse::MatchedReuse>,
 }
 
+/// Suppress only the bug-red legs for a bug pull request with the documented
+/// budget-breach explanation and both measurements in its body.
+pub(crate) fn plan_with_budget_breach_body(mut plan: Plan, bug: bool, body: &str) -> Plan {
+    if bug && budget_breach_section(body) {
+        plan.jobs.insert("bug_red", false);
+    }
+    plan
+}
+
+/// Whether the body has a complete budget-breach section outside fenced code.
+pub(crate) fn budget_breach_section(body: &str) -> bool {
+    let mut fence: Option<(u8, usize)> = None;
+    let mut in_section = false;
+    let mut base = false;
+    let mut head = false;
+
+    for line in body.lines() {
+        let trimmed = line.trim_start();
+        let bytes = trimmed.as_bytes();
+        if let Some(&marker) = bytes.first()
+            && (marker == b'`' || marker == b'~')
+        {
+            let width = bytes.iter().take_while(|byte| **byte == marker).count();
+            if width >= 3 {
+                match fence {
+                    None => fence = Some((marker, width)),
+                    Some((open, open_width)) if marker == open && width >= open_width => {
+                        fence = None
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+        }
+        if fence.is_some() {
+            continue;
+        }
+        if let Some(heading) = trimmed.strip_prefix("## ") {
+            if in_section {
+                break;
+            }
+            in_section = heading.trim() == "Budget breach";
+            continue;
+        }
+        if in_section {
+            base |= trimmed.starts_with("Base:");
+            head |= trimmed.starts_with("Head:");
+        }
+    }
+    in_section && base && head
+}
+
 /// Add the pull-request-only macOS selections from the head paths and their
 /// current contents, while leaving release-path selection separate.
 pub(crate) fn plan_with_changed_paths(

@@ -93,6 +93,7 @@ fn a_stale_read_republishes_the_fetched_model_field_after_cached_publish() {
                 default_level: None,
                 configured: None,
                 roles: Vec::new(),
+                is_new: false,
                 price: None,
             }],
             ..Default::default()

@@ -54,8 +54,8 @@ fn client_key(key: &str) -> bool {
         config::path::parse(key)
             .and_then(|parts| parts.into_iter().next())
             .as_deref(),
-        Some("keys" | "tui")
-    )
+        Some("keys" | "tui" | "hubs")
+    ) || key == "hub.default"
 }
 
 struct Args<'a>(&'a Map<String, Value>);
@@ -464,6 +464,11 @@ impl hub::Machine for Seam {
     ) -> Result<Option<Value>, Failure> {
         let a = Args(args);
         let result = match operation {
+            "search_backends" => {
+                a.shape(&["workspace"], &[])?;
+                let names = self.search_backends(a.workspace()?).map_err(from_view)?;
+                json!({"backends":names})
+            }
             "settings" => {
                 a.shape(&["workspace"], &["overrides"])?;
                 let overrides = overrides(args)?;

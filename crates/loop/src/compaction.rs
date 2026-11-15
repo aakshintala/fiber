@@ -262,9 +262,10 @@ impl Loop {
         let Some(trigger_at) = self.compaction.trigger_at else {
             return Ok(None);
         };
-        let Some(size) = self.context_size() else {
+        let size = self.context_estimate();
+        if size > self.prompt.context_window {
             return Ok(None);
-        };
+        }
         if size >= trigger_at && !self.compaction.blocked {
             return Ok(cancelled(self.run_compaction_rows(
                 turn,

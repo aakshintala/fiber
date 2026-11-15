@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/settings_view_tests.rs
+expression: "drawn(&settings, None, 80, 24)"
+---
+ Settings  /settings                                                 Esc returns
+Changes save automatically
+
+ Appearance   Notifications   Models   Permissions   Sessions   Advanced
+
+  Default model       a/b ›
+
+  Live model details  [x] On
+
+  Model list refresh  24 h
+
+  Thinking level      Default
+
+› Scoped models       Open /scoped-models ›
+
+  Credentials         Open /credential ›
+
+
+
+
+Choose which models the picker shows by default.
+/scoped-models · opens its own screen
+All models
+←→ tab · / search · Enter change · Tab layer · Delete reset

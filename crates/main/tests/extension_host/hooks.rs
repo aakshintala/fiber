@@ -2019,7 +2019,7 @@ fn a_compaction_runs_session_start_with_reason_compaction() {
            run = function(call) return { context = \"reason:\" .. call.reason } end })\n",
     );
     let server = ProviderServer::start([
-        stream(&[function_call(
+        fakes::wire::stream_above_trigger(&[function_call(
             "call_read",
             "read",
             &json!({"path": "note.txt"}),
@@ -2030,7 +2030,7 @@ fn a_compaction_runs_session_start_with_reason_compaction() {
     .unwrap();
     setup.hooks_provider_with_extra(
         &server,
-        &json!({"compaction": {"tokens": 10, "nudge": false}}),
+        &json!({"compaction": {"tokens": 1000, "nudge": false}}),
     );
     fs::write(
         setup.workspace().join("note.txt"),
@@ -2105,7 +2105,7 @@ fn a_blocking_session_start_failure_at_a_compaction_fails_the_compaction_and_the
              return {} end })\n",
     );
     let server = ProviderServer::start([
-        stream(&[function_call(
+        fakes::wire::stream_above_trigger(&[function_call(
             "call_read",
             "read",
             &json!({"path": "note.txt"}),
@@ -2116,7 +2116,7 @@ fn a_blocking_session_start_failure_at_a_compaction_fails_the_compaction_and_the
     .unwrap();
     setup.hooks_provider_with_extra(
         &server,
-        &json!({"compaction": {"tokens": 10, "nudge": false}}),
+        &json!({"compaction": {"tokens": 1000, "nudge": false}}),
     );
     fs::write(
         setup.workspace().join("note.txt"),
@@ -2200,7 +2200,7 @@ fn noting_hook(on_failure: &str, body: &str) -> String {
     )
 }
 
-/// Runs `fiber ask` where the model reads a file, then the five-token
+/// Runs `fiber ask` where the model reads a file, then the 1,000-token
 /// trigger compacts, with `init` installed and `extra` configured.
 fn compaction_run(
     setup: &Setup,
@@ -2223,6 +2223,9 @@ fn compaction_run(
 const HOOK_COMPACTION_TURN: &[&str] = &[
     "turn_started",
     "step_started",
+    "compaction_started",
+    "compaction_completed",
+    "opening_message",
     "assistant_message_started",
     "tool_call_requested",
     "usage_recorded",
@@ -2275,13 +2278,14 @@ fn a_before_compaction_hook_writes_the_note_and_no_note_request_is_made() {
         run.kinds(),
         [compaction_prefix(), HOOK_COMPACTION_TURN.into()].concat()
     );
-    let completed = run.first("compaction_completed");
+    let completed_lines = run.all("compaction_completed");
+    let completed = completed_lines.last().unwrap();
     let note_text = completed["payload"]["note_text"].as_str().unwrap();
     assert!(note_text.starts_with("Hook note: "), "{note_text}");
     assert_eq!(completed["payload"]["extension"], "fiber.test/notes");
     assert!(completed["payload"].get("note").is_none());
-    // Two requests, not three: the note request never ran, and the second
-    // holds the hook's note.
+    // Two hook-noted compactions make two requests: the note requests never
+    // ran, and the final request holds the second hook's note.
     let requests = server.requests();
     assert_eq!(requests.len(), 2);
     let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
@@ -2300,7 +2304,7 @@ fn a_before_compaction_hook_writes_the_note_and_no_note_request_is_made() {
             .iter()
             .filter(|line| line["data"]["op"] == "hook.before_compaction")
             .count(),
-        1
+        2, // Both compactions use the note-writing hook.
     );
     assert_eq!(
         timings
@@ -2336,21 +2340,13 @@ fn a_before_compaction_hook_that_returns_nothing_leaves_the_note_to_the_model() 
             vec![
                 "turn_started",
                 "step_started",
+                "compaction_started",
                 "assistant_message_started",
                 "tool_call_requested",
                 "usage_recorded",
                 "assistant_message_completed",
-                "tool_call_started",
                 "tool_call_completed",
-                "step_started",
-                "compaction_started",
-                "assistant_message_started",
-                "assistant_message_delta",
-                "text_completed",
-                "usage_recorded",
-                "assistant_message_completed",
                 "compaction_completed",
-                "opening_message",
                 "assistant_message_started",
                 "assistant_message_delta",
                 "text_completed",
@@ -2362,7 +2358,10 @@ fn a_before_compaction_hook_that_returns_nothing_leaves_the_note_to_the_model() 
         ]
         .concat()
     );
-    assert_eq!(server.requests().len(), 3);
+    // The first script entry is the step-1 note reply. `record_note` records
+    // its tool call as cancelled, so it does not run; the second entry answers
+    // the person's turn, and the third entry is unused.
+    assert_eq!(server.requests().len(), 2);
 }
 
 #[test]
@@ -2372,7 +2371,7 @@ fn a_non_blocking_before_compaction_hook_with_a_bad_return_leaves_the_note_to_th
         &setup,
         &noting_hook("non-blocking", r#"return "x""#),
         vec![
-            stream(&[function_call(
+            fakes::wire::stream_above_trigger(&[function_call(
                 "call_read",
                 "read",
                 &json!({"path": "note.txt"}),
@@ -2380,7 +2379,7 @@ fn a_non_blocking_before_compaction_hook_with_a_bad_return_leaves_the_note_to_th
             hello(),
             hello(),
         ],
-        &json!({"compaction": {"tokens": 5}}),
+        &json!({"compaction": {"tokens": 1000}}),
     );
     // The model's turn, with the hook's failure as a notice after
     // `compaction_started`.
@@ -2429,14 +2428,14 @@ fn a_blocking_before_compaction_failure_fails_the_compaction_hook_failed() {
         &setup,
         &noting_hook("blocking", r#"error("boom")"#),
         vec![
-            stream(&[function_call(
+            fakes::wire::stream_above_trigger(&[function_call(
                 "call_read",
                 "read",
                 &json!({"path": "note.txt"}),
             )]),
             hello(),
         ],
-        &json!({"compaction": {"tokens": 5}}),
+        &json!({"compaction": {"tokens": 1000}}),
     );
     let completed = run.first("compaction_completed");
     assert_eq!(completed["payload"]["outcome"], "failed");
@@ -2459,7 +2458,7 @@ fn a_hook_note_survives_resume() {
             r#"return { note = "Hook note: " .. #h.messages .. " messages" }"#,
         ),
         vec![
-            stream(&[function_call(
+            fakes::wire::stream_above_trigger(&[function_call(
                 "call_read",
                 "read",
                 &json!({"path": "note.txt"}),
@@ -2467,7 +2466,7 @@ fn a_hook_note_survives_resume() {
             hello(),
             hello(),
         ],
-        &json!({"compaction": {"tokens": 5}}),
+        &json!({"compaction": {"tokens": 1000}}),
     );
     let id = run.session_id().to_owned();
     let note_text = run.first("compaction_completed")["payload"]["note_text"]

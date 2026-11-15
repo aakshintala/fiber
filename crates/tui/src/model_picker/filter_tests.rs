@@ -15,6 +15,7 @@ fn entry(provider: &str, id: &str, name: Option<&str>) -> ModelEntry {
         default_level: None,
         configured: None,
         roles: Vec::new(),
+        is_new: false,
         price: None,
     }
 }

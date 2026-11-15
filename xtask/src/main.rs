@@ -264,6 +264,22 @@ fn run(args: &[String]) -> Result<bool, String> {
                     reuse: reuse.clone(),
                 },
             );
+            let bug_red_was_selected = plan.jobs.get("bug_red") == Some(&true);
+            let body = optional(rest, "--pr-body").unwrap_or_default();
+            let plan = select::plan_with_budget_breach_body(plan, bug, &body);
+            let budget_breach = bug_red_was_selected && plan.jobs.get("bug_red") == Some(&false);
+            if budget_breach && let Some(summary) = std::env::var_os("GITHUB_STEP_SUMMARY") {
+                use std::io::Write;
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(summary)
+                    .map_err(|e| format!("GITHUB_STEP_SUMMARY: {e}"))?;
+                writeln!(
+                    file,
+                    "Budget breach exemption: bug-red legs skipped; reviewers judge Base/Head measurements."
+                )
+                .map_err(|e| format!("GITHUB_STEP_SUMMARY: {e}"))?;
+            }
             let plan =
                 select::plan_with_changed_paths(plan, event == "pull_request", &changed_paths);
             let shards: Vec<u64> = (0..plan.shards).collect();
@@ -286,6 +302,9 @@ fn run(args: &[String]) -> Result<bool, String> {
                 None => println!("reuse=false"),
             }
             println!("shard_total={}", plan.shards);
+            if budget_breach {
+                println!("budget_breach=true");
+            }
             println!(
                 "shard_timeout={}",
                 select::shard_timeout_minutes(mutant_count)

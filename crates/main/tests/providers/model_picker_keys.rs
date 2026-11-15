@@ -29,7 +29,7 @@ use support::pty::{Colour, Grid, Run};
 /// `alpha` declares the thinking levels `low` and `high`, so the
 /// thinking chip opens the picker on its level chips (`docs/tui.md`,
 /// "Home").
-fn install_picker_provider(setup: &Setup, server: &ProviderServer) {
+fn install_picker_provider(setup: &Setup, server: &ProviderServer, debug_diagnostics: bool) {
     let source = setup.root.path().join("src");
     support::write_json(
         &source.join("extension.json"),
@@ -64,10 +64,11 @@ fn install_picker_provider(setup: &Setup, server: &ProviderServer) {
         "0.0.0",
         None,
     );
-    support::write_json(
-        &setup.home().join("config.json"),
-        &json!({"model": "fake/alpha", "hub": {"idle_exit_ms": 200}}),
-    );
+    let mut config = json!({"model": "fake/alpha", "hub": {"idle_exit_ms": 200}});
+    if debug_diagnostics {
+        config["diagnostics"] = json!({"level": "debug"});
+    }
+    support::write_json(&setup.home().join("config.json"), &config);
 }
 
 /// Whether any grid row holds `needle`.
@@ -112,7 +113,13 @@ fn wait_picker_catalogue(run: &mut Run, setup: &Setup) -> Grid {
                 && shows(screen, "gamma")
                 && !shows(screen, "Reading the model lists")
         },
-        || session_model_changed(setup),
+        || {
+            format!(
+                "{}; {}",
+                session_model_changed(setup),
+                super::model_picker_name::tui_stage_diagnostics(setup)
+            )
+        },
     )
 }
 
@@ -120,7 +127,7 @@ fn wait_picker_catalogue(run: &mut Run, setup: &Setup) -> Grid {
 fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
     let setup = Setup::new();
     let server = ProviderServer::start([support::hello()]).unwrap();
-    install_picker_provider(&setup, &server);
+    install_picker_provider(&setup, &server, true);
     let mut run = Run::spawn(
         &setup,
         120,
@@ -318,7 +325,7 @@ fn close_and_quit(mut run: Run) {
 fn clicking_the_model_chip_opens_the_model_picker() {
     let setup = Setup::new();
     let server = ProviderServer::start([support::hello()]).unwrap();
-    install_picker_provider(&setup, &server);
+    install_picker_provider(&setup, &server, false);
     let mut run = home_run(&setup, &[("TERM", "xterm-256color")]);
     // The home grid above proves the chip drew before the click.
     let (x, y) = chip_cell(&run.screen(), "[fake/alpha]"); // settled: case 1 run.ready() + home with its chips
@@ -331,7 +338,7 @@ fn clicking_the_model_chip_opens_the_model_picker() {
 fn clicking_the_thinking_chip_opens_the_picker_on_its_level_chips() {
     let setup = Setup::new();
     let server = ProviderServer::start([support::hello()]).unwrap();
-    install_picker_provider(&setup, &server);
+    install_picker_provider(&setup, &server, false);
     let mut run = home_run(&setup, &[("TERM", "xterm-256color")]);
     // The home grid above proves the chip drew before the click.
     // A thinking click falls back to an ordinary choose while the
@@ -539,7 +546,7 @@ fn chip_cells(screen: &Grid, x: u16, y: u16, len: u16) -> Vec<support::pty::Cell
 fn hovering_a_home_chip_tints_it_and_moving_off_restores_it() {
     let setup = Setup::new();
     let server = ProviderServer::start([support::hello()]).unwrap();
-    install_picker_provider(&setup, &server);
+    install_picker_provider(&setup, &server, false);
     // Truecolour, as the link hover test runs: at 256 colours the
     // hover tint and the chips' surface tint share one palette entry,
     // so a hovered chip reads back unchanged there.
@@ -651,7 +658,7 @@ fn all_log_lines(setup: &Setup) -> Vec<Value> {
 
 /// Opens the picker on a Lua catalogue and quits: the picker shows the
 /// fetched `m1`, and the closed run exits cleanly.
-fn open_catalogue_and_quit(setup: &Setup) {
+fn open_catalogue_and_quit(setup: &Setup, debug_diagnostics: bool) {
     let mut run = Run::spawn(
         setup,
         120,
@@ -666,8 +673,13 @@ fn open_catalogue_and_quit(setup: &Setup) {
     run.wait_screen("home with its chip", |screen| shows(screen, "[cat/m1]"));
     run.write(b"\x0c");
     run.wait_screen("the open picker", |screen| shows(screen, "Type to search"));
-    run.wait_screen("the answered catalogue", |screen| {
-        shows(screen, "m1") && !shows(screen, "Reading the model lists")
+    let answered = |screen: &Grid| shows(screen, "m1") && !shows(screen, "Reading the model lists");
+    run.wait_screen_reporting("the answered catalogue", answered, || {
+        if debug_diagnostics {
+            super::model_picker_name::tui_stage_diagnostics(setup)
+        } else {
+            String::new()
+        }
     });
     run.write(b"\x1b[27u");
     run.wait_screen("home again", |screen| {
@@ -694,7 +706,7 @@ fn tui_catalogue_records_the_entry_fetch_at_debug() {
     })
     .unwrap();
     install_lua_catalogue_provider(&setup, &server.url(), true);
-    open_catalogue_and_quit(&setup);
+    open_catalogue_and_quit(&setup, true);
     assert!(
         server
             .requests()
@@ -755,7 +767,7 @@ fn tui_catalogue_stays_silent_at_info() {
     })
     .unwrap();
     install_lua_catalogue_provider(&setup, &server.url(), false);
-    open_catalogue_and_quit(&setup);
+    open_catalogue_and_quit(&setup, false);
     assert!(
         server
             .requests()
