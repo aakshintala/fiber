@@ -710,3 +710,4 @@ xtask/tests/models-dev.json:10950-10951	fiber-4866	plan	2026-11-15T05:52:42Z	rou
 xtask/tests/models-dev.json:12309-12309	fiber-4866	plan	2026-11-15T05:52:42Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4866	
 xtask/tests/models-dev.json:14010-14010	fiber-4866	plan	2026-11-15T05:52:42Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4866	
 xtask/tests/models-dev.json:14035-14035	fiber-4866	plan	2026-11-15T05:52:42Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4866	
+crates/extensions/src/models_dev_tests.rs	fiber-4755	plan	2026-11-15T06:08:17Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
