@@ -679,3 +679,6 @@ crates/main/src/parts_tests.rs	fiber-4755	plan	2026-11-15T05:52:04Z	Amoghs-MacBo
 crates/main/src/parts.rs	fiber-4755	plan	2026-11-15T05:52:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/cli/src/model_lists_tests.rs	fiber-4755	plan	2026-11-15T05:52:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/models_dev_tests.rs	fiber-4755	plan	2026-11-15T06:08:17Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+xtask/src/rules.rs	fiber-4871	plan	2026-11-15T06:10:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/rules_tests.rs	fiber-4871	plan	2026-11-15T06:10:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/tests/cli.rs	fiber-4871	plan	2026-11-15T06:10:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
