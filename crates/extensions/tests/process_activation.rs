@@ -844,7 +844,7 @@ fn services_plan(markers: &Path) -> Value {
 /// Installed session services answer the process host calls, and calls
 /// without a session fail with the existing sentences: the model, the
 /// delegate and the driver reply through fakes, while `host.tool` with no
-/// runner fails `invalid_arguments`.
+/// runner fails `not_available`.
 #[test]
 fn process_host_calls_reach_session_services_and_unset_ones_fail_closed() {
     let env = Env::new("fiber-process-host-services");
@@ -924,7 +924,7 @@ fn process_host_calls_reach_session_services_and_unset_ones_fail_closed() {
     assert_eq!(ack("tool-ack.json")["kind"], json!("command_rejected"));
     assert_eq!(
         ack("tool-ack.json")["payload"]["code"],
-        json!("invalid_arguments")
+        json!("not_available")
     );
     let cancel = CancelToken::new();
     session.finish_processes(&cancel);
@@ -1068,7 +1068,7 @@ fn process_host_tool_model_delegate_live_and_sealed() {
     );
     let watcher_tool = read_marker(&markers.join("watch-tool.json"));
     assert_eq!(watcher_tool["kind"], "command_rejected");
-    assert_eq!(watcher_tool["payload"]["code"], "invalid_arguments");
+    assert_eq!(watcher_tool["payload"]["code"], "not_available");
     assert_eq!(
         watcher_tool["payload"]["message"],
         "host.tool: called outside a running tool call"

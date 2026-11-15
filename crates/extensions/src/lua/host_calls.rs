@@ -473,8 +473,11 @@ pub(super) fn admit<'a>(
                             builder: thread::Builder::new().name(format!("tool {name}")),
                             work: Box::new(move || {
                                 let reply = match runner.run(&extension, &tool, arguments) {
-                                    Ok(completed) => Reply::Tool(host::tool::outcome(&completed)),
-                                    Err(message) => Reply::Tool(Err(message)),
+                                    Ok(completed) => Reply::Tool(
+                                        host::tool::outcome(&completed)
+                                            .map_err(host::ToolError::Arg),
+                                    ),
+                                    Err(message) => Reply::Tool(Err(host::ToolError::Arg(message))),
                                 };
                                 tool_deliver(reply);
                             }),
@@ -484,9 +487,10 @@ pub(super) fn admit<'a>(
                 }
                 None => {
                     drop(shared);
-                    Admitted::Replied(Reply::Tool(Err(
+                    Admitted::Replied(Reply::Tool(Err(host::ToolError::Coded((
+                        contract::ErrorCode::NotAvailable,
                         "host.tool: called outside a running tool call".to_owned(),
-                    )))
+                    )))))
                 }
             }
         }

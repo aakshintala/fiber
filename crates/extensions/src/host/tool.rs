@@ -28,25 +28,29 @@ const TOOL_DEPTH: usize = super::MAX_DEPTH;
 /// returned, so a coroutine that yields `host.tool` through a parent which
 /// then mutates the shared table cannot change what the host reads.
 const TOOL: &str = r#"
-local host, tag, in_entry, check = ...
+local host, tag, in_entry, failure, check = ...
 function host.tool(name, args)
   if in_entry() then
-    error("host.tool: not available while init.lua runs", 0)
+    error(failure("not_available", "host.tool: not available while init.lua runs"), 0)
   end
   local ok, text = check(name, args)
   if not ok then error(text, 2) end
-  local result, message = coroutine.yield(tag, "tool", { name = name, args = text })
-  if result == nil then error(message, 0) end
+  local result, code, message = coroutine.yield(tag, "tool", { name = name, args = text })
+  if result == nil then
+    if message ~= nil then error(failure(code, message), 0) else error(code, 0) end
+  end
   return result
 end
 "#;
 
 /// Sets `host.tool` on `host`. `entry` is true while the entry script runs.
+/// `failure` builds the `{ code, message }` table a coded refusal raises.
 pub(crate) fn install(
     lua: &Lua,
     host: &Table,
     tag: &Table,
     entry: Rc<Cell<bool>>,
+    failure: mlua::Function,
 ) -> mlua::Result<()> {
     let in_entry = super::failure::in_entry(lua, &entry)?;
     let check = lua.create_function(|_, (name, args): (LuaValue, LuaValue)| {
@@ -56,9 +60,13 @@ pub(crate) fn install(
         let checked: (bool, Option<String>) = check_args(&name, &args);
         Ok(checked)
     })?;
-    lua.load(TOOL)
-        .set_name("=host.tool")
-        .call::<()>((host.clone(), tag.clone(), in_entry, check))
+    lua.load(TOOL).set_name("=host.tool").call::<()>((
+        host.clone(),
+        tag.clone(),
+        in_entry,
+        failure,
+        check,
+    ))
 }
 
 /// Checks `name` with `args`: `true` with the arguments as a JSON text, or

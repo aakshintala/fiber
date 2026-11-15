@@ -309,23 +309,23 @@ pub(crate) fn http_attribution(ran_by: Option<&str>) -> HttpAttribution {
 /// does anywhere else.
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn entry_refusal(call: &str) -> Option<(ErrorCode, String)> {
-    let string = |message: &str| Some((ErrorCode::InvalidArguments, message.to_owned()));
+    let refused = |message: &str| Some((ErrorCode::NotAvailable, message.to_owned()));
     let closing = |message: &str| Some((ErrorCode::Closing, message.to_owned()));
     match call {
-        "host.tool" => string("host.tool: not available while init.lua runs"),
-        "host.exec" => string("host.exec: not available while init.lua runs"),
-        "host.model" => closing("host.model: not available while init.lua runs"),
+        "host.tool" => refused("host.tool: not available while init.lua runs"),
+        "host.exec" => refused("host.exec: not available while init.lua runs"),
+        "host.model" => refused("host.model: not available while init.lua runs"),
         "host.delegate" => closing("host.delegate: not available while init.lua runs"),
-        "host.drive" => closing("host.drive: not available while init.lua runs"),
-        "host.ask" => string("host.ask: not available while init.lua runs"),
+        "host.drive" => refused("host.drive: not available while init.lua runs"),
+        "host.ask" => refused("host.ask: not available while init.lua runs"),
         "host.oauth.callback" => {
-            string("host.oauth.callback: needs a running callback, not the entry script")
+            refused("host.oauth.callback: needs a running callback, not the entry script")
         }
         "host.oauth.poll" => {
-            string("host.oauth.poll: needs a running callback, not the entry script")
+            refused("host.oauth.poll: needs a running callback, not the entry script")
         }
         "host.oauth.refresh" => {
-            string("host.oauth.refresh: needs a running callback, not the entry script")
+            refused("host.oauth.refresh: needs a running callback, not the entry script")
         }
         _ => None,
     }

@@ -282,14 +282,14 @@ impl NativeHostServices {
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
         if callback.tool_anchor().is_none() {
             return Err((
-                contract::ErrorCode::InvalidArguments,
+                contract::ErrorCode::NotAvailable,
                 "host.tool: called outside a running tool call".to_owned(),
             ));
         }
         let runner = callback.inner_calls.clone();
         let Some(runner) = runner else {
             return Err((
-                contract::ErrorCode::InvalidArguments,
+                contract::ErrorCode::NotAvailable,
                 "host.tool: called outside a running tool call".to_owned(),
             ));
         };
