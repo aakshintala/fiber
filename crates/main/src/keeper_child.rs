@@ -731,15 +731,12 @@ impl Runtime {
                             Stream::Out => output.clone(),
                             Stream::Err => errors.clone().unwrap_or_else(|| output.clone()),
                         });
-                        match (&failed, state.write_failure.is_none()) {
-                            (Some(path), true) => {
-                                state.write_failure = Some((path.clone(), error));
-                                #[cfg(test)]
-                                if let Some(write_failed) = &runtime.hooks.write_failed {
-                                    write_failed();
-                                }
+                        if let (Some(path), true) = (&failed, state.write_failure.is_none()) {
+                            state.write_failure = Some((path.clone(), error));
+                            #[cfg(test)]
+                            if let Some(write_failed) = &runtime.hooks.write_failed {
+                                write_failed();
                             }
-                            _ => {}
                         }
                         match (destinations, failed) {
                             (Some((output, errors)), Some(failed)) => {
