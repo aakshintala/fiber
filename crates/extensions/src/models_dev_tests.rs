@@ -1,6 +1,40 @@
 use serde_json::json;
 
-use super::{CatalogMeta, retained_rows};
+use super::{CatalogMeta, retained_rows, valid_catalog};
+
+#[test]
+fn streaming_projection_keeps_duplicate_keys_last_wins_and_mistyped_siblings() {
+    let models: Vec<config::ModelData> = serde_json::from_value(json!([
+        {"id": "x", "protocol": "openai-responses", "base_url": "https://example.test"}
+    ]))
+    .unwrap();
+    let meta = CatalogMeta {
+        sources: vec!["provider".into()],
+        ..Default::default()
+    };
+    let input = br#"{"provider":{"x":{"status":"active"}},"provider":{"x":{"name":5,"status":"deprecated"}},"other":{"large":"ignored"}}"#;
+    let result = retained_rows(&input[..], &models, &meta).unwrap();
+    assert_eq!(
+        result,
+        json!({"provider":{"x":{"name":5,"status":"deprecated"}}})
+    );
+}
+
+#[test]
+fn streaming_catalog_parsers_reject_trailing_bytes() {
+    let models: Vec<config::ModelData> = serde_json::from_value(json!([
+        {"id": "x", "protocol": "openai-responses", "base_url": "https://example.test"}
+    ]))
+    .unwrap();
+    let meta = CatalogMeta {
+        sources: vec!["provider".into()],
+        ..Default::default()
+    };
+    assert!(retained_rows(&b"{} trailing"[..], &models, &meta).is_err());
+    assert!(!valid_catalog(&b"{} trailing"[..]));
+    assert!(!valid_catalog(&b"[]"[..]));
+    assert!(valid_catalog(&b"{}"[..]));
+}
 
 #[test]
 fn retained_rows_keeps_only_resolved_catalog_entries() {
@@ -28,8 +62,9 @@ fn retained_rows_keeps_only_resolved_catalog_entries() {
         source_aliases: Default::default(),
     };
 
+    let bytes = serde_json::to_vec(&catalog).unwrap();
     assert_eq!(
-        retained_rows(&catalog, &models, &meta),
+        retained_rows(&bytes[..], &models, &meta).unwrap(),
         json!({
             "provider": {
                 "served": {"status": "active"},

@@ -1148,11 +1148,11 @@ fn the_refresh_child_writes_the_catalogue_and_keeps_it_on_failure() {
                 .unwrap();
         }
         let response = expected.clone();
-        let fetch: extensions::models_dev::Fetch = Arc::new(move |_| {
+        let fetch: extensions::models_dev::Fetch = Arc::new(move |_, writer| {
             if fail {
                 Err("catalog offline".to_owned())
             } else {
-                Ok(response.clone())
+                std::io::Write::write_all(writer, &response).map_err(|error| error.to_string())
             }
         });
         let clock = fakes::clock::FakeClock::new();

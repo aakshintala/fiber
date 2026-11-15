@@ -46,8 +46,8 @@ use serde_json::{Map, Value};
 
 pub use cache::{
     cached_model_lists, model_cache_age, model_cache_file, model_cache_lock_file, models_dev_age,
-    models_dev_cache_file, models_dev_lock_file, read_model_cache, read_models_dev,
-    write_model_cache, write_models_dev,
+    models_dev_cache_file, models_dev_lock_file, open_models_dev, read_model_cache,
+    read_models_dev, write_model_cache, write_models_dev,
 };
 pub use contract::Secret;
 pub use contract::provider::{Cost, Tier};

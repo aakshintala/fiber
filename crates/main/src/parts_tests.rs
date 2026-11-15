@@ -244,9 +244,9 @@ fn session_start_spawns_a_due_catalog_fetch() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let recorded = Arc::clone(&calls);
     let bytes = serde_json::to_vec(&json!({"acme": {"m": {"name": "live"}}})).unwrap();
-    let fetch: extensions::models_dev::Fetch = Arc::new(move |url| {
+    let fetch: extensions::models_dev::Fetch = Arc::new(move |url, writer| {
         recorded.lock().unwrap().push(url.to_owned());
-        Ok(bytes.clone())
+        std::io::Write::write_all(writer, &bytes).map_err(|error| error.to_string())
     });
 
     let handle = start_catalog_refresh(

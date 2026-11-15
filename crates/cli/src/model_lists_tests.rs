@@ -231,9 +231,9 @@ fn catalog_fetch(
     let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
     let recorded = Arc::clone(&calls);
     let bytes = serde_json::to_vec(&response).unwrap();
-    let fetch: extensions::models_dev::Fetch = Arc::new(move |url| {
+    let fetch: extensions::models_dev::Fetch = Arc::new(move |url, writer| {
         recorded.lock().unwrap().push(url.to_owned());
-        Ok(bytes.clone())
+        std::io::Write::write_all(writer, &bytes).map_err(|error| error.to_string())
     });
     (fetch, calls)
 }

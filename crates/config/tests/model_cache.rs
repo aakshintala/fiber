@@ -8,7 +8,7 @@ mod common;
 
 use common::Setup;
 use config::{
-    model_cache_file, models_dev_age, models_dev_cache_file, models_dev_lock_file,
+    model_cache_file, models_dev_age, models_dev_cache_file, models_dev_lock_file, open_models_dev,
     read_model_cache, read_models_dev, write_model_cache, write_models_dev,
 };
 use contract::clock::Clock;
@@ -30,6 +30,38 @@ fn models_dev_cache_round_trips_raw_bytes_and_uses_a_separate_lock() {
         models_dev_lock_file(&home).unwrap(),
         home.join("cache/models.dev/api.lock")
     );
+}
+
+#[test]
+fn models_dev_streaming_opener_returns_only_regular_files() {
+    let setup = Setup::new();
+    let home = setup.home();
+    assert!(open_models_dev(&home).unwrap().is_none());
+    write_models_dev(&home, b"{}").unwrap();
+    let mut reader = open_models_dev(&home).unwrap().unwrap();
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut reader, &mut bytes).unwrap();
+    assert_eq!(bytes, b"{}");
+
+    let path = models_dev_cache_file(&home).unwrap();
+    std::fs::remove_file(path).unwrap();
+    std::fs::create_dir_all(models_dev_cache_file(&home).unwrap()).unwrap();
+    assert!(open_models_dev(&home).unwrap().is_none());
+
+    #[cfg(unix)]
+    {
+        std::fs::remove_dir(models_dev_cache_file(&home).unwrap()).unwrap();
+        write_models_dev(&home, b"{}").unwrap();
+        let path = models_dev_cache_file(&home).unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        use std::os::unix::fs::PermissionsExt;
+        permissions.set_mode(0);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        assert!(open_models_dev(&home).unwrap().is_none());
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o600);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
 }
 
 #[test]

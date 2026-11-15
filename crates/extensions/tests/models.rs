@@ -472,9 +472,9 @@ fn models_dev_forced_refresh_skips_a_held_lock() {
     held.try_lock().unwrap();
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let recorded = std::sync::Arc::clone(&calls);
-    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_| {
+    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_, writer| {
         recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(br#"{"acme":{}}"#.to_vec())
+        std::io::Write::write_all(writer, br#"{"acme":{}}"#).map_err(|error| error.to_string())
     });
 
     fakes::within(
@@ -495,13 +495,60 @@ fn models_dev_forced_refresh_skips_a_held_lock() {
 }
 
 #[test]
+fn models_dev_refresh_keeps_cache_and_cleans_temp_for_failed_or_invalid_fetches() {
+    for (label, body, fail) in [
+        ("partial", b"{\"acme\":".as_slice(), true),
+        ("invalid", b"[]".as_slice(), false),
+        ("trailing", b"{} trailing".as_slice(), false),
+    ] {
+        let setup = Setup::new();
+        let home = setup.workspace().join(label);
+        let original = br#"{"old":{}}"#;
+        config::write_models_dev(&home, original).unwrap();
+        let response = body.to_vec();
+        let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_, writer| {
+            std::io::Write::write_all(writer, &response).map_err(|error| error.to_string())?;
+            if fail {
+                Err("injected partial response".to_owned())
+            } else {
+                Ok(())
+            }
+        });
+        extensions::models_dev::refresh_forced(
+            &home,
+            true,
+            fakes::clock::FakeClock::new().wall(),
+            &fetch,
+        );
+        assert_eq!(
+            config::read_models_dev(&home).unwrap(),
+            Some(original.to_vec()),
+            "{label}"
+        );
+        let cache = config::models_dev_cache_file(&home).unwrap();
+        let leftovers: Vec<_> = std::fs::read_dir(cache.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".models-dev-")
+            })
+            .collect();
+        assert!(leftovers.is_empty(), "{label}: temporary files remain");
+    }
+}
+
+#[test]
 fn models_dev_fetch_reads_a_loopback_http_response() {
     use fakes::{ProviderServer, Response};
 
     let server = ProviderServer::start([Response::status(200, "{}")]).unwrap();
     let agent = ureq::Agent::new_with_defaults();
-    let bytes =
-        extensions::models_dev::fetch(&agent, &format!("{}/api.json", server.url())).unwrap();
+    let mut bytes = Vec::new();
+    extensions::models_dev::fetch(&agent, &format!("{}/api.json", server.url()), &mut bytes)
+        .unwrap();
     assert_eq!(bytes, b"{}");
 }
 
@@ -512,9 +559,9 @@ fn models_dev_refresh_and_spawn_run_when_due() {
     let now = fakes::clock::FakeClock::new().wall();
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let recorded = std::sync::Arc::clone(&calls);
-    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_| {
+    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_, writer| {
         recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(br#"{"acme":{}}"#.to_vec())
+        std::io::Write::write_all(writer, br#"{"acme":{}}"#).map_err(|error| error.to_string())
     });
     extensions::models_dev::refresh_if_due(&home, true, None, now, &fetch);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -525,9 +572,9 @@ fn models_dev_refresh_and_spawn_run_when_due() {
 
     let fresh_home = setup.workspace().join("second-home");
     let recorded = std::sync::Arc::clone(&calls);
-    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_| {
+    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_, writer| {
         recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(br#"{"acme":{}}"#.to_vec())
+        std::io::Write::write_all(writer, br#"{"acme":{}}"#).map_err(|error| error.to_string())
     });
     extensions::models_dev::spawn_if_due(fresh_home, true, None, now, fetch)
         .expect("missing catalog is due")
