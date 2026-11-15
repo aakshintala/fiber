@@ -481,6 +481,17 @@ fn in_launch_project_passes_the_recorded_workspace_once() {
         }
     ));
     assert!(seen.borrow().is_empty());
+    // An existing session with a valid header reaches the predicate, and
+    // its false result refuses it. Missing/corrupt launch identity must not
+    // be treated as an implicit match.
+    let seen = RefCell::new(Vec::new());
+    assert!(!in_launch_project(&dir, &|workspace| {
+        seen.borrow_mut().push(workspace.to_owned());
+        false
+    }));
+    assert_eq!(*seen.borrow(), vec!["/nowhere"]);
+    let absent = sessions.join("s_absent");
+    assert!(!in_launch_project(&absent, &|_| true));
 }
 
 #[test]

@@ -97,6 +97,14 @@ fn recorded_project_match_accepts_the_migrated_hashed_candidate() {
     .unwrap();
 
     assert!(recorded_project_matches(&dir, &identity, &identity));
+    assert!(
+        !recorded_project_matches(&dir, Path::new("/other/project"), &identity),
+        "a candidate whose logged repository belongs to another project is refused"
+    );
+    assert!(
+        !recorded_project_matches(&dir, &identity, Path::new("/other/worktree")),
+        "a candidate recorded for a different workspace is refused"
+    );
 }
 
 #[test]

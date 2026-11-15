@@ -82,6 +82,29 @@ fn latest_and_selector_search_both_derived_project_directories() {
             .0,
         "s_legacy"
     );
+
+    // Both physical candidates exist, but a session recorded for another
+    // project must not be selected by either resume or continue.
+    let wrong = Path::new("/another/project");
+    logged(&candidates[0], "s_wrong", 100, 400);
+    let path = candidates[0].join("s_wrong/events.jsonl");
+    let mut contents = std::fs::read_to_string(&path).unwrap();
+    contents = contents.replace("\"workspace\":\"/w\"", "\"workspace\":\"/another/project\"");
+    std::fs::write(path, contents).unwrap();
+    let accepts = |workspace: &str| Path::new(workspace) == project;
+    assert_eq!(
+        resolve_project_sessions(home.path(), project, "s_wrong", &accepts)
+            .unwrap_err()
+            .code,
+        contract::ErrorCode::SessionNotFound
+    );
+    assert_ne!(wrong, project);
+    assert_eq!(
+        select_latest_project(home.path(), project, &accepts)
+            .unwrap()
+            .0,
+        "s_hashed"
+    );
 }
 
 #[test]
