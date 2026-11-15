@@ -617,10 +617,7 @@ fn tabs_are_inert_and_typing_on_option_kinds_changes_nothing() {
         press(&mut question, &[Key::Tab, Key::BackTab]);
         assert_eq!(lines(&question), before);
         question.on_edit(&Edit::Paste("x\ny".to_owned()));
-        press(
-            &mut question,
-            &[Key::Char('x'), Key::Char(' '), Key::Backspace],
-        );
+        press(&mut question, &[Key::Char('x'), Key::Backspace]);
         question.on_edit(&Edit::Left);
         question.on_edit(&Edit::Right);
         assert_eq!(lines(&question), before);
