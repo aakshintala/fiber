@@ -13,11 +13,6 @@ crates/tui/src/app/call_view_tests.rs	fiber-4675	plan	2026-11-14T02:49:14Z	round
 crates/tui/src/app/rewind_tests.rs	fiber-4675	plan	2026-11-14T02:49:14Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/snapshots/tui__app__rewind__tests__rewind_opened_80x24.snap	fiber-4675	plan	2026-11-14T02:49:14Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/snapshots/tui__app__rewind__tests__rewind_refused_80x24.snap	fiber-4675	plan	2026-11-14T02:49:14Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/loop/tests/fixtures/reviewer_eval/README.md	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
-crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
-crates/loop/tests/fixtures/reviewer_eval/extract.sh	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
-crates/loop/tests/reviewer_eval.rs	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
-crates/loop/tests/support/reviewer_eval.rs	fiber-477	plan	2026-11-14T09:38:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4558
 crates/main/tests/screen_looks/swapped_panels_look.rs:1110-1110	fiber-4675	plan	2026-11-14T09:39:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-enter	
 crates/main/tests/screen_looks/swapped_panels_look.rs:1122-1124	fiber-4675	plan	2026-11-14T09:39:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-enter	
 crates/main/tests/screen_looks/swapped_panels_look.rs:1126-1126	fiber-4675	plan	2026-11-14T09:39:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-enter	
@@ -372,7 +367,6 @@ crates/main/tests/hub_daemon/hub_list.rs	fiber-4685	plan	2026-11-15T00:17:26Z	Am
 crates/main/tests/hub_daemon/hub_remote_terminal.rs	fiber-4685	plan	2026-11-15T00:17:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screens/home_rail.rs	fiber-4685	plan	2026-11-15T00:17:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screens/rail_focus.rs	fiber-4685	plan	2026-11-15T00:17:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/tests/fixtures/reviewer_eval/check_confidential.sh	fiber-477	plan	2026-11-15T00:38:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 docs/workflow.md	fiber-477	plan	2026-11-15T00:38:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 xtask/src/select/plan.rs	fiber-4861	plan	2026-11-15T00:52:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/select/plan_tests.rs	fiber-4861	plan	2026-11-15T00:52:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -622,3 +616,36 @@ crates/extensions/src/process_tests.rs:6958-6959	fiber-4677	plan	2026-11-15T03:3
 crates/extensions/src/process_tests.rs:7041-7051	fiber-4677	plan	2026-11-15T03:30:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4677-host-exec-relative	
 crates/extensions/src/process_tests.rs:7284-7284	fiber-4677	plan	2026-11-15T03:30:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4677-host-exec-relative	
 crates/extensions/src/process_tests.rs:7304-7314	fiber-4677	plan	2026-11-15T03:30:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4677-host-exec-relative	
+crates/loop/tests/fixtures/reviewer_eval/README.md:3-7	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/README.md:13-14	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/README.md:24-25	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/README.md:34-34	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/README.md:79-91	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/README.md:109-114	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/check_confidential.sh	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/extract.sh:2-3	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/extract.sh:7-19	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/extract.sh:31-31	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/extract.sh:48-49	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/extract.sh:53-53	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/extract.sh:62-62	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/extract.sh:66-66	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/extract.sh:79-79	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/extract.sh:83-84	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/extract.sh:91-91	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/extract.sh:100-100	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/extract.sh:102-102	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/fixtures/reviewer_eval/extract.sh:110-111	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/reviewer_eval.rs:284-285	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/reviewer_eval.rs:291-292	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/reviewer_eval.rs:330-331	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/reviewer_eval.rs:488-488	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/reviewer_eval.rs:518-519	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/reviewer_eval.rs:562-563	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/reviewer_eval.rs:568-569	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/support/reviewer_eval.rs:195-196	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/support/reviewer_eval.rs:415-416	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/support/reviewer_eval.rs:529-530	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/support/reviewer_eval.rs:544-545	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
+crates/loop/tests/support/reviewer_eval.rs:1701-1702	fiber-477	plan	2026-11-15T04:24:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/eval/477-reviewer-eval-plan	
