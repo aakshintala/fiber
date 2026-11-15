@@ -1892,6 +1892,8 @@ fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
     assert_eq!(exited["usage"]["tokens"]["input"], 10);
     assert_eq!(exited["usage"]["tokens"]["output"], 16);
     let requests = server.requests();
+    // On first use, an uncached provider list is fetched before the response
+    // call: docs/model-routing.md, "Model discovery".
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].path, "/v1/models");
     assert_eq!(requests[1].path, "/v1/responses");

@@ -363,6 +363,8 @@ fn admission_muse_rows_follow_catalog_capabilities() {
         true,
     );
 
+    // The vendor list is the source of offered models; catalog admission and
+    // metadata follow docs/model-routing.md, "Which models exist, and what Fiber knows about them".
     assert_eq!(admitted.len(), 9);
     for (index, id) in ids[..7].iter().enumerate() {
         let model = admitted.iter().find(|model| model.id == *id).unwrap();
