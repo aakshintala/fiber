@@ -641,17 +641,17 @@ fn entry_refusals_name_the_lua_sentence() {
     for (call, code, message) in [
         (
             "host.tool",
-            contract::ErrorCode::InvalidArguments,
+            contract::ErrorCode::NotAvailable,
             "host.tool: not available while init.lua runs",
         ),
         (
             "host.exec",
-            contract::ErrorCode::InvalidArguments,
+            contract::ErrorCode::NotAvailable,
             "host.exec: not available while init.lua runs",
         ),
         (
             "host.model",
-            contract::ErrorCode::Closing,
+            contract::ErrorCode::NotAvailable,
             "host.model: not available while init.lua runs",
         ),
         (
@@ -661,27 +661,27 @@ fn entry_refusals_name_the_lua_sentence() {
         ),
         (
             "host.drive",
-            contract::ErrorCode::Closing,
+            contract::ErrorCode::NotAvailable,
             "host.drive: not available while init.lua runs",
         ),
         (
             "host.ask",
-            contract::ErrorCode::InvalidArguments,
+            contract::ErrorCode::NotAvailable,
             "host.ask: not available while init.lua runs",
         ),
         (
             "host.oauth.callback",
-            contract::ErrorCode::InvalidArguments,
+            contract::ErrorCode::NotAvailable,
             "host.oauth.callback: needs a running callback, not the entry script",
         ),
         (
             "host.oauth.poll",
-            contract::ErrorCode::InvalidArguments,
+            contract::ErrorCode::NotAvailable,
             "host.oauth.poll: needs a running callback, not the entry script",
         ),
         (
             "host.oauth.refresh",
-            contract::ErrorCode::InvalidArguments,
+            contract::ErrorCode::NotAvailable,
             "host.oauth.refresh: needs a running callback, not the entry script",
         ),
     ] {
