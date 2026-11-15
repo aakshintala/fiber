@@ -212,6 +212,7 @@ fn a_later_catalog_replaces_stale_cautious_values() {
     assert!(known[0].cost.is_none());
 }
 
+// debt: ceiling six inline Setup/source/seed fixtures, upgrade trigger flywheel sign-off for a shared helper (RULING-4638-4 "edit only those tests": a helper widens the edited surface beyond the named tests).
 #[test]
 fn admission_capability_filter_drops_catalog_non_text_models() {
     let setup = Setup::new();
@@ -227,18 +228,27 @@ fn admission_capability_filter_drops_catalog_non_text_models() {
     );
     config::write_models_dev(
         &setup.home(),
-        br#"{"fake":{"m":{"modalities":{"output":["image"]},"tool_call":true}}}"#,
+        br#"{"fake":{"m":{"modalities":{"output":["image"]},"tool_call":true},"kept":{"modalities":{"output":["text"]},"tool_call":true}}}"#,
     )
     .unwrap();
-    let model = serde_json::from_value(json!({
-        "id": "m", "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"
-    }))
-    .unwrap();
+    let models = ["m", "kept"].map(|id| {
+        serde_json::from_value(json!({
+            "id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"
+        }))
+        .unwrap()
+    });
 
-    let admitted =
-        extensions::models_dev::merge_admission(&setup.home(), &package, "fake", vec![model], true);
+    let admitted = extensions::models_dev::merge_admission(
+        &setup.home(),
+        &package,
+        "fake",
+        models.into(),
+        true,
+    );
 
     assert!(admitted.iter().all(|model| model.id != "m"));
+    assert_eq!(admitted.len(), 1);
+    assert_eq!(admitted[0].id, "kept");
 }
 
 #[test]
@@ -256,18 +266,27 @@ fn admission_capability_filter_drops_catalog_tool_call_false_models() {
     );
     config::write_models_dev(
         &setup.home(),
-        br#"{"fake":{"m":{"modalities":{"output":["text"]},"tool_call":false}}}"#,
+        br#"{"fake":{"m":{"modalities":{"output":["text"]},"tool_call":false},"kept":{"modalities":{"output":["text"]},"tool_call":true}}}"#,
     )
     .unwrap();
-    let model = serde_json::from_value(json!({
-        "id": "m", "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"
-    }))
-    .unwrap();
+    let models = ["m", "kept"].map(|id| {
+        serde_json::from_value(json!({
+            "id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"
+        }))
+        .unwrap()
+    });
 
-    let admitted =
-        extensions::models_dev::merge_admission(&setup.home(), &package, "fake", vec![model], true);
+    let admitted = extensions::models_dev::merge_admission(
+        &setup.home(),
+        &package,
+        "fake",
+        models.into(),
+        true,
+    );
 
     assert!(admitted.iter().all(|model| model.id != "m"));
+    assert_eq!(admitted.len(), 1);
+    assert_eq!(admitted[0].id, "kept");
 }
 
 #[test]
@@ -344,10 +363,10 @@ fn admission_capability_filter_drops_openai_audio_and_image_models() {
     );
     config::write_models_dev(
         &setup.home(),
-        br#"{"openai":{"audio":{"modalities":{"output":["audio"]},"tool_call":false},"image":{"modalities":{"output":["image"]},"tool_call":false}}}"#,
+        br#"{"openai":{"audio":{"modalities":{"output":["audio"]},"tool_call":false},"image":{"modalities":{"output":["image"]},"tool_call":false},"chat":{"modalities":{"output":["text"]},"tool_call":true}}}"#,
     )
     .unwrap();
-    let models = ["audio", "image"].map(|id| {
+    let models = ["audio", "image", "chat"].map(|id| {
         serde_json::from_value(json!({
             "id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"
         }))
@@ -362,7 +381,10 @@ fn admission_capability_filter_drops_openai_audio_and_image_models() {
         true,
     );
 
-    assert!(admitted.is_empty());
+    assert!(admitted.iter().all(|model| model.id != "audio"));
+    assert!(admitted.iter().all(|model| model.id != "image"));
+    assert_eq!(admitted.len(), 1);
+    assert_eq!(admitted[0].id, "chat");
 }
 
 #[test]
@@ -380,23 +402,27 @@ fn admission_capability_filter_drops_anthropic_non_tool_rows() {
     );
     config::write_models_dev(
         &setup.home(),
-        br#"{"anthropic":{"m":{"modalities":{"output":["text"]},"tool_call":false}}}"#,
+        br#"{"anthropic":{"m":{"modalities":{"output":["text"]},"tool_call":false},"kept":{"modalities":{"output":["text"]},"tool_call":true}}}"#,
     )
     .unwrap();
-    let model = serde_json::from_value(json!({
-        "id": "m", "protocol": "anthropic-messages", "base_url": "https://api.anthropic.com/v1"
-    }))
-    .unwrap();
+    let models = ["m", "kept"].map(|id| {
+        serde_json::from_value(json!({
+            "id": id, "protocol": "anthropic-messages", "base_url": "https://api.anthropic.com/v1"
+        }))
+        .unwrap()
+    });
 
     let admitted = extensions::models_dev::merge_admission(
         &setup.home(),
         &package,
         "anthropic",
-        vec![model],
+        models.into(),
         true,
     );
 
-    assert!(admitted.is_empty());
+    assert!(admitted.iter().all(|model| model.id != "m"));
+    assert_eq!(admitted.len(), 1);
+    assert_eq!(admitted[0].id, "kept");
 }
 
 #[test]

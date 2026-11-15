@@ -2,6 +2,8 @@ fiber.provider("gemini", {
   models = {
     timeout = 10000,
     run = function(call)
+      -- Each provider package keeps its own percent-encoder: packages ship
+      -- independently with no shared Lua module, so the copy stays local.
       local function encode(value)
         return (value:gsub("[^A-Za-z0-9%-_%.~]", function(c)
           return string.format("%%%02X", string.byte(c))

@@ -173,6 +173,7 @@ fn write(file: &PathBuf, value: &Value) {
     fs::write(file, value.to_string()).unwrap();
 }
 
+// debt: ceiling two inline read-parse-seed blocks (here and models_lists_every_first_party_model_and_drops_none), upgrade trigger flywheel sign-off for a shared helper (RULING-4638-4 "edit only those tests": a helper widens the edited surface beyond the named tests).
 #[test]
 fn first_party_models_follow_environment_presence_and_survive_logout() {
     let setup = Setup::new();

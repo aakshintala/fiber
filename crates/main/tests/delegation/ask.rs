@@ -2007,6 +2007,7 @@ fn probe(name: &str, bytes: &[u8], label: &str) -> Response {
     }
 }
 
+// debt: ceiling four inline read-parse-seed blocks, upgrade trigger flywheel sign-off for a shared helper (RULING-4638-4 "edit only those tests": a helper widens the edited surface beyond the named tests).
 #[test]
 fn anthropic_installed_by_path_completes_a_turn_on_its_recorded_streams() {
     let setup = Setup::new_with_started_deadline();
