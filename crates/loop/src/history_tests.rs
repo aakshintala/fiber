@@ -3422,6 +3422,7 @@ fn restored_block_parent_segment_does_not_contribute_to_run() {
         ],
         &[],
     );
+    // Rewind keeps each session's spend and blocks in its own segment (docs/events.md, "Rewind").
     assert_eq!(folded.consecutive, 0);
 }
 
