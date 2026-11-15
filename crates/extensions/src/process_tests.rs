@@ -6480,16 +6480,10 @@ fn process_host_exec_resolves_inside_package_and_refuses_traversal() {
         .clone()
         .expect("production services are installed");
     let context = ProcessContext {
-        run: ProcessRun::Call,
         workspace: sibling.path().to_path_buf(),
         package: owner.workspace().canonicalize().expect("canonical package"),
-        data_dirs: contract::events::ExtensionDataDirs {
-            machine: "m".to_owned(),
-            project: "p".to_owned(),
-        },
-        state: serde_json::Map::new(),
-        extension: "fiber.test/proc".to_owned(),
         home: sibling.path().to_path_buf(),
+        ..test_call_context()
     };
     let callback = CallbackContext::entry("fiber.test/proc");
     let run_exec = |program: String| {

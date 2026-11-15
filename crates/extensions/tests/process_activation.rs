@@ -467,6 +467,35 @@ fn registered_session(
     (session, captured)
 }
 
+/// A session refuses to start a process whose program escapes its package.
+#[test]
+fn session_process_start_refuses_package_escape() {
+    let env = Env::new("fiber-process-session-escape");
+    env.install_process(
+        "proc",
+        &json!({"process": {"program": "../outside"}}),
+        &json!({}),
+    );
+
+    let session = env.load(ExtensionReason::New, 0);
+    assert!(
+        !session
+            .loaded_names()
+            .iter()
+            .any(|name| name == "fiber.test/proc"),
+        "the refused process extension is not loaded: {:?}",
+        session.loaded_names()
+    );
+    assert!(
+        session.notices().iter().any(|notice| {
+            notice.extension.as_deref() == Some("fiber.test/proc")
+                && notice.message.contains("cannot start its process")
+        }),
+        "the session reports the package escape: {:?}",
+        session.notices()
+    );
+}
+
 /// Loading starts the process package: the hello carries the session's
 /// identity, reason, workspace, data directories and folded state, the
 /// tool and hook register as a Lua extension's do, and both run.
