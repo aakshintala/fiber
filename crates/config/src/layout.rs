@@ -296,6 +296,18 @@ mod tests {
         .unwrap();
         assert_eq!(fs::read(home.path().join("layout")).unwrap(), b"2");
 
+        let home = fakes::TempDir::new("config-layout-read-denied");
+        let layout = home.path().join("layout");
+        fs::write(&layout, b"2").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&layout, fs::Permissions::from_mode(0o000)).unwrap();
+        assert!(
+            ensure_project_layout_with(home.path(), PathBuf::from("/none").as_path(), |_, _| {
+                unreachable!()
+            })
+            .is_err()
+        );
+
         let home = fakes::TempDir::new("config-layout-read-error");
         fs::create_dir(home.path().join("layout")).unwrap();
         assert!(
@@ -314,6 +326,11 @@ mod tests {
 
         let home = fakes::TempDir::new("config-layout-projects-not-dir");
         fs::write(projects_dir(home.path()), b"file").unwrap();
+        assert!(ensure_project_layout(home.path(), PathBuf::from("/none").as_path()).is_err());
+
+        let home = fakes::TempDir::new("config-layout-projects-loop");
+        let projects = projects_dir(home.path());
+        std::os::unix::fs::symlink(&projects, &projects).unwrap();
         assert!(ensure_project_layout(home.path(), PathBuf::from("/none").as_path()).is_err());
     }
 
@@ -371,6 +388,28 @@ mod tests {
         })
         .unwrap();
         assert!(source.is_dir());
+
+        let source = home.path().join("permission-source");
+        let target = home.path().join("permission-target");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&target).unwrap();
+        assert!(
+            rename_project_dir(&source, &target, |_, _| {
+                Err(std::io::ErrorKind::AlreadyExists.into())
+            })
+            .is_ok()
+        );
+
+        let source = home.path().join("denied-source");
+        let target = home.path().join("denied-target");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&target).unwrap();
+        assert!(
+            rename_project_dir(&source, &target, |_, _| {
+                Err(std::io::ErrorKind::PermissionDenied.into())
+            })
+            .is_err()
+        );
 
         let source = home.path().join("plain-source");
         let target = home.path().join("plain-target");
@@ -445,6 +484,19 @@ mod tests {
         assert_eq!(fs::read(target.join("legacy-key")).unwrap(), b"-a-b");
         assert_eq!(fs::read(target.join("config.json")).unwrap(), b"legacy");
         assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn legacy_project_migration_writes_marker_before_renaming_unmarked_source() {
+        let home = fakes::TempDir::new("config-layout-marker-write");
+        let identity = PathBuf::from("/a-b");
+        let legacy = projects_dir(home.path()).join("-a-b");
+        fs::create_dir_all(&legacy).unwrap();
+
+        ensure_project_layout(home.path(), &identity).unwrap();
+
+        let target = projects_dir(home.path()).join(support::project_key::project_key(&identity));
+        assert_eq!(fs::read(target.join("legacy-key")).unwrap(), b"-a-b");
     }
 
     #[test]
