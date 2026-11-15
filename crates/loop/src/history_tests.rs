@@ -464,19 +464,17 @@ fn allowed_with_grant(id: &str) -> Event {
     })
 }
 
-/// A reviewer denial with no request, decided by `decided_by`: the live
-/// reviewer's own block line.
-fn reviewer_allowed() -> Event {
+fn allowed_by(decided_by: DecidedBy) -> Event {
     Event::PermissionResolved(PermissionResolved {
         call: None,
         request_id: None,
         decision: Decision::Allow,
-        decided_by: DecidedBy::Reviewer,
+        decided_by,
         reason: None,
         feedback: None,
         grant: None,
         rule: None,
-        reviewer: Some(contract::events::ReviewerRef {
+        reviewer: (decided_by == DecidedBy::Reviewer).then(|| contract::events::ReviewerRef {
             model: "fake/reviewer-1".to_owned(),
             stage: 2,
         }),
@@ -484,6 +482,7 @@ fn reviewer_allowed() -> Event {
     })
 }
 
+/// A reviewer denial with no request: the live reviewer's own block line.
 fn denied_by(decided_by: DecidedBy) -> Event {
     Event::PermissionResolved(PermissionResolved {
         call: None,
@@ -3359,6 +3358,7 @@ fn restored_block_consecutive_raise_counts() {
 
 #[test]
 fn restored_block_consecutive_denials_fold_run() {
+    // `docs/permissions.md`, "What happens on a block": 3 consecutive blocks.
     let folded = fold_own(
         "restored-deny-deny",
         &[
@@ -3371,11 +3371,12 @@ fn restored_block_consecutive_denials_fold_run() {
 
 #[test]
 fn restored_block_reviewer_allow_resets_run() {
+    // `docs/permissions.md`, "What happens on a block": reviewer allow resets the run.
     let folded = fold_own(
         "restored-deny-allow-deny",
         &[
             denied_by(DecidedBy::Reviewer),
-            reviewer_allowed(),
+            allowed_by(DecidedBy::Reviewer),
             denied_by(DecidedBy::Reviewer),
         ],
     );
@@ -3384,6 +3385,7 @@ fn restored_block_reviewer_allow_resets_run() {
 
 #[test]
 fn restored_block_person_answer_resets_escalation_run() {
+    // `docs/permissions.md`, "What happens on a block": the person's answer ends the run.
     let folded = fold_own(
         "restored-answer-reset",
         &[
@@ -3398,6 +3400,7 @@ fn restored_block_person_answer_resets_escalation_run() {
 
 #[test]
 fn restored_block_non_escalation_answer_keeps_run() {
+    // `docs/permissions.md`, "What happens on a block": the person's answer ends the run only for an escalation.
     let folded = fold_own(
         "restored-standing-answer",
         &[
@@ -3424,6 +3427,7 @@ fn restored_block_parent_segment_does_not_contribute_to_run() {
 
 #[test]
 fn restored_block_cancel_keeps_run_after_escalation() {
+    // `docs/permissions.md`, "What happens on a block": the person's answer ends the run.
     let folded = fold_own(
         "restored-cancel-run",
         &[
@@ -3438,6 +3442,7 @@ fn restored_block_cancel_keeps_run_after_escalation() {
 
 #[test]
 fn restored_block_hook_settlement_keeps_run_after_escalation() {
+    // `docs/permissions.md`, "What happens on a block": only a person's answer ends the run.
     let folded = fold_own(
         "restored-hook-run-standing",
         &[
@@ -3452,6 +3457,7 @@ fn restored_block_hook_settlement_keeps_run_after_escalation() {
 
 #[test]
 fn restored_block_parent_hook_settlement_increments_run() {
+    // `docs/permissions.md`, "What happens on a block": 3 consecutive blocks.
     let folded = fold_chain(
         "restored-hook-run",
         &[requested_review("r_1", consecutive_blocks())],

@@ -2790,6 +2790,7 @@ fn judged(name: &'static str) -> Arc<support::TestTool> {
 
 #[test]
 fn a_resumed_credential_refusal_prefers_the_block_budget_over_later_questions() {
+    // `docs/permissions.md`, "What happens on a block": 3 consecutive blocks.
     let keys = fakes::TempDir::new("fiber-resume-keys");
     let key = keys.path().join("openrouter");
     std::fs::write(&key, "sk-file-secret").unwrap();
@@ -4397,6 +4398,7 @@ fn an_allowed_call_that_asks_ends_the_finishing_turn_with_its_questions() {
 
 #[test]
 fn an_answered_resume_prefers_the_block_budget_over_later_questions() {
+    // `docs/permissions.md`, "What happens on a block": 3 consecutive blocks.
     // The batch is `act`, judged below, then `exec` and `ask`. The reply
     // allows `act`; the `close` behind it ends the `exec` block's wait.
     // Twenty prior denials make this `consecutive_blocks`, not a
@@ -4531,6 +4533,7 @@ fn an_answerable_resume_denies_the_call_a_person_refuses() {
 
 #[test]
 fn resumed_answer_matches_restart() {
+    // `docs/permissions.md`, "What happens on a block": the person's answer ends the run.
     // The pending escalation is the third block. A person's denial resets
     // the run, so the following reviewer block is not another escalation;
     // after a restart the folded answer must produce the same result.

@@ -1050,18 +1050,19 @@ impl Loop {
             .as_ref()
             .ok()
             .and_then(|prepared| prepared.effects.hosts.clone());
-        let decision: Decided =
+        let decision: Decided = {
+            let is_review = matches!(&request.step, contract::events::AskStep::Review { .. });
             match self.await_answer(&action, &turn, &call.name, request, hosts)? {
                 // The answer allows the prepared call: it runs with no second
                 // check.
                 Asked::Allow => {
-                    if matches!(&request.step, contract::events::AskStep::Review { .. }) {
+                    if is_review {
                         self.consecutive = 0;
                     }
                     allow
                 }
                 Asked::Deny(completed) => {
-                    if matches!(&request.step, contract::events::AskStep::Review { .. }) {
+                    if is_review {
                         self.consecutive = 0;
                     }
                     Err(completed)
@@ -1077,7 +1078,8 @@ impl Loop {
                 // the call completes as one no person can answer
                 // (`docs/events.md`, `permission_resolved`).
                 Asked::Closed => Err(crate::calls::no_person()),
-            };
+            }
+        };
         // The resumed decision is in: the segment ends here, before the
         // batch runs and its workers start their own timers.
         drop(permission);
