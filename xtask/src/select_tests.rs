@@ -971,3 +971,113 @@ pub(super) fn package_members() -> Members {
     );
     members
 }
+
+// `docs/workflow.md`, "Rules by path".
+#[test]
+fn rules_selection_runs_a_touched_crate_without_dependents() {
+    let files = strings(&["crates/contract/src/lib.rs"]);
+    assert_eq!(
+        classify(&files, &members()),
+        Selection::Crates(strings(&["config", "contract", "log", "loop"]))
+    );
+    assert_eq!(
+        rules_selection(&files, &members()),
+        Selection::Crates(strings(&["contract"]))
+    );
+}
+
+// `docs/workflow.md`, "Rules by path".
+#[test]
+fn rules_selection_runs_every_crate_a_doc_table_names() {
+    let selection = rules_selection(&strings(&["docs/errors.md"]), &members_with_tools());
+    assert_eq!(selection, Selection::Crates(strings(&["contract", "tui"])));
+    assert_eq!(selection.mode(), "crates");
+}
+
+// `docs/workflow.md`, "Rules by path".
+#[test]
+fn rules_selection_maps_a_crate_manifest_to_its_crate() {
+    let files = strings(&["crates/tui/Cargo.toml"]);
+    assert!(matches!(
+        classify(&files, &members_with_tools()),
+        Selection::All(_)
+    ));
+    assert_eq!(
+        rules_selection(&files, &members_with_tools()),
+        Selection::Crates(strings(&["tui"]))
+    );
+}
+
+// `docs/workflow.md`, "Rules by path".
+#[test]
+fn rules_selection_keeps_listed_support_files_with_their_owner() {
+    for (path, crates) in [
+        ("crates/loop/tests/support/review.rs", &["loop", "main"][..]),
+        (
+            "crates/provider/tests/support/probes.rs",
+            &["main", "provider"][..],
+        ),
+        ("crates/tui/assets/logo-mask.bin", &["tui", "xtask"][..]),
+    ] {
+        let selection = rules_selection(&strings(&[path]), &members_with_tools());
+        assert_eq!(selection, Selection::Crates(strings(crates)), "{path}");
+    }
+}
+
+// `docs/workflow.md`, "Rules by path".
+#[test]
+fn rules_selection_runs_no_crate_for_globally_scoped_runs_all_paths() {
+    for path in [
+        "scripts/check",
+        ".github/workflows/ci.yml",
+        "Cargo.toml",
+        "Cargo.lock",
+        "clippy.toml",
+    ] {
+        let selection = rules_selection(&strings(&[path]), &members_with_tools());
+        assert_eq!(selection, Selection::Crates(vec![]), "{path}");
+        assert_eq!(selection.mode(), "crates", "{path}");
+    }
+}
+
+// `docs/workflow.md`, "Rules by path".
+#[test]
+fn rules_selection_ignores_globally_scoped_paths_beside_a_crate_change() {
+    let selection = rules_selection(
+        &strings(&["scripts/check", "crates/log/src/lib.rs"]),
+        &members(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["log"])));
+}
+
+// `docs/workflow.md`, "Rules by path".
+#[test]
+fn rules_selection_runs_no_crate_for_a_package_only_diff() {
+    let selection = rules_selection(&strings(&["providers/opencode/extension.json"]), &members());
+    assert_eq!(selection, Selection::Crates(vec![]));
+    assert_eq!(selection.mode(), "crates");
+}
+
+// `docs/workflow.md`, "Rules by path".
+#[test]
+fn rules_selection_runs_a_prototype_diff_as_crates_without_packages() {
+    let selection = rules_selection(
+        &strings(&["research/tui-prototype/src/main.rs"]),
+        &members(),
+    );
+    assert_eq!(selection, Selection::Crates(vec![]));
+}
+
+// `docs/workflow.md`, "Rules by path".
+#[test]
+fn rules_selection_runs_docs_only_diffs_as_docs() {
+    for files in [
+        &[][..],
+        &["README.md"][..],
+        &["docs/notes.md", "research/x/run.sh"][..],
+    ] {
+        let selection = rules_selection(&strings(files), &members_with_tools());
+        assert_eq!(selection, Selection::Docs, "{files:?}");
+        assert_eq!(selection.mode(), "docs", "{files:?}");
+    }
+}

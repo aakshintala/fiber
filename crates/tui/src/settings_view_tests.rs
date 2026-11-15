@@ -13,8 +13,9 @@ use ratatui::style::Modifier;
 
 use super::{
     Act, Applies, Ctx, Item, Request, SCREEN_ROWS, Screen, ScreenRow, Settings, applies,
-    applies_text, as_typed, layers, next_number_value, next_text_value, number_list, number_slider,
-    number_text, refresh_millis, shown_value, slider_bar, slider_step, text_list,
+    applies_text, as_typed, editor_default, editors_on_path, layers, next_number_value,
+    next_text_value, number_list, number_slider, number_text, refresh_millis, slider_bar,
+    slider_step, text_list,
 };
 use crate::ThemeSetting;
 use crate::configure::{Layer, SettingControl, SettingRow, Shown, WriteScope};
@@ -22,6 +23,10 @@ use crate::configure_fake::{Fake, controlled, file, placed, row};
 use crate::keys::{Edit, Key};
 use crate::swapped::{Spot, render};
 use contract::settings::SettingsTab;
+
+fn shown_value(row: &SettingRow) -> (String, Option<String>) {
+    super::shown_value(row, |_| None)
+}
 
 /// A value shown as compact JSON.
 fn value(json: &str) -> Shown {
@@ -1155,6 +1160,23 @@ fn editor_fake() -> Fake {
     )])
 }
 
+fn open_other_field(settings: &mut Settings, fake: &Fake) {
+    let current = settings
+        .rows
+        .iter()
+        .find(|row| row.key == "tui.editor")
+        .and_then(|row| super::current_text(&row.value))
+        .expect("editor value");
+    settings.open_dynamic_choices(
+        "tui.editor".to_owned(),
+        Layer::Global,
+        vec!["Default".to_owned(), "Other…".to_owned()],
+        Some(current),
+        &ctx(fake),
+    );
+    settings.choose("Other…", &ctx(fake));
+}
+
 /// Builds settings rows with `key` set to `shown` at `layer` for tests.
 fn with(key: &str, shown: Shown, layer: &str) -> Vec<SettingRow> {
     rows()
@@ -1414,8 +1436,16 @@ fn a_saved_write_rereads_and_says_the_file() {
 
 #[test]
 fn free_text_is_saved_as_a_string_whatever_it_looks_like() {
-    let fake = editor_fake();
-    let mut settings = at(&fake, "tui.editor");
+    let fake = Fake::new(row_on(
+        "test.text",
+        "Text",
+        SettingsTab::Sessions,
+        value("\"vim\""),
+        "global",
+        PERSON,
+        SettingControl::Text,
+    ));
+    let mut settings = at(&fake, "test.text");
     one(&mut settings, &fake, Key::Enter);
     press(
         &mut settings,
@@ -1424,9 +1454,9 @@ fn free_text_is_saved_as_a_string_whatever_it_looks_like() {
     );
     typed(&mut settings, &fake, "7d");
     one(&mut settings, &fake, Key::Enter);
-    assert_eq!(writes(&fake), [w(Layer::Global, "tui.editor", "\"7d\"")]);
+    assert_eq!(writes(&fake), [w(Layer::Global, "test.text", "\"7d\"")]);
     // Text that parses as JSON is still text.
-    let mut again = at(&fake, "tui.editor");
+    let mut again = at(&fake, "test.text");
     one(&mut again, &fake, Key::Enter);
     press(
         &mut again,
@@ -1437,7 +1467,7 @@ fn free_text_is_saved_as_a_string_whatever_it_looks_like() {
     one(&mut again, &fake, Key::Enter);
     assert_eq!(
         writes(&fake).last(),
-        Some(&w(Layer::Global, "tui.editor", "\"12\""))
+        Some(&w(Layer::Global, "test.text", "\"12\""))
     );
 }
 
@@ -1459,11 +1489,8 @@ fn a_refused_numeric_step_keeps_the_value_and_reports_the_error() {
 fn esc_in_a_field_cancels_with_no_write() {
     let fake = editor_fake();
     let mut settings = at(&fake, "tui.editor");
-    press(
-        &mut settings,
-        &fake,
-        &[Key::Enter, Key::Char('9'), Key::Esc],
-    );
+    open_other_field(&mut settings, &fake);
+    press(&mut settings, &fake, &[Key::Char('9'), Key::Esc]);
     assert!(fake.writes().is_empty());
     assert!(matches!(settings.mode, super::Mode::Rows));
     // A second Esc leaves the view: Esc in the rows closes it.
@@ -1474,7 +1501,7 @@ fn esc_in_a_field_cancels_with_no_write() {
 fn the_field_takes_paste_and_moves_its_caret_by_characters() {
     let fake = editor_fake();
     let mut settings = at(&fake, "tui.editor");
-    one(&mut settings, &fake, Key::Enter);
+    open_other_field(&mut settings, &fake);
     press(
         &mut settings,
         &fake,
@@ -1506,7 +1533,7 @@ fn the_field_takes_paste_and_moves_its_caret_by_characters() {
 fn the_wheel_and_clicks_do_not_retarget_an_open_field() {
     let fake = editor_fake();
     let mut settings = at(&fake, "tui.editor");
-    one(&mut settings, &fake, Key::Enter);
+    open_other_field(&mut settings, &fake);
     settings.wheel(false, &ctx(&fake));
     settings.click(Spot::Row(0), &ctx(&fake));
     assert_eq!(
@@ -2767,6 +2794,26 @@ fn choice_at(settings: &Settings) -> usize {
 }
 
 #[test]
+fn ordinary_text_values_do_not_use_editor_display_rules() {
+    let unset = controlled(
+        "test.unset",
+        Shown::Unset,
+        "default",
+        ANY,
+        SettingControl::Text,
+    );
+    assert_eq!(shown_value(&unset).0, "Default");
+    let value = controlled(
+        "test.text",
+        value("\"plain\""),
+        "global",
+        ANY,
+        SettingControl::Text,
+    );
+    assert_eq!(shown_value(&value).0, "plain");
+}
+
+#[test]
 fn backend_and_hub_values_advertise_their_dynamic_picker() {
     for key in ["web_search.backend", "hub.default"] {
         let row = controlled(key, value("\"alpha\""), "global", ANY, SettingControl::Text);
@@ -2858,6 +2905,50 @@ fn hub_picker_uses_local_names_with_default_first_and_saves() {
 }
 
 #[test]
+fn choosing_the_current_hub_choice_still_saves_it() {
+    let mut fake = Fake::new(row_on(
+        "hub.default",
+        "Default hub",
+        SettingsTab::Advanced,
+        value("\"alpha\""),
+        "global",
+        WriteScope::GlobalOnly,
+        SettingControl::Text,
+    ));
+    fake.hubs = vec!["alpha".to_owned()];
+    let mut settings = at(&fake, "hub.default");
+    one(&mut settings, &fake, Key::Enter);
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "hub.default", "\"alpha\"")]
+    );
+}
+
+#[test]
+fn a_gui_named_choice_on_a_non_editor_key_does_not_add_wait() {
+    let fake = Fake::new(row_on(
+        "hub.default",
+        "Default hub",
+        SettingsTab::Advanced,
+        Shown::Unset,
+        "default",
+        WriteScope::GlobalOnly,
+        SettingControl::Text,
+    ));
+    let mut settings = at(&fake, "hub.default");
+    settings.open_dynamic_choices(
+        "hub.default".to_owned(),
+        Layer::Global,
+        vec!["Default".to_owned(), "code".to_owned()],
+        None,
+        &ctx(&fake),
+    );
+    settings.choose("code", &ctx(&fake));
+    assert_eq!(writes(&fake), [w(Layer::Global, "hub.default", "\"code\"")]);
+}
+
+#[test]
 fn hub_picker_default_on_an_unset_key_closes_without_a_write() {
     let mut fake = Fake::new(row_on(
         "hub.default",
@@ -2876,6 +2967,225 @@ fn hub_picker_default_on_an_unset_key_closes_without_a_write() {
     assert!(matches!(settings.mode, super::Mode::Rows));
     assert!(fake.writes().is_empty());
     assert!(resets(&fake).is_empty());
+}
+
+#[test]
+fn opening_editor_settings_focuses_its_row() {
+    let mut fixture = row_on(
+        "tui.editor",
+        "Editor",
+        SettingsTab::Advanced,
+        value("\"vim\""),
+        "global",
+        PERSON,
+        SettingControl::Text,
+    );
+    fixture.push(on(
+        SettingsTab::Advanced,
+        "Earlier row",
+        "a.earlier",
+        Shown::Unset,
+        "default",
+        ANY,
+        SettingControl::Text,
+    ));
+    let fake = Fake::new(fixture);
+    let settings = Settings::open_on(&ctx(&fake), Vec::new(), "tui.editor");
+    assert_eq!(settings.tab, SettingsTab::Advanced);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("tui.editor".to_owned()))
+    );
+}
+
+#[test]
+fn shown_editor_default_names_visual_when_set() {
+    let row = controlled(
+        "tui.editor",
+        Shown::Unset,
+        "default",
+        PERSON,
+        SettingControl::Text,
+    );
+    let rendered = super::shown_value(&row, |name| match name {
+        "VISUAL" => Some("vim".to_owned()),
+        _ => None,
+    });
+    assert_eq!(rendered.0, "Default ($VISUAL: vim)");
+}
+
+#[test]
+fn shown_editor_default_names_editor_when_visual_is_unset() {
+    let row = controlled(
+        "tui.editor",
+        Shown::Unset,
+        "default",
+        PERSON,
+        SettingControl::Text,
+    );
+    let rendered = super::shown_value(&row, |name| match name {
+        "EDITOR" => Some("nvim".to_owned()),
+        _ => None,
+    });
+    assert_eq!(rendered.0, "Default ($EDITOR: nvim)");
+}
+
+#[test]
+fn editor_default_details_follow_visual_then_editor_and_none() {
+    assert_eq!(
+        editor_default(Some("vim"), Some("nvim")),
+        "Default ($VISUAL: vim)"
+    );
+    assert_eq!(
+        editor_default(None, Some("nvim")),
+        "Default ($EDITOR: nvim)"
+    );
+    assert_eq!(editor_default(None, None), "Default (none set)");
+}
+
+#[test]
+fn editor_picker_uses_path_order_and_saves_wait_for_gui_editors() {
+    let dir = fakes::TempDir::new("editor-path");
+    use std::os::unix::fs::PermissionsExt;
+    let nvim = dir.path().join("nvim");
+    std::fs::write(&nvim, "").unwrap();
+    std::fs::set_permissions(&nvim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let non_executable = dir.path().join("vim");
+    std::fs::write(&non_executable, "").unwrap();
+    let directory = dir.path().join("hx");
+    std::fs::create_dir(&directory).unwrap();
+    let code = dir.path().join("code");
+    std::fs::write(&code, "").unwrap();
+    std::fs::set_permissions(code, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        editors_on_path(Some(dir.path().as_os_str())),
+        ["nvim", "code"]
+    );
+
+    let fake = Fake::new(row_on(
+        "tui.editor",
+        "Editor",
+        SettingsTab::Sessions,
+        value("\"nvim --wait\""),
+        "global",
+        PERSON,
+        SettingControl::Text,
+    ));
+    let mut settings = at(&fake, "tui.editor");
+    assert_eq!(
+        row_of(&screen(&settings), "Editor"),
+        "› Editor nvim --wait ›"
+    );
+    settings.change_with_path(&ctx(&fake), Some(dir.path().as_os_str()));
+
+    let super::Mode::Choices { list, .. } = &settings.mode else {
+        panic!("editor choices did not open");
+    };
+    assert_eq!(
+        list.selected(),
+        1,
+        "saved command did not select its program"
+    );
+    one(&mut settings, &fake, Key::Down);
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "tui.editor", "\"code --wait\"")]
+    );
+
+    let mut absolute = at(&fake, "tui.editor");
+    absolute.open_dynamic_choices(
+        "tui.editor".to_owned(),
+        Layer::Global,
+        vec!["Default".to_owned(), "code".to_owned(), "Other…".to_owned()],
+        Some("/usr/local/bin/code --wait".to_owned()),
+        &ctx(&fake),
+    );
+    let super::Mode::Choices { list, .. } = &absolute.mode else {
+        panic!("editor choices did not open");
+    };
+    assert_eq!(list.selected(), 1);
+    assert!(screen(&absolute).contains("code  (current)"));
+    absolute.choose("code", &ctx(&fake));
+    assert_eq!(
+        writes(&fake).len(),
+        1,
+        "reselecting the current program wrote a value"
+    );
+
+    let mut other = at(&fake, "tui.editor");
+    other.open_dynamic_choices(
+        "tui.editor".to_owned(),
+        Layer::Global,
+        vec!["Default".to_owned(), "Other…".to_owned()],
+        Some("code --wait".to_owned()),
+        &ctx(&fake),
+    );
+    other.choose("Other…", &ctx(&fake));
+    for _ in 0.."code --wait".chars().count() {
+        one(&mut other, &fake, Key::Backspace);
+    }
+    typed(&mut other, &fake, "emacs -nw");
+    one(&mut other, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake).last(),
+        Some(&w(Layer::Global, "tui.editor", "\"emacs -nw\""))
+    );
+
+    let mut cancel = at(&fake, "tui.editor");
+    cancel.open_dynamic_choices(
+        "tui.editor".to_owned(),
+        Layer::Global,
+        vec!["Default".to_owned(), "Other…".to_owned()],
+        Some("code --wait".to_owned()),
+        &ctx(&fake),
+    );
+    cancel.choose("Other…", &ctx(&fake));
+    one(&mut cancel, &fake, Key::Esc);
+    assert_eq!(writes(&fake).len(), 2, "cancel wrote a value");
+
+    let empty_fake = Fake::new(row_on(
+        "tui.editor",
+        "Editor",
+        SettingsTab::Sessions,
+        value("\"code --wait\""),
+        "global",
+        PERSON,
+        SettingControl::Text,
+    ));
+    let mut empty = at(&empty_fake, "tui.editor");
+    empty.open_dynamic_choices(
+        "tui.editor".to_owned(),
+        Layer::Global,
+        vec!["Default".to_owned(), "Other…".to_owned()],
+        None,
+        &ctx(&empty_fake),
+    );
+    empty.choose("Other…", &ctx(&empty_fake));
+    let mut unset_rows = rows();
+    let editor_row = on(
+        SettingsTab::Sessions,
+        "Editor",
+        "tui.editor",
+        Shown::Unset,
+        "default",
+        PERSON,
+        SettingControl::Text,
+    );
+    unset_rows.push(editor_row);
+    unset_rows.sort_by(|a, b| a.key.cmp(&b.key));
+    *support::lock(&empty_fake.rows_after) = Some(unset_rows);
+    one(&mut empty, &empty_fake, Key::Enter);
+    assert!(writes(&empty_fake).is_empty(), "empty Other… wrote a value");
+    assert_eq!(
+        resets(&empty_fake),
+        [w(Layer::Global, "tui.editor", "code --wait")],
+        "empty Other… must reset the override"
+    );
+    assert_eq!(
+        row_of(&screen(&empty), "Editor"),
+        "› Editor Default (none set)"
+    );
 }
 
 #[test]
@@ -3405,7 +3715,7 @@ fn settings_editing() {
     ));
     let fake = Fake::new(all);
     let mut settings = at(&fake, "tui.editor");
-    one(&mut settings, &fake, Key::Enter);
+    open_other_field(&mut settings, &fake);
     typed(&mut settings, &fake, "5");
     let super::Mode::Field(field) = &settings.mode else {
         panic!("no field");
@@ -3595,7 +3905,7 @@ fn a_number_row_shows_its_unit_in_row_text() {
     assert_eq!(text("model_lists.refresh_after", Text, "\"soon\""), "soon");
     // Only the refresh row reads duration words: any other Text row keeps
     // its raw text even when it ends in a duration unit.
-    assert_eq!(text("tui.editor", Text, "\"24h\""), "24h");
+    assert_eq!(text("tui.editor", Text, "\"24h\""), "24h ›");
     // A non-ASCII value never splits a character boundary: it keeps its
     // raw text instead of panicking.
     assert_eq!(text("model_lists.refresh_after", Text, "\"é\""), "é");
@@ -4359,7 +4669,14 @@ fn the_wheel_over_the_theme_choices_previews_only_when_the_selection_moves() {
 fn a_field_and_a_page_print_without_their_draft() {
     let fake = editor_fake();
     let mut settings = at(&fake, "tui.editor");
-    one(&mut settings, &fake, Key::Enter);
+    settings.open_dynamic_choices(
+        "tui.editor".to_owned(),
+        Layer::Global,
+        vec!["Default".to_owned(), "Other…".to_owned()],
+        Some("vim".to_owned()),
+        &ctx(&fake),
+    );
+    settings.choose("Other…", &ctx(&fake));
     typed(&mut settings, &fake, "sekret");
     let field = format!("{:?}", settings.mode);
     assert!(field.contains("Field"), "{field}");
@@ -5112,15 +5429,15 @@ fn settings_search_controls_field_owns_its_keys_until_it_cancels() {
     let mut all = rows();
     all.push(on(
         SettingsTab::Appearance,
-        "Editor",
-        "tui.editor",
+        "Text",
+        "test.text",
         value("\"vim\""),
         "project",
         PERSON,
         SettingControl::Text,
     ));
     let fake = Fake::new(all);
-    let mut settings = searched(&fake, "editor");
+    let mut settings = searched(&fake, "text");
     one(&mut settings, &fake, Key::Enter);
     assert!(matches!(settings.mode, super::Mode::Field(_)));
     // Letters, a slash and a paste land in the field, never the query.
@@ -5131,19 +5448,19 @@ fn settings_search_controls_field_owns_its_keys_until_it_cancels() {
         panic!("no field");
     };
     assert_eq!(field.draft.expand(), "vimab/3");
-    assert_eq!(query_of(&settings), "editor");
+    assert_eq!(query_of(&settings), "text");
     assert!(fake.writes().is_empty());
     // The field's own Esc writes nothing and keeps the search: the next
     // Esc clears it onto the match, as the ruling says.
     one(&mut settings, &fake, Key::Esc);
     assert!(matches!(settings.mode, super::Mode::Rows));
-    assert_eq!(query_of(&settings), "editor");
+    assert_eq!(query_of(&settings), "text");
     assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
     assert!(settings.search.is_none());
     assert_eq!(settings.tab, SettingsTab::Appearance);
     assert_eq!(
         settings.focus,
-        Some(super::Focus::Key("tui.editor".to_owned()))
+        Some(super::Focus::Key("test.text".to_owned()))
     );
 }
 
