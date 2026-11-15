@@ -310,7 +310,7 @@ impl TextRun {
     /// The session's directory, from its id.
     fn session_dir(&self, setup: &Setup) -> PathBuf {
         let workspace = fs::canonicalize(setup.root.path().join("w")).unwrap();
-        let key = workspace.to_string_lossy().replace('/', "-");
+        let key = log::project_key(&workspace);
         setup
             .home()
             .join("projects")
@@ -3773,10 +3773,10 @@ fn provider_with(
 
 /// Writes `config` as the per-project `config.json` for the workspace:
 /// `projects/<key>/config.json`, the key the canonical workspace with
-/// every `/` made `-`, as [`Run::session_dir`] builds it.
+/// using the shared persisted project-key formatter, as [`Run::session_dir`] builds it.
 fn write_project_config(setup: &Setup, config: &Value) {
     let workspace = fs::canonicalize(setup.root.path().join("w")).unwrap();
-    let key = workspace.to_string_lossy().replace('/', "-");
+    let key = log::project_key(&workspace);
     write(
         &setup.home().join("projects").join(key).join("config.json"),
         config,

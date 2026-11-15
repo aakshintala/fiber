@@ -16,7 +16,7 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 use mlua::{Lua, Value as LuaValue};
 
-use crate::{Error, LuaExtension};
+use crate::LuaExtension;
 
 /// `clock` as the extension's clock.
 fn clocked(clock: &Arc<FakeClock>) -> Arc<dyn contract::clock::Clock> {
@@ -168,13 +168,14 @@ fn model_accepts_a_limit_of_one() {
 }
 
 #[test]
-fn model_in_the_entry_script_raises_closing() {
+fn model_in_the_entry_script_raises_not_available() {
     let clock = FakeClock::new();
     let dir = fakes::TempDir::new("fiber-model");
     std::fs::write(
         dir.path().join("init.lua"),
-        "host.model({ model = \"p/m\", messages = { { role = \"user\", content = \"hi\" } }, max_tokens = 16 })\n\
-         fiber.command(\"go\", { timeout = 5000, run = function() end })\n",
+        "local ok, err = pcall(host.model, { model = \"p/m\", messages = { { role = \"user\", content = \"hi\" } }, max_tokens = 16 })\n\
+         ENTRY = tostring(ok) .. \"/\" .. tostring(err.code) .. \"/\" .. tostring(err)\n\
+         fiber.command(\"go\", { timeout = 5000, run = function() return ENTRY end })\n",
     )
     .unwrap();
     let ext = LuaExtension::new(
@@ -185,16 +186,15 @@ fn model_in_the_entry_script_raises_closing() {
     );
     let ext = Arc::new(ext);
     let held = Arc::clone(&ext);
-    match fakes::within(
-        "held.commands",
-        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-        move || held.commands(),
-    ) {
-        Err(Error::Lua { message, .. }) => {
-            assert_eq!(message, "host.model: not available while init.lua runs");
-        }
-        other => panic!("the entry script fails to load: {other:?}"),
-    }
+    assert_eq!(
+        fakes::within(
+            "held.command",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.command("go", "")
+        )
+        .unwrap(),
+        "false/not_available/host.model: not available while init.lua runs"
+    );
 }
 
 #[test]

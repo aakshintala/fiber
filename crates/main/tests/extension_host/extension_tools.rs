@@ -76,7 +76,7 @@ impl StdoutRun {
     /// The session's directory, from its id.
     pub(super) fn extension_tools_session_dir(&self, setup: &Setup) -> PathBuf {
         let workspace = fs::canonicalize(setup.workspace()).unwrap();
-        let key = workspace.to_string_lossy().replace('/', "-");
+        let key = log::project_key(&workspace);
         setup
             .home()
             .join("projects")

@@ -194,7 +194,7 @@ end
 
 local function in_callback(call)
   if in_entry() then
-    error("host.oauth." .. call .. ": needs a running callback, not the entry script", 3)
+    error(failure("not_available", "host.oauth." .. call .. ": needs a running callback, not the entry script"), 3)
   end
 end
 

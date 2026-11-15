@@ -256,6 +256,12 @@ impl Package {
         name: &str,
         workspace: &std::path::Path,
     ) -> Result<config::ProjectKey, (contract::ErrorCode, String)> {
+        if workspace.as_os_str().is_empty() {
+            return Err((
+                contract::ErrorCode::InvalidArguments,
+                format!("{name}: cannot key its project data from an empty workspace"),
+            ));
+        }
         let identity = workspace
             .canonicalize()
             .unwrap_or_else(|_| workspace.to_path_buf());

@@ -150,13 +150,9 @@ impl Setup {
             .join("sessions")
     }
 
-    /// The project key of the workspace's project: the canonical
-    /// workspace path with `/` as `-`.
+    /// The persisted key of the workspace's project.
     fn project_key(&self) -> String {
-        fs::canonicalize(self.workspace())
-            .unwrap()
-            .to_string_lossy()
-            .replace('/', "-")
+        log::project_key(&worktree::project(&self.workspace()))
     }
 }
 

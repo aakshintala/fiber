@@ -18,7 +18,7 @@ use std::time::Duration;
 use contract::SessionId;
 use serde_json::{Value, json};
 
-use super::resolve;
+use super::{recorded_project_matches, resolve};
 
 const OLD: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -72,6 +72,39 @@ fn new() -> SessionId {
 fn session_dir(old_dir: &Path) -> log::SessionDir {
     let sessions = old_dir.parent().unwrap();
     log::SessionDir::new(sessions, &old())
+}
+
+#[test]
+fn recorded_project_match_accepts_the_migrated_hashed_candidate() {
+    let home = fakes::TempDir::new("main-continues-migrated");
+    let workspace = home.path().join("wt");
+    std::fs::create_dir(&workspace).unwrap();
+    let identity = std::fs::canonicalize(&workspace).unwrap();
+    let candidates = log::candidate_sessions_dirs(home.path(), &identity);
+    let dir = candidates[1].join(OLD);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("events.jsonl"),
+        started(
+            &identity,
+            Some(json!({
+                "path": identity.to_string_lossy(),
+                "branch": "fiber/x",
+                "repository": identity.to_string_lossy(),
+            })),
+        ),
+    )
+    .unwrap();
+
+    assert!(recorded_project_matches(&dir, &identity, &identity));
+    assert!(
+        !recorded_project_matches(&dir, Path::new("/other/project"), &identity),
+        "a candidate whose logged repository belongs to another project is refused"
+    );
+    assert!(
+        !recorded_project_matches(&dir, &identity, Path::new("/other/worktree")),
+        "a candidate recorded for a different workspace is refused"
+    );
 }
 
 #[test]
@@ -527,6 +560,36 @@ fn entry_child() {
     };
     let code = crate::session_command::run(args, &process);
     std::process::exit(code);
+}
+
+#[test]
+fn entry_point_with_no_matching_session_returns_one() {
+    if std::env::var(ENTRY_CHILD).is_ok() {
+        entry_child();
+        return;
+    }
+    let home = fakes::TempDir::new("main-continues-no-match-entry");
+    let workspace = home.path().join("wt");
+    std::fs::create_dir(&workspace).unwrap();
+    let out = fakes::rerun_within(
+        &this("entry_point_with_no_matching_session_returns_one"),
+        &[
+            (ENTRY_CHILD, "1"),
+            ("FIBER_HOME", home.path().to_string_lossy().as_ref()),
+            (
+                "FIBER_MAIN_CONTINUES_ENTRY_WS",
+                workspace.to_string_lossy().as_ref(),
+            ),
+            ("FIBER_MAIN_CONTINUES_ENTRY_OLD", OLD),
+            ("FIBER_MAIN_CONTINUES_ENTRY_NEW", "s_bbbbbbbbbbbbbbbb"),
+        ],
+        fakes::Deadline::after(Duration::from_secs(30)),
+    );
+    assert_eq!(out.status.code(), Some(1), "the refusal returns exactly 1");
+    assert!(
+        !home.path().join("sessions").exists(),
+        "no session was created"
+    );
 }
 
 #[test]

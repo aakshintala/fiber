@@ -95,9 +95,11 @@ fn the_doctor_output_stays_verbatim() {
 }
 
 #[test]
-fn install_is_install_sh_with_a_commit_and_unknown_without() {
-    assert_eq!(install_method("0.3.0 (abc123)"), "install.sh");
-    assert_eq!(install_method("0.3.0"), "unknown");
+fn install_is_source_with_a_commit_and_unknown_without() {
+    assert_eq!(install_method("0.3.0 (abc123)", false), "source");
+    assert_eq!(install_method("0.3.0 (abc123)", true), "install.sh");
+    assert_eq!(install_method("0.3.0", false), "unknown");
+    assert_eq!(install_method("0.3.0", true), "unknown");
 }
 
 #[test]
@@ -240,7 +242,7 @@ fn write_writes_the_report_once_and_returns_its_path_and_link() {
             build_report(
                 VERSION,
                 &super::platform(),
-                install_method(VERSION),
+                install_method(VERSION, false),
                 DESCRIPTION,
                 DOCTOR
             )
@@ -528,6 +530,41 @@ fn select_session_rejects_an_explicit_delegate_id() {
     )
     .unwrap_err();
     assert_eq!(error.code, ErrorCode::SessionNotFound);
+}
+
+#[test]
+fn select_session_finds_a_session_after_legacy_directory_migration() {
+    let home = Home::new();
+    let workspace = home.0.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let identity = fs::canonicalize(&workspace).unwrap();
+    let legacy = support::project_key::legacy_project_slug(&identity);
+    let dir = log::session_dir(home.0.path(), &legacy, &SessionId(SESSION.to_owned()));
+    fs::create_dir_all(&dir).unwrap();
+    let started = serde_json::json!({
+        "kind": "session_started", "session_id": SESSION, "seq": 0, "ts": 1,
+        "schema_version": 1,
+        "payload": {"workspace": identity, "variables": {"path": "", "names": [], "source": "inherited"}}
+    });
+    fs::write(dir.join("events.jsonl"), format!("{started}\n")).unwrap();
+    let source = dir.parent().unwrap().parent().unwrap();
+    let target = home
+        .0
+        .path()
+        .join("projects")
+        .join(log::project_key(&identity));
+    fs::write(source.join("legacy-key"), legacy.as_bytes()).unwrap();
+    fs::rename(source, target).unwrap();
+
+    assert_eq!(
+        select_session(
+            home.0.path(),
+            &workspace,
+            Some(SessionId(SESSION.to_owned()))
+        )
+        .unwrap(),
+        Some(SessionId(SESSION.to_owned()))
+    );
 }
 
 #[test]
