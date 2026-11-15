@@ -493,11 +493,9 @@ crates/extensions/src/package.rs	fiber-4677	plan	2026-11-14T21:54:31Z	Amoghs-Mac
 crates/extensions/src/hooks.rs	fiber-4677	plan	2026-11-14T21:54:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/package_tests.rs	fiber-4677	plan	2026-11-14T21:54:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/process_tests.rs	fiber-4677	plan	2026-11-14T21:54:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-xtask/src/select/plan_tests.rs	fiber-4830	plan	2026-11-14T22:05:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/tests/cli.rs	fiber-4830	plan	2026-11-14T22:05:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/select/plan.rs	fiber-4830	plan	2026-11-14T22:05:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/main.rs	fiber-4830	plan	2026-11-14T22:05:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/ci.md	fiber-4830	plan	2026-11-14T22:05:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/select.rs	fiber-4830	plan	2026-11-14T22:05:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/select_tests.rs	fiber-4830	plan	2026-11-14T22:05:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/doors/src/lib.rs	fiber-4827	plan	2026-11-14T22:09:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -550,3 +548,12 @@ crates/main/tests/screen_looks/swapped_panels_look.rs	fiber-4837	plan	2026-11-14
 crates/main/tests/support/pty.rs	fiber-4837	plan	2026-11-14T23:56:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/event_loop.rs	fiber-4837	plan	2026-11-14T23:56:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/workflow.md	fiber-4837	plan	2026-11-14T23:56:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/ci.md:31-34	fiber-4830	plan	2026-11-15T00:00:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4830-4814-p3s	
+xtask/src/select/plan_tests.rs:297-298	fiber-4830	plan	2026-11-15T00:00:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4830-4814-p3s	
+xtask/src/select/plan_tests.rs:302-303	fiber-4830	plan	2026-11-15T00:00:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4830-4814-p3s	
+xtask/src/select/plan_tests.rs:314-326	fiber-4830	plan	2026-11-15T00:00:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4830-4814-p3s	
+xtask/src/select/plan_tests.rs:330-342	fiber-4830	plan	2026-11-15T00:00:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4830-4814-p3s	
+xtask/src/select/plan_tests.rs:360-360	fiber-4830	plan	2026-11-15T00:00:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4830-4814-p3s	
+xtask/src/select/plan_tests.rs:365-366	fiber-4830	plan	2026-11-15T00:00:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4830-4814-p3s	
+xtask/src/select/plan_tests.rs:381-393	fiber-4830	plan	2026-11-15T00:00:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4830-4814-p3s	
+xtask/src/select/plan_tests.rs:401-412	fiber-4830	plan	2026-11-15T00:00:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4830-4814-p3s	
