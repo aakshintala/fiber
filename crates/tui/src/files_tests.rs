@@ -638,7 +638,24 @@ fn the_listing_is_the_tracked_files_from_the_repository_root() {
 #[test]
 fn a_directory_outside_a_repository_gives_the_error() {
     let dir = fakes::TempDir::new("tui-files-bare");
-    let error = list_within(dir.path()).err().unwrap_or_default();
+    let error = match list_within(dir.path()) {
+        Ok(paths) => {
+            let diagnostic = support::git::command("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(["rev-parse", "--show-toplevel", "--absolute-git-dir"])
+                .output()
+                .unwrap_or_else(|err| panic!("git rev-parse diagnostic: {err}"));
+            panic!(
+                "expected directory outside a repository; tempdir: {}; returned paths: {paths:?}; git root (status {}): {}{}",
+                dir.path().display(),
+                diagnostic.status,
+                String::from_utf8_lossy(&diagnostic.stdout),
+                String::from_utf8_lossy(&diagnostic.stderr),
+            );
+        }
+        Err(error) => error,
+    };
     assert!(error.contains("not a git repository"), "{error}");
     assert!(!error.contains('\n'), "{error}");
 }
