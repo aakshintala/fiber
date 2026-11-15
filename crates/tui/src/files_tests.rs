@@ -647,10 +647,17 @@ fn a_directory_outside_a_repository_gives_the_error() {
                 .output()
                 .unwrap_or_else(|err| panic!("git rev-parse diagnostic: {err}"));
             panic!(
-                "expected directory outside a repository; tempdir: {}; returned paths: {paths:?}; git root (status {}): {}{}",
+                "expected directory outside a repository; tempdir: {}; returned paths: {paths:?}; git rev-parse (status {}):\ntoplevel: {}git dir: {}stderr: {}",
                 dir.path().display(),
                 diagnostic.status,
-                String::from_utf8_lossy(&diagnostic.stdout),
+                String::from_utf8_lossy(&diagnostic.stdout)
+                    .lines()
+                    .next()
+                    .unwrap_or("<missing>"),
+                String::from_utf8_lossy(&diagnostic.stdout)
+                    .lines()
+                    .nth(1)
+                    .unwrap_or("<missing>"),
                 String::from_utf8_lossy(&diagnostic.stderr),
             );
         }
