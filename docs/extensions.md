@@ -209,7 +209,7 @@ envelope and `schema_version` (`docs/events.md`), and three kinds of traffic:
 >
 > **Fiber's requests are lines the extension answers with `reply`.** Each is an ephemeral line of kind `extension_request`, whose payload holds `request_id`, `registration` (the `id` of the `call` command that registered it), `key` (the function's key, such as `run`) and `args` (the arguments the Lua function receives, as a JSON array). The extension answers with `reply`: `request_id` and `result` (what the Lua function returns), or `request_id` and `error`, `{ code, message }`, which fails the call as a Lua error does. Stream items, meaning hooks, watcher deliveries and commands, are sent one at a time, each after the reply to the last one. Tool calls are sent as they arrive, so several can be outstanding. A reply to a request that is no longer pending, such as one past its timeout, is rejected `stale_request` and changes nothing. That is how a late reply is dropped.
 >
-> **`extension_hello`** is the first line Fiber sends, ephemeral, with payload keys `session_id`, `reason` (`new`, `resume`, `fork`, `rewind`, `compaction`, or `call` for a provider call outside a session, such as a call case or the credential precheck), `workspace` (the workspace root), `data_dirs` (`{ machine, project }`, the paths `host.data_dir` returns) and `state` (the extension's folded state, as `state.get` reads it). After a restart it is sent again, with the state as it stands in the session. With reason `call`, `session_id` is absent and `state` is `{}`. The extension has `host.http`, `host.exec`, `host.oauth`, `host.secret`, `host.data_dir`, `host.log`, `host.fs` reads, the hashes and `json`; any other host call raises `invalid_arguments` (`<call>: not available here`).
+> **`extension_hello`** is the first line Fiber sends, ephemeral, with payload keys `session_id`, `reason` (`new`, `resume`, `fork`, `rewind`, `compaction`, or `call` for a provider call outside a session, such as a call case or the credential precheck), `workspace` (the workspace root), `data_dirs` (`{ machine, project }`, the paths `host.data_dir` returns) and `state` (the extension's folded state, as `state.get` reads it). After a restart it is sent again, with the state as it stands in the session. With reason `call`, `session_id` is absent and `state` is `{}`. The extension has `host.http`, `host.exec`, `host.oauth`, `host.secret`, `host.data_dir`, `host.log`, `host.fs` reads, the hashes and `json`; any other host call raises `not_available` (`<call>: not available here`).
 
 Every session starts its own process extensions, a delegate included, as it
 starts its own MCP servers. Nothing is shared between sessions
@@ -447,10 +447,10 @@ json.decode(str [, { lenient }]) / json.encode(value)   -- JSON, host-provided (
   the calling code, raised as strings, before any service call. A refusal
   from the service reaches Lua as `error({ code, message })`: the codes
   and messages are the start's, `depth_exceeded`, `invalid_arguments`,
-  `credential_missing` and `tool_error` (`docs/errors.md`).
+  `credential_missing`, `not_available` and `tool_error` (`docs/errors.md`).
   From a command, a hook, a timer or a tool call it starts the delegate;
   from a watcher, a provider function, a search function or an effects
-  function it raises `invalid_arguments` (`host.delegate: not available
+  function it raises `not_available` (`host.delegate: not available
   here`) and starts nothing. While the entry script runs it raises `closing`.
   Once the session's end has begun stopping its jobs, on a normal end, a
   shutdown or a rewind, it raises `closing` and starts nothing. The end
@@ -1765,7 +1765,7 @@ written at session end runs. It writes to the extension's data directory
 deliveries come after `fiber_exited`, the last line the log takes, so
 `state.set`, `state.unset`, `host.model` and `host.drive` fail with code
 `closing`. `host.delegate` is refused to a watcher at any time, so there
-it fails with `invalid_arguments`, not `closing`. A process extension
+it fails with `not_available`, not `closing`. A process extension
 then has its manifest's `exit_timeout_ms` to finish, and after that gets
 the shutdown sequence every child gets: SIGTERM, 800 ms, then SIGKILL
 (`docs/invocation.md`, "Shutdown").
