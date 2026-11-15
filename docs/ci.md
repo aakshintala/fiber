@@ -717,8 +717,8 @@ renamed in the new release fails it, because `unknown_lints` is denied
 night at 03:00 UTC on `main` and opens a pull request when a committed model
 list or `providers/models-corrections.toml` changes
 (`docs/model-routing.md`, "What a provider extension declares"). It fetches
-models.dev's public catalog and needs no secret. The pull request uses the
-toolchain bump token so its CI runs (`docs/ci.md`, "Toolchain"). When an open
+models.dev's public catalog with no credential, and opens its pull request
+with the toolchain bump token so that CI runs ("Toolchain"). When an open
 pull request from an earlier run exists, the workflow updates its branch
 instead of opening a second one. On each changed run, it resets the
 bot-managed `models-catalog` branch from `main` and overwrites it, so nobody

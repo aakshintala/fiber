@@ -51,7 +51,8 @@ jobs:
         id: changes
         run: |
           set -euo pipefail
-          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+          git add -A
+          if git diff --cached --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "Generated model lists match main"
           else
@@ -66,7 +67,6 @@ jobs:
         run: |
           set -euo pipefail
           branch=models-catalog
-          git add -u
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "Update generated model lists"
@@ -106,6 +106,7 @@ jobs:
             echo "No stale model-list pull request"
             exit 0
           fi
+          gh pr close "$pr" --comment "Generated model lists match main; closing this stale pull request. Run: $RUN_URL"
           expected=$(git ls-remote origin "refs/heads/$branch" | awk 'NR == 1 { print $1 }')
           if [ -n "$expected" ]; then
             auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
@@ -113,4 +114,3 @@ jobs:
               --force-with-lease="refs/heads/$branch:$expected" \
               origin ":refs/heads/$branch"
           fi
-          gh pr close "$pr" --comment "Generated model lists match main; closing this stale pull request. Run: $RUN_URL"
