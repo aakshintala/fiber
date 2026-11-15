@@ -17,8 +17,31 @@ use std::sync::Arc;
 use contract::CommandId;
 use serde_json::{Value, json};
 
-use super::package::{Package, PackageOptions};
+use super::package::{Package, PackageOptions, canonicalize_package_dir};
 use super::process::RegisterOutcome;
+
+/// Package canonicalization resolves links and reports failures with the input path.
+#[test]
+fn canonicalize_package_dir_resolves_symlinks_and_maps_missing_to_io_failed() {
+    use std::os::unix::fs::symlink;
+
+    let root = fakes::TempDir::new("fiber-package-canonicalize");
+    let target = root.path().join("target");
+    std::fs::create_dir(&target).expect("create package target");
+    let link = root.path().join("link");
+    symlink(&target, &link).expect("link package directory");
+
+    let canonical_target = target.canonicalize().expect("canonical target");
+    let canonical = canonicalize_package_dir(&link).expect("canonicalize symlink");
+    assert_eq!(canonical, canonical_target);
+    assert!(canonical.starts_with(&canonical_target));
+
+    let missing = root.path().join("missing");
+    let source = missing.canonicalize().expect_err("missing directory fails");
+    let error = canonicalize_package_dir(&missing).expect_err("missing directory maps to error");
+    assert_eq!(error.0, contract::ErrorCode::IoFailed);
+    assert_eq!(error.1, format!("{}: {source}", missing.display()));
+}
 
 /// A package directory holding `manifest_extra` merged over a process
 /// manifest for `fiber.test/proc`.
@@ -248,6 +271,7 @@ fn process_context(dir: &fakes::TempDir) -> super::process::context::ProcessCont
             reason: contract::events::SessionReason::New,
         },
         workspace: dir.path().to_path_buf(),
+        package: dir.path().canonicalize().expect("canonical package"),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: dir.path().join("machine").display().to_string(),
             project: dir.path().join("project").display().to_string(),
@@ -464,6 +488,84 @@ fn load_session(
         super::package::ProcessProviderMode::Session(test_session(dir, clock)),
         Some(test_host(dir)),
     )
+}
+
+/// A traversal-and-reentry manifest program is refused before an executable
+/// target can start, and the failure names the escaped program.
+#[test]
+fn load_process_refuses_manifest_program_that_leaves_the_package() {
+    let root = fakes::TempDir::new("fiber-process-package-escape");
+    let dir = root.path().join("pkg");
+    std::fs::create_dir(&dir).expect("package directory");
+    let (fixture, args) = fakes::ProcessFixture::command(
+        "peer",
+        Some(&json!([{"read": {}}, {"send": {"id":"ready", "command":"ready"}}])),
+    );
+    std::fs::copy(fixture, dir.join("program")).expect("copy the process fixture into package");
+    std::fs::write(
+        dir.join("extension.json"),
+        json!({
+            "name": "fiber.test/proc",
+            "version": "v1.2.3",
+            "fiber": "0.1.0",
+            "api": 1,
+            "process": {"program": "../pkg/program", "args": args, "exit_timeout_ms": 1000},
+        })
+        .to_string(),
+    )
+    .expect("write manifest");
+
+    let outcome = Package::load_process_provider_with(
+        PackageOptions {
+            dir: dir.clone(),
+            clock: fakes::clock::FakeClock::new(),
+        },
+        super::package::ProcessProviderMode::Sessionless,
+        None,
+    );
+    let Err((code, message)) = outcome else {
+        panic!("an escaping manifest program is refused");
+    };
+    assert_eq!(code, contract::ErrorCode::ExtensionFailed);
+    assert!(message.contains("../pkg/program"), "{message}");
+    assert!(message.contains(&dir.display().to_string()), "{message}");
+}
+
+/// A slash-relative program inside the package loads and starts.
+#[test]
+fn load_process_starts_manifest_program_inside_package() {
+    let root = fakes::TempDir::new("fiber-process-package-relative");
+    let dir = root.path().join("pkg");
+    std::fs::create_dir_all(dir.join("bin")).expect("package bin directory");
+    let (fixture, args) = fakes::ProcessFixture::command(
+        "peer",
+        Some(&json!([{"read": {}}, {"send": {"id":"ready", "command":"ready"}}])),
+    );
+    std::fs::copy(fixture, dir.join("bin/tool")).expect("copy process fixture into package");
+    std::fs::write(
+        dir.join("extension.json"),
+        json!({
+            "name": "fiber.test/proc",
+            "version": "v1.2.3",
+            "fiber": "0.1.0",
+            "api": 1,
+            "process": {"program": "bin/tool", "args": args, "exit_timeout_ms": 1000},
+        })
+        .to_string(),
+    )
+    .expect("write manifest");
+
+    let started = Package::load_process_provider_with(
+        PackageOptions {
+            dir,
+            clock: fakes::clock::FakeClock::new(),
+        },
+        super::package::ProcessProviderMode::Sessionless,
+        None,
+    )
+    .expect("an in-package slash-relative program starts");
+    let package = started.package;
+    drain(&package);
 }
 
 /// A missing program fails the package load, required or not: the
