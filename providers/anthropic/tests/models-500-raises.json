@@ -1,0 +1,26 @@
+{
+  "call": {
+    "provider": "anthropic",
+    "function": "models",
+    "arg": {"key": "anthropic-test-key", "placeholders": {}}
+  },
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://api.anthropic.com/v1/models?limit=1000",
+          "headers": {
+            "x-api-key": "anthropic-test-key",
+            "anthropic-version": "2023-06-01"
+          }
+        },
+        "reply": {"status": 500, "body": "{}"}
+      }
+    ]
+  },
+  "error": {
+    "code": "extension_failed",
+    "message": "`github.com/aakshintala/fiber/providers/anthropic`: anthropic models: unexpected status 500"
+  }
+}

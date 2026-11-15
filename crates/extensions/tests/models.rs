@@ -212,6 +212,256 @@ fn a_later_catalog_replaces_stale_cautious_values() {
     assert!(known[0].cost.is_none());
 }
 
+// debt: ceiling six inline Setup/source/seed fixtures, upgrade trigger flywheel sign-off for a shared helper (RULING-4638-4 "edit only those tests": a helper widens the edited surface beyond the named tests).
+#[test]
+fn admission_capability_filter_drops_catalog_non_text_models() {
+    let setup = Setup::new();
+    let package = setup.source(
+        "known",
+        &manifest("known"),
+        &[json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_UNSET_KEY"},
+            "models_dev": {"source": "fake"},
+            "models": []
+        })],
+    );
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"fake":{"m":{"modalities":{"output":["image"]},"tool_call":true},"kept":{"modalities":{"output":["text"]},"tool_call":true}}}"#,
+    )
+    .unwrap();
+    let models = ["m", "kept"].map(|id| {
+        serde_json::from_value(json!({
+            "id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"
+        }))
+        .unwrap()
+    });
+
+    let admitted = extensions::models_dev::merge_admission(
+        &setup.home(),
+        &package,
+        "fake",
+        models.into(),
+        true,
+    );
+
+    assert!(admitted.iter().all(|model| model.id != "m"));
+    assert_eq!(admitted.len(), 1);
+    assert_eq!(admitted[0].id, "kept");
+}
+
+#[test]
+fn admission_capability_filter_drops_catalog_tool_call_false_models() {
+    let setup = Setup::new();
+    let package = setup.source(
+        "known",
+        &manifest("known"),
+        &[json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_UNSET_KEY"},
+            "models_dev": {"source": "fake"},
+            "models": []
+        })],
+    );
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"fake":{"m":{"modalities":{"output":["text"]},"tool_call":false},"kept":{"modalities":{"output":["text"]},"tool_call":true}}}"#,
+    )
+    .unwrap();
+    let models = ["m", "kept"].map(|id| {
+        serde_json::from_value(json!({
+            "id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"
+        }))
+        .unwrap()
+    });
+
+    let admitted = extensions::models_dev::merge_admission(
+        &setup.home(),
+        &package,
+        "fake",
+        models.into(),
+        true,
+    );
+
+    assert!(admitted.iter().all(|model| model.id != "m"));
+    assert_eq!(admitted.len(), 1);
+    assert_eq!(admitted[0].id, "kept");
+}
+
+#[test]
+fn admission_capability_filter_keeps_unknown_models_new() {
+    let setup = Setup::new();
+    let package = setup.source(
+        "known",
+        &manifest("known"),
+        &[json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_UNSET_KEY"},
+            "models_dev": {"source": "fake"},
+            "models": []
+        })],
+    );
+    config::write_models_dev(&setup.home(), br#"{"fake":{}}"#).unwrap();
+    let model = serde_json::from_value(json!({
+        "id": "unknown", "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"
+    }))
+    .unwrap();
+
+    let admitted =
+        extensions::models_dev::merge_admission(&setup.home(), &package, "fake", vec![model], true);
+
+    assert_eq!(admitted.len(), 1);
+    assert!(admitted[0].is_new);
+    assert_eq!(admitted[0].input, ["text"]);
+    assert_eq!(admitted[0].context_window, Some(128_000));
+}
+
+#[test]
+fn admission_capability_filter_keeps_models_with_text_and_tool_call() {
+    let setup = Setup::new();
+    let package = setup.source(
+        "known",
+        &manifest("known"),
+        &[json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_UNSET_KEY"},
+            "models_dev": {"source": "fake"},
+            "models": []
+        })],
+    );
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"fake":{"m":{"modalities":{"output":["text"]},"tool_call":true}}}"#,
+    )
+    .unwrap();
+    let model = serde_json::from_value(json!({
+        "id": "m", "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"
+    }))
+    .unwrap();
+
+    let admitted =
+        extensions::models_dev::merge_admission(&setup.home(), &package, "fake", vec![model], true);
+
+    assert_eq!(admitted.len(), 1);
+    assert_eq!(admitted[0].id, "m");
+    assert!(!admitted[0].is_new);
+}
+
+#[test]
+fn admission_capability_filter_drops_openai_audio_and_image_models() {
+    let setup = Setup::new();
+    let package = setup.source(
+        "known",
+        &manifest("known"),
+        &[json!({
+            "name": "openai",
+            "credential": {"env": "FIBER_TEST_UNSET_KEY"},
+            "models_dev": {"source": "openai"},
+            "models": []
+        })],
+    );
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"openai":{"audio":{"modalities":{"output":["audio"]},"tool_call":false},"image":{"modalities":{"output":["image"]},"tool_call":false},"chat":{"modalities":{"output":["text"]},"tool_call":true}}}"#,
+    )
+    .unwrap();
+    let models = ["audio", "image", "chat"].map(|id| {
+        serde_json::from_value(json!({
+            "id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"
+        }))
+        .unwrap()
+    });
+
+    let admitted = extensions::models_dev::merge_admission(
+        &setup.home(),
+        &package,
+        "openai",
+        models.into(),
+        true,
+    );
+
+    assert!(admitted.iter().all(|model| model.id != "audio"));
+    assert!(admitted.iter().all(|model| model.id != "image"));
+    assert_eq!(admitted.len(), 1);
+    assert_eq!(admitted[0].id, "chat");
+}
+
+#[test]
+fn admission_capability_filter_drops_anthropic_non_tool_rows() {
+    let setup = Setup::new();
+    let package = setup.source(
+        "known",
+        &manifest("known"),
+        &[json!({
+            "name": "anthropic",
+            "credential": {"env": "FIBER_TEST_UNSET_KEY"},
+            "models_dev": {"source": "anthropic"},
+            "models": []
+        })],
+    );
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"anthropic":{"m":{"modalities":{"output":["text"]},"tool_call":false},"kept":{"modalities":{"output":["text"]},"tool_call":true}}}"#,
+    )
+    .unwrap();
+    let models = ["m", "kept"].map(|id| {
+        serde_json::from_value(json!({
+            "id": id, "protocol": "anthropic-messages", "base_url": "https://api.anthropic.com/v1"
+        }))
+        .unwrap()
+    });
+
+    let admitted = extensions::models_dev::merge_admission(
+        &setup.home(),
+        &package,
+        "anthropic",
+        models.into(),
+        true,
+    );
+
+    assert!(admitted.iter().all(|model| model.id != "m"));
+    assert_eq!(admitted.len(), 1);
+    assert_eq!(admitted[0].id, "kept");
+}
+
+#[test]
+fn admission_retain_listed_hides_vendor_active_catalog_deprecated_models() {
+    let setup = Setup::new();
+    let package = setup.source(
+        "known",
+        &manifest("known"),
+        &[json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_UNSET_KEY"},
+            "models_dev": {"source": "fake"},
+            "models": [{
+                "id": "m", "protocol": "openai-responses",
+                "base_url": "http://127.0.0.1:1/v1", "context_window": 1000
+            }]
+        })],
+    );
+    install(&setup.home(), &package, "0.1.0").unwrap();
+    let (mut providers, _) = Providers::load_enabled(&setup.home(), &config(&setup, &[])).unwrap();
+    assert_eq!(providers.get("fake").unwrap().models.len(), 1);
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"fake":{"m":{"status":"deprecated","modalities":{"output":["text"]},"tool_call":true}}}"#,
+    )
+    .unwrap();
+    let applied = extensions::models_dev::apply(
+        &setup.home(),
+        true,
+        None,
+        fakes::clock::FakeClock::new().wall(),
+        &mut providers,
+    );
+
+    applied.retain_listed(&mut providers);
+
+    assert!(providers.get("fake").unwrap().models.is_empty());
+}
+
 #[test]
 fn models_dev_merge_uses_catalog_fields_without_changing_the_model_set() {
     let mut models: Vec<ModelData> =
@@ -2162,6 +2412,35 @@ fn two_failing_registrations_of_one_provider_record_two_failures() {
     assert_eq!(failures[0].extension.as_deref(), Some("acme-ext"));
     assert_eq!(failures[1].provider, "acme");
     assert_eq!(failures[1].extension.as_deref(), Some("other-ext"));
+}
+
+#[test]
+fn disk_cached_models_survive_a_failing_refresh() {
+    let setup = Setup::new();
+    let cached = json!([{
+        "id": "cached", "protocol": "openai-responses",
+        "base_url": "http://127.0.0.1:1/v1", "context_window": 1000
+    }]);
+    write_model_cache(&setup.home(), "acme", &cached).unwrap();
+    let lua = lua_acme(&setup, "ext", "error(\"refresh failed\")");
+
+    let handle = lua
+        .refresh(None, ModelsArg::default())
+        .expect("an unconditional refresh starts");
+    let joined = fakes::within(
+        "models refresh join",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || handle.join(),
+    )
+    .expect("the refresh joins before its deadline");
+    let error = joined.unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ExtensionFailed);
+    assert_eq!(lua.models(&ModelsArg::default()).unwrap()[0].id, "cached");
+    let persisted = config::read_model_cache(&setup.home(), "acme")
+        .unwrap()
+        .unwrap();
+    assert_eq!(persisted.len(), 1);
+    assert_eq!(persisted[0].id, "cached");
 }
 
 #[test]
