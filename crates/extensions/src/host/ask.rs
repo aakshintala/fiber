@@ -18,10 +18,10 @@ use mlua::{Lua, Table, Value as LuaValue};
 /// the entry script before it yields, like
 /// `host.exec`.
 const ASK: &str = r#"
-local host, tag, in_entry, check = ...
+local host, tag, in_entry, failure, check = ...
 function host.ask(kind, spec)
   if in_entry() then
-    error("host.ask: not available while init.lua runs", 0)
+    error(failure("not_available", "host.ask: not available while init.lua runs"), 0)
   end
   local ok, message = check(kind, spec)
   if not ok then error(message, 2) end
@@ -30,11 +30,13 @@ end
 "#;
 
 /// Sets `host.ask` on `host`. `entry` is true while the entry script runs.
+/// `failure` builds the `{ code, message }` table a coded refusal raises.
 pub(crate) fn install(
     lua: &Lua,
     host: &Table,
     tag: &Table,
     entry: Rc<Cell<bool>>,
+    failure: mlua::Function,
 ) -> mlua::Result<()> {
     let in_entry = crate::host::failure::in_entry(lua, &entry)?;
     let check = lua.create_function(|_, (kind, spec): (LuaValue, LuaValue)| {
@@ -43,9 +45,13 @@ pub(crate) fn install(
         let checked: (bool, Option<String>) = check_spec(&kind, &spec);
         Ok(checked)
     })?;
-    lua.load(ASK)
-        .set_name("=host.ask")
-        .call::<()>((host.clone(), tag.clone(), in_entry, check))
+    lua.load(ASK).set_name("=host.ask").call::<()>((
+        host.clone(),
+        tag.clone(),
+        in_entry,
+        failure,
+        check,
+    ))
 }
 
 /// Checks `kind` with its `spec`: `true`, or `false` with the string the

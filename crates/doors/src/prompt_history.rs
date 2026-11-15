@@ -12,6 +12,7 @@ use contract::clock::wall_ms;
 use contract::inbox::Ack;
 use contract::shapes::ContentPart;
 use contract::{CommandId, SessionId};
+use log::diag::{Diag, Level, Process, Severity};
 use support::lock;
 
 use crate::session::Gate;
@@ -79,10 +80,24 @@ pub(crate) fn recorded(ack: Ack, path: PathBuf, gate: &Arc<Gate>, id: CommandId)
         if result.is_ok()
             && let Some(content) = entry
         {
-            // debt: a failed append is dropped unreported, when a session gets a diag log, record a failed history append.
             let ts = wall_ms(recorded.gate.clock.wall());
-            match append(&recorded.path, ts, &recorded.gate.session_id, &content) {
-                Ok(()) | Err(_) => {}
+            if append(&recorded.path, ts, &recorded.gate.session_id, &content).is_err() {
+                let diag = Diag::new(
+                    &recorded.gate.home,
+                    Process::Session,
+                    Level::Info,
+                    Arc::clone(&recorded.gate.clock),
+                );
+                diag.attach(&recorded.gate.session_id);
+                diag.line(
+                    Severity::Warn,
+                    None,
+                    "io_failed",
+                    &format!(
+                        "Could not append prompt history to {}.",
+                        recorded.path.display()
+                    ),
+                );
             }
         }
         if let Some(inner) = recorded.inner.take() {

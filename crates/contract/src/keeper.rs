@@ -133,6 +133,9 @@ pub struct Exit {
     pub timed_out: bool,
     /// The keeper stopped it at its output cap.
     pub output_cap: bool,
+    /// The first job output file that could not be written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_write_failure: Option<std::path::PathBuf>,
 }
 
 /// Output and endings delivered to the session's shell driver.

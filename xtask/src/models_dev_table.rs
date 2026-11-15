@@ -635,6 +635,9 @@ const OPENCODE_ZEN: Package = Package {
         // thinking levels LOW, MEDIUM (default) and HIGH; models.dev
         // names the same three for this id.
         ("gemini-4-carbon", LOW_MEDIUM_HIGH, None),
+        // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-hydrogen:
+        // thinking levels LOW, MEDIUM, HIGH (default) and XHIGH.
+        ("gemini-4-hydrogen", LOW_MEDIUM_HIGH_XHIGH, None),
         // research/opencode-thinking/raw/zen-glm-5.json (minimal through
         // max 200; off 400: a thinking-only model).
         ("glm-5", MINIMAL_LOW_MEDIUM_HIGH_XHIGH_MAX, None),

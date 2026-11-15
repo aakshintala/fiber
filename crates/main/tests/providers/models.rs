@@ -173,6 +173,7 @@ fn write(file: &PathBuf, value: &Value) {
     fs::write(file, value.to_string()).unwrap();
 }
 
+// debt: ceiling two inline read-parse-seed blocks (here and models_lists_every_first_party_model_and_drops_none), upgrade trigger flywheel sign-off for a shared helper (RULING-4638-4 "edit only those tests": a helper widens the edited surface beyond the named tests).
 #[test]
 fn first_party_models_follow_environment_presence_and_survive_logout() {
     let setup = Setup::new();
@@ -180,6 +181,11 @@ fn first_party_models_follow_environment_presence_and_survive_logout() {
         let dir = setup.home().join("extensions").join(package);
         support::package::copy_package(package, &dir, "", "");
         write_record(&dir);
+        let data: Value = serde_json::from_slice(
+            &fs::read(dir.join("providers").join(format!("{package}.json"))).unwrap(),
+        )
+        .unwrap();
+        config::write_model_cache(&setup.home(), package, &data["models"]).unwrap();
     }
     for args in [vec!["models"], vec!["models", "--json"]] {
         let off = setup.fiber(&args);
@@ -539,6 +545,15 @@ fn models_lists_every_first_party_model_and_drops_none() {
         support::package::copy_package(package, &dest, "", "");
         write_record(&dest);
         for provider in config::read_providers(&dest).unwrap() {
+            let data: Value = serde_json::from_slice(
+                &fs::read(
+                    dest.join("providers")
+                        .join(format!("{}.json", provider.name)),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            config::write_model_cache(&setup.home(), &provider.name, &data["models"]).unwrap();
             config::store_credential(
                 &setup.home(),
                 provider

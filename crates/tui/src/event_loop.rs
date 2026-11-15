@@ -340,6 +340,7 @@ pub(crate) fn run_with(
         converter,
     };
     app.set_opener(programs.open.is_some());
+    let editor_setting = app.editor_setting();
     let var: Var = Box::new(|name| std::env::var(name).ok());
     app.set_osc9(crate::attention::supported(&var));
     // Whether stripes draw is read once, before the first frame.
@@ -428,6 +429,7 @@ pub(crate) fn run_with(
         pointer: Pointer::default(),
         hover,
         var,
+        editor_setting,
         programs,
         title,
         shape: osc::Shape::default(),
@@ -593,6 +595,8 @@ struct Loop<B: Backend> {
     hover: bool,
     /// Reads an environment variable: `$VISUAL` and `$EDITOR` for Ctrl+G.
     var: Var,
+    /// `tui.editor`, captured when the terminal starts (`docs/configuration.md`, "Keys").
+    editor_setting: Option<String>,
     /// The programs this machine runs for the person.
     programs: Programs,
     /// The window title last written.
@@ -1893,7 +1897,7 @@ impl<B: Backend> Loop<B> {
     /// while the editor runs quits with 128 plus its number instead, with
     /// no resume: the run's own restore takes the terminal back.
     fn open_editor(&mut self, target: editor::Target, text: &str) -> LoopResult {
-        let Some(command) = editor::command(&self.var) else {
+        let Some(command) = editor::command(self.editor_setting.clone(), &self.var) else {
             self.app
                 .editor_returned(target, Err(editor::NO_EDITOR.to_owned()));
             return Ok(None);
@@ -1934,9 +1938,9 @@ impl<B: Backend> Loop<B> {
     /// quits with 128 plus its number instead, with no resume, as above.
     fn open_file(&mut self, file: editor::OpenFile) -> LoopResult {
         let editor::OpenFile { path, line } = file;
-        let Some(command) = editor::command(&self.var) else {
+        let Some(command) = editor::command(self.editor_setting.clone(), &self.var) else {
             self.app
-                .config_file_closed(Err(editor::NO_EDITOR_FILE.to_owned()));
+                .config_file_closed(Err(editor::NO_EDITOR.to_owned()));
             return Ok(None);
         };
         // As in [`Loop::open_editor`]: pause the writer first so no upload

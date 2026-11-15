@@ -653,8 +653,10 @@ design:
 - **Esc** is named once. A swapped view names it in its top row, "Esc
   returns", or "Esc back" on a sub-page, and its footer leaves it out. An
   overlay has no top row, so its footer ends "Esc close".
-- **The main action** on the focused row is Enter, and Space does the same.
-  Delete removes or resets the row; Backspace is a synonym only where no
+- **The main action** on the focused row is Enter, and Space does the same,
+  except in an approval, where Space does nothing. An approval takes the
+  keyboard as it opens, so a space meant for the input box would otherwise
+  approve the call. Delete removes or resets the row; Backspace is a synonym only where no
   text field is open.
 - **A footer** names every key the view takes, keys bold and words dim,
   joined by " · ", on the last row. A view that takes only ↑↓ and Esc has
@@ -1172,7 +1174,8 @@ install still running.
       `subl` save with `--wait`: without it they return at once, and
       Ctrl+G on the draft would read the file back before any edit.
       "Other…" opens a field for a command line, holding the current value;
-      Enter saves it and Esc cancels. "Default" names the variable the
+      Enter saves it and Esc cancels. An empty field saves as unset, so
+      the row returns to Default. "Default" names the variable the
       editor rule picks and its value, "Default ($VISUAL: vim)" or
       "Default ($EDITOR: nvim)", or reads "Default (none set)" dim when
       neither is set.
@@ -1298,7 +1301,9 @@ install still running.
   turn start. Enter shows the skill's text, after every skill it shadows
   with its source and path, Ctrl+G opens its file
   (`docs/system-prompt.md`, "Skills"); on a remote terminal it opens the
-  hub's copy instead ("Swapped views"). A row is "review · checks a diff
+  hub's copy instead ("Swapped views").
+  With row focus, Enter or Space shows its text; with a focused switch,
+  Enter or Space toggles that switch. A row is "review · checks a diff
   · repo · seen · this project " and its switch, then " · everywhere " and
   its switch, as on `/tools`; a shadowing skill adds " · shadows <source>,
   …" after the switches, cut with "…" so both switches stay whole.
@@ -1310,7 +1315,7 @@ install still running.
   the description is cut first, then the name, then the skill's own source,
   keeping room for " · shadows …"; the clause is left out only when the
   fixed fields and both switches leave less than that minimum. The last row
-  is "Enter shows the text · Ctrl+G opens its file", dim.
+  is "Enter/Space opens row text or toggles the focused switch · Ctrl+G opens its file", dim.
 - **`/rewind`** ("Rewind").
 - **`/fork`:** rewinds to the end of the conversation ("Rewind").
 - **A repository's offer**, before a new session's first request ("Approving

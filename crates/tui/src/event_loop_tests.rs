@@ -351,6 +351,7 @@ impl<B: Backend> Loop<B> {
             pointer: crate::mouse::Pointer::default(),
             hover: true,
             var: Box::new(|_| None),
+            editor_setting: None,
             programs: super::Programs::default(),
             title: crate::osc::Title::default(),
             shape: crate::osc::Shape::default(),
@@ -2145,6 +2146,76 @@ fn a_remote_changed_file_return_stores_the_copy_through_the_close_path() {
     assert_eq!(lp.app.notices.newest(), None);
     drop(editor);
     crate::term::restore();
+}
+
+#[test]
+fn ctrl_g_uses_the_editor_setting_captured_at_terminal_start() {
+    let pair = open();
+    let frames = watch(&pair.main, vec![b"\x1b]2;fiber\x07", b"captured"]);
+    let mut main = pair.main;
+    let slave = pair.slave;
+    let (captured, captured_var) = fake_editor("printf 'captured' > \"$1\"\n");
+    let (live, live_var) = fake_editor("printf 'live' > \"$1\"\n");
+    let captured_command = captured_var("EDITOR").expect("the captured fake editor command");
+    let live_command = live_var("EDITOR").expect("the live fake editor command");
+    let setting_row = |command: &str| {
+        crate::configure_fake::row(
+            "tui.editor",
+            crate::configure::Shown::Value(
+                serde_json::Value::String(command.to_owned()).to_string(),
+            ),
+            "project",
+            crate::configure::WriteScope::PersonFiles,
+        )
+    };
+    let settings = Arc::new(crate::configure_fake::Fake::new(vec![setting_row(
+        &captured_command,
+    )]));
+    let mut launch = launch();
+    launch.configure = Some(Arc::clone(&settings) as Arc<dyn crate::Configure>);
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("lib-editor-snapshot".to_owned())
+        .spawn(move || {
+            let result = super::run_with(
+                slave,
+                launch,
+                Box::new(|| Err(io::Error::other("refused"))),
+                Box::new(|_| {}),
+                fakes::clock::FakeClock::new(),
+                super::Reader::spawn,
+                |builder, body| builder.spawn(body),
+                crate::timing::info_diag(),
+                None,
+            );
+            done.send(result).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+
+    let _first = watched(&frames, "the first frame", &Deadline::after(DEADLINE));
+    *settings.rows.lock().expect("fixture settings lock") = Ok(vec![setting_row(&live_command)]);
+    main.write_all(b"\x07")
+        .unwrap_or_else(|err| panic!("write Ctrl-G: {err}"));
+    let draft = watched(
+        &frames,
+        "the launch-time editor draft",
+        &Deadline::after(DEADLINE),
+    );
+    assert!(
+        draft.ends_with(b"captured"),
+        "the resumed screen contains the launch-time draft: {draft:?}"
+    );
+    signal_hook::low_level::raise(signal_hook::consts::SIGTERM)
+        .unwrap_or_else(|err| panic!("raise SIGTERM: {err}"));
+    let result = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run_with to return: {err}"));
+    assert_eq!(
+        result.expect("run_with handles SIGTERM"),
+        128 + signal_hook::consts::SIGTERM
+    );
+    captured.assert_gone();
+    live.assert_gone();
 }
 
 #[test]

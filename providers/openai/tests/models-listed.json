@@ -1,0 +1,26 @@
+{
+  "call": {
+    "provider": "openai",
+    "function": "models",
+    "arg": {"key": "openai-test-key", "placeholders": {}}
+  },
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://api.openai.com/v1/models",
+          "headers": {"authorization": "Bearer openai-test-key"}
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"object\":\"list\",\"data\":[{\"id\":\"gpt-test-a\",\"object\":\"model\",\"created\":1700000000,\"owned_by\":\"openai\"},{\"id\":\"gpt-test-b\",\"object\":\"model\",\"created\":1700000001,\"owned_by\":\"openai\"}]}"
+        }
+      }
+    ]
+  },
+  "returns": [
+    {"id": "gpt-test-a", "protocol": "openai-responses", "base_url": "https://api.openai.com/v1"},
+    {"id": "gpt-test-b", "protocol": "openai-responses", "base_url": "https://api.openai.com/v1"}
+  ]
+}

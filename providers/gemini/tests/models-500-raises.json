@@ -1,0 +1,23 @@
+{
+  "call": {
+    "provider": "gemini",
+    "function": "models",
+    "arg": {"key": "gemini-test-key", "placeholders": {}}
+  },
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",
+          "headers": {"x-goog-api-key": "gemini-test-key"}
+        },
+        "reply": {"status": 500, "body": "{}"}
+      }
+    ]
+  },
+  "error": {
+    "code": "extension_failed",
+    "message": "`github.com/aakshintala/fiber/providers/gemini`: gemini models: unexpected status 500"
+  }
+}

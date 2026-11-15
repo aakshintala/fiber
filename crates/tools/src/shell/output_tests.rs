@@ -11,8 +11,13 @@ use fakes::TempDir;
 use fakes::clock::FakeClock;
 use fakes::jobs::JobDeltas;
 
+use super::super::background::finish_inline;
+use super::super::command::MoveReason;
+use super::super::drive::{Phase, Run};
+use super::super::moved::Moved;
 use super::{
-    Errors, HELD_MAX, PacedStream, Pending, Shared, escaped_len, lock, read_errors, read_output,
+    Errors, HELD_MAX, PacedStream, Pending, Shared, escaped_len, lock, note_eof, read_errors,
+    read_output,
 };
 
 struct Chunks(Vec<Vec<u8>>);
@@ -346,13 +351,115 @@ fn a_call_stream_reads_the_call_queue_and_a_job_stream_the_job_queue() {
 }
 
 #[test]
+fn held_stderr_attach_write_failure_is_recorded() {
+    let dir = TempDir::new("fiber-held-stderr-failure");
+    let path = dir.path().join("err.log");
+    std::fs::write(&path, b"").unwrap();
+    let shared = Arc::new(Shared::default());
+    {
+        let mut inner = lock(&shared.inner);
+        inner.errors = Some(Errors::default());
+    }
+    read_errors(Chunks(vec![b"held".to_vec()]), &shared);
+    // A read-only handle fails the held flush: the attach reports it, and
+    // the move records it under the shared lock with the stderr path.
+    let read_only = std::fs::File::open(&path).unwrap();
+    let moved = parked(Arc::clone(&shared));
+    moved.attach_errors(Some(read_only), Some(path.clone()));
+    let inner = lock(&shared.inner);
+    let failure = inner
+        .write_failure
+        .as_ref()
+        .expect("recorded flush failure");
+    assert_eq!(failure.path, path);
+    assert!(std::fs::read(&path).unwrap().is_empty());
+}
+
+fn parked(shared: Arc<Shared>) -> Moved {
+    Moved {
+        reason: MoveReason::StartedInBackground,
+        bridge: None,
+        progress: Run {
+            phase: Phase::Running,
+            stop: None,
+            sent_signal: false,
+            seen_empty: false,
+            stream_carry: Vec::new(),
+            timeout_at: None,
+            move_at: None,
+            members: None,
+            identity: None,
+            pgid: 2,
+            hosted: None,
+            listing: None,
+            shared,
+            ask: None,
+            job: None,
+            paced: None,
+            feed: None,
+        },
+        cap: super::OUTPUT_CAP,
+        spill: None,
+        protection: None,
+    }
+}
+
+#[test]
+fn an_inline_artifact_installs_as_the_output_path() {
+    let dir = TempDir::new("fiber-output-inline-artifact");
+    let shared = Arc::new(Shared::default());
+    note_eof(&shared);
+    let mut moved = parked(Arc::clone(&shared));
+    moved.spill = Some(super::super::spill::Config {
+        dir: dir.path().to_path_buf(),
+        bound: contract::tool::Bound { start: 8, end: 8 },
+        wrap: None,
+        name: None,
+    });
+    let clock = FakeClock::new();
+    let mut carry = Vec::new();
+    finish_inline(moved, &*clock, None, "true", &NoEmit, &mut carry);
+    let inner = lock(&shared.inner);
+    let path = inner
+        .output_path
+        .as_ref()
+        .expect("the artifact installs as the output path");
+    assert!(path.starts_with(dir.path()));
+    assert!(inner.artifact_sink);
+    assert!(path.is_file());
+}
+
+#[test]
+fn output_file_write_failure_captures_first_path() {
+    let dir = TempDir::new("fiber-output-write-failure");
+    let path = dir.path().join("output.log");
+    std::fs::write(&path, b"").unwrap();
+    let shared = Shared::default();
+    {
+        let mut inner = lock(&shared.inner);
+        inner.output.extend_from_slice(b"initial");
+        inner.attach(std::fs::File::open(&path).unwrap(), &path, 100);
+        assert_eq!(inner.write_failure.as_ref().unwrap().path, path);
+        inner.sink(b"later");
+        assert_eq!(inner.write_failure.as_ref().unwrap().path, path);
+    }
+    assert!(std::fs::read(&path).unwrap().is_empty());
+}
+
+#[test]
 fn hosted_out_and_err_route_to_their_own_files_with_both_sinks_present() {
     let dir = TempDir::new("fiber-hosted-sinks");
     let _watchdog = fakes::Watchdog::matching(&dir.path().to_string_lossy());
     let (shared, out) = attached(&dir, b"", 100);
     let err = dir.path().join("err.log");
     let mut errors = Errors::default();
-    errors.attach(Some(std::fs::File::create(&err).unwrap()), 100);
+    errors
+        .attach(
+            Some(std::fs::File::create(&err).unwrap()),
+            Some(err.clone()),
+            100,
+        )
+        .unwrap();
     lock(&shared.inner).errors = Some(errors);
 
     super::hosted_bytes(&shared, contract::keeper::Stream::Out, b"stdout\n");
@@ -375,9 +482,15 @@ fn standard_error_is_held_then_written_to_its_file_up_to_the_cap() {
         let mut inner = lock(&shared.inner);
         let errors = inner.errors.as_mut().unwrap();
         assert!(errors.eof);
-        errors.attach(Some(std::fs::File::create(&path).unwrap()), 5);
-        errors.sink(b"cdef");
-        errors.sink(b"g");
+        errors
+            .attach(
+                Some(std::fs::File::create(&path).unwrap()),
+                Some(path.clone()),
+                5,
+            )
+            .unwrap();
+        errors.sink(b"cdef").unwrap();
+        errors.sink(b"g").unwrap();
     }
     // Past the cap the bytes are dropped; nothing stops.
     assert_eq!(std::fs::read(&path).unwrap(), b"abcde");
@@ -392,8 +505,8 @@ fn standard_error_with_no_file_is_dropped_after_the_move() {
     let mut inner = lock(&shared.inner);
     let errors = inner.errors.as_mut().unwrap();
     assert_eq!(errors.held, b"before", "held until the move");
-    errors.attach(None, 5);
-    errors.sink(b"after");
+    errors.attach(None, None, 5).unwrap();
+    errors.sink(b"after").unwrap();
     assert!(errors.held.is_empty(), "nothing is held past the move");
     assert_eq!(errors.written, 0);
 }
@@ -920,6 +1033,43 @@ fn attach_after_a_spill_with_a_cap_below_its_size_fires_at_once() {
     let inner = lock(&shared.inner);
     assert_eq!(inner.written, 100);
     assert!(inner.cap_fired);
+}
+
+#[test]
+fn attach_after_a_spill_with_a_failed_copy_returns_the_receipt() {
+    use super::super::spill::Spill;
+    use contract::tool::Bound;
+
+    let artifacts = TempDir::new("fiber-spill-attach-copy-fail");
+    let shared = Shared::default();
+    // A spill started directly, holding bytes the move must copy.
+    {
+        let mut inner = lock(&shared.inner);
+        inner.spill = Some(Spill::start(
+            SpillConfig {
+                dir: artifacts.path().to_path_buf(),
+                bound: Bound { start: 8, end: 8 },
+                wrap: None,
+                name: Some("s_test.txt".to_owned()),
+            },
+            b"0123456789abcdef".to_vec(),
+        ));
+    }
+    // The rename misses its directory and the registry handle cannot
+    // take the copy: attach names the raw file left behind.
+    let job = artifacts.path().join("missing").join("j_1.log");
+    let readonly = artifacts.path().join("readonly.log");
+    std::fs::write(&readonly, b"").unwrap();
+    let registry = std::fs::File::open(&readonly).unwrap();
+    let line = lock(&shared.inner).attach(registry, &job, 5_000_000_000);
+    let line = line.expect("the raw file is named in the receipt");
+    assert!(line.contains("s_test.txt"), "{line}");
+    let inner = lock(&shared.inner);
+    let failure = inner
+        .write_failure
+        .as_ref()
+        .expect("the copy failure is stored");
+    assert_eq!(failure.path, job);
 }
 
 #[test]
