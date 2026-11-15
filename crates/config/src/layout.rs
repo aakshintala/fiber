@@ -309,6 +309,28 @@ mod tests {
     }
 
     #[test]
+    fn layout_marker_rejects_unknown_bytes_without_rewriting_them() {
+        let home = fakes::TempDir::new("config-layout-unknown-marker");
+        fs::write(home.path().join("layout"), b"1").unwrap();
+        let error =
+            ensure_project_layout(home.path(), PathBuf::from("/a-b").as_path()).unwrap_err();
+        assert!(
+            matches!(error, super::ConfigError::Io { source, .. } if source.kind() == std::io::ErrorKind::InvalidData)
+        );
+        assert_eq!(fs::read(home.path().join("layout")).unwrap(), b"1");
+    }
+
+    #[test]
+    fn projects_entry_must_be_a_directory() {
+        let home = fakes::TempDir::new("config-layout-projects-file");
+        fs::write(projects_dir(home.path()), b"not a directory").unwrap();
+        assert!(matches!(
+            ensure_project_layout(home.path(), PathBuf::from("/a-b").as_path()),
+            Err(super::ConfigError::Io { .. })
+        ));
+    }
+
+    #[test]
     fn legacy_project_migration_marker() {
         let home = fakes::TempDir::new("config-layout-marker");
         let identity = PathBuf::from("/a-b");
@@ -395,6 +417,25 @@ mod tests {
         assert!(legacy.is_dir());
         assert_eq!(fs::read(legacy.join("config.json")).unwrap(), b"legacy");
         assert_eq!(fs::read(target.join("config.json")).unwrap(), b"target");
+    }
+
+    #[test]
+    fn legacy_project_migration_handles_racing_target_and_preserves_both_trees() {
+        let identity = PathBuf::from("/a-b");
+        let home = fakes::TempDir::new("config-layout-racing-target");
+        let legacy = projects_dir(home.path()).join("-a-b");
+        let target = projects_dir(home.path()).join(support::project_key::project_key(&identity));
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("data"), b"source").unwrap();
+        let result = ensure_project_layout_with(home.path(), &identity, |_, target_path| {
+            fs::create_dir(target_path)?;
+            fs::write(target_path.join("data"), b"target")?;
+            Err(std::io::ErrorKind::AlreadyExists.into())
+        });
+        result.unwrap();
+        assert_eq!(fs::read(legacy.join("data")).unwrap(), b"source");
+        assert_eq!(fs::read(target.join("data")).unwrap(), b"target");
+        assert_eq!(fs::read(legacy.join("legacy-key")).unwrap(), b"-a-b");
     }
 
     #[test]

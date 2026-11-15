@@ -420,6 +420,74 @@ fn find_logged_session_skips_a_directory_without_a_log() {
     }
 }
 
+#[test]
+fn project_lookup_resolves_hashed_and_legacy_directories_without_crossing_projects() {
+    let home = fakes::TempDir::new("log-project-lookup-identities");
+    let identity = std::path::Path::new("/a-b");
+    let hashed = crate::project_key(identity);
+    let id = SessionId("s_0123456789abcdef".into());
+    let hashed_dir = home
+        .path()
+        .join("projects")
+        .join(&hashed)
+        .join("sessions")
+        .join(&id.0);
+    let legacy_dir = home.path().join("projects/-a-b/sessions").join(&id.0);
+    std::fs::create_dir_all(&hashed_dir).unwrap();
+    std::fs::create_dir_all(&legacy_dir).unwrap();
+    std::fs::write(
+        hashed_dir.join("events.jsonl"),
+        b"{\"kind\":\"session_started\",\"payload\":{\"workspace\":\"/a-b\"}}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path()
+            .join("projects")
+            .join(&hashed)
+            .join("legacy-key"),
+        b"-a-b",
+    )
+    .unwrap();
+    std::fs::write(
+        legacy_dir.join("events.jsonl"),
+        b"{\"kind\":\"session_started\",\"payload\":{\"workspace\":\"/a-b\"}}\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        find_session(home.path(), &id),
+        Some(("-a-b".to_owned(), legacy_dir.clone()))
+    );
+    std::fs::remove_dir_all(&legacy_dir).unwrap();
+    assert_eq!(
+        find_session_in_project(home.path(), "-a-b", &id),
+        Some((hashed.clone(), hashed_dir.clone()))
+    );
+    assert_eq!(
+        find_logged_session_in(home.path(), identity, &id, &|workspace| workspace == "/a-b"),
+        Some((hashed, hashed_dir))
+    );
+    assert!(
+        find_logged_session_in(home.path(), identity, &id, &|workspace| workspace
+            == "/wrong")
+        .is_none()
+    );
+}
+
+#[test]
+fn malformed_project_key_suffix_does_not_select_a_legacy_slug() {
+    let home = fakes::TempDir::new("log-project-key-invalid-suffix");
+    let id = SessionId("s_0123456789abcdef".into());
+    for key in [
+        "-a-b-short",
+        "-a-b-0123456789abcdeg",
+        "-a-b-0123456789ABCDE",
+    ] {
+        project(home.path(), key, &id.0, false);
+        assert!(find_session_in_project(home.path(), "-a-b-0123456789abcdef", &id).is_none());
+    }
+}
+
 fn line() -> Envelope {
     Envelope {
         kind: EventKind::Unknown("x".into()),

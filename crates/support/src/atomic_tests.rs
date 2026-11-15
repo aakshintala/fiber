@@ -271,6 +271,20 @@ fn reset_write_count_zeroes_after_writes() {
 }
 
 #[test]
+fn rename_unsupported_classifier_matches_only_supported_fallback_errors() {
+    for error in [
+        rustix::io::Errno::INVAL,
+        rustix::io::Errno::NOSYS,
+        rustix::io::Errno::NOTSUP,
+    ] {
+        assert!(super::rename_unsupported(error), "{error}");
+    }
+    for error in [rustix::io::Errno::EXIST, rustix::io::Errno::NOENT] {
+        assert!(!super::rename_unsupported(error), "{error}");
+    }
+}
+
+#[test]
 fn rename_noreplace_success() {
     let dir = fakes::TempDir::new("fiber-support-rename-noreplace");
     let source = dir.path().join("source");

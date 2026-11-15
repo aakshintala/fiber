@@ -31,6 +31,30 @@ fn started(id: &str, workspace: &str, parent: Option<(&str, u64, &str)>) -> Stri
 }
 
 #[test]
+fn located_migrated_session_matches_recorded_project_and_refuses_another() {
+    let home = fakes::TempDir::new("main-rewind-located-migrated");
+    let identity = Path::new("/target/repository");
+    let id = SessionId("s_parent".into());
+    let sessions = log::sessions_dir(home.path(), identity);
+    let dir = log::SessionDir::new(&sessions, &id);
+    fs::create_dir_all(dir.path()).unwrap();
+    fs::write(dir.events(), started(&id.0, "/target/repository", None)).unwrap();
+    let context = Context {
+        home: home.path().to_path_buf(),
+        identity: identity.to_path_buf(),
+        sessions,
+        reads: std::sync::Arc::new(crate::switch::Reads::default()),
+        _cancel: crate::switch::CancelOnDrop(std::sync::Arc::new(crate::switch::Reads::default())),
+    };
+    assert_eq!(
+        super::located_session(&context, &id).unwrap().path(),
+        dir.path()
+    );
+    fs::write(dir.events(), started(&id.0, "/wrong/repository", None)).unwrap();
+    assert!(super::located_session(&context, &id).is_none());
+}
+
+#[test]
 fn point_dir_keeps_the_physical_parent_directory_after_a_project_move() {
     let home = fakes::TempDir::new("main-rewind-migrated-parent");
     let source = Path::new("/source/repository");

@@ -23,15 +23,15 @@ pub fn rename_noreplace(source: &Path, target: &Path) -> Result<(), std::io::Err
         rustix::fs::RenameFlags::NOREPLACE,
     ) {
         Ok(()) => Ok(()),
-        Err(error)
-            if error == rustix::io::Errno::INVAL
-                || error == rustix::io::Errno::NOSYS
-                || error == rustix::io::Errno::NOTSUP =>
-        {
-            Err(std::io::ErrorKind::Unsupported.into())
-        }
+        Err(error) if rename_unsupported(error) => Err(std::io::ErrorKind::Unsupported.into()),
         Err(error) => Err(error.into()),
     }
+}
+
+fn rename_unsupported(error: rustix::io::Errno) -> bool {
+    error == rustix::io::Errno::INVAL
+        || error == rustix::io::Errno::NOSYS
+        || error == rustix::io::Errno::NOTSUP
 }
 
 /// How many fresh temporary names one write draws before giving up with
