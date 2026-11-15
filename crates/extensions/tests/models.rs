@@ -2389,6 +2389,35 @@ fn two_failing_registrations_of_one_provider_record_two_failures() {
 }
 
 #[test]
+fn disk_cached_models_survive_a_failing_refresh() {
+    let setup = Setup::new();
+    let cached = json!([{
+        "id": "cached", "protocol": "openai-responses",
+        "base_url": "http://127.0.0.1:1/v1", "context_window": 1000
+    }]);
+    write_model_cache(&setup.home(), "acme", &cached).unwrap();
+    let lua = lua_acme(&setup, "ext", "error(\"refresh failed\")");
+
+    let handle = lua
+        .refresh(None, ModelsArg::default())
+        .expect("an unconditional refresh starts");
+    let joined = fakes::within(
+        "models refresh join",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || handle.join(),
+    )
+    .expect("the refresh joins before its deadline");
+    let error = joined.unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ExtensionFailed);
+    assert_eq!(lua.models(&ModelsArg::default()).unwrap()[0].id, "cached");
+    let persisted = config::read_model_cache(&setup.home(), "acme")
+        .unwrap()
+        .unwrap();
+    assert_eq!(persisted.len(), 1);
+    assert_eq!(persisted[0].id, "cached");
+}
+
+#[test]
 fn a_failing_models_keeps_the_data_files_models() {
     let setup = Setup::new();
     let mut providers = installed(&setup, &[("acme", provider("acme", &["a"]))]);
