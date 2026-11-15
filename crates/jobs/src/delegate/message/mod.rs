@@ -539,7 +539,6 @@ impl DelegateMessage {
             | ErrorCode::CredentialMissing
             | ErrorCode::DelegateSession
             | ErrorCode::DepthExceeded
-            | ErrorCode::NotAvailable
             | ErrorCode::ExtensionFailed
             | ErrorCode::ExtensionIncompatible
             | ErrorCode::ExtensionMissing
@@ -583,6 +582,7 @@ impl DelegateMessage {
             | ErrorCode::NoMatch
             | ErrorCode::NoModel
             | ErrorCode::NonzeroExit
+            | ErrorCode::NotAvailable
             | ErrorCode::NotFound
             | ErrorCode::NotStepBoundary
             | ErrorCode::NotSubscribed

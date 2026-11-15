@@ -6563,17 +6563,17 @@ fn sessionless_host_calls_answer_only_the_call_case_set() {
         {"send": {"id": "c3", "command": "call", "args": {"call": "host.fs.write", "args": ["p", "c"]}}},
         {"send": {"id": "c4", "command": "call", "args": {"call": "host.config.get", "args": []}}},
         {"send": {"id": "c5", "command": "call", "args": {"call": "host.drive", "args": ["steer"]}}},
-        {"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready"}}}},
-        {"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "c1", "result": {}}}}},
-        {"read": {"expect": {"kind": "command_rejected", "payload": {"command_id": "c2", "code": "not_available", "message": "state.set: not available here"}}}},
-        {"read": {"expect": {"kind": "command_rejected", "payload": {"command_id": "c3", "code": "not_available", "message": "host.fs.write: not available here"}}}},
-        {"read": {"expect": {"kind": "command_rejected", "payload": {"command_id": "c4", "code": "not_available", "message": "host.config.get: not available here"}}}},
-        {"read": {"expect": {"kind": "command_rejected", "payload": {"command_id": "c5", "code": "not_available", "message": "host.drive: not available here"}}}},
+        {"read": {"append_to": "answers"}},
+        {"read": {"append_to": "answers"}},
+        {"repeat": {"count": 4, "actions": [{"read": {"append_to": "answers"}}]}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "answers"}}},
     ])
     .to_string();
+    let out = fakes::TempDir::new("fiber-process-wire");
+    let out_path = out.path().join("answers.json");
     let owner = Harness::start_call_with_services(
         script,
-        &[],
+        &[out_path.to_str().unwrap()],
         json!({}),
         production_services,
         FakeServices::new(),
@@ -6582,6 +6582,28 @@ fn sessionless_host_calls_answer_only_the_call_case_set() {
         owner.pump();
     }
     assert_eq!(owner.drain(), CloseReason::Eof);
+    let answers = read_json_file(&out_path, "the sessionless refusal answers");
+    let answers = answers.as_array().expect("six command answers");
+    assert_eq!(answers.len(), 6);
+    let answers: std::collections::BTreeMap<_, _> = answers
+        .iter()
+        .map(|answer| (answer["payload"]["command_id"].as_str().unwrap(), answer))
+        .collect();
+    assert_eq!(answers["ready"]["kind"], json!("command_accepted"));
+    assert_eq!(answers["c1"]["kind"], json!("command_accepted"));
+    assert_eq!(answers["c1"]["payload"]["result"]["value"], json!({}));
+    for (id, message) in [
+        ("c2", "state.set: not available here"),
+        ("c3", "host.fs.write: not available here"),
+        ("c4", "host.config.get: not available here"),
+        ("c5", "host.drive: not available here"),
+    ] {
+        let answer = answers[id];
+        assert_eq!(answer["kind"], json!("command_rejected"), "{id}");
+        assert_eq!(answer["payload"]["command_id"], json!(id));
+        assert_eq!(answer["payload"]["code"], json!("not_available"), "{id}");
+        assert_eq!(answer["payload"]["message"], json!(message), "{id}");
+    }
 }
 
 /// Dropping the sessionless guard reaps the child at once: the owner
