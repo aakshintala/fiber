@@ -116,31 +116,66 @@ fn keeper_fixture() {
     let _parked = stdin.read(&mut parked);
 }
 
-/// The confined writer: damages the protected file, acknowledges past the
-/// damage, then blocks on the release FIFO the parent holds open.
+/// The confined writer: damages the protected file, opens the release
+/// FIFO, acknowledges past the damage once parked on that open read, then
+/// blocks reading it. The acknowledgement proves the release read is
+/// open, so a release line written any time after it is never lost to a
+/// closed pipe (`docs/testing.md`, "Waits and timeouts").
 #[cfg(target_os = "linux")]
 fn writer_script(token: &str, ready: &Path, release: &Path, target: &Path) -> String {
     format!(
-        "# {token}\necho $$ > {}\nprintf 'damaged' > {}\necho $$ >> {}\nread -r line < {}",
+        "# {token}\necho $$ > {}\nprintf 'damaged' > {}\nexec 3< {}\necho $$ >> {}\nread -r line <&3",
         fakes::shell_quote(ready),
         fakes::shell_quote(target),
-        fakes::shell_quote(ready),
         fakes::shell_quote(release),
+        fakes::shell_quote(ready),
     )
 }
 
 /// The grandchild variant: the command leader damages nothing itself; it
 /// reports its group, starts a separately executed descendant that damages,
-/// acknowledges past its own exec, and holds the release FIFO, then exits.
+/// opens the release FIFO, acknowledges past its own open, then holds the
+/// release read, then exits. Opens the release FIFO before the
+/// acknowledgement; see `writer_script`.
 #[cfg(target_os = "linux")]
 fn grandchild_script(token: &str, ready: &Path, release: &Path, target: &Path) -> String {
     format!(
-        "# {token}\necho $$ > {}\nsh -c 'printf \"damaged\" > \"{}\"; echo $$ >> \"{}\"; exec cat \"{}\" > /dev/null' &\nexit 0",
+        "# {token}\necho $$ > {}\nsh -c 'printf \"damaged\" > \"{}\"; exec 3< \"{}\"; echo $$ >> \"{}\"; exec cat <&3 > /dev/null' &\nexit 0",
         fakes::shell_quote(ready),
         fakes::shell_quote(target),
-        fakes::shell_quote(ready),
         fakes::shell_quote(release),
+        fakes::shell_quote(ready),
     )
+}
+
+/// Both scripts open the release FIFO before writing the post-damage
+/// acknowledgement: the acknowledgement proves the release read is open,
+/// so a release line written any time after it is never lost to a closed
+/// pipe (`docs/testing.md`, "Waits and timeouts"). The window is too
+/// narrow to reproduce under load, so this order pin is the reproduction:
+/// swapping the two lines in either script fails this test.
+#[cfg(target_os = "linux")]
+#[test]
+fn acknowledgement_follows_the_release_open() {
+    let dir = Path::new("/probe");
+    let ready = dir.join("ready.fifo");
+    let release = dir.join("release.fifo");
+    let target = dir.join("target");
+    for script in [
+        writer_script("token", &ready, &release, &target),
+        grandchild_script("token", &ready, &release, &target),
+    ] {
+        let open = script
+            .find("exec 3< ")
+            .expect("the script opens the release FIFO");
+        let ack = script
+            .find(">> ")
+            .expect("the script acknowledges past the damage");
+        assert!(
+            open < ack,
+            "the acknowledgement proves the release read is open, got:\n{script}"
+        );
+    }
 }
 
 /// The forced keeper-death interleaving: a session guard, a keeper fixture
@@ -249,8 +284,8 @@ impl KeeperDeath {
             matching.stand_down(fakes::Deadline::after(WAIT));
         }
         death.group_watch = Some(group_watch);
-        // The second line arrives after the damage: the writer is past its
-        // exec and, with the fix, holds the inherited active lock.
+        // The second line proves the release read is open; see
+        // `writer_script`.
         let _ack = death.ready.wait(fakes::Deadline::after(WAIT));
         death
     }

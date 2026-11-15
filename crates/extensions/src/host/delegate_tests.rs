@@ -517,7 +517,7 @@ fn a_hook_and_a_timer_can_each_call_it() {
 }
 
 #[test]
-fn an_effects_function_gets_invalid_arguments() {
+fn an_effects_function_gets_not_available() {
     let (fake, _arrived) = Fake::answering(Ok(JobId("j_1".into())));
     let init = "fiber.tool(\"t\", { description = \"d\", input_schema = { type = \"object\" },\n"
         .to_owned()
@@ -530,10 +530,7 @@ fn an_effects_function_gets_invalid_arguments() {
     let (_dir, ext, _clock) = rigged(&init, Some(&fake), true);
     match ext.tool_effects("t", Value::Null) {
         Err(crate::Error::Lua { message, .. }) => {
-            assert_eq!(
-                message,
-                "invalid_arguments/host.delegate: not available here"
-            );
+            assert_eq!(message, "not_available/host.delegate: not available here");
         }
         other => panic!("the effects function is refused: {other:?}"),
     }
