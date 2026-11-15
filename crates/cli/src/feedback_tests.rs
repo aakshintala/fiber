@@ -96,8 +96,10 @@ fn the_doctor_output_stays_verbatim() {
 
 #[test]
 fn install_is_source_with_a_commit_and_unknown_without() {
-    assert_eq!(install_method("0.3.0 (abc123)"), "source");
-    assert_eq!(install_method("0.3.0"), "unknown");
+    assert_eq!(install_method("0.3.0 (abc123)", false), "source");
+    assert_eq!(install_method("0.3.0 (abc123)", true), "install.sh");
+    assert_eq!(install_method("0.3.0", false), "unknown");
+    assert_eq!(install_method("0.3.0", true), "unknown");
 }
 
 #[test]
@@ -240,7 +242,7 @@ fn write_writes_the_report_once_and_returns_its_path_and_link() {
             build_report(
                 VERSION,
                 &super::platform(),
-                install_method(VERSION),
+                install_method(VERSION, false),
                 DESCRIPTION,
                 DOCTOR
             )
