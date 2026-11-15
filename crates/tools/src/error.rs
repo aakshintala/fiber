@@ -19,7 +19,7 @@ pub(crate) use media::{ImageReadError, PdfError};
 pub(crate) use misc::ReviewerNotesError;
 pub(crate) use misc::{AskUserError, SkillError, WebSearchError};
 pub(crate) use session::{SessionListError, SessionMessageError};
-pub(crate) use shell::ShellError;
+pub(crate) use shell::{ShellError, output_write_line};
 pub(crate) use web_fetch::{UrlError, WebFetchError};
 
 /// Every way a built-in tool call fails. The root is the one type that

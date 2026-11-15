@@ -54,6 +54,8 @@ pub(crate) struct Finished {
     pub capped: bool,
     /// A monitor's flood stopped it.
     pub flooded: bool,
+    /// A known failure writing the output file.
+    pub(super) write_failure: Option<super::output::WriteFailure>,
 }
 
 /// What a finished command kept: the whole output, or the spill it went to.

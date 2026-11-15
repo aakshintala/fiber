@@ -20,6 +20,7 @@ use contract::shapes::{ContentPart, Failure};
 use contract::tool::{Cancel, Output};
 use support::cancel::Token;
 
+use super::Limit;
 use super::command::{Finished, MovePolicy, MoveReason, StopKind};
 use super::drive::finish;
 use super::monitor::Feed;
@@ -27,7 +28,6 @@ use super::moved::Moved;
 use super::output::{PacedStream, Shared, align_char_boundary, lock};
 use super::sandbox::protected::{Guard as ProtectionGuard, Report as ProtectedReport};
 use super::tty;
-use super::{Limit, assemble};
 use crate::error::{ShellError, ToolError};
 
 /// A description longer than this is cut, with `…` as the last character.
@@ -298,6 +298,7 @@ pub(crate) fn finish_inline(
         Ok((file, path)) => {
             let mut inner = lock(&progress.shared.inner);
             inner.file = Some(file);
+            inner.output_path = Some(path.clone());
             inner.artifact_sink = true;
             inner.cap = cap;
             format!(
@@ -439,11 +440,11 @@ fn hand_off(
     let feed = opened.lines.map(|lines| {
         sink = Some(match File::create(&errors) {
             Ok(file) => {
-                moved.attach_errors(Some(file));
+                moved.attach_errors(Some(file), Some(errors.clone()));
                 Ok(())
             }
             Err(error) => {
-                moved.attach_errors(None);
+                moved.attach_errors(None, None);
                 Err(error)
             }
         });
@@ -601,8 +602,9 @@ fn terminal_receipt(
 }
 
 /// A monitor's standard error file: beside its output file, named
-/// `<job_id>.stderr.log`.
-fn errors_path(output: &Path) -> std::path::PathBuf {
+/// `<job_id>.stderr.log`. Restored jobs share it for their keeper-side
+/// failure path.
+pub(super) fn errors_path(output: &Path) -> std::path::PathBuf {
     let stem = output
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
@@ -834,6 +836,9 @@ fn to_completed(
 
 /// The adopted end with the protected-path report of its guard: the same
 /// outcome as [`to_completed`], carrying what the call's end restored.
+/// A known stored output-write failure replaces the selected end, whatever
+/// it was, with one shared override: the cap wins over every other end,
+/// then a flood, then the stop or the process end the foreground maps.
 pub(super) fn to_completed_reported(
     job_id: JobId,
     path: &Path,
@@ -850,17 +855,18 @@ pub(super) fn to_completed_reported(
     // A moved job's timeout carries the hint from its receipt: the same
     // line a foreground kill says, plus how to keep a long-running
     // process. A monitor's deadline names itself; an indeterminate end
-    // stays indeterminate, as `assemble` reads it first; and the
+    // stays indeterminate, as `assemble_output` reads it first; and the
     // foreground `assemble` above stays byte-identical. The capped and
     // flooded branches below still win when they apply. Read before
-    // `assemble` consumes the end.
+    // `assemble_output` consumes the end.
     let moved_limit = match (finished.stop, limit) {
         (Some(StopKind::Timeout), Some(limit)) if !limit.monitor && !finished.indeterminate => {
             Some((limit.ms, limit.has_pipe))
         }
         _ => None,
     };
-    let mut output = assemble(limit, finished, None, None);
+    let (mut output, pre_end, write_failure) = super::assemble_output(limit, finished, None, None);
+    let failed_write = write_failure.is_some();
     if let Some((ms, has_pipe)) = moved_limit {
         output.error = Some(Failure::from(&ToolError::from(ShellError::TimedOutMoved {
             ms,
@@ -868,12 +874,20 @@ pub(super) fn to_completed_reported(
         })));
     }
     output.protected_paths = report.as_ref().filter(|report| !report.is_empty()).cloned();
-    if capped {
+    if let Some(write_failure) = write_failure {
+        output.error = Some(super::hosted::override_write_failure(
+            pre_end,
+            &write_failure.path,
+            flooded,
+        ));
+    } else if capped {
         output.error = Some(Failure::from(&ToolError::from(ShellError::Capped)));
     } else if flooded {
         output.error = Some(Failure::from(&ToolError::from(ShellError::Flooded)));
     }
-    let status = if stopped {
+    let status = if failed_write {
+        Outcome::Failed
+    } else if stopped {
         Outcome::Cancelled
     } else if output.error.is_some() {
         Outcome::Failed

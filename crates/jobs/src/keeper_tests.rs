@@ -7,6 +7,7 @@ fn end() -> Exit {
         signal: None,
         timed_out: false,
         output_cap: false,
+        output_write_failure: None,
     }
 }
 
@@ -16,6 +17,7 @@ fn signal_end() -> Exit {
         signal: Some(15),
         timed_out: false,
         output_cap: false,
+        output_write_failure: None,
     }
 }
 

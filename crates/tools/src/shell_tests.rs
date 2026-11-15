@@ -81,6 +81,159 @@ fn shell_child_receives_its_explicit_session_id() {
 }
 
 #[test]
+fn shell_job_output_write_failure_is_reported() {
+    let path = std::path::PathBuf::from("/tmp/job.log");
+    let output = super::assemble(
+        None,
+        super::Finished {
+            output: super::command::Kept::Whole(Vec::new()),
+            status: None,
+            stop: None,
+            indeterminate: false,
+            held_open: false,
+            sent_signal: false,
+            capped: false,
+            flooded: false,
+            write_failure: Some(super::output::WriteFailure {
+                path: path.clone(),
+                source: std::io::Error::other("private OS detail"),
+            }),
+        },
+        None,
+        None,
+    );
+    assert_eq!(code(&output), Some(ErrorCode::IoFailed));
+    let failure = output.error.unwrap();
+    assert!(failure.message.contains(&path.display().to_string()));
+    assert!(failure.message.contains("tool_error"));
+    assert!(!failure.message.contains("private OS detail"));
+}
+
+#[test]
+fn shell_call_write_failure_replaces_nonzero_exit() {
+    let path = std::path::PathBuf::from("/tmp/job.log");
+    let status = Command::new("sh").args(["-c", "exit 3"]).status().unwrap();
+    let output = super::assemble(
+        None,
+        super::Finished {
+            output: super::command::Kept::Whole(Vec::new()),
+            status: Some(status),
+            stop: None,
+            indeterminate: false,
+            held_open: false,
+            sent_signal: false,
+            capped: false,
+            flooded: false,
+            write_failure: Some(super::output::WriteFailure {
+                path: path.clone(),
+                source: std::io::Error::other("private OS detail"),
+            }),
+        },
+        None,
+        None,
+    );
+    assert_eq!(code(&output), Some(ErrorCode::IoFailed));
+    let failure = output.error.unwrap();
+    assert!(failure.message.contains(&path.display().to_string()));
+    assert!(failure.message.contains("replaced end: nonzero_exit"));
+    assert!(!failure.message.contains("private OS detail"));
+}
+
+#[test]
+fn shell_call_write_failure_replaces_output_cap() {
+    let path = std::path::PathBuf::from("/tmp/job.log");
+    let status = Command::new("sh").args(["-c", "exit 0"]).status().unwrap();
+    let output = super::assemble(
+        None,
+        super::Finished {
+            output: super::command::Kept::Whole(Vec::new()),
+            status: Some(status),
+            stop: None,
+            indeterminate: false,
+            held_open: false,
+            sent_signal: false,
+            capped: true,
+            flooded: false,
+            write_failure: Some(super::output::WriteFailure {
+                path: path.clone(),
+                source: std::io::Error::other("private OS detail"),
+            }),
+        },
+        None,
+        None,
+    );
+    assert_eq!(code(&output), Some(ErrorCode::IoFailed));
+    let failure = output.error.unwrap();
+    assert!(failure.message.contains(&path.display().to_string()));
+    assert!(failure.message.contains("replaced end: output_cap"));
+    assert!(!failure.message.contains("private OS detail"));
+}
+
+#[test]
+fn shell_call_write_failure_replaces_timeout() {
+    let path = std::path::PathBuf::from("/tmp/job.log");
+    let status = Command::new("sh").args(["-c", "exit 0"]).status().unwrap();
+    let output = super::assemble(
+        None,
+        super::Finished {
+            output: super::command::Kept::Whole(Vec::new()),
+            status: Some(status),
+            stop: Some(super::command::StopKind::Timeout),
+            indeterminate: false,
+            held_open: false,
+            sent_signal: false,
+            capped: false,
+            flooded: false,
+            write_failure: Some(super::output::WriteFailure {
+                path: path.clone(),
+                source: std::io::Error::other("private OS detail"),
+            }),
+        },
+        None,
+        None,
+    );
+    assert_eq!(code(&output), Some(ErrorCode::IoFailed));
+    let failure = output.error.unwrap();
+    assert!(failure.message.contains(&path.display().to_string()));
+    assert!(failure.message.contains("replaced end: timeout"));
+    assert!(!failure.message.contains("private OS detail"));
+}
+
+#[test]
+fn shell_call_write_failure_replaces_signal() {
+    let path = std::path::PathBuf::from("/tmp/job.log");
+    let mut child = Command::new("sh")
+        .args(["-c", "kill -TERM $$"])
+        .spawn()
+        .unwrap();
+    let status = child.wait().unwrap();
+    let output = super::assemble(
+        None,
+        super::Finished {
+            output: super::command::Kept::Whole(Vec::new()),
+            status: Some(status),
+            stop: None,
+            indeterminate: false,
+            held_open: false,
+            sent_signal: false,
+            capped: false,
+            flooded: false,
+            write_failure: Some(super::output::WriteFailure {
+                path: path.clone(),
+                source: std::io::Error::other("private OS detail"),
+            }),
+        },
+        None,
+        None,
+    );
+    assert_eq!(code(&output), Some(ErrorCode::IoFailed));
+    let failure = output.error.unwrap();
+    assert!(failure.message.contains(&path.display().to_string()));
+    assert!(failure.message.contains("replaced end: signal"));
+    assert!(!failure.message.contains("private OS detail"));
+}
+
+#[test]
 fn nullable_optional_arguments_parse_as_absent() {
     let dir = fakes::TempDir::new("fiber-shell-nullable");
     let arguments = fakes::tool_args(json!({"command": "ls", "workdir": null, "timeout_ms": null,
@@ -872,6 +1025,7 @@ fn shell_details_describe_the_command_and_reaped_status() {
                 sent_signal: false,
                 capped: false,
                 flooded: false,
+                write_failure: None,
             },
             None,
             command,
@@ -1276,6 +1430,7 @@ fn assemble_of_a_spilled_output_has_no_text_and_names_the_file() {
             sent_signal: false,
             capped: false,
             flooded: false,
+            write_failure: None,
         },
         None,
         None,
@@ -1317,6 +1472,7 @@ fn assemble_of_a_failed_spilled_output_keeps_its_error_and_process() {
             sent_signal: false,
             capped: false,
             flooded: false,
+            write_failure: None,
         },
         None,
         None,
@@ -1345,6 +1501,7 @@ fn assemble_hands_the_open_failure_line_to_both_kinds_of_output() {
         sent_signal: false,
         capped: false,
         flooded: false,
+        write_failure: None,
     };
     let limit = Some(super::Limit {
         ms: 1,
