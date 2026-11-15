@@ -327,7 +327,7 @@ fn const_site(trees: &[TokenTree], i: usize, scan: &Scan) -> Option<Site> {
 fn known_ms(name: &str) -> Option<bool> {
     match name {
         "WAITS" | "BUDGET" | "CLEANUP" | "MAX" => Some(true),
-        "ZERO" if SHORT_BOUND_NAMES.contains(&"Duration::ZERO") => Some(false),
+        "ZERO" => Some(false),
         name if SHORT_BOUND_NAMES.contains(&name) => Some(false),
         _ => None,
     }
