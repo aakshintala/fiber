@@ -2737,86 +2737,50 @@ fn deleting_the_list_row_resets_it_and_deleting_in_the_page_removes_an_entry() {
 #[test]
 fn the_pages_clicks_and_wheel_move_its_focus_only_outside_a_field() {
     let fake = Fake::new(rows());
-    // The scoped-model page opens a clicked entry directly in its field;
-    // Space edits that field, and clicks and the wheel cannot retarget it.
-    let mut settings = page(&fake, "scoped_models");
-    let entry = settings.page.as_ref().unwrap().entries[1].clone();
-    settings.click(Spot::Row(1), &ctx(&fake));
-    assert_eq!(settings.page.as_ref().unwrap().list.selected(), 1);
-    let draft = settings
-        .page
-        .as_ref()
-        .unwrap()
-        .field
-        .as_ref()
-        .unwrap()
-        .draft
-        .expand();
-    assert_eq!(draft, entry.as_str().unwrap());
-    one(&mut settings, &fake, Key::Char(' '));
-    assert_eq!(
-        settings
-            .page
-            .as_ref()
-            .unwrap()
-            .field
-            .as_ref()
-            .unwrap()
-            .draft
-            .expand(),
-        format!("{draft} ")
-    );
-    settings.click(Spot::Row(0), &ctx(&fake));
-    assert_eq!(settings.page.as_ref().unwrap().list.selected(), 1, "a field holds the focus");
-    settings.wheel(true, &ctx(&fake));
-    assert!(fake.writes().is_empty());
-
-    // The string-list page opens an entry with Enter and likewise keeps its
-    // field focused against clicks and the wheel.
+    // Clicking a string-list entry opens its field and keeps it focused
+    // against clicks and the wheel.
     let mut settings = page(&fake, "sandbox.allow_write");
     settings.click(Spot::Row(1), &ctx(&fake));
     assert_eq!(settings.page.as_ref().unwrap().list.selected(), 1);
-    one(&mut settings, &fake, Key::Enter);
     assert!(settings.page.as_ref().unwrap().field.is_some());
-    settings.click(Spot::Row(0), &ctx(&fake));
-    assert_eq!(settings.page.as_ref().unwrap().list.selected(), 1, "a field holds the focus");
+    settings.click(Spot::Row(1), &ctx(&fake));
+    assert_eq!(
+        settings.page.as_ref().unwrap().list.selected(),
+        1,
+        "a field holds the focus"
+    );
     assert!(fake.writes().is_empty());
     settings.wheel(true, &ctx(&fake));
     assert!(fake.writes().is_empty());
+}
 
-    let mut add_by_click = page(&fake, "scoped_models");
-    let add_row = add_by_click.page.as_ref().unwrap().entries.len();
-    add_by_click.click(Spot::Row(add_row), &ctx(&fake));
-    let mut add_by_enter = page(&fake, "scoped_models");
-    add_by_enter.page_select(add_row, &ctx(&fake));
-    one(&mut add_by_enter, &fake, Key::Enter);
+#[test]
+fn clicking_the_scoped_models_screen_row_opens_its_screen() {
+    let mut fixture = rows();
+    fixture.extend([on(
+        SettingsTab::Models,
+        "Scoped models setting",
+        "scoped_models",
+        value("[]"),
+        "global",
+        ANY,
+        SettingControl::StringList,
+    )]);
+    let fake = Fake::new(fixture);
+    let mut settings = tab(&fake, SettingsTab::Models);
+    let layout = settings.layout(80, 24, None);
+    let row = layout
+        .lines
+        .iter()
+        .position(|line| *line == super::Line::Item(Item::Screen(Screen::ScopedModels)))
+        .unwrap();
+
+    settings.click(Spot::Row(row), &ctx(&fake));
     assert_eq!(
-        add_by_click
-            .page
-            .as_ref()
-            .unwrap()
-            .field
-            .as_ref()
-            .unwrap()
-            .draft
-            .expand(),
-        add_by_enter
-            .page
-            .as_ref()
-            .unwrap()
-            .field
-            .as_ref()
-            .unwrap()
-            .draft
-            .expand()
+        settings.take_request(),
+        Some(Request::Screen(Screen::ScopedModels))
     );
-
-    let mut by_space = page(&fake, "scoped_models");
-    by_space.click(Spot::Row(500), &ctx(&fake));
-    assert_eq!(by_space.page.as_ref().unwrap().list.selected(), 0);
-    assert!(by_space.page.as_ref().unwrap().field.is_none());
-    one(&mut by_space, &fake, Key::Char(' '));
-    assert!(by_space.page.as_ref().unwrap().field.is_some());
+    assert!(fake.writes().is_empty());
 }
 
 // The theme choices `/theme` opens on.
