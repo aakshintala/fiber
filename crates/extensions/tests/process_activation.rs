@@ -467,6 +467,87 @@ fn registered_session(
     (session, captured)
 }
 
+/// A session process callback receives the real result of package-relative
+/// `host.exec`, running the executable copied into the installed package.
+#[test]
+fn session_process_exec_resolves_package_relative_program() {
+    let env = Env::new("fiber-process-host-exec");
+    let source = env.root.path().join("src").join("exec");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/session-host-exec");
+    copy_tree(&fixture, &source);
+    // The process executable is the standard peer jig; its plan handles the
+    // command callback by calling host.exec and records the actual answer.
+    let peer = ProcessFixture::command("peer", Some(&exec_plan(&env.marker("exec-result.json"))));
+    write(
+        &source.join("extension.json"),
+        &json!({
+            "name": "fiber.test/exec",
+            "version": "v1",
+            "fiber": "0.1.0",
+            "api": 1,
+            "process": {
+                "program": peer.0.display().to_string(),
+                "args": peer.1,
+                "exit_timeout_ms": 1000
+            },
+            "commands": {"probe": {"description": "Run the package probe"}}
+        })
+        .to_string(),
+    );
+    plan(
+        &env.home(),
+        &Request::Path(source),
+        "0.1.0",
+        &Origin::github(),
+        &*FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+
+    let session = env.load(ExtensionReason::New, 0);
+    let release = session
+        .command(&contract::CommandId("exec-command".into()), "probe", "")
+        .unwrap();
+    release();
+    let result = read_json_file(&env.marker("exec-result.json"), "host.exec result");
+    assert_eq!(result["payload"]["result"]["value"]["exit_code"], 0);
+    assert_eq!(
+        result["payload"]["result"]["value"]["stdout"],
+        "c2Vzc2lvbi1ob3N0LWV4ZWMtcHJvYmU="
+    );
+    session.finish_processes(&CancelToken::new());
+}
+
+fn exec_plan(result: &Path) -> Value {
+    json!([
+        {"read": {}},
+        {"send": {"id": "reg", "command": "call", "args": {"call": "fiber.command", "args": ["probe", {"description": "Run", "timeout": 5000, "run": true}]}}},
+        {"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "reg"}}}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready"}}}},
+        {"read_until": {"path": "kind", "equals": "extension_request", "as": "request"}},
+        {"send": {"id": "host-exec", "command": "call", "args": {"call": "host.exec", "args": ["bin/probe", [], {}], "request_id": {"$ref": "request.payload.request_id"}}}},
+        {"read_until": {"path": "payload.command_id", "equals": "host-exec", "as": "exec_answer"}},
+        {"write_file": {"path": result.to_str().unwrap(), "value": {"$ref": "exec_answer"}}},
+        {"send": {"id": "callback-answer", "command": "reply", "args": {"request_id": {"$ref": "request.payload.request_id"}, "result": "done"}}},
+        {"loop": [{"read": {}}]}
+    ])
+}
+
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
 /// A session refuses to start a process whose program escapes its package.
 #[test]
 fn session_process_start_refuses_package_escape() {
