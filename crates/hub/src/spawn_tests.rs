@@ -165,7 +165,7 @@ fn pre_session_callback_runs_once_when_registered_before_reap() {
     }));
     drain(&child, &state);
     assert_eq!(
-        Deadline::after(DRAIN_DEADLINE)
+        Deadline::after(DRAIN_DEADLINE) // ruling: #4897
             .recv_or_fail(&received, "the registered pre-session verdict"),
         format!("{line}\n")
     );
@@ -187,7 +187,8 @@ fn pre_session_callback_runs_once_when_registered_after_reap() {
         sent.send(line).unwrap_or(());
     }));
     assert_eq!(
-        Deadline::after(DRAIN_DEADLINE).recv_or_fail(&received, "the stored pre-session verdict"),
+        Deadline::after(DRAIN_DEADLINE) // ruling: #4897
+            .recv_or_fail(&received, "the stored pre-session verdict"),
         format!("{line}\n")
     );
     let (duplicate, duplicates) = mpsc::channel();

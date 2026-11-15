@@ -160,7 +160,7 @@ impl Client {
                 let outcome = self.read.read_line(&mut text);
                 done_tx.send((outcome, text)).unwrap_or(());
             });
-            Deadline::after(within)
+            Deadline::after(within) // ruling: #4897 — bounded by each caller.
                 .recv(&done_rx)
                 .unwrap_or_else(|_| panic!("never received {what}"))
         })
@@ -358,7 +358,7 @@ fn start_forwards_pre_session_fiber_exited() {
         "start",
         json!({"workspace": workspace}),
     ));
-    let bound = Deadline::after(crate::start::START_DEADLINE);
+    let bound = Deadline::after(crate::start::START_DEADLINE); // ruling: #4897
     assert!(
         exit.wait_bound(&bound),
         "the child binds before acknowledgement"
@@ -397,7 +397,7 @@ fn start_buffers_pre_session_exit_until_acknowledgement() {
         "start",
         json!({"workspace": workspace}),
     ));
-    let bound = Deadline::after(crate::start::START_DEADLINE);
+    let bound = Deadline::after(crate::start::START_DEADLINE); // ruling: #4897
     assert!(exit.wait_bound(&bound), "the child bind is observed");
     exit.release();
     let (id, _) = accepted(&client.next("the start acknowledgement"));
@@ -436,7 +436,7 @@ fn start_forwards_pre_session_exit_after_content_acknowledgement() {
         "start",
         json!({"workspace": temp.workspace(), "content": content()}),
     ));
-    let bound = Deadline::after(crate::start::START_DEADLINE);
+    let bound = Deadline::after(crate::start::START_DEADLINE); // ruling: #4897
     assert!(exit.wait_bound(&bound), "the child bind is observed");
     let (id, result) = accepted(&client.next("the start acknowledgement"));
     assert_eq!(id, "c_start");
@@ -466,7 +466,7 @@ fn start_cancels_pre_session_exit_after_summary_rejection() {
         "start",
         json!({"workspace": temp.workspace(), "content": content()}),
     ));
-    let bound = Deadline::after(crate::start::START_DEADLINE);
+    let bound = Deadline::after(crate::start::START_DEADLINE); // ruling: #4897
     assert!(exit.wait_bound(&bound), "the child bind is observed");
     let (code, id, _) = rejected(&client.next("the summary rejection"));
     assert_eq!(code, "closing");
@@ -497,7 +497,7 @@ fn start_cancels_pre_session_exit_when_first_prompt_cannot_start() {
         "start",
         json!({"workspace": temp.workspace(), "content": content()}),
     ));
-    let bound = Deadline::after(crate::start::START_DEADLINE);
+    let bound = Deadline::after(crate::start::START_DEADLINE); // ruling: #4897
     assert!(exit.wait_bound(&bound), "the child bind is observed");
     let (code, id, _) = rejected(&client.next("the first prompt rejection"));
     assert_eq!(code, "io_failed");
@@ -527,7 +527,7 @@ fn start_logs_a_pre_session_exit_once_when_the_client_closes() {
         "start",
         json!({"workspace": temp.workspace()}),
     ));
-    let bound = Deadline::after(crate::start::START_DEADLINE);
+    let bound = Deadline::after(crate::start::START_DEADLINE); // ruling: #4897
     assert!(exit.wait_bound(&bound), "the child bind is observed");
     accepted(&client.next("the start acknowledgement"));
     drop(client);
