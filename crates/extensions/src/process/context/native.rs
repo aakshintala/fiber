@@ -317,10 +317,7 @@ impl NativeHostServices {
         cancel: &dyn Cancel,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
         if !callback.model_permitted() {
-            return Err((
-                contract::ErrorCode::InvalidArguments,
-                "host.model: not available here".to_owned(),
-            ));
+            return Err(crate::process::calls::not_available("host.model"));
         }
         let model = support::lock(&self.model).clone();
         let Some(model) = model else {
@@ -387,10 +384,7 @@ impl NativeHostServices {
         host_call: &super::super::requests::HostCallHandle,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
         if !callback.delegate_permitted() {
-            return Err((
-                contract::ErrorCode::InvalidArguments,
-                "host.delegate: not available here".to_owned(),
-            ));
+            return Err(crate::process::calls::not_available("host.delegate"));
         }
         let delegate = support::lock(&self.delegate).clone();
         let Some(delegate) = delegate else {

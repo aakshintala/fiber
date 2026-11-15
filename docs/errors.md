@@ -378,6 +378,7 @@ the lines that carry it.
 | `no_jobs_running` | notice | `/jobs` ran in an attached session with no running jobs (`docs/tui.md`, "Slash commands") | event |
 | `no_model` | exit, notice, driver command (`rewind`), hub command | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id; or a hub `configure` operation sets `model` to one no installed provider has | event |
 | `nonzero_exit` | tool call, job | a process exited nonzero | — |
+| `not_available` | extension call | an extension made a host call from a callback or a session that may not make it (`docs/extensions.md`, "Host calls") | — |
 | `not_found` | extension call, tool call, hub command, driver command | the path `read` or `edit` names does not exist, or `read_file` names no file (`docs/invocation.md`, "A session's files"), or `revoke` names no paired device (`docs/invocation.md`, "Remote clients"), or `artifact_page` names no file (`docs/invocation.md`, "Driver commands") | — |
 | `orphaned` | job | the job's keeper died before it wrote the job's end, or the session had no keeper (`docs/tools.md`, "The keeper") | — |
 | `output_cap` | job | a job's output file passed 5 GB | — |
