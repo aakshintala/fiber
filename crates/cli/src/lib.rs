@@ -248,16 +248,21 @@ fn finish<E: Into<CliError>>(result: Result<(), E>) -> i32 {
 fn finish_code<E: Into<CliError>>(result: Result<i32, E>) -> i32 {
     match result.map_err(Into::into) {
         Ok(code) => code,
-        Err(error) => {
-            if let CliError::StandardOutput(source) | CliError::DoctorReport(source) = &error {
-                match doors::stdout_write_exit_code(source) {
-                    0 => 0,
-                    _ => fail(error.into()),
-                }
-            } else {
-                fail(error.into())
+        Err(CliError::StandardOutput(source)) => match doors::stdout_write_outcome(source) {
+            Ok(()) => 0,
+            Err(doors::SessionError::StdoutFailed { source }) => {
+                fail(CliError::StandardOutput(source).into())
             }
-        }
+            Err(error) => fail(error.into()),
+        },
+        Err(CliError::DoctorReport(source)) => match doors::stdout_write_outcome(source) {
+            Ok(()) => 0,
+            Err(doors::SessionError::StdoutFailed { source }) => {
+                fail(CliError::DoctorReport(source).into())
+            }
+            Err(error) => fail(error.into()),
+        },
+        Err(error) => fail(error.into()),
     }
 }
 
