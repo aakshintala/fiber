@@ -15,6 +15,10 @@ use serde_json::Value;
 
 use crate::Providers;
 
+#[cfg(test)]
+#[path = "models_dev_tests.rs"]
+mod tests;
+
 /// The public models.dev catalog endpoint.
 pub const URL: &str = "https://models.dev/api.json";
 /// A fetch operation returning the response body or a transport error.
@@ -74,6 +78,10 @@ pub fn should_fetch(
         Ok(None) | Err(_) => true,
         Ok(Some(age)) => max_age.is_none_or(|max| age > max),
     }
+}
+
+fn retained_rows(catalog: &Value, _models: &[ModelData], _meta: &CatalogMeta) -> Value {
+    catalog.clone()
 }
 
 fn valid_catalog(bytes: &[u8]) -> bool {
