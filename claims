@@ -658,3 +658,10 @@ docs/errors.md	fiber-4855	plan	2026-11-15T05:34:44Z	Amoghs-MacBook-Pro:/Users/aa
 docs/extensions.md	fiber-4855	plan	2026-11-15T05:34:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/testing/running.md	fiber-4873	grant	2026-11-15T05:45:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4873-zsh-completion-flake	
 docs/ci.md	fiber-4873	grant	2026-11-15T05:45:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4873-zsh-completion-flake	
+crates/jobs/src/delegate/delegate_tests.rs	fiber-4042	plan	2026-11-15T05:45:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/jobs/src/delegate/outcome.rs	fiber-4042	plan	2026-11-15T05:45:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/jobs/src/timing_tests.rs	fiber-4042	plan	2026-11-15T05:45:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/jobs/tests/delegate_early_failure.rs	fiber-4042	plan	2026-11-15T05:45:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/tests/resume.rs	fiber-4042	plan	2026-11-15T05:45:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/delegates_tests.rs	fiber-4042	plan	2026-11-15T05:45:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/mcp_servers.rs	fiber-4042	plan	2026-11-15T05:45:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
