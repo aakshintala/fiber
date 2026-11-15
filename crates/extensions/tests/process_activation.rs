@@ -473,37 +473,18 @@ fn registered_session(
 fn session_process_exec_resolves_package_relative_program() {
     let env = Env::new("fiber-process-host-exec");
     let source = env.root.path().join("src").join("exec");
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/session-host-exec");
-    copy_tree(&fixture, &source);
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/session-host-exec/bin/probe");
+    std::fs::create_dir_all(source.join("bin")).unwrap();
+    std::fs::copy(fixture, source.join("bin/probe")).unwrap();
     // The process executable is the standard peer jig; its plan handles the
     // command callback by calling host.exec and records the actual answer.
-    let peer = ProcessFixture::command("peer", Some(&exec_plan(&env.marker("exec-result.json"))));
-    write(
-        &source.join("extension.json"),
-        &json!({
-            "name": "fiber.test/exec",
-            "version": "v1",
-            "fiber": "0.1.0",
-            "api": 1,
-            "process": {
-                "program": peer.0.display().to_string(),
-                "args": peer.1,
-                "exit_timeout_ms": 1000
-            },
-            "commands": {"probe": {"description": "Run the package probe"}}
-        })
-        .to_string(),
+    let exec_plan = exec_plan(&env.marker("exec-result.json"));
+    env.install_process(
+        "exec",
+        &json!({"commands": {"probe": {"description": "Run the package probe"}}}),
+        &exec_plan,
     );
-    plan(
-        &env.home(),
-        &Request::Path(source),
-        "0.1.0",
-        &Origin::github(),
-        &*FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
 
     let session = env.load(ExtensionReason::New, 0);
     let release = session
@@ -533,19 +514,6 @@ fn exec_plan(result: &Path) -> Value {
         {"send": {"id": "callback-answer", "command": "reply", "args": {"request_id": {"$ref": "request.payload.request_id"}, "result": "done"}}},
         {"loop": [{"read": {}}]}
     ])
-}
-
-fn copy_tree(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).unwrap();
-    for entry in std::fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else {
-            std::fs::copy(entry.path(), target).unwrap();
-        }
-    }
 }
 
 /// A session refuses to start a process whose program escapes its package.
