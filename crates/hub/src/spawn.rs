@@ -419,7 +419,6 @@ fn strict_pre_session_line(line: &str) -> Option<String> {
         || !object.contains_key("kind")
         || !object.contains_key("schema_version")
         || !object.contains_key("payload")
-        || object.get("kind")?.as_str()? != "fiber_exited"
         || object.get("schema_version")?.as_u64()? != u64::from(contract::SCHEMA_VERSION)
     {
         return None;
