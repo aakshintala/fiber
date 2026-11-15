@@ -642,16 +642,31 @@ fn tabs_are_inert_and_typing_on_option_kinds_changes_nothing() {
 }
 
 #[test]
-fn space_on_multi_select_submit_and_chat_does_nothing() {
+fn space_on_multi_select_submit_answers_and_chat_declines() {
     let mut question = multi_select();
-    press(&mut question, &[Key::Down, Key::Down, Key::Down]);
-    let submit = lines(&question);
-    press(&mut question, &[Key::Char(' ')]);
-    assert_eq!(lines(&question), submit);
-    press(&mut question, &[Key::Down]);
-    let chat = lines(&question);
-    press(&mut question, &[Key::Char(' ')]);
-    assert_eq!(lines(&question), chat);
+    press(
+        &mut question,
+        &[
+            Key::Char(' '),
+            Key::Down,
+            Key::Down,
+            Key::Char(' '),
+            Key::Down,
+        ],
+    );
+    assert_eq!(question.on_key(&Key::Char(' ')), Some(PanelKey::Answer));
+    assert_eq!(answer(&question), json!({"labels": ["alpha", "gamma"]}));
+
+    let mut question = multi_select();
+    press(
+        &mut question,
+        &[Key::Char(' '), Key::Down, Key::Down, Key::Down, Key::Down],
+    );
+    assert_eq!(
+        lines(&question).last().map(String::as_str),
+        Some("▸  Chat about this ")
+    );
+    assert_eq!(question.on_key(&Key::Char(' ')), Some(PanelKey::Decline));
 }
 
 #[test]
