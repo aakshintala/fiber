@@ -3514,7 +3514,7 @@ fn foreground_output_past_a_mebibyte_keeps_peak_rss_growth_bounded() {
     };
     let before = hwm(completed[0]);
     let after = hwm(completed[2]);
-    // VmHWM uses approximate per-CPU RSS counters, which can read lower later.
+    // VmHWM can read lower: update_hiwater_rss() samples approximate per-CPU RSS before drops.
     assert!(before > 0, "{before} {after}");
     // Without the spill the buffer alone is at least 64 MiB.
     assert!(
