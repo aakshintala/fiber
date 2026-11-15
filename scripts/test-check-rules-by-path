@@ -9,7 +9,7 @@ top=$PWD
 fail() { echo "test-check-rules-by-path: $1" >&2; exit 1; }
 
 work=$(mktemp -d)
-trap 'git worktree remove --force "${proto_wt-}" 2>/dev/null || true; rm -rf "$work" "${proto_parent-}"' EXIT
+trap 'git worktree remove --force "${proto_wt-}" 2>/dev/null || true; git worktree remove --force "${example_wt-}" 2>/dev/null || true; rm -rf "$work" "${proto_parent-}" "${example_parent-}"' EXIT
 
 # A flag conflict prints usage and exits 2, like any unknown flag.
 code=0
@@ -54,6 +54,50 @@ printf '%s\n' "research/tui-prototype/src/main.rs" >"$work/changed"
 grep -q "^$pattern/" "$work/changed" || fail "a prototype-only diff trips no trigger"
 printf '%s\n' "crates/log/src/lib.rs" >"$work/unchanged"
 grep -q "^$pattern/" "$work/unchanged" && fail "a non-prototype file trips the prototype trigger"
+
+# A selected non-main jig package builds its plain example binary before
+# nextest. Cargo's test harness is a separate hashed artifact and cannot stand
+# in for the binary a jig starts.
+example_parent=$(mktemp -d)
+example_wt="$example_parent/wt"
+git worktree add -q --detach "$example_wt" HEAD
+mkdir -p "$example_wt/crates/log/src" "$work/example-bin"
+printf '%s\n' '//! selected log package' >"$example_wt/crates/log/src/rules-selftest-probe.rs"
+cat >"$work/example-bin/cargo" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$CARGO_CALLS"
+if [[ "$*" == "xtask select"* ]]; then
+  printf '%s\n' 'mode=crates' 'packages=log' 'package_specs=log@0.0.0' 'library_specs=log@0.0.0' 'extension_packages='
+  exit 0
+fi
+if [[ "$*" == "build -q -p fakes --example process-extension" ]]; then exit 0; fi
+if [[ "$*" == "build -p main --examples" ]]; then exit 0; fi
+if [[ "$*" == "build -p log@0.0.0 --examples" ]]; then
+  mkdir -p "$CARGO_TARGET_DIR/debug/examples"
+  : >"$CARGO_TARGET_DIR/debug/examples/check"
+  exit 0
+fi
+if [[ "$*" == "nextest run --all-targets -p log@0.0.0" ]]; then
+  test -e "$CARGO_TARGET_DIR/debug/examples/check" || { echo 'jig example check is absent' >&2; exit 1; }
+  exit 0
+fi
+exit 0
+STUB
+chmod +x "$work/example-bin/cargo"
+export CARGO_CALLS="$work/calls" CARGO_TARGET_DIR="$work/example-target"
+if ! (cd "$example_wt" && PATH="$work/example-bin:$PATH" bash "$top/scripts/check" --rules-by-path --base HEAD >"$work/example-check" 2>&1); then
+  cat "$work/example-check" >&2
+  fail "selected log jig ran without its plain example build"
+fi
+build_line=$(grep -n '^build -p log@0.0.0 --examples$' "$work/calls" | cut -d: -f1 || true)
+test_line=$(grep -n '^nextest run --all-targets -p log@0.0.0$' "$work/calls" | cut -d: -f1 || true)
+[ -n "$build_line" ] && [ -n "$test_line" ] && [ "$build_line" -lt "$test_line" ] || fail "log examples were not built before nextest"
+[ "$(grep -c '^build -p main --examples$' "$work/calls" || true)" -eq 0 ] || fail "main examples build was unexpectedly duplicated"
+grep -q '^build -q -p fakes --example process-extension$' "$work/calls" || fail "fakes process-extension build changed"
+grep -q '^nextest run --all-targets -p log@0.0.0$' "$work/calls" || fail "selected log tests were omitted"
+git worktree remove --force "$example_wt"
+rm -rf "$example_parent"
 
 # A narrowed smoke run through the built xtask carries no dependent crate.
 cargo build -q -p xtask

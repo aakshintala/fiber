@@ -165,6 +165,12 @@ if [ "$rules" = 1 ]; then
       else
         build_step cargo clippy --all-targets -p "$spec" -- -D warnings
       fi
+      if [ "$crate" != main ]; then
+        # A jig test starts the plain example binary; nextest's all-targets
+        # test harness is a separate hashed artifact.
+        echo "== $crate: cargo build --examples"
+        build_step cargo build -p "$spec" --examples
+      fi
       echo "== $crate: cargo nextest run"
       if [ "$crate" = main ]; then
         build_step cargo nextest run --bins --tests -p "$spec"
