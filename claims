@@ -263,9 +263,6 @@ docs/model-routing.md	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/U
 docs/extensions.md	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 docs/testing/fakes.md	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 docs/ci.md	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-crates/cli/src/feedback.rs	fiber-4686	plan	2026-11-15T11:39:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/cli/src/feedback_tests.rs	fiber-4686	plan	2026-11-15T11:39:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/releasing.md	fiber-4686	plan	2026-11-15T11:39:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/workflow.md	fiber-4420	plan	2026-11-15T11:59:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 docs/testing.md	fiber-4420	plan	2026-11-15T11:59:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 docs/testing/running.md	fiber-4420	plan	2026-11-15T11:59:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
@@ -325,9 +322,6 @@ crates/extensions/tests/models.rs:780-780	fiber-4755	plan	2026-11-15T12:31:45Z	r
 crates/main/src/parts.rs:561-561	fiber-4755	plan	2026-11-15T12:31:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4755-retain	
 crates/main/src/parts_tests.rs:247-247	fiber-4755	plan	2026-11-15T12:31:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4755-retain	
 crates/main/src/parts_tests.rs:249-249	fiber-4755	plan	2026-11-15T12:31:45Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4755-retain	
-.github/workflows/release.yml	fiber-4686	plan	2026-11-15T12:48:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/cli/build.rs	fiber-4686	plan	2026-11-15T12:58:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-crates/main/src/main.rs	fiber-4686	plan	2026-11-15T12:58:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/support/src/atomic.rs	fiber-4755	plan	2026-11-15T13:23:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/support/src/atomic_tests.rs	fiber-4755	plan	2026-11-15T13:23:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/state.md	fiber-4755	plan	2026-11-15T13:23:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
