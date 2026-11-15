@@ -70,7 +70,7 @@ fn home_cache_keys_projected_values_flat_and_width() {
     });
     assert!(draw(&changed_builtin, 20).is_some());
     assert!(draw(&base, 21).is_some());
-    assert_eq!(calls.get(), 5); // `docs/tui.md`:3702
+    assert_eq!(calls.get(), 5); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
 }
 
 #[test]
@@ -130,7 +130,7 @@ fn layout_cache_keys_width_height_shown_regions_and_flat() {
         ("panel".into(), raw_rect(4, 0, 6, 3)),
     ];
     assert!(draw(&two_regions, two).is_some());
-    assert_eq!(calls.get(), 6); // `docs/tui.md`:3702
+    assert_eq!(calls.get(), 6); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
 }
 
 #[test]
