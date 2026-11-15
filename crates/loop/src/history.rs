@@ -291,6 +291,7 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
         if pass.own_segment {
             if pass.staged.insert(id, true) != Some(true) {
                 resumed.session_blocks += 1;
+                resumed.consecutive += 1;
             }
         } else {
             pass.staged.entry(id).or_insert(false);
@@ -501,6 +502,7 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
             )
         {
             resumed.session_blocks += 1;
+            resumed.consecutive += 1;
         }
         // A settlement answering a staged-but-uncounted escalation counts
         // the block its raise recorded but never wrote here: a hook or
@@ -513,7 +515,24 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
             && !*counted
         {
             resumed.session_blocks += 1;
+            resumed.consecutive += 1;
             *counted = true;
+        }
+        if pass.own_segment
+            && resolved.decided_by == DecidedBy::Reviewer
+            && resolved.decision == Decision::Allow
+        {
+            resumed.consecutive = 0;
+        }
+        if pass.own_segment
+            && resolved.decided_by == DecidedBy::Person
+            && matches!(resolved.decision, Decision::Allow | Decision::Deny)
+            && resolved
+                .request_id
+                .as_ref()
+                .is_some_and(|id| pass.staged.contains_key(id))
+        {
+            resumed.consecutive = 0;
         }
     } else if let Event::OpeningMessage(message) = &event {
         // Only the own log's openings seed the running path: a parent

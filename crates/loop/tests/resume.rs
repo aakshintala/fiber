@@ -565,14 +565,52 @@ fn resume_after_prior_denials(decided_by: DecidedBy) -> (History, contract::even
     );
     tool.subject = Some("run tests".into());
     let tool = Arc::new(tool);
-    for _ in 0..20 {
+    let mut expected = vec![EventKind::SessionStarted];
+    if decided_by == DecidedBy::NoReviewer {
+        // Reach 19 session blocks while each person answer resets the run;
+        // the resumed block then isolates the session-count threshold.
+        for round in 0..6 {
+            for _ in 0..2 {
+                history.write(
+                    Event::PermissionResolved(PermissionResolved {
+                        call: None,
+                        request_id: None,
+                        decision: Decision::Deny,
+                        decided_by,
+                        reason: Some("no reviewer".into()),
+                        feedback: None,
+                        grant: None,
+                        rule: None,
+                        reviewer: None,
+                        hosts: None,
+                    }),
+                    Some("a_old"),
+                );
+                expected.push(EventKind::PermissionResolved);
+            }
+            let id = format!("r_prior_{round}");
+            history.write(
+                review_request_with(
+                    &id,
+                    Escalation::ConsecutiveBlocks {
+                        reason: "it writes".into(),
+                    },
+                ),
+                Some("a_old"),
+            );
+            history.write(person_denied(&id), Some("a_old"));
+            expected.extend([
+                EventKind::PermissionRequested,
+                EventKind::PermissionResolved,
+            ]);
+        }
         history.write(
             Event::PermissionResolved(PermissionResolved {
                 call: None,
                 request_id: None,
                 decision: Decision::Deny,
                 decided_by,
-                reason: Some("no".into()),
+                reason: Some("no reviewer".into()),
                 feedback: None,
                 grant: None,
                 rule: None,
@@ -581,10 +619,28 @@ fn resume_after_prior_denials(decided_by: DecidedBy) -> (History, contract::even
             }),
             Some("a_old"),
         );
+        expected.push(EventKind::PermissionResolved);
+    } else {
+        for _ in 0..20 {
+            history.write(
+                Event::PermissionResolved(PermissionResolved {
+                    call: None,
+                    request_id: None,
+                    decision: Decision::Deny,
+                    decided_by,
+                    reason: Some("no".into()),
+                    feedback: None,
+                    grant: None,
+                    rule: None,
+                    reviewer: None,
+                    hosts: None,
+                }),
+                Some("a_old"),
+            );
+            expected.push(EventKind::PermissionResolved);
+        }
     }
     history.freeze();
-    let mut expected = vec![EventKind::SessionStarted];
-    expected.extend(vec![EventKind::PermissionResolved; 20]);
     assert_eq!(history.history_kinds(), expected);
 
     let reviewer = Arc::new(ScriptedProvider::new(vec![
@@ -634,8 +690,8 @@ fn resume_after_prior_denials(decided_by: DecidedBy) -> (History, contract::even
 fn no_reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
     let (history, outcome) = resume_after_prior_denials(DecidedBy::NoReviewer);
 
-    // The 21st session block escalates with no person to answer: the turn
-    // fails `blocked`.
+    // The 20th session block reaches the session threshold while the
+    // consecutive count remains below its limit; no person can answer.
     assert_eq!(outcome, contract::events::TurnOutcome::Failed);
     assert_eq!(
         history.new_kinds(),
@@ -718,10 +774,10 @@ fn resumed_after_two_consecutive_blocks_escalates_next_block() {
 
     let reviewer = Arc::new(ScriptedProvider::new(vec![
         Scripted::text("check"),
-        Scripted::text("it writes\\nblock"),
+        Scripted::text("it writes\nblock"),
     ]));
     let looped = history
-        .resume_headless(vec![("builtin".into(), tool as Arc<dyn Tool>)])
+        .resume(vec![("builtin".into(), tool as Arc<dyn Tool>)])
         .reviewer(
             Ok(r#loop::Reviewer {
                 provider: reviewer,
@@ -736,19 +792,31 @@ fn resumed_after_two_consecutive_blocks_escalates_next_block() {
             }),
             r#loop::BlockLimits::default(),
         );
-    let (delivery, seen) = reply_delivery("r_9", Decision::Deny);
+    let watcher = history.log.watch();
     let inbox = history.inbox_tx.clone();
-    let replied = on_reraise(&history, move || inbox.send(delivery).unwrap());
+    let replied = std::thread::spawn(move || {
+        let (_, lines) = support::read_until(watcher, "a permission_requested line", |line| {
+            line.kind() == EventKind::PermissionRequested
+        });
+        let id = lines.last().unwrap().payload["request_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (delivery, seen) = reply_delivery(&id, Decision::Deny);
+        inbox.send(delivery).unwrap();
+        seen
+    });
     let outcome = history.run(looped, "two");
-    replied.join().unwrap();
+    let seen = replied.join().unwrap();
 
     assert_eq!(outcome, contract::events::TurnOutcome::Completed);
     assert!(is_accepted(&seen), "the escalation answer was accepted");
     let raises = new_of(&history, "permission_requested");
     assert_eq!(raises.len(), 1);
     assert_eq!(
-        raises[0].payload["escalation"]["cause"],
-        "consecutive_blocks"
+        raises[0].payload["escalation"]["cause"], "consecutive_blocks",
+        "escalation: {:?}",
+        raises[0].payload["escalation"]
     );
 }
 
@@ -2660,8 +2728,8 @@ fn ended_blocked(history: &History) {
     );
 }
 
-/// Twenty reviewer denials, as `resume.rs` folds them: with the default
-/// session limit the next block spends the budget.
+/// Twenty consecutive reviewer denials: both limits reach 20, but the next
+/// reviewer block escalates as `consecutive_blocks` because that limit wins.
 fn twenty_prior_denials(history: &History) {
     for _ in 0..20 {
         history.write(
@@ -2776,8 +2844,9 @@ fn a_resumed_credential_refusal_prefers_the_block_budget_over_later_questions() 
     history.inbox_tx = tx;
     let (_looped, finishing) = history.step(looped);
 
-    // The second call's block is the session's 21st with no person to
-    // answer; the third call's questions never end the turn.
+    // Twenty prior reviewer denials also left the consecutive count at 20,
+    // so the next block's cause is `consecutive_blocks`, not session blocks;
+    // the third call's questions never end the turn.
     assert_eq!(finishing, Some(contract::events::TurnOutcome::Failed));
     assert!(blocked.ran().is_empty(), "the blocked call never ran");
     assert_eq!(ask.ran().len(), 1, "a call after the block still runs");
@@ -4329,9 +4398,9 @@ fn an_allowed_call_that_asks_ends_the_finishing_turn_with_its_questions() {
 #[test]
 fn an_answered_resume_prefers_the_block_budget_over_later_questions() {
     // The batch is `act`, judged below, then `exec` and `ask`. The reply
-    // allows `act`; the `close` behind it ends the `exec` block's wait,
-    // so the headless budget spends the session's 21st block and the
-    // `ask` call's questions never end the turn.
+    // allows `act`; the `close` behind it ends the `exec` block's wait.
+    // Twenty prior denials make this `consecutive_blocks`, not a
+    // session-count escalation; the `ask` call's questions never end the turn.
     let mut history = History::new(Vec::new());
     twenty_prior_denials(&history);
     history.write(user_turn("one"), None);
@@ -4402,6 +4471,19 @@ fn an_answered_resume_prefers_the_block_budget_over_later_questions() {
             EventKind::TurnCompleted,
         ]
     );
+    let escalations: Vec<_> = new_of(&history, "permission_requested")
+        .into_iter()
+        .filter(|line| {
+            line.payload
+                .get("escalation")
+                .is_some_and(|escalation| !escalation.is_null())
+        })
+        .collect();
+    assert_eq!(escalations.len(), 1);
+    assert_eq!(
+        escalations[0].payload["escalation"]["cause"],
+        "consecutive_blocks"
+    );
     ended_blocked(&history);
 }
 
@@ -4445,6 +4527,90 @@ fn an_answerable_resume_denies_the_call_a_person_refuses() {
     let done = new_of(&history, "tool_call_completed");
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["status"], "denied");
+}
+
+#[test]
+fn resumed_answer_matches_restart() {
+    // The pending escalation is the third block. A person's denial resets
+    // the run, so the following reviewer block is not another escalation;
+    // after a restart the folded answer must produce the same result.
+    let mut resumed = History::new(vec![
+        support::tool_call_reply("Go.", &["exec"]),
+        Scripted::text("Done."),
+    ]);
+    resumed.write(user_turn("one"), None);
+    resumed.write(message_started(), Some("a_0"));
+    resumed.write(requested("exec", "Paris"), Some("a_1"));
+    resumed.write(reviewer_denied(), Some("a_1"));
+    resumed.write(reviewer_denied(), Some("a_1"));
+    resumed.write(review_request("r_9"), Some("a_1"));
+    resumed.write(fiber_started(), None);
+    resumed.write(fiber_exited(Some("r_9")), None);
+    resumed.freeze();
+    let exec = reads("exec");
+    let reviewer = Arc::new(ScriptedProvider::new(vec![
+        Scripted::text("check"),
+        Scripted::text("next block\nblock"),
+    ]));
+    let looped = resumed.resume(tools_of(&[&exec])).reviewer(
+        Ok(r#loop::Reviewer {
+            provider: reviewer,
+            model: Model {
+                reference: "fake/reviewer-1".into(),
+                cost: None,
+                subscription: false,
+            },
+            cache_lifetime: contract::events::CacheLifetime::OneHour,
+            context_window: fakes::CONTEXT_WINDOW,
+            thinking_levels: Vec::new(),
+        }),
+        r#loop::BlockLimits::default(),
+    );
+    let (delivery, seen) = reply_delivery("r_9", Decision::Deny);
+    let inbox = resumed.inbox_tx.clone();
+    let replied = on_reraise(&resumed, move || inbox.send(delivery).unwrap());
+    let (_looped, outcome) = resumed.step(looped);
+    replied.join().unwrap();
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    assert!(is_accepted(&seen));
+    assert_eq!(new_of(&resumed, "permission_requested").len(), 1);
+
+    let mut restarted = History::new(vec![
+        support::tool_call_reply("Go.", &["exec"]),
+        Scripted::text("Done."),
+    ]);
+    restarted.write(user_turn("one"), None);
+    restarted.write(message_started(), Some("a_0"));
+    restarted.write(requested("exec", "Paris"), Some("a_1"));
+    restarted.write(reviewer_denied(), Some("a_1"));
+    restarted.write(reviewer_denied(), Some("a_1"));
+    restarted.write(review_request("r_9"), Some("a_1"));
+    restarted.write(person_denied("r_9"), Some("a_1"));
+    restarted.freeze();
+    let exec = reads("exec");
+    let reviewer = Arc::new(ScriptedProvider::new(vec![
+        Scripted::text("check"),
+        Scripted::text("next block\nblock"),
+    ]));
+    let looped = restarted.resume(tools_of(&[&exec])).reviewer(
+        Ok(r#loop::Reviewer {
+            provider: reviewer,
+            model: Model {
+                reference: "fake/reviewer-1".into(),
+                cost: None,
+                subscription: false,
+            },
+            cache_lifetime: contract::events::CacheLifetime::OneHour,
+            context_window: fakes::CONTEXT_WINDOW,
+            thinking_levels: Vec::new(),
+        }),
+        r#loop::BlockLimits::default(),
+    );
+    assert_eq!(
+        restarted.run(looped, "after restart"),
+        contract::events::TurnOutcome::Completed
+    );
+    assert!(new_of(&restarted, "permission_requested").is_empty());
 }
 
 #[test]

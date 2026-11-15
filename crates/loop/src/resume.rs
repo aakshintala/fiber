@@ -376,6 +376,7 @@ impl Loop {
             grants,
             known_hosts,
             session_blocks,
+            consecutive,
             reviewed,
             orphans,
             delegate_sessions,
@@ -471,6 +472,7 @@ impl Loop {
                 known_hosts,
                 reviewed,
                 session_blocks,
+                consecutive,
                 repository: crate::offer::State::resumed(offers),
                 naming,
                 fired,
@@ -1052,8 +1054,19 @@ impl Loop {
             match self.await_answer(&action, &turn, &call.name, request, hosts)? {
                 // The answer allows the prepared call: it runs with no second
                 // check.
-                Asked::Allow => allow,
-                Asked::Deny(completed) | Asked::Gone(completed) => Err(completed),
+                Asked::Allow => {
+                    if matches!(&request.step, contract::events::AskStep::Review { .. }) {
+                        self.consecutive = 0;
+                    }
+                    allow
+                }
+                Asked::Deny(completed) => {
+                    if matches!(&request.step, contract::events::AskStep::Review { .. }) {
+                        self.consecutive = 0;
+                    }
+                    Err(completed)
+                }
+                Asked::Gone(completed) => Err(completed),
                 Asked::Cancelled => Err(self.cancelled_before_ran()),
                 Asked::Idle => {
                     self.pending.clear();
