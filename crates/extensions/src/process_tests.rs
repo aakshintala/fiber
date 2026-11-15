@@ -6519,13 +6519,13 @@ fn process_host_exec_resolves_inside_package_and_refuses_traversal() {
         (thread, receive)
     };
     let (run, receive) = run_exec("bin/tool".to_owned());
-    let execution = fakes::Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN)
+    let execution = fakes::Deadline::after(Duration::from_secs(10))
         .recv_or_fail(&receive, "host.exec package-relative run");
     run.join().expect("host.exec thread joins");
 
     let escaped = "../outside".to_owned();
     let (run, receive) = run_exec(escaped.clone());
-    let refusal = fakes::Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN)
+    let refusal = fakes::Deadline::after(Duration::from_secs(10))
         .recv_or_fail(&receive, "host.exec traversal refusal");
     run.join().expect("refusal thread joins");
 
@@ -6549,7 +6549,7 @@ fn process_host_exec_resolves_inside_package_and_refuses_traversal() {
         assert_eq!(line.program, expected_resolved);
     }
     let (run, receive) = run_exec("sh".to_owned());
-    let bare = fakes::Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN)
+    let bare = fakes::Deadline::after(Duration::from_secs(10))
         .recv_or_fail(&receive, "host.exec bare-name run");
     run.join().expect("bare-name host.exec thread joins");
     assert!(bare.is_ok(), "bare-name program runs: {bare:?}");
