@@ -291,6 +291,25 @@ fn rename_unsupported_classifier_matches_only_supported_fallback_errors() {
 }
 
 #[test]
+fn rename_noreplace_maps_unsupported_and_propagates_other_errors() {
+    let dir = fakes::TempDir::new("fiber-support-rename-noreplace-errors");
+    let source = dir.path().join("source");
+    fs::create_dir(&source).unwrap();
+    let descendant = source.join("child");
+    assert_eq!(
+        rename_noreplace(&source, &descendant).unwrap_err().kind(),
+        io::ErrorKind::Unsupported
+    );
+
+    let missing = dir.path().join("missing");
+    let target = dir.path().join("target");
+    assert_eq!(
+        rename_noreplace(&missing, &target).unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
+}
+
+#[test]
 fn rename_noreplace_success() {
     let dir = fakes::TempDir::new("fiber-support-rename-noreplace");
     let source = dir.path().join("source");

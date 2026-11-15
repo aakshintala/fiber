@@ -528,6 +528,55 @@ fn find_session_in_project_resolves_slugged_hashed_key_and_absent_id() {
 }
 
 #[test]
+fn find_session_in_project_tests_marker_and_legacy_disjuncts() {
+    let home = fakes::TempDir::new("log-find-project-key-marker");
+    let id = SessionId("s_aaaaaaaaaaaaaaaa".into());
+    let key = "a-0123456789abcdef";
+    let legacy_dir = home
+        .path()
+        .join("projects")
+        .join("a")
+        .join("sessions")
+        .join(&id.0);
+    project(home.path(), "a", &id.0, false);
+    let hashed_dir = home.path().join("projects").join(key);
+    std::fs::create_dir_all(hashed_dir.join("sessions").join(&id.0)).unwrap();
+    std::fs::write(hashed_dir.join("legacy-key"), b"a").unwrap();
+    assert_eq!(
+        find_session_in_project(home.path(), key, &id),
+        Some((key.to_owned(), legacy_dir.clone()))
+    );
+    let marker_id = SessionId("s_bbbbbbbbbbbbbbbb".into());
+    let marker_dir = hashed_dir.join("sessions").join(&marker_id.0);
+    std::fs::create_dir_all(&marker_dir).unwrap();
+    assert_eq!(
+        find_session_in_project(home.path(), "a", &marker_id),
+        Some((key.to_owned(), marker_dir))
+    );
+    assert_eq!(
+        find_session_in_project(home.path(), "a", &SessionId("s_missing".into())),
+        None
+    );
+
+    let adversarial = fakes::TempDir::new("log-find-project-key-wrong-marker");
+    let physical = "a-0123456789abcdef";
+    let adversarial_id = SessionId("s_cccccccccccccccc".into());
+    let project_dir = adversarial.path().join("projects").join(physical);
+    let session_dir = project_dir.join("sessions").join(&adversarial_id.0);
+    std::fs::create_dir_all(&session_dir).unwrap();
+    let other_suffixed_key = "b-0123456789abcdef";
+    std::fs::write(
+        project_dir.join("legacy-key"),
+        other_suffixed_key.as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(
+        find_session_in_project(adversarial.path(), other_suffixed_key, &adversarial_id),
+        None
+    );
+}
+
+#[test]
 fn malformed_project_key_suffix_does_not_select_a_legacy_slug() {
     let home = fakes::TempDir::new("log-project-key-invalid-suffix");
     let id = SessionId("s_0123456789abcdef".into());

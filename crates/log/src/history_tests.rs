@@ -875,6 +875,31 @@ fn a_moved_history_resolves_each_ancestor_in_its_recorded_project() {
 }
 
 #[test]
+fn a_legacy_project_marker_falls_back_when_legacy_parent_is_missing() {
+    let home = fakes::TempDir::new("log-history-marker-fallback");
+    let child = project_dir(&home, "-w-new-0123456789abcdef", "s_cccccccccccccccc");
+    let child_line = started_in("s_cccccccccccccccc", 0, "s_rrrrrrrrrrrrrrrr", 0, Some("-w"));
+    session_log(&child, child_line.as_bytes());
+
+    let identity = Path::new("/w");
+    let legacy = support::project_key::legacy_project_slug(identity);
+    let hashed = support::project_key::project_key(identity);
+    let hashed_project = home.path().join("projects").join(&hashed);
+    fs::create_dir_all(hashed_project.join("sessions").join("s_rrrrrrrrrrrrrrrr")).unwrap();
+    fs::write(hashed_project.join("legacy-key"), legacy.as_bytes()).unwrap();
+    let hashed_parent = hashed_project.join("sessions").join("s_rrrrrrrrrrrrrrrr");
+    let parent_line = b"{\"kind\":\"session_started\",\"session_id\":\"s_rrrrrrrrrrrrrrrr\",\"ts\":1759150000000,\"seq\":0,\"schema_version\":1,\"payload\":{\"workspace\":\"/w\"}}\n";
+    session_log(&hashed_parent, parent_line);
+
+    let legacy_parent = project_dir(&home, &legacy, "s_rrrrrrrrrrrrrrrr");
+    session_log(&legacy_parent, parent_line);
+    assert_eq!(history(&child).unwrap()[0].dir, legacy_parent);
+
+    fs::remove_dir_all(home.path().join("projects").join(legacy)).unwrap();
+    assert_eq!(history(&child).unwrap()[0].dir, hashed_parent);
+}
+
+#[test]
 fn a_moved_parent_in_an_unknown_project_fails_closed() {
     let home = fakes::TempDir::new("log-history-unknown-project");
     let child = project_dir(&home, "-work-new-9e59204e77517c50", "s_cccccccccccccccc");
