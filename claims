@@ -557,3 +557,17 @@ xtask/src/select/plan_tests.rs:360-360	fiber-4830	plan	2026-11-15T00:00:48Z	Amog
 xtask/src/select/plan_tests.rs:365-366	fiber-4830	plan	2026-11-15T00:00:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4830-4814-p3s	
 xtask/src/select/plan_tests.rs:381-393	fiber-4830	plan	2026-11-15T00:00:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4830-4814-p3s	
 xtask/src/select/plan_tests.rs:401-412	fiber-4830	plan	2026-11-15T00:00:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4830-4814-p3s	
+crates/contract/src/codes.rs	fiber-4670	plan	2026-11-14T23:54:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/contract/src/codes_tests.rs	fiber-4670	plan	2026-11-14T23:54:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/contract/src/events/context_tests.rs	fiber-4670	plan	2026-11-14T23:54:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/contract/src/events/host.rs	fiber-4670	plan	2026-11-14T23:54:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/diag/src/diag.rs	fiber-4670	plan	2026-11-14T23:54:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/doors/src/client.rs	fiber-4670	plan	2026-11-14T23:54:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/doors/src/prompt_history_tests.rs	fiber-4670	plan	2026-11-14T23:54:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/doors/src/session.rs	fiber-4670	plan	2026-11-14T23:54:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/jobs/src/keeper.rs	fiber-4670	plan	2026-11-14T23:54:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/jobs/src/registry/runs.rs	fiber-4670	plan	2026-11-14T23:54:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/src/hooks.rs	fiber-4670	plan	2026-11-14T23:54:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tools/src/error.rs	fiber-4670	plan	2026-11-14T23:54:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tools/src/shell/command_tests.rs	fiber-4670	plan	2026-11-14T23:54:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tools/src/shell/sandbox/sandbox_tests.rs	fiber-4670	plan	2026-11-14T23:54:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
