@@ -1,0 +1,83 @@
+#!/bin/bash
+# Self-test for the `scripts/check --rules-by-path` branch (issue #4861):
+# usage conflicts, closed invalid base, seven-name coupling against the doc,
+# and crate-list narrowing through the built xtask.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+top=$PWD
+
+fail() { echo "test-check-rules-by-path: $1" >&2; exit 1; }
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+# A flag conflict prints usage and exits 2, like any unknown flag.
+code=0
+scripts/check --rules-by-path --platform-only >"$work/usage" 2>&1 || code=$?
+[ "$code" -eq 2 ] || fail "--rules-by-path --platform-only exited $code, not 2"
+grep -q -- "--rules-by-path" "$work/usage" || fail "usage text names no --rules-by-path"
+code=0
+scripts/check --rules-by-path --shared-only >"$work/conflict" 2>&1 || code=$?
+[ "$code" -eq 2 ] || fail "--rules-by-path --shared-only exited $code, not 2"
+
+# An unknown flag still exits 2.
+code=0
+scripts/check --bogus >"$work/bogus" 2>&1 || code=$?
+[ "$code" -eq 2 ] || fail "--bogus exited $code, not 2"
+
+# An invalid base fails closed: non-zero exit, no PASS line.
+code=0
+scripts/check --rules-by-path --base nonexistent-base >"$work/closed" 2>&1 || code=$?
+[ "$code" -ne 0 ] || fail "invalid base passed"
+grep -q "scripts/check: PASS" "$work/closed" && fail "invalid base printed PASS"
+
+# The seven xtask names in the rules branch equal the doc list.
+expected="$work/expected"
+printf '%s\n' compiled-in crate-edges dependency-list image-isolation must-succeed signal-sites tui-isolation >"$expected"
+sed -n '/# rules-by-path: start/,/# rules-by-path: end/p' scripts/check \
+  | grep -vE '^[[:space:]]*#' | grep -oE 'cargo xtask [a-z-]+' | awk '{print $3}' | grep -v '^select$' | sort -u >"$work/branch"
+diff "$expected" "$work/branch" || fail "branch xtask names differ from the doc list"
+while IFS= read -r name; do
+  grep -q "cargo xtask $name" docs/workflow.md || fail "docs/workflow.md names no cargo xtask $name"
+done <"$expected"
+
+# A narrowed smoke run through the built xtask carries no dependent crate.
+cargo build -q -p xtask
+fixture="$work/fixture"
+mkdir -p "$fixture/crates/a/src" "$fixture/crates/b/src"
+cat >"$fixture/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/a", "crates/b"]
+resolver = "3"
+EOF
+cat >"$fixture/crates/a/Cargo.toml" <<'EOF'
+[package]
+name = "a"
+version = "0.0.0"
+edition = "2021"
+EOF
+cat >"$fixture/crates/b/Cargo.toml" <<'EOF'
+[package]
+name = "b"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+a = { path = "../a" }
+EOF
+echo '//! a' >"$fixture/crates/a/src/lib.rs"
+echo '//! b' >"$fixture/crates/b/src/lib.rs"
+git -C "$fixture" init -q -b main
+git -C "$fixture" -c user.email=t@t -c user.name=t add .
+git -C "$fixture" -c user.email=t@t -c user.name=t commit -qm base
+echo '//! a, changed' >"$fixture/crates/a/src/lib.rs"
+narrowed=$(git -C "$fixture" rev-parse HEAD >/dev/null && (cd "$fixture" && "$top/target/debug/xtask" select --base HEAD --rules-by-path))
+packages=$(sed -n 's/^packages=//p' <<<"$narrowed")
+[ "$packages" = "a" ] || fail "narrowed packages are '$packages', not 'a'"
+mkdir -p "$fixture/scripts"
+echo true >"$fixture/scripts/noop"
+narrowed=$(cd "$fixture" && "$top/target/debug/xtask" select --base HEAD --rules-by-path)
+packages=$(sed -n 's/^packages=//p' <<<"$narrowed")
+[ "$packages" = "a" ] || fail "a scripts file changed the narrowed packages to '$packages'"
+
+echo "test-check-rules-by-path: ok"
