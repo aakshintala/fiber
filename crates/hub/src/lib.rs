@@ -183,6 +183,10 @@ pub trait Started: Send {
     /// `io_failed` naming the session when there is none.
     fn exited(&self) -> Option<Failure>;
 
+    /// Registers a one-shot callback for the raw pre-session exit line.
+    /// Settled implementations have no raw line and keep this no-op.
+    fn watch_pre_session_exit(&self, _callback: Box<dyn FnOnce(String) + Send>) {}
+
     /// Kills the process without waiting for it: the drain reaps it, as
     /// for every exit, so a caller that holds the child lock for a read
     /// is never blocked. The default is a no-op, for a `Started` whose

@@ -145,6 +145,14 @@ impl Client {
     /// the test thread past the wait. Panics past the deadline naming the
     /// wait.
     fn read_deadline(&mut self, what: &str) -> (std::io::Result<usize>, String) {
+        self.read_deadline_with(what, DEADLINE)
+    }
+
+    fn read_deadline_with(
+        &mut self,
+        what: &str,
+        within: Duration,
+    ) -> (std::io::Result<usize>, String) {
         let (done_tx, done_rx) = mpsc::channel();
         thread::scope(|scope| {
             scope.spawn(|| {
@@ -152,7 +160,7 @@ impl Client {
                 let outcome = self.read.read_line(&mut text);
                 done_tx.send((outcome, text)).unwrap_or(());
             });
-            Deadline::after(DEADLINE)
+            Deadline::after(within)
                 .recv(&done_rx)
                 .unwrap_or_else(|_| panic!("never received {what}"))
         })
@@ -314,6 +322,42 @@ fn names_outside_the_hub_table_are_unknown_command() {
         assert_eq!(code, "unknown_command");
         assert_eq!(echoed.as_deref(), Some(id));
     }
+}
+
+#[test]
+fn start_forwards_pre_session_fiber_exited() {
+    let temp = Temp::new();
+    let failure = crate::fake::failure(ErrorCode::IoFailed, "recorded");
+    let line = serde_json::to_string(&contract::PreSessionExit::new(1, failure)).unwrap();
+    let (starter, exit) = crate::fake::FakeStarter::bind_then_exit(&temp.dir, line.clone());
+    let hub = temp.hub(starter);
+    let mut client = Client::connect(&hub);
+    client
+        .read
+        .get_mut()
+        .set_read_timeout(Some(crate::start::START_DEADLINE))
+        .unwrap();
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command(
+        "c_start",
+        "start",
+        json!({"workspace": workspace}),
+    ));
+    let bound = Deadline::after(crate::start::START_DEADLINE);
+    assert!(
+        exit.wait_bound(&bound),
+        "the child binds before acknowledgement"
+    );
+    let (id, _) = accepted(&client.next("the start acknowledgement"));
+    assert_eq!(id, "c_start");
+    exit.release();
+    let (outcome, text) = client.read_deadline_with(
+        "the original pre-session fiber_exited line",
+        crate::start::START_DEADLINE,
+    );
+    outcome.expect("the hub returns the terminal line");
+    assert_eq!(text.trim_end(), line);
 }
 
 #[test]
