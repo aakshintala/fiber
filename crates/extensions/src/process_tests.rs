@@ -7339,9 +7339,9 @@ struct ProcessExecInbox(std::sync::mpsc::Sender<contract::inbox::Delivery>);
 impl contract::emit::Emit for ProcessExecInbox {
     fn emit(&self, event: &contract::events::Event) {
         if let contract::events::Event::ExtensionExec(line) = event {
-            let _ = self
-                .0
-                .send(contract::inbox::Delivery::ExtensionExec(line.clone()));
+            self.0
+                .send(contract::inbox::Delivery::ExtensionExec(line.clone()))
+                .expect("process exec inbox receiver lives for the test");
         }
     }
 }
