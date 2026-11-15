@@ -86,9 +86,14 @@ impl Moved {
     /// on. Nothing for any other command.
     pub(crate) fn attach_errors(&self, file: Option<File>, path: Option<std::path::PathBuf>) {
         let mut inner = lock(&self.progress.shared.inner);
-        // Red-commit stub: the path is stored but its flush error is swallowed.
-        if let Some(errors) = inner.errors.as_mut() {
-            let _ = errors.attach(file, path, self.cap);
+        let failure = inner.errors.as_mut().and_then(|errors| {
+            errors
+                .attach(file, path.clone(), self.cap)
+                .err()
+                .and_then(|source| path.map(|path| WriteFailure { path, source }))
+        });
+        if inner.write_failure.is_none() {
+            inner.write_failure = failure;
         }
     }
 

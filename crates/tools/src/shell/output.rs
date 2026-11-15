@@ -152,9 +152,7 @@ impl Errors {
         self.path = path;
         self.cap = cap;
         let held = std::mem::take(&mut self.held);
-        // Red-commit stub: the held flush error is swallowed.
-        let _ = self.sink(&held);
-        Ok(())
+        self.sink(&held)
     }
 
     fn sink(&mut self, bytes: &[u8]) -> io::Result<()> {
@@ -167,12 +165,11 @@ impl Errors {
         };
         let room = usize::try_from(self.cap.saturating_sub(self.written)).unwrap_or(usize::MAX);
         let kept = bytes.get(..room.min(bytes.len())).unwrap_or(&[]);
-        // Red-commit stub: the write error is swallowed.
-        let _ = write_or_drop(file, kept);
+        let result = write_or_drop(file, kept);
         self.written = self
             .written
             .saturating_add(u64::try_from(kept.len()).unwrap_or(u64::MAX));
-        Ok(())
+        result
     }
 }
 
@@ -257,9 +254,14 @@ impl Inner {
         }
         let room = usize::try_from(self.cap.saturating_sub(self.written)).unwrap_or(usize::MAX);
         let kept = bytes.get(..room.min(bytes.len())).unwrap_or(&[]);
-        // Red-commit stub: the write error is swallowed, recording nothing.
-        if let Some(file) = self.file.as_mut() {
-            let _ = write_or_drop(file, kept);
+        if let Some(file) = self.file.as_mut()
+            && let Err(source) = write_or_drop(file, kept)
+            && let Some(path) = self.output_path.as_ref()
+        {
+            self.write_failure.get_or_insert_with(|| WriteFailure {
+                path: path.clone(),
+                source,
+            });
         }
         self.written = self
             .written
@@ -486,9 +488,7 @@ pub(super) fn stream_rest(shared: &Shared, emit: &dyn Emit, carry: &mut Vec<u8>)
 }
 
 pub(super) fn write_or_drop(file: &mut File, bytes: &[u8]) -> io::Result<()> {
-    // Red-commit stub: the write error is swallowed and `Ok(())` returned.
-    let _ = file.write_all(bytes);
-    Ok(())
+    file.write_all(bytes)
 }
 
 /// Where a paced stream's text comes from and where it goes.

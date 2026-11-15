@@ -5,7 +5,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::ExitStatusExt as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, mpsc};
 use std::thread;
@@ -71,7 +71,15 @@ const CRASHED_STOP_LINE: &str = "{\"shutdown\":true}";
 enum Sink {
     Control,
     Hold(Vec<(Stream, Vec<u8>)>),
-    Files { output: File, errors: Option<File> },
+    Files {
+        /// `None` once the output file failed: every stream writing to it
+        /// is discarded, while a separate healthy errors file keeps
+        /// receiving stderr.
+        output: Option<File>,
+        errors: Option<File>,
+        discard_output: bool,
+        discard_errors: bool,
+    },
     Discard,
 }
 struct Adoption {
@@ -86,7 +94,6 @@ struct State {
     cap: u64,
     timed_out: bool,
     output_cap: bool,
-    // Red-commit stub: the first path-bearing write error; never stored yet.
     write_failure: Option<(PathBuf, io::Error)>,
     stopping: Option<Instant>,
     ended: bool,
@@ -123,6 +130,27 @@ impl Drop for HeldLog {
 struct Listening {
     stop: Arc<AtomicBool>,
     socket: PathBuf,
+}
+
+/// Discards every stream whose destination is the failed file: stdout
+/// always writes the output file; stderr writes the errors file when the
+/// job has one, else the output file. A separate healthy file keeps its
+/// stream.
+fn discard_failed(output: &Path, errors: Option<&Path>, failed: &Path, sink: &mut Sink) {
+    let errors = errors.unwrap_or(output);
+    if let Sink::Files {
+        discard_output,
+        discard_errors,
+        ..
+    } = sink
+    {
+        if *failed == *output {
+            *discard_output = true;
+        }
+        if *failed == *errors {
+            *discard_errors = true;
+        }
+    }
 }
 
 /// A candidate that asked for the handover and awaits the serialized decision.
@@ -354,7 +382,16 @@ impl Runtime {
                         continue;
                     }
                     if let Some(log) = log.as_ref() {
-                        let mut completed = tools::kept_end(job_id, &exit);
+                        // The timeout end is selected before the write
+                        // override, so `kept_end` must not apply it on this
+                        // path: strip the stored failure, overwrite the
+                        // timeout status and error, then invoke the shared
+                        // helper once so a stored failure stays reported as
+                        // `failed` `io_failed` with `replaced end:
+                        // keeper_timeout`.
+                        let mut without_failure = exit.clone();
+                        without_failure.output_write_failure = None;
+                        let mut completed = tools::kept_end(job_id, &without_failure);
                         completed.status = contract::events::Outcome::Failed;
                         completed.error = Some(contract::shapes::Failure {
                             code: contract::ErrorCode::KeeperTimeout,
@@ -362,6 +399,10 @@ impl Runtime {
                             retry_after_ms: None,
                             provider: None,
                         });
+                        if let Some(path) = &exit.output_write_failure {
+                            completed.error =
+                                Some(tools::override_write_failure("keeper_timeout", path, false));
+                        }
                         log.log
                             .append(
                                 &contract::events::Event::JobCompleted(completed),
@@ -403,22 +444,64 @@ impl Runtime {
     }
 
     fn files(&self) -> io::Result<()> {
+        // One job's bad file never stops the keeper ending every other
+        // job: each process stores its own first path-bearing failure,
+        // discards every stream writing to that file, and the sweep
+        // moves on and returns `Ok(())`.
         for process in lock(&self.processes).values() {
             let mut state = lock(&process.state);
             let old = std::mem::replace(&mut state.sink, Sink::Discard);
             let Some(adoption) = state.adoption.as_ref() else {
                 continue;
             };
-            let output = OpenOptions::new().append(true).open(&adoption.output)?;
-            let errors = adoption
-                .errors
-                .as_ref()
-                .map(|path| OpenOptions::new().append(true).open(path))
-                .transpose()?;
-            let mut sink = Sink::Files { output, errors };
+            let output_path = adoption.output.clone();
+            let errors_path = adoption.errors.clone();
+            let output = match OpenOptions::new().append(true).open(&output_path) {
+                Ok(file) => Some(file),
+                Err(error) => {
+                    state
+                        .write_failure
+                        .get_or_insert_with(|| (output_path.clone(), error));
+                    None
+                }
+            };
+            let mut discard_errors = false;
+            let errors = match &errors_path {
+                None => None,
+                Some(path) => match OpenOptions::new().append(true).open(path) {
+                    Ok(file) => Some(file),
+                    Err(error) => {
+                        state
+                            .write_failure
+                            .get_or_insert_with(|| (path.clone(), error));
+                        // The errors file is dead: stderr is discarded,
+                        // never redirected into the output file.
+                        discard_errors = true;
+                        None
+                    }
+                },
+            };
+            let discard_output = output.is_none();
+            let mut sink = Sink::Files {
+                output,
+                errors,
+                discard_output,
+                discard_errors,
+            };
             if let Sink::Hold(held) = old {
                 for (stream, bytes) in held {
-                    write_sink(&mut sink, stream, &bytes)?;
+                    if let Err(error) = write_sink(&mut sink, stream, &bytes) {
+                        let failed = match stream {
+                            Stream::Out => output_path.clone(),
+                            Stream::Err => {
+                                errors_path.clone().unwrap_or_else(|| output_path.clone())
+                            }
+                        };
+                        state
+                            .write_failure
+                            .get_or_insert_with(|| (failed.clone(), error));
+                        discard_failed(&output_path, errors_path.as_deref(), &failed, &mut sink);
+                    }
                 }
             }
             state.sink = sink;
@@ -553,8 +636,10 @@ impl Runtime {
                     signal: status.signal(),
                     timed_out: state.timed_out,
                     output_cap: state.output_cap,
-                    // Red-commit stub: the reader still returns its write error.
-                    output_write_failure: None,
+                    output_write_failure: state
+                        .write_failure
+                        .as_ref()
+                        .map(|(path, _)| path.clone()),
                 };
                 drop(state);
                 // Reader completion precedes exit, and the log mutex precedes sup.
@@ -608,7 +693,7 @@ impl Runtime {
                     if count > room {
                         state.output_cap = true;
                     }
-                    match &mut state.sink {
+                    let write_result = match &mut state.sink {
                         Sink::Control => {
                             match runtime.send(FromKeeper::Output {
                                 id: id.clone(),
@@ -617,10 +702,55 @@ impl Runtime {
                             }) {
                                 Ok(()) | Err(_) => {}
                             }
+                            Ok(())
                         }
-                        Sink::Hold(held) => held.push((stream, kept.to_vec())),
+                        Sink::Hold(held) => {
+                            held.push((stream, kept.to_vec()));
+                            Ok(())
+                        }
                         sink @ (Sink::Files { .. } | Sink::Discard) => {
-                            write_sink(sink, stream, kept)?
+                            write_sink(sink, stream, kept)
+                        }
+                    };
+                    if let Err(error) = write_result {
+                        // The first failure wins, with its destination
+                        // path; every stream writing to that file is
+                        // discarded, while a separate healthy file keeps
+                        // its stream. Without an adoption there is no
+                        // destination to compare, so the failed stream
+                        // alone is discarded.
+                        let destinations = state
+                            .adoption
+                            .as_ref()
+                            .map(|adoption| (adoption.output.clone(), adoption.errors.clone()));
+                        let failed = destinations.as_ref().map(|(output, errors)| match stream {
+                            Stream::Out => output.clone(),
+                            Stream::Err => errors.clone().unwrap_or_else(|| output.clone()),
+                        });
+                        match (&failed, state.write_failure.is_none()) {
+                            (Some(path), true) => {
+                                state.write_failure = Some((path.clone(), error));
+                            }
+                            _ => drop(error),
+                        }
+                        match (destinations, failed) {
+                            (Some((output, errors)), Some(failed)) => {
+                                discard_failed(&output, errors.as_deref(), &failed, &mut state.sink)
+                            }
+                            (None, _) => {
+                                if let Sink::Files {
+                                    discard_output,
+                                    discard_errors,
+                                    ..
+                                } = &mut state.sink
+                                {
+                                    match stream {
+                                        Stream::Out => *discard_output = true,
+                                        Stream::Err => *discard_errors = true,
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     let capped = state.output_cap;
@@ -1096,13 +1226,31 @@ impl Runtime {
 }
 
 fn write_sink(sink: &mut Sink, stream: Stream, bytes: &[u8]) -> io::Result<()> {
-    if let Sink::Files { output, errors } = sink {
-        if stream == Stream::Err
-            && let Some(errors) = errors
-        {
-            return errors.write_all(bytes);
+    if let Sink::Files {
+        output,
+        errors,
+        discard_output,
+        discard_errors,
+    } = sink
+    {
+        if stream == Stream::Err {
+            if *discard_errors {
+                return Ok(());
+            }
+            if let Some(errors) = errors {
+                return errors.write_all(bytes);
+            }
+            // No errors file: stderr shares the output file, so an
+            // output failure discards it too instead of erroring again.
+            if *discard_output {
+                return Ok(());
+            }
+        } else if *discard_output {
+            return Ok(());
         }
-        output.write_all(bytes)?;
+        if let Some(output) = output {
+            output.write_all(bytes)?;
+        }
     }
     Ok(())
 }

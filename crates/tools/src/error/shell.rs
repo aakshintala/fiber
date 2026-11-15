@@ -129,8 +129,7 @@ pub(crate) enum ShellError {
     /// no flooded sentence here (job completions add it in the shared
     /// helper instead). Neither the `io::ErrorKind` nor the operating
     /// system's text is rendered.
-    #[error("{}", output_write_line(path, &replaced, false))]
-    #[allow(dead_code, reason = "red-commit stub")]
+    #[error("{}", output_write_line(path, replaced, false))]
     OutputWrite {
         /// The file that failed.
         path: PathBuf,

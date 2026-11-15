@@ -1311,9 +1311,15 @@ pub(crate) fn assemble_tailed(
         (Some(line), true) => Some(line.to_owned()),
         (Some(line), false) => Some(format!("{line}\n{}", notice.join("\n"))),
     };
-    let (mut output, _pre_end, _write_failure) =
+    let (mut output, pre_end, write_failure) =
         assemble_output(limit, finished, extra.as_deref(), tail);
-    // Red-commit stub: a stored write failure does not override the end.
+    if let Some(write_failure) = write_failure {
+        output.error = Some(Failure::from(&ToolError::from(ShellError::OutputWrite {
+            path: write_failure.path,
+            replaced: pre_end,
+            source: write_failure.source,
+        })));
+    }
     output.details = command.map(|command| details(command, output.process.as_ref()));
     if let Some(inner) = report
         .as_ref()
@@ -1337,8 +1343,14 @@ pub(crate) fn assemble(
     extra: Option<&str>,
     command: Option<&str>,
 ) -> Output {
-    let (mut output, _pre_end, _write_failure) = assemble_output(limit, finished, extra, None);
-    // Red-commit stub: a stored write failure does not override the end.
+    let (mut output, pre_end, write_failure) = assemble_output(limit, finished, extra, None);
+    if let Some(write_failure) = write_failure {
+        output.error = Some(Failure::from(&ToolError::from(ShellError::OutputWrite {
+            path: write_failure.path,
+            replaced: pre_end,
+            source: write_failure.source,
+        })));
+    }
     output.details = command.map(|command| details(command, output.process.as_ref()));
     output
 }

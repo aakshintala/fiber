@@ -863,9 +863,8 @@ pub(super) fn to_completed_reported(
         }
         _ => None,
     };
-    let (mut output, _pre_end, _write_failure) =
-        super::assemble_output(limit, finished, None, None);
-    // Red-commit stub: a stored write failure does not override the end.
+    let (mut output, pre_end, write_failure) = super::assemble_output(limit, finished, None, None);
+    let failed_write = write_failure.is_some();
     if let Some((ms, has_pipe)) = moved_limit {
         output.error = Some(Failure::from(&ToolError::from(ShellError::TimedOutMoved {
             ms,
@@ -873,12 +872,20 @@ pub(super) fn to_completed_reported(
         })));
     }
     output.protected_paths = report.as_ref().filter(|report| !report.is_empty()).cloned();
-    if capped {
+    if let Some(write_failure) = write_failure {
+        output.error = Some(super::hosted::override_write_failure(
+            pre_end,
+            &write_failure.path,
+            flooded,
+        ));
+    } else if capped {
         output.error = Some(Failure::from(&ToolError::from(ShellError::Capped)));
     } else if flooded {
         output.error = Some(Failure::from(&ToolError::from(ShellError::Flooded)));
     }
-    let status = if stopped {
+    let status = if failed_write {
+        Outcome::Failed
+    } else if stopped {
         Outcome::Cancelled
     } else if output.error.is_some() {
         Outcome::Failed

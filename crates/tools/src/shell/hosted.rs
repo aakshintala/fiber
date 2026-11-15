@@ -244,6 +244,7 @@ pub(super) fn execute(
 #[cfg_attr(false, mutants::skip)]
 pub fn kept_end(job_id: JobId, exit: &Exit) -> JobCompleted {
     let finished = keeper_finished(exit, false);
+    let pre_end = super::pre_end_of(&finished);
     let mut completed = super::background::to_completed_reported(
         job_id,
         Path::new(""),
@@ -258,6 +259,10 @@ pub fn kept_end(job_id: JobId, exit: &Exit) -> JobCompleted {
         None,
     );
     completed.output_tail = None;
+    if let Some(path) = &exit.output_write_failure {
+        completed.status = Outcome::Failed;
+        completed.error = Some(override_write_failure(pre_end, path, false));
+    }
     completed
 }
 
@@ -305,8 +310,13 @@ pub fn adopted_flooded_end(job_id: JobId, output: &Path, exit: &Exit) -> JobComp
         None,
     );
     completed.output_tail = super::background::output_tail(output);
-    completed.status = Outcome::Failed;
-    completed.error = Some(Failure::from(&ToolError::from(ShellError::Flooded)));
+    if let Some(path) = &exit.output_write_failure {
+        completed.status = Outcome::Failed;
+        completed.error = Some(override_write_failure("flooded", path, true));
+    } else {
+        completed.status = Outcome::Failed;
+        completed.error = Some(Failure::from(&ToolError::from(ShellError::Flooded)));
+    }
     completed
 }
 

@@ -1024,7 +1024,7 @@ fn keeper_written_write_failure_wins_over_keeper_timeout() {
         ..super::Hooks::default()
     };
     let clock = fakes::clock::FakeClock::new();
-    let (mut keeper, _runtime) = serve_keeper_with(
+    let (mut keeper, runtime) = serve_keeper_with(
         "keeper-timeout-write",
         SessionId("s_0123456789abcdef".into()),
         clock.clone(),
@@ -1085,9 +1085,23 @@ fn keeper_written_write_failure_wins_over_keeper_timeout() {
         std::thread::yield_now();
     }
     drop(reader);
-    // Every later append fails with no reader: one real-time pause lets the
-    // runner record its first path-bearing failure before the bound fires.
-    std::thread::sleep(Duration::from_secs(1));
+    // Every later append fails with no reader: the runner records its
+    // first path-bearing failure on its next write. Waiting on the
+    // stored failure keeps real-clock timing out of the verdict.
+    let stored = Deadline::after(Duration::from_secs(10));
+    loop {
+        let failed = support::lock(&runtime.processes)
+            .get("flooder")
+            .is_some_and(|process| support::lock(&process.state).write_failure.is_some());
+        if failed {
+            break;
+        }
+        assert!(
+            !stored.left().is_zero(),
+            "runner to record its write failure"
+        );
+        std::thread::yield_now();
+    }
     fire_keeper_bound(&clock);
     Deadline::after(Duration::from_secs(10))
         .recv_or_fail(&keeper.result, "keeper exit")

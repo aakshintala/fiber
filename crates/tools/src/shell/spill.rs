@@ -292,7 +292,7 @@ impl Spill {
                             Err(_) => (registry, Some(still_there(&self.path)), None),
                         };
                     }
-                    Err(_) => return (registry, Some(still_there(&self.path)), None),
+                    Err(error) => return (registry, Some(still_there(&self.path)), Some(error)),
                 }
             }
         }
@@ -300,8 +300,7 @@ impl Spill {
         // gets the held head, then the ring, then later output.
         let mut head = self.head;
         head.extend_from_slice(&self.ring.bytes);
-        // Red-commit stub: the held-head copy error is swallowed.
-        let _ = super::output::write_or_drop(&mut registry, &head);
+        let write_error = super::output::write_or_drop(&mut registry, &head).err();
         let mut line = None;
         if let Some(left) = self.left.take() {
             // One more try; a file that survives is named in the receipt.
@@ -309,7 +308,7 @@ impl Spill {
                 line = Some(still_there(&left));
             }
         }
-        (registry, line, None)
+        (registry, line, write_error)
     }
 }
 
