@@ -786,8 +786,32 @@ fn models_dev_refresh_keeps_cache_and_cleans_temp_for_failed_or_invalid_fetches(
                     .starts_with(".models-dev-")
             })
             .collect();
+        // `docs/state.md`, "Concurrent access": failed whole-file writes remove the temporary file.
         assert!(leftovers.is_empty(), "{label}: temporary files remain");
     }
+}
+
+#[test]
+fn models_dev_forced_refresh_fetches_when_cache_is_missing() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let recorded = std::sync::Arc::clone(&calls);
+    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_, writer| {
+        recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        std::io::Write::write_all(writer, br#"{"acme":{}}"#).map_err(|error| error.to_string())
+    });
+    extensions::models_dev::refresh_forced(
+        &home,
+        true,
+        fakes::clock::FakeClock::new().wall(),
+        &fetch,
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        config::read_models_dev(&home).unwrap(),
+        Some(br#"{"acme":{}}"#.to_vec())
+    );
 }
 
 #[test]

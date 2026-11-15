@@ -1,5 +1,6 @@
 use serde_json::json;
 
+// This pins parity with the whole-document serde_json parse the streaming path replaced.
 use super::{CatalogMeta, retained_rows, valid_catalog};
 
 #[test]
@@ -34,6 +35,36 @@ fn streaming_catalog_parsers_reject_trailing_bytes() {
     assert!(!valid_catalog(&b"{} trailing"[..]));
     assert!(!valid_catalog(&b"[]"[..]));
     assert!(valid_catalog(&b"{}"[..]));
+}
+
+#[test]
+fn streaming_visitors_report_expected_object_shapes_and_ignore_non_map_providers() {
+    let models: Vec<config::ModelData> = serde_json::from_value(json!([
+        {"id": "x", "protocol": "openai-responses", "base_url": "https://example.test"}
+    ]))
+    .unwrap();
+    let meta = CatalogMeta {
+        sources: vec!["provider".into()],
+        ..Default::default()
+    };
+    let error = retained_rows(&b"[]"[..], &models, &meta).unwrap_err();
+    assert!(error.to_string().contains("a JSON object"), "{error}");
+    for value in [
+        "[]",
+        "true",
+        "1",
+        "18446744073709551615",
+        "1.5",
+        "\"text\"",
+        "null",
+    ] {
+        let input = format!("{{\"provider\":{value}}}");
+        assert_eq!(
+            retained_rows(input.as_bytes(), &models, &meta).unwrap(),
+            json!({"provider":{}}),
+            "{value}"
+        );
+    }
 }
 
 #[test]

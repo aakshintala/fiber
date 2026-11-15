@@ -664,7 +664,8 @@ future database is derived from the logs, rebuildable, never the truth.
 ## Concurrent access
 
 Every whole-file write is a temporary file renamed over the old one, so a
-reader sees the old file or the new one, never half. A file that is read,
+reader sees the old file or the new one, never half; it leaves the old file
+and removes its temporary file. A file that is read,
 changed and written back — the config default, standing rules — takes a lock
 file first. Appends (`history.jsonl`, `events.jsonl`) are one line per single
 write. Readers never lock.

@@ -1,12 +1,9 @@
 //! Fetches and merges the advisory models.dev catalog over generated provider data.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime};
@@ -261,7 +258,6 @@ pub fn refresh_forced(home: &Path, enabled: bool, now: SystemTime, fetcher: &Fet
 }
 
 fn refresh_to_cache(home: &Path, fetcher: &Fetch) {
-    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
     let Ok(cache) = config::models_dev_cache_file(home) else {
         return;
     };
@@ -269,36 +265,20 @@ fn refresh_to_cache(home: &Path, fetcher: &Fetch) {
     if fs::create_dir_all(parent).is_err() {
         return;
     }
-    let mut temp = None;
-    for _ in 0..16 {
-        let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
-        let path = parent.join(format!(".models-dev-{}-{id}.tmp", std::process::id()));
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        match options.open(&path) {
-            Ok(file) => {
-                temp = Some((path, file));
-                break;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => return,
+    let result = support::atomic::write_atomic_stream(&cache, 0o600, |file| {
+        fetcher(URL, file).map_err(std::io::Error::other)?;
+        file.flush()?;
+        file.seek(SeekFrom::Start(0))?;
+        if valid_catalog(file) {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid models.dev catalog",
+            ))
         }
-    }
-    let Some((temp_path, mut file)) = temp else {
-        return;
-    };
-    let result =
-        fetcher(URL, &mut file).and_then(|()| file.flush().map_err(|error| error.to_string()));
-    drop(file);
-    if result.is_ok()
-        && File::open(&temp_path).is_ok_and(valid_catalog)
-        && fs::rename(&temp_path, &cache).is_ok()
-    {
-        return;
-    }
-    drop(fs::remove_file(temp_path));
+    });
+    drop(result);
 }
 
 /// Start a detached refresh thread only when the catalog is due.
