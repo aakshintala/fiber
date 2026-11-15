@@ -5,7 +5,6 @@ use fakes::TempDir;
 use serde_json::{Value, json};
 
 use super::{check_listing, clone_sessions, set_keep_exited};
-use crate::home::Home;
 
 /// A home with a seed session: its directory holding an `events.jsonl`
 /// naming `seed`, and one `recent.jsonl` row for it.
@@ -49,15 +48,13 @@ fn rows(home: &TempDir) -> Vec<Value> {
 
 #[test]
 fn listing_home_config_keeps_all_exited_sessions() {
-    let exe = std::env::current_exe().expect("the test binary has a path");
-    let home = Home::new(&exe).expect("a home copies the test binary");
-    set_keep_exited(&home).expect("the listing config is written");
-    let config: Value = serde_json::from_slice(
-        &fs::read(home.home().join("config.json")).expect("the config exists"),
-    )
-    .expect("the config is JSON");
+    let home = TempDir::new("fiber-bench-listing-config");
+    let path = home.path().join("config.json");
+    fs::write(&path, r#"{"session":{"idle_exit_ms":3600000}}"#).expect("the config is written");
+    set_keep_exited(&path).expect("the listing config is updated");
+    let config: Value = serde_json::from_slice(&fs::read(&path).expect("the config exists"))
+        .expect("the config is JSON");
     assert_eq!(config["session"]["keep_exited"], 0);
-    home.finish().expect("the fixture leaves no processes");
 }
 
 #[test]
