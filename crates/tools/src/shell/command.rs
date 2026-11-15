@@ -900,6 +900,7 @@ pub(crate) fn execute_confined(
     )
 }
 
+#[cfg(target_os = "macos")]
 #[allow(
     clippy::too_many_arguments,
     reason = "confined execution shares the shell spawn inputs"
