@@ -287,7 +287,6 @@ impl Runtime {
                     let mut request = [0; contract::keeper::LIFELINE_QUERY.len()];
                     match lifeline.read_exact(&mut request) {
                         Ok(()) => {}
-                        Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                         Err(_) => return,
                     }
                     let mut reply = [b'N', 0, 0, 0, 0];

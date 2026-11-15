@@ -252,7 +252,6 @@ impl LifelineQuery {
         let parent_before = u32::try_from(rustix::process::getppid()?.as_raw_pid()).ok()?;
         let result = match reply {
             [b'P', a, b, c, d] => Some(u32::from_le_bytes([a, b, c, d])),
-            [b'N', 0, 0, 0, 0] => None,
             _ => None,
         };
         let parent_after = u32::try_from(rustix::process::getppid()?.as_raw_pid()).ok()?;
@@ -783,7 +782,6 @@ fn read_replies(
                     let _sent = sender.send(frame);
                 }
             }
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(_) => {
                 if let Some(sender) = lock(pending).take() {
                     let _sent = sender.send([b'N', 0, 0, 0, 0]);
