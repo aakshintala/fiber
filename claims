@@ -410,11 +410,6 @@ xtask/src/docs.rs	fiber-4029	plan	2026-11-15T18:52:47Z	Amoghs-MacBook-Pro:/Users
 xtask/src/docs_tests.rs	fiber-4029	plan	2026-11-15T18:52:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 xtask/src/main.rs	fiber-4029	plan	2026-11-15T18:52:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 xtask/tests/cli.rs	fiber-4029	plan	2026-11-15T18:52:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-crates/main/tests/commands/completion.rs:36-38	fiber-4902	plan	2026-11-15T19:38:17Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
-crates/main/tests/commands/completion.rs:360-361	fiber-4902	plan	2026-11-15T19:38:17Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
-crates/main/tests/commands/completion.rs:388-388	fiber-4902	plan	2026-11-15T19:38:17Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
-crates/main/tests/commands/completion.rs:424-424	fiber-4902	plan	2026-11-15T19:38:17Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
-crates/main/tests/commands/completion.rs:426-426	fiber-4902	plan	2026-11-15T19:38:17Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
 crates/tui/src/files_tests.rs:641-641	fiber-4894	plan	2026-11-15T19:41:32Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4894-files-outside-repo-flake	
 crates/hub/src/first.rs	fiber-4897	plan	2026-11-15T19:43:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/rules.rs	fiber-4897	plan	2026-11-15T19:43:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -424,3 +419,8 @@ scripts/check:161-166	fiber-4889	plan	2026-11-15T20:00:56Z	roundhouse-7010-plus-
 scripts/check:169-173	fiber-4889	plan	2026-11-15T20:00:56Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4889-jig-examples	
 scripts/test-check-rules-by-path:12-12	fiber-4889	plan	2026-11-15T20:00:56Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4889-jig-examples	
 scripts/test-check-rules-by-path:57-58	fiber-4889	plan	2026-11-15T20:00:56Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4889-jig-examples	
+crates/main/tests/commands/completion.rs:36-38	fiber-4902	plan	2026-11-15T20:04:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
+crates/main/tests/commands/completion.rs:360-362	fiber-4902	plan	2026-11-15T20:04:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
+crates/main/tests/commands/completion.rs:388-388	fiber-4902	plan	2026-11-15T20:04:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
+crates/main/tests/commands/completion.rs:424-424	fiber-4902	plan	2026-11-15T20:04:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
+crates/main/tests/commands/completion.rs:426-426	fiber-4902	plan	2026-11-15T20:04:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
