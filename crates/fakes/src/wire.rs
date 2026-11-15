@@ -38,6 +38,14 @@ pub fn stream_with_usage(events: &[Value], usage: Value) -> Response {
     Response::stream(body)
 }
 
+/// An `openai-responses` stream of `events` whose terminal usage reports a
+/// 1,200-token measured context: above the 1,000-token trigger the
+/// estimate-based compaction tests use, so the first measured reply crosses
+/// it while the fresh estimate stays below it.
+pub fn stream_above_trigger(events: &[Value]) -> Response {
+    stream_with_usage(events, json!({"input_tokens": 1200, "output_tokens": 3}))
+}
+
 /// An `openai-responses` stream answering `Hello.` in two fragments.
 pub fn hello() -> Response {
     stream(&[
