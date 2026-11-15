@@ -241,6 +241,7 @@ fn file_seen(details: &Option<Value>) -> Option<(PathBuf, u64)> {
 /// reads (such as a `reviewer_failed` line with an unreadable `error`)
 /// still counts, as the raw read counts it now. A full `Escalation` parse
 /// would drop those lines.
+// debt: local EscalationCause tag enum parsed via serde_json::from_value stays instead of Event::from_envelope, ceiling: one tag-only mirror of Escalation keeping the FOLDED raw-payload rule, upgrade trigger: revisit if Escalation gains a tag-only TryFrom or the FOLDED raw-payload rule changes
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum EscalationCause {

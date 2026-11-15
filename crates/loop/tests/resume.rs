@@ -696,6 +696,7 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
     );
 }
 
+// debt: restored_block_mix_matches_live_limit plus review_request_with stay beside the 15 fold rows and the sibling loop test, ceiling: one loop test and one helper pinning the 20-live-block mix, headless resume and 21st-block Failed, upgrade trigger: drop only if the acceptance no longer requires a loop test holding each kind of block
 #[test]
 fn restored_block_mix_matches_live_limit() {
     // `docs/permissions.md`, "What happens on a block": 3 consecutive

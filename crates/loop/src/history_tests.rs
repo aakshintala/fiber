@@ -381,6 +381,7 @@ fn requested_permission(id: &str) -> Event {
     })
 }
 
+// debt: requested_review, settled, allowed_with_grant, denied_by, session_blocks_escalation and reviewer_failed_escalation stay duplicated with resume.rs helpers, ceiling: two test files with the same builders and no documented rule covering test helpers, upgrade trigger: fold into shared support if a third test file needs the same builders
 /// A review escalation request: the reviewer handed the call to a person.
 /// The block counts at this raise, whatever settles the request or
 /// whether anything settles it.
