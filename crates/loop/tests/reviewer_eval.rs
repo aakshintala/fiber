@@ -778,7 +778,7 @@ fn committed_set_holds_no_confidential_values() {
                 .as_deref()
                 == Some("seeded")
             {
-                &[][..]
+                &["QuotaBar", "pi-extensions"][..]
             } else {
                 &["QuotaBar", "pi-extensions", "work/fiber"][..]
             };

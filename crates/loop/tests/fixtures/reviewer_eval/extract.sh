@@ -130,7 +130,7 @@ python3 - "$OUT" "$TMP/sampled-only.jsonl" <<'PYEOF'
 import json, sys
 with open(sys.argv[1]) as source, open(sys.argv[2], "w") as sampled:
     for line in source:
-        if json.loads(line)["source"]["kind"] != "seeded":
+        if json.loads(line)["source"]["kind"] == "sampled":
             sampled.write(line)
 PYEOF
 "$FIX_DIR/check_confidential.sh" --project work/fiber "$TMP/sampled-only.jsonl"
