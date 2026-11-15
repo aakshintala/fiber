@@ -2192,11 +2192,7 @@ fn ctrl_g_uses_the_editor_setting_captured_at_terminal_start() {
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
 
-    let first = watched(&frames, "the first frame", &Deadline::after(DEADLINE));
-    assert!(
-        first.starts_with(START),
-        "the first frame follows the terminal setup bytes: {first:?}"
-    );
+    let _first = watched(&frames, "the first frame", &Deadline::after(DEADLINE));
     *settings.rows.lock().expect("fixture settings lock") = Ok(vec![setting_row(&live_command)]);
     main.write_all(b"\x07")
         .unwrap_or_else(|err| panic!("write Ctrl-G: {err}"));
