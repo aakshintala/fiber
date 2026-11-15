@@ -115,7 +115,7 @@ pub fn history(dir: &Path) -> Result<Vec<Segment>, Error> {
                 };
                 let legacy = support::project_key::legacy_project_slug(identity);
                 let hashed_key = support::project_key::project_key(identity);
-                // debt: `read::legacy_slug` accepts uppercase hex; share this check once its key alphabet is narrowed to the persisted lowercase form.
+                // debt: `read::legacy_slug` accepts uppercase hex; share this check once its key alphabet is narrowed to the persisted lowercase form, or the next time either key-alphabet check changes.
                 let points_to_hashed_key = key.rsplit_once('-').is_some_and(|(_, suffix)| {
                     suffix.len() == 16
                         && suffix
