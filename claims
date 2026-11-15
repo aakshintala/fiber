@@ -710,3 +710,4 @@ docs/ci.md:716-723	fiber-4634	plan	2026-11-15T06:54:06Z	roundhouse-7010-plus-1:/
 docs/ci.md:819-819	fiber-4634	plan	2026-11-15T06:54:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/ci/4634-nightly-model-lists	
 docs/ci.md:839-840	fiber-4634	plan	2026-11-15T06:54:06Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/ci/4634-nightly-model-lists	
 crates/extensions/src/host_tests.rs	fiber-4855	plan	2026-11-15T07:20:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/log/src/write.rs	fiber-4822	plan	2026-11-15T07:40:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
