@@ -3422,7 +3422,8 @@ fn restored_block_parent_segment_does_not_contribute_to_run() {
         ],
         &[],
     );
-    // Rewind keeps each session's spend and blocks in its own segment (`docs/events.md`, "Rewind").
+    // `docs/permissions.md`, "What happens on a block": 20 in a session.
+    assert_eq!(folded.session_blocks, 0);
 }
 
 #[test]
