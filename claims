@@ -683,3 +683,8 @@ xtask/src/rules.rs	fiber-4871	plan	2026-11-15T06:10:33Z	Amoghs-MacBook-Pro:/User
 xtask/src/rules_tests.rs	fiber-4871	plan	2026-11-15T06:10:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/tests/cli.rs	fiber-4871	plan	2026-11-15T06:10:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/commands/completion.rs	fiber-4873	plan	2026-11-15T06:22:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/tool_calls/tools.rs	fiber-4829	plan	2026-11-15T06:24:54Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing/running.md	fiber-4829	plan	2026-11-15T06:24:54Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/tools.md	fiber-4829	plan	2026-11-15T06:24:54Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/performance.md	fiber-4829	plan	2026-11-15T06:24:54Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/workflow.md	fiber-4829	plan	2026-11-15T06:24:54Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
