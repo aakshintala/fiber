@@ -21,7 +21,7 @@ const MODEL: &str = r#"
 local host, tag, in_entry, failure = ...
 function host.model(opts)
   if in_entry() then
-    error(failure("closing", "host.model: not available while init.lua runs"), 0)
+    error(failure("not_available", "host.model: not available while init.lua runs"), 0)
   end
   if type(opts) ~= "table" then
     error("host.model: `opts` must be a table", 2)
