@@ -217,13 +217,30 @@ pub const LOGOUT_SHAPE: &str =
     clippy::result_large_err,
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
+pub fn project_key_of(workspace: &Path) -> Result<::config::ProjectKey, CliError> {
+    project_key_for_identity(&worktree::project(workspace))
+}
+
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
+fn project_key_for_identity(identity: &Path) -> Result<::config::ProjectKey, CliError> {
+    Ok(::config::ProjectKey::new(log::project_key(identity))?)
+}
+
+/// The sessions directory and project key for a workspace's resolved identity.
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 pub fn project_of(
     home: &Path,
     workspace: &Path,
 ) -> Result<(PathBuf, ::config::ProjectKey), CliError> {
     let project = worktree::project(workspace);
     let sessions = log::sessions_dir(home, &project);
-    let key = ::config::ProjectKey::new(log::project_key(&project))?;
+    let key = project_key_for_identity(&project)?;
     Ok((sessions, key))
 }
 

@@ -139,11 +139,15 @@ pub fn list(
     archived: bool,
     connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> i32 {
-    let ran = std::env::current_dir()
-        .map_err(CliError::CurrentDirectory)
-        .and_then(|workspace| {
-            let project = worktree::resolve_project(&workspace);
-            run(&project, all, json, archived, &mut io::stdout(), connect)
+    let ran = config::fiber_home_from_env()
+        .map_err(CliError::Config)
+        .and_then(|_home| {
+            std::env::current_dir()
+                .map_err(CliError::CurrentDirectory)
+                .and_then(|workspace| {
+                    let project = worktree::resolve_project(&workspace);
+                    run(&project, all, json, archived, &mut io::stdout(), connect)
+                })
         });
     finish(ran)
 }

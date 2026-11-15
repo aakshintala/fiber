@@ -462,7 +462,7 @@ fn a_read_of_a_stored_mcp_token_is_refused() {
         }
         assert!(!run.stderr.contains("protected-mcp-token-594"));
         let workspace = fs::canonicalize(setup.workspace()).unwrap();
-        let project = workspace.to_string_lossy().replace('/', "-");
+        let project = log::project_key(&workspace);
         let dir = setup
             .home()
             .join("projects")

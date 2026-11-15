@@ -187,7 +187,7 @@ impl ProtectedPaths {
     #[cfg(any(target_os = "linux", test))]
     pub(crate) fn begin(&self, workspace: &Path) -> Result<Begin, SetupError> {
         let live = baseline::identity(workspace).map_err(|message| SetupError { message })?;
-        let _key = config::ProjectKey::new(live.path.to_string_lossy().replace('/', "-")).map_err(
+        let _key = config::ProjectKey::new(support::project_key::project_key(&live.path)).map_err(
             |source| SetupError {
                 message: source.to_string(),
             },

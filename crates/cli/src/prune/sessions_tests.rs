@@ -457,6 +457,87 @@ fn in_project_scope_a_session_from_another_project_is_excluded_and_a_missing_wor
 }
 
 #[test]
+fn project_scope_rejects_non_candidate_directory_even_for_missing_workspace() {
+    let root = fakes::TempDir::new("cli-prune-scope-noncandidate");
+    let repo = root.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    fakes::git::git(&repo, &["init", "--quiet"]);
+    let workspace = fs::canonicalize(&repo).unwrap();
+    let home = root.path().join("home");
+    let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
+    let missing_workspace = "/definitely/not/on/disk/prune-scope-test";
+    session_in(
+        &sessions.join("s_candidate_missing_workspace"),
+        missing_workspace,
+        None,
+        old_ts(),
+    );
+    let non_candidate = home.join("projects/not-a-candidate/sessions");
+    session_in(
+        &non_candidate.join("s_non_candidate_missing_workspace"),
+        missing_workspace,
+        None,
+        old_ts(),
+    );
+
+    let all = log::started_sessions(&home);
+    let selected = select(&home, &all, &workspace, Some(older_than()), false, wall());
+    assert_eq!(
+        selected
+            .deletes
+            .iter()
+            .map(|delete| delete.id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["s_candidate_missing_workspace"]
+    );
+    // The candidate row passes the sessions-dir gate, then its nonexistent
+    // workspace makes it eligible. The non-candidate row is rejected before
+    // that branch can return true.
+}
+
+#[test]
+fn project_scope_selects_matching_workspace_and_rejects_another_project() {
+    let root = fakes::TempDir::new("cli-prune-scope-comparison");
+    let repo = root.path().join("repo");
+    let other = root.path().join("other");
+    fs::create_dir_all(&repo).unwrap();
+    fs::create_dir_all(&other).unwrap();
+    fakes::git::git(&repo, &["init", "--quiet"]);
+    fakes::git::git(&other, &["init", "--quiet"]);
+    let workspace = fs::canonicalize(&repo).unwrap();
+    let other_workspace = fs::canonicalize(&other).unwrap();
+    let home = root.path().join("home");
+    let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
+    session_in(
+        &sessions.join("s_matching_workspace"),
+        workspace.to_str().unwrap(),
+        None,
+        old_ts(),
+    );
+    let other_sessions = log::sessions_dir(&home, &worktree::project(&other_workspace));
+    session_in(
+        &other_sessions.join("s_wrong_workspace"),
+        other_workspace.to_str().unwrap(),
+        None,
+        old_ts(),
+    );
+
+    let all = log::started_sessions(&home);
+    let selected = select(&home, &all, &workspace, Some(older_than()), false, wall());
+    assert_eq!(
+        selected
+            .deletes
+            .iter()
+            .map(|delete| delete.id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["s_matching_workspace"]
+    );
+    // Both rows have session directories under this project's candidate directory,
+    // so each reaches the workspace/project comparison; only one matches.
+    assert_eq!(all.len(), 2);
+}
+
+#[test]
 fn outside_a_repository_every_project_is_in_scope() {
     let setup = Setup::new();
     setup.session("s_00000000000000a1", "/w", None, old_ts());

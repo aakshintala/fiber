@@ -1153,12 +1153,29 @@ fn delegate_sessions(home: &Path, workspace: &Path, id: &SessionId) -> Result<Pa
                     format!("{}: not a worktree of a Fiber project", workspace.display())
                 })
         }
-        None => {
-            if !workspace.is_dir()
-                && let Some((key, _)) = log::find_logged_session(home, id)
+        None if workspace.is_dir() => {
+            let identity = worktree::project(workspace);
+            let same_project = |recorded: &str| worktree::project(Path::new(recorded)) == identity;
+            if let Some((_, dir)) = log::find_logged_session_in(home, &identity, id, &same_project)
             {
-                return log::sessions_dir_for_key(home, &key)
-                    .ok_or_else(|| format!("{key}: invalid logged project key"));
+                return Ok(dir.parent().unwrap_or(&dir).to_path_buf());
+            }
+            Ok(log::sessions_dir(home, &identity))
+        }
+        None => {
+            if let Some((key, dir)) = log::find_logged_session(home, id) {
+                if log::started_first(&dir).is_ok_and(|started| {
+                    started.workspace.as_deref() == Some(workspace.to_string_lossy().as_ref())
+                }) {
+                    return dir
+                        .parent()
+                        .map(Path::to_path_buf)
+                        .ok_or_else(|| format!("{key}: invalid logged project key"));
+                }
+                return Err(format!(
+                    "{}: recorded workspace does not match",
+                    workspace.display()
+                ));
             }
             Ok(log::sessions_dir(home, &worktree::project(workspace)))
         }

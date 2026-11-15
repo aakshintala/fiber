@@ -73,9 +73,9 @@ pub fn fiber_home_path_from_env() -> Result<PathBuf, ConfigError> {
     fiber_home_path(std::env::var_os("FIBER_HOME"), std::env::var_os("HOME"))
 }
 
-/// A project's key, naming `projects/<key>/` in Fiber home: the slug of the
-/// project's identity path, every `/` made `-` (`docs/state.md`, "Projects"),
-/// so it is always one file name.
+/// A project's key, naming `projects/<key>/` in Fiber home: its legacy path
+/// slug plus a short SHA-256 suffix (`docs/state.md`, "Projects"), so it is
+/// collision-resistant and remains one file name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectKey(String);
 

@@ -2296,24 +2296,24 @@ fn colliding_project_slugs_do_not_share_protected_baselines() {
         .expect("first identity")
         .path;
     let second_identity = baseline::identity(&nested).expect("second identity").path;
-    let first_slug = first_identity.to_string_lossy().replace('/', "-");
-    let second_slug = second_identity.to_string_lossy().replace('/', "-");
-    assert_eq!(
-        first_slug, second_slug,
-        "the identities share the project slug"
+    let first_key = support::project_key::project_key(&first_identity);
+    let second_key = support::project_key::project_key(&second_identity);
+    assert_ne!(
+        first_key, second_key,
+        "distinct identities have distinct project keys"
     );
     let first_paths = baseline::state_paths(&home, &hyphenated).expect("first state paths");
     let second_paths = baseline::state_paths(&home, &nested).expect("second state paths");
     assert_eq!(
         first_paths.dir,
         home.join("projects")
-            .join(first_slug)
+            .join(first_key)
             .join("protected-paths"),
         "protected state uses the project key, without a second key scheme"
     );
-    assert_eq!(
+    assert_ne!(
         first_paths.dir, second_paths.dir,
-        "the slug collision is real"
+        "protected state is isolated by identity"
     );
     assert_ne!(
         first_paths.identity_marker, second_paths.identity_marker,
@@ -2323,24 +2323,26 @@ fn colliding_project_slugs_do_not_share_protected_baselines() {
     let first = open_handle(&home, &hyphenated);
     let second = open_handle(&home, &nested);
     let active = first.begin(&hyphenated).expect("first call begins");
+    let second_active = second
+        .begin(&nested)
+        .expect("the distinct identity owns an independent baseline");
     assert!(
-        second.begin(&nested).is_err(),
-        "a different identity cannot join a live baseline"
+        ProtectedPaths::open(&home, &nested).is_ok(),
+        "one identity can open its own baseline while another is active"
     );
     assert!(
-        ProtectedPaths::open(&home, &nested).is_err(),
-        "a different identity cannot open another project's live baseline"
+        second.note_approved_write(&nested, &nested_file).is_ok(),
+        "an approved write updates the matching identity's baseline"
     );
-    assert!(
-        second.note_approved_write(&nested, &nested_file).is_err(),
-        "an approved write cannot update another project's baseline"
-    );
+    drop(second_active.guard);
     std::fs::write(&hyphenated_file, b"damaged first project").expect("first path changed");
     drop(active.guard); // Simulate a call that ended before recovery ran.
 
+    let (_nested, nested_startup) =
+        ProtectedPaths::open(&home, &nested).expect("the other identity has its own state");
     assert!(
-        ProtectedPaths::open(&home, &nested).is_err(),
-        "a colliding identity cannot discard another project's stale baseline"
+        nested_startup.is_none(),
+        "the other identity has no stale baseline"
     );
     let (_first, startup) =
         ProtectedPaths::open(&home, &hyphenated).expect("the baseline's identity can recover it");
