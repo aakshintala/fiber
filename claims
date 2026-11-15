@@ -398,3 +398,13 @@ docs/testing/running.md	fiber-4894	plan	2026-11-15T15:31:07Z	roundhouse-7010-plu
 docs/ci.md	fiber-4894	plan	2026-11-15T15:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 .config/nextest.toml	fiber-4894	plan	2026-11-15T15:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/workflow.md	fiber-4894	plan	2026-11-15T15:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/hub/src/start.rs	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/hub/src/spawn.rs	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/hub/src/lib.rs	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/hub/src/connection.rs	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/hub/src/fake.rs	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/hub/src/connection_tests.rs	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/hub/src/start_tests.rs	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/hub/src/spawn_tests.rs	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/hub_daemon	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/errors.md	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
