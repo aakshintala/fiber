@@ -427,7 +427,7 @@ fn admission_retain_listed_hides_vendor_active_catalog_deprecated_models() {
         &setup.home(),
         true,
         None,
-        std::time::SystemTime::now(),
+        fakes::clock::FakeClock::new().wall(),
         &mut providers,
     );
 
