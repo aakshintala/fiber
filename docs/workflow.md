@@ -115,11 +115,11 @@ those.
   its tests run, and a jig older than its sources is refused
   (`docs/testing/fakes.md`, "Jigs"). So every `main` nextest run here comes
   after `cargo build -p main --examples`, with the same environment
-  variables. Each selected package with examples also builds them with
+  variables. Each selected package other than `main` builds its examples with
   `cargo build -p <package> --examples` before its narrowed test run, with the
   same environment variables. This supplies plain jig binaries: `--all-targets`
   builds hashed test harnesses instead. `log` shares its name with a dependency,
-  so its clippy and nextest take `-p log@0.0.0`; `cargo fmt` takes plain `-p log`.
+  so its clippy, examples build and nextest take `-p log@0.0.0`; `cargo fmt` takes plain `-p log`.
 - A crate whose tests read a doc table, such as `contract`, runs its tests
   when that doc changes.
 - A change to session, door or hub behaviour that `crates/main/tests`

@@ -57,7 +57,7 @@ grep -q "^$pattern/" "$work/unchanged" && fail "a non-prototype file trips the p
 
 # A selected non-main jig package builds its plain example binary before
 # nextest. Cargo's test harness is a separate hashed artifact and cannot stand
-# in for the binary a jig starts.
+# in for the binary a jig starts (`docs/workflow.md`, "Rules by path").
 example_parent=$(mktemp -d)
 example_wt="$example_parent/wt"
 git worktree add -q --detach "$example_wt" HEAD
@@ -72,14 +72,17 @@ if [[ "$*" == "xtask select"* ]]; then
   exit 0
 fi
 if [[ "$*" == "build -q -p fakes --example process-extension" ]]; then exit 0; fi
-if [[ "$*" == "build -p main --examples" ]]; then exit 0; fi
 if [[ "$*" == "build -p log@0.0.0 --examples" ]]; then
-  mkdir -p "$CARGO_TARGET_DIR/debug/examples"
-  : >"$CARGO_TARGET_DIR/debug/examples/check"
+  if [[ "${NO_EXAMPLES-}" != 1 ]]; then
+    mkdir -p "$CARGO_TARGET_DIR/debug/examples"
+    : >"$CARGO_TARGET_DIR/debug/examples/check"
+  fi
   exit 0
 fi
 if [[ "$*" == "nextest run --all-targets -p log@0.0.0" ]]; then
-  test -e "$CARGO_TARGET_DIR/debug/examples/check" || { echo 'jig example check is absent' >&2; exit 1; }
+  if [[ "${NO_EXAMPLES-}" != 1 ]]; then
+    test -e "$CARGO_TARGET_DIR/debug/examples/check" || { echo 'jig example check is absent' >&2; exit 1; }
+  fi
   exit 0
 fi
 exit 0
@@ -95,9 +98,18 @@ test_line=$(grep -n '^nextest run --all-targets -p log@0.0.0$' "$work/calls" | c
 [ -n "$build_line" ] && [ -n "$test_line" ] && [ "$build_line" -lt "$test_line" ] || fail "log examples were not built before nextest"
 [ "$(grep -c '^build -p main --examples$' "$work/calls" || true)" -eq 0 ] || fail "main examples build was unexpectedly duplicated"
 grep -q '^build -q -p fakes --example process-extension$' "$work/calls" || fail "fakes process-extension build changed"
-grep -q '^nextest run --all-targets -p log@0.0.0$' "$work/calls" || fail "selected log tests were omitted"
-git worktree remove --force "$example_wt"
-rm -rf "$example_parent"
+# A selected package with no examples still passes through the examples build
+# and narrowed test without requiring an example artifact.
+: >"$work/no-examples-calls"
+export CARGO_CALLS="$work/no-examples-calls"
+if ! (cd "$example_wt" && PATH="$work/example-bin:$PATH" NO_EXAMPLES=1 bash "$top/scripts/check" --rules-by-path --base HEAD >"$work/no-examples-check" 2>&1); then
+  cat "$work/no-examples-check" >&2
+  fail "selected package with no examples failed its narrowed run"
+fi
+build_line=$(grep -n '^build -p log@0.0.0 --examples$' "$work/no-examples-calls" | cut -d: -f1 || true)
+test_line=$(grep -n '^nextest run --all-targets -p log@0.0.0$' "$work/no-examples-calls" | cut -d: -f1 || true)
+[ -n "$build_line" ] && [ -n "$test_line" ] && [ "$build_line" -lt "$test_line" ] || fail "no-example package build did not precede nextest"
+
 
 # A narrowed smoke run through the built xtask carries no dependent crate.
 cargo build -q -p xtask
