@@ -530,8 +530,8 @@ fn the_settings_view_matches_the_doc() {
         find_row(grid, "Reviewer model").is_some()
             && find_row(grid, "Permissions").is_some_and(|row| is_bold(grid, row, "Permissions"))
     });
-    let mut grid = run.wait_screen("the focused Permissions row", |grid| {
-        focused_label(grid).is_some()
+    let mut grid = run.wait_screen("the focused Consecutive blocks row", |grid| {
+        focused_label(grid).as_deref() == Some("Consecutive blocks")
             && find_row(grid, "Permissions").is_some_and(|row| is_bold(grid, row, "Permissions"))
     });
     grid = focus_row_with_down(&mut run, grid, "Reviewer model", 10);
