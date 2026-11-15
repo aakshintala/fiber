@@ -488,18 +488,23 @@ fn a_keeper_that_vanishes_after_an_adopted_write_failure_reports_io_failed_once_
     // closed. The next frame therefore forces the adopted stderr append to
     // fail, and the keeper connection then closes without an Exit.
     world.send(output_frame("call_0", "err", "first\\n"));
-    let wait = deadline();
-    let mut bytes = [0_u8; 32];
-    loop {
-        match reader.read(&mut bytes) {
-            Ok(count) if count > 0 => break,
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(error) => panic!("read from output FIFO: {error}"),
-        }
-        assert!(!wait.left().is_zero(), "the adopted writer did not write");
-        std::thread::yield_now();
-    }
+    let (first, first_rx) = mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty())
+                .expect("output FIFO blocks");
+            let mut bytes = [0_u8; 32];
+            first
+                .send(reader.read(&mut bytes).expect("read from output FIFO"))
+                .expect("first read");
+        });
+        assert!(
+            deadline()
+                .recv_or_fail(&first_rx, "the adopted writer did not write")
+                > 0,
+            "the adopted writer closed the output FIFO without writing"
+        );
+    });
     drop(reader);
     world.send(output_frame("call_0", "err", "second\\n"));
     drop(world.keeper);
@@ -519,6 +524,7 @@ fn a_keeper_that_vanishes_after_an_adopted_write_failure_reports_io_failed_once_
     assert_eq!(failure.code, ErrorCode::IoFailed);
     assert!(failure.message.contains(errors.to_str().unwrap()));
     assert!(failure.message.contains("replaced end: indeterminate"));
+    // `docs/tools.md`, "The keeper": a job_completed for each job that ends.
     assert!(deliveries.try_recv().is_err(), "the end is reported once");
 }
 

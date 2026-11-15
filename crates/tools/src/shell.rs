@@ -1314,11 +1314,7 @@ pub(crate) fn assemble_tailed(
     let (mut output, pre_end, write_failure) =
         assemble_output(limit, finished, extra.as_deref(), tail);
     if let Some(write_failure) = write_failure {
-        output.error = Some(Failure::from(&ToolError::from(ShellError::OutputWrite {
-            path: write_failure.path,
-            replaced: pre_end,
-            source: write_failure.source,
-        })));
+        apply_write_failure(&mut output, pre_end, write_failure);
     }
     output.details = command.map(|command| details(command, output.process.as_ref()));
     if let Some(inner) = report
@@ -1345,14 +1341,20 @@ pub(crate) fn assemble(
 ) -> Output {
     let (mut output, pre_end, write_failure) = assemble_output(limit, finished, extra, None);
     if let Some(write_failure) = write_failure {
-        output.error = Some(Failure::from(&ToolError::from(ShellError::OutputWrite {
-            path: write_failure.path,
-            replaced: pre_end,
-            source: write_failure.source,
-        })));
+        apply_write_failure(&mut output, pre_end, write_failure);
     }
     output.details = command.map(|command| details(command, output.process.as_ref()));
     output
+}
+
+/// Reports a stored output write failure on a finished command's output,
+/// replacing whatever end it had: the failure is the completion.
+fn apply_write_failure(output: &mut Output, pre_end: ReplacedEnd, write_failure: output::WriteFailure) {
+    output.error = Some(Failure::from(&ToolError::from(ShellError::OutputWrite {
+        path: write_failure.path,
+        replaced: pre_end,
+        source: write_failure.source,
+    })));
 }
 
 /// The documented end a finished command had before any stored output-write

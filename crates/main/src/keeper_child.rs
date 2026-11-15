@@ -72,13 +72,14 @@ enum Sink {
     Control,
     Hold(Vec<(Stream, Vec<u8>)>),
     Files {
-        /// `None` once the output file failed: every stream writing to it
-        /// is discarded, while a separate healthy errors file keeps
-        /// receiving stderr.
+        /// `None` once the file failed: every stream writing to it is
+        /// skipped, while a separate healthy errors file keeps
+        /// receiving stderr. `errors_declared` remembers a declared
+        /// errors file, so its death discards stderr instead of
+        /// falling back to the output file.
         output: Option<File>,
         errors: Option<File>,
-        discard_output: bool,
-        discard_errors: bool,
+        errors_declared: bool,
     },
     Discard,
 }
@@ -132,23 +133,24 @@ struct Listening {
     socket: PathBuf,
 }
 
-/// Discards every stream whose destination is the failed file: stdout
-/// always writes the output file; stderr writes the errors file when the
-/// job has one, else the output file. A separate healthy file keeps its
-/// stream.
-fn discard_failed(output: &Path, errors: Option<&Path>, failed: &Path, sink: &mut Sink) {
-    let errors = errors.unwrap_or(output);
+/// Kills the handle for the failed file: stdout always writes the output
+/// file; stderr writes the errors file when the job declared one, else
+/// the output file. A separate healthy file keeps its stream; a declared
+/// but dead errors file discards stderr instead of falling back.
+fn fail_handle(sink: &mut Sink, output: &Path, errors: Option<&Path>, failed: &Path) {
+    let errors_path = errors.unwrap_or(output);
     if let Sink::Files {
-        discard_output,
-        discard_errors,
-        ..
+        output: live_output,
+        errors: live_errors,
+        errors_declared,
     } = sink
     {
         if *failed == *output {
-            *discard_output = true;
+            *live_output = None;
         }
-        if *failed == *errors {
-            *discard_errors = true;
+        if *failed == *errors_path {
+            *live_errors = None;
+            *errors_declared = true;
         }
     }
 }
@@ -191,6 +193,9 @@ struct Hooks {
     /// Runs immediately before a handover switches each job's sink from its
     /// files to the session, so a test lands a write in that window.
     before_switch: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Runs once a runner stores its first output write failure, so a test
+    /// waits on the store instead of spinning on the runner's state.
+    write_failed: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs as a bound watcher ends, with its generation.
     watcher_done: Option<Box<dyn Fn(u64) + Send + Sync>>,
 }
@@ -469,7 +474,6 @@ impl Runtime {
                     None
                 }
             };
-            let mut discard_errors = false;
             let errors = match &errors_path {
                 None => None,
                 Some(path) => match OpenOptions::new().append(true).open(path) {
@@ -480,17 +484,14 @@ impl Runtime {
                             .get_or_insert_with(|| (path.clone(), error));
                         // The errors file is dead: stderr is discarded,
                         // never redirected into the output file.
-                        discard_errors = true;
                         None
                     }
                 },
             };
-            let discard_output = output.is_none();
             let mut sink = Sink::Files {
                 output,
                 errors,
-                discard_output,
-                discard_errors,
+                errors_declared: errors_path.is_some(),
             };
             if let Sink::Hold(held) = old {
                 for (stream, bytes) in held {
@@ -504,7 +505,7 @@ impl Runtime {
                         state
                             .write_failure
                             .get_or_insert_with(|| (failed.clone(), error));
-                        discard_failed(&output_path, errors_path.as_deref(), &failed, &mut sink);
+                        fail_handle(&mut sink, &output_path, errors_path.as_deref(), &failed);
                     }
                 }
             }
@@ -734,23 +735,35 @@ impl Runtime {
                         match (&failed, state.write_failure.is_none()) {
                             (Some(path), true) => {
                                 state.write_failure = Some((path.clone(), error));
+                                #[cfg(test)]
+                                if let Some(write_failed) = &runtime.hooks.write_failed {
+                                    write_failed();
+                                }
                             }
                             _ => {}
                         }
                         match (destinations, failed) {
                             (Some((output, errors)), Some(failed)) => {
-                                discard_failed(&output, errors.as_deref(), &failed, &mut state.sink)
+                                fail_handle(
+                                    &mut state.sink,
+                                    &output,
+                                    errors.as_deref(),
+                                    &failed,
+                                )
                             }
                             (None, _) => {
                                 if let Sink::Files {
-                                    discard_output,
-                                    discard_errors,
-                                    ..
+                                    output,
+                                    errors,
+                                    errors_declared,
                                 } = &mut state.sink
                                 {
                                     match stream {
-                                        Stream::Out => *discard_output = true,
-                                        Stream::Err => *discard_errors = true,
+                                        Stream::Out => *output = None,
+                                        Stream::Err => {
+                                            *errors = None;
+                                            *errors_declared = true;
+                                        }
                                     }
                                 }
                             }
@@ -1233,24 +1246,18 @@ fn write_sink(sink: &mut Sink, stream: Stream, bytes: &[u8]) -> io::Result<()> {
     if let Sink::Files {
         output,
         errors,
-        discard_output,
-        discard_errors,
+        errors_declared,
     } = sink
     {
         if stream == Stream::Err {
-            if *discard_errors {
-                return Ok(());
-            }
             if let Some(errors) = errors {
                 return errors.write_all(bytes);
             }
-            // No errors file: stderr shares the output file, so an
-            // output failure discards it too instead of erroring again.
-            if *discard_output {
+            // A declared errors file died: stderr is discarded, never
+            // redirected into the output file.
+            if *errors_declared {
                 return Ok(());
             }
-        } else if *discard_output {
-            return Ok(());
         }
         if let Some(output) = output {
             output.write_all(bytes)?;

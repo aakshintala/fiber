@@ -475,6 +475,11 @@ fn a_failed_rename_fallback_copy_is_reported() {
     let (_sink, line, write_error) = spill.into_job(&job, registry);
     assert!(write_error.is_some());
     assert!(line.is_some_and(|line| line.contains("s_test.txt")));
+    // The failed rename keeps the spill file: the receipt points at it.
+    assert_eq!(
+        std::fs::read(dir.path().join("s_test.txt")).unwrap(),
+        b"0123456789abcdef"
+    );
 }
 
 #[test]

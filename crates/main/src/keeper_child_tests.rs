@@ -292,21 +292,23 @@ fn a_keeper_child_output_write_failure_drains_and_reports_io_failed() {
     Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "keeper files to be active");
 
     input_writer.write_all(b"go\n").expect("release child");
-    let wait = Deadline::after(Duration::from_secs(10));
-    let mut bytes = [0_u8; 256];
-    loop {
-        match reader.read(&mut bytes) {
-            Ok(count) if count > 0 => break,
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(error) => panic!("read output FIFO: {error}"),
-        }
+    let (first, first_rx) = mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty())
+                .expect("output FIFO blocks");
+            let mut bytes = [0_u8; 256];
+            first
+                .send(reader.read(&mut bytes).expect("read output FIFO"))
+                .expect("first read");
+        });
         assert!(
-            !wait.left().is_zero(),
-            "child did not write to the output FIFO"
+            Deadline::after(Duration::from_secs(10))
+                .recv_or_fail(&first_rx, "child did not write to the output FIFO")
+                > 0,
+            "the child closed the output FIFO without writing"
         );
-        std::thread::yield_now();
-    }
+    });
     drop(reader);
 
     let exit = loop {
@@ -420,6 +422,7 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
         .recv_or_fail(&keeper.result, "keeper to finish after both children")
         .expect("keeper exits cleanly");
     let completed = job_completed_lines(&keeper);
+    // `docs/tools.md`, "The keeper": a job_completed for each job that ends.
     assert_eq!(completed.len(), 2, "both jobs end");
     let bad = completed
         .iter()
@@ -515,6 +518,7 @@ fn a_keeper_child_files_errors_open_failure_discards_stderr_and_reports_io_faile
         .recv_or_fail(&keeper.result, "keeper to finish after child")
         .expect("keeper exits cleanly");
     let completed = job_completed_lines(&keeper);
+    // `docs/tools.md`, "The keeper": a job_completed for each job that ends.
     assert_eq!(completed.len(), 1, "one ending for the one job");
     let payload = &completed[0].payload;
     assert_eq!(payload["status"], "failed");
@@ -1019,12 +1023,14 @@ fn keeper_written_write_failure_wins_over_keeper_timeout() {
         .open(&output_fifo)
         .expect("output FIFO reader");
     let (held, held_rx) = ready_signal();
+    let (failed, failed_rx) = ready_signal();
     let hooks = super::Hooks {
         held: Some(held),
+        write_failed: Some(failed),
         ..super::Hooks::default()
     };
     let clock = fakes::clock::FakeClock::new();
-    let (mut keeper, runtime) = serve_keeper_with(
+    let (mut keeper, _runtime) = serve_keeper_with(
         "keeper-timeout-write",
         SessionId("s_0123456789abcdef".into()),
         clock.clone(),
@@ -1072,41 +1078,35 @@ fn keeper_written_write_failure_wins_over_keeper_timeout() {
         .write_all(b"go\n")
         .expect("release child");
     // The child floods until the test sees its bytes flowing.
-    let wait = Deadline::after(Duration::from_secs(10));
-    let mut bytes = [0_u8; 256];
-    loop {
-        match reader.read(&mut bytes) {
-            Ok(count) if count > 0 => break,
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(error) => panic!("read output FIFO: {error}"),
-        }
-        assert!(!wait.left().is_zero(), "child did not flood the output");
-        std::thread::yield_now();
-    }
+    let (first, first_rx) = mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty())
+                .expect("output FIFO blocks");
+            let mut bytes = [0_u8; 256];
+            first
+                .send(reader.read(&mut bytes).expect("read output FIFO"))
+                .expect("first read");
+        });
+        assert!(
+            Deadline::after(Duration::from_secs(10))
+                .recv_or_fail(&first_rx, "child did not flood the output")
+                > 0,
+            "the child closed the output FIFO without writing"
+        );
+    });
     drop(reader);
     // Every later append fails with no reader: the runner records its
-    // first path-bearing failure on its next write. Waiting on the
-    // stored failure keeps real-clock timing out of the verdict.
-    let stored = Deadline::after(Duration::from_secs(10));
-    loop {
-        let failed = support::lock(&runtime.processes)
-            .get("flooder")
-            .is_some_and(|process| support::lock(&process.state).write_failure.is_some());
-        if failed {
-            break;
-        }
-        assert!(
-            !stored.left().is_zero(),
-            "runner to record its write failure"
-        );
-        std::thread::yield_now();
-    }
+    // first path-bearing failure on its next write. The hook fires at
+    // that store, so no real-clock timing leaks into the verdict.
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&failed_rx, "runner to record its write failure");
     fire_keeper_bound(&clock);
     Deadline::after(Duration::from_secs(10))
         .recv_or_fail(&keeper.result, "keeper exit")
         .expect("keeper exits cleanly");
     let completed = job_completed_lines(&keeper);
+    // `docs/tools.md`, "The keeper": a job_completed for each job that ends.
     assert_eq!(completed.len(), 1, "one ending for the one held job");
     let payload = &completed[0].payload;
     assert_eq!(payload["job_id"], "j_flooder");
@@ -1158,6 +1158,7 @@ fn keeper_timeout_write_failure_reports_io_failed() {
         .recv_or_fail(&keeper.result, "keeper exit")
         .expect("keeper exits cleanly");
     let completed = job_completed_lines(&keeper);
+    // `docs/tools.md`, "The keeper": a job_completed for each job that ends.
     assert_eq!(completed.len(), 1, "one ending for the one held job");
     let payload = &completed[0].payload;
     assert_eq!(payload["job_id"], "j_sleepy");
