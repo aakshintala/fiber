@@ -124,17 +124,17 @@ pub(crate) enum ShellError {
         code: i32,
     },
     /// A shell output file could not be written. `replaced` is the
-    /// documented end the failure replaced, as `&'static str` so no new
+    /// documented end the failure replaced, as a [`ReplacedEnd`] so no new
     /// code reaches the model; the foreground never floods, so there is
     /// no flooded sentence here (job completions add it in the shared
     /// helper instead). Neither the `io::ErrorKind` nor the operating
     /// system's text is rendered.
-    #[error("{}", output_write_line(path, replaced, false))]
+    #[error("{}", output_write_line(path, *replaced, false))]
     OutputWrite {
         /// The file that failed.
         path: PathBuf,
         /// The end replaced by this failure.
-        replaced: &'static str,
+        replaced: crate::shell::ReplacedEnd,
         /// The underlying I/O failure.
         #[source]
         source: io::Error,
@@ -159,7 +159,12 @@ const CHECK_PLACEHOLDER: &str = "<check command>";
 /// monitor was also flooded. The single wording every completion builder
 /// shares, so the foreground error and the shared override helper read
 /// the same line.
-pub(crate) fn output_write_line(path: &std::path::Path, replaced: &str, flooded: bool) -> String {
+pub(crate) fn output_write_line(
+    path: &std::path::Path,
+    replaced: crate::shell::ReplacedEnd,
+    flooded: bool,
+) -> String {
+    let replaced = replaced.as_str();
     let mut line = format!(
         "Could not write shell output file {}; replaced end: {replaced}.",
         path.display()

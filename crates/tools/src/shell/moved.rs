@@ -92,9 +92,7 @@ impl Moved {
                 .err()
                 .and_then(|source| path.map(|path| WriteFailure { path, source }))
         });
-        if inner.write_failure.is_none() {
-            inner.write_failure = failure;
-        }
+        inner.keep_write_failure(failure);
     }
 
     /// Wakes this command when `cancel` fires. The job's stop uses it.

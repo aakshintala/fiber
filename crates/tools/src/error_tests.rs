@@ -33,7 +33,7 @@ fn arguments_error_reports_the_schema_mismatch() {
 fn shell_output_write_failure_uses_io_failed_and_names_path() {
     let error = ShellError::OutputWrite {
         path: PathBuf::from("/tmp/job.log"),
-        replaced: "indeterminate",
+        replaced: crate::shell::ReplacedEnd::Indeterminate,
         source: io::Error::other("private OS detail"),
     };
     let failure = contract::shapes::Failure::from(&ToolError::from(error));

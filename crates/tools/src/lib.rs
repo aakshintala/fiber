@@ -46,6 +46,7 @@ pub use session_search::SessionSearch;
 pub use shell::Shell;
 pub use shell::hosted::override_write_failure;
 pub use shell::hosted::{adopted_end, adopted_flooded_end};
+pub use shell::ReplacedEnd;
 pub use shell::hosted::{keeper_spawn, kept_end};
 pub use shell::restored::{AdoptedRun, AdoptedSink};
 #[cfg(any(target_os = "linux", target_os = "macos"))]

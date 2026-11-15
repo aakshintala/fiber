@@ -137,7 +137,7 @@ impl AdoptedRun {
                         );
                         completed.status = Outcome::Failed;
                         completed.error = Some(super::hosted::override_write_failure(
-                            "indeterminate",
+                            super::ReplacedEnd::Indeterminate,
                             &path,
                             false,
                         ));
@@ -221,15 +221,8 @@ impl AdoptedRun {
         {
             if let Err(error) = errors.write_all(bytes) {
                 if sinks.write_failure.is_none() {
-                    let stem = self
-                        .output_path
-                        .file_stem()
-                        .unwrap_or_default()
-                        .to_string_lossy();
-                    sinks.write_failure = Some(
-                        self.output_path
-                            .with_file_name(format!("{stem}.stderr.log")),
-                    );
+                    sinks.write_failure =
+                        Some(super::background::errors_path(&self.output_path));
                 }
                 drop(error);
             }

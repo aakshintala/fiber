@@ -14,8 +14,10 @@ use fakes::jobs::JobDeltas;
 use super::super::command::MoveReason;
 use super::super::drive::{Phase, Run};
 use super::super::moved::Moved;
+use super::super::background::finish_inline;
 use super::{
-    Errors, HELD_MAX, PacedStream, Pending, Shared, escaped_len, lock, read_errors, read_output,
+    Errors, HELD_MAX, PacedStream, Pending, Shared, escaped_len, lock, note_eof, read_errors,
+    read_output,
 };
 
 struct Chunks(Vec<Vec<u8>>);
@@ -400,6 +402,31 @@ fn parked(shared: Arc<Shared>) -> Moved {
         spill: None,
         protection: None,
     }
+}
+
+#[test]
+fn an_inline_artifact_installs_as_the_output_path() {
+    let dir = TempDir::new("fiber-output-inline-artifact");
+    let shared = Arc::new(Shared::default());
+    note_eof(&shared);
+    let mut moved = parked(Arc::clone(&shared));
+    moved.spill = Some(super::super::spill::Config {
+        dir: dir.path().to_path_buf(),
+        bound: contract::tool::Bound { start: 8, end: 8 },
+        wrap: None,
+        name: None,
+    });
+    let clock = FakeClock::new();
+    let mut carry = Vec::new();
+    finish_inline(moved, &*clock, None, "true", &NoEmit, &mut carry);
+    let inner = lock(&shared.inner);
+    let path = inner
+        .output_path
+        .as_ref()
+        .expect("the artifact installs as the output path");
+    assert!(path.starts_with(dir.path()));
+    assert!(inner.artifact_sink);
+    assert!(path.is_file());
 }
 
 #[test]

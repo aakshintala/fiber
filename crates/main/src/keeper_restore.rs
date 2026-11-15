@@ -42,6 +42,15 @@ enum Decision {
 }
 
 impl Verdict {
+    /// Delivers a held report once the handover is kept: the ending ships
+    /// when the runner wrote one, otherwise the uncalled end drops.
+    fn deliver(end: End, completed: Option<contract::events::JobCompleted>) {
+        if let Some(completed) = completed {
+            (end.0)(completed);
+        } else {
+            drop(end);
+        }
+    }
     fn pending() -> Arc<Self> {
         Arc::new(Self(Mutex::new(Decision::Pending(Vec::new()))))
     }
@@ -56,11 +65,7 @@ impl Verdict {
             Decision::Pending(ends) => ends.push((end, completed)),
             Decision::Kept => {
                 drop(decision);
-                if let Some(completed) = completed {
-                    (end.0)(completed);
-                } else {
-                    drop(end);
-                }
+                Self::deliver(end, completed);
             }
             Decision::Abandoned => {
                 drop(decision);
@@ -81,11 +86,7 @@ impl Verdict {
         };
         for (end, completed) in ends {
             if kept {
-                if let Some(completed) = completed {
-                    (end.0)(completed);
-                } else {
-                    drop(end);
-                }
+                Self::deliver(end, completed);
             } else {
                 std::mem::forget(end);
             }

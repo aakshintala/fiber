@@ -298,6 +298,7 @@ pub(crate) fn finish_inline(
         Ok((file, path)) => {
             let mut inner = lock(&progress.shared.inner);
             inner.file = Some(file);
+            inner.output_path = Some(path.clone());
             inner.artifact_sink = true;
             inner.cap = cap;
             format!(
@@ -601,8 +602,9 @@ fn terminal_receipt(
 }
 
 /// A monitor's standard error file: beside its output file, named
-/// `<job_id>.stderr.log`.
-fn errors_path(output: &Path) -> std::path::PathBuf {
+/// `<job_id>.stderr.log`. Restored jobs share it for their keeper-side
+/// failure path.
+pub(super) fn errors_path(output: &Path) -> std::path::PathBuf {
     let stem = output
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())

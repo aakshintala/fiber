@@ -203,6 +203,14 @@ impl Default for Inner {
 }
 
 impl Inner {
+    /// Keeps the first output write failure, naming its file: a later
+    /// failure never overwrites it. `None` records nothing.
+    pub(super) fn keep_write_failure(&mut self, failure: Option<WriteFailure>) {
+        if self.write_failure.is_none() {
+            self.write_failure = failure;
+        }
+    }
+
     /// Hands the command to `file`: a spill in progress goes to the job's
     /// output file at `path`, and the foreground bytes are copied whole.
     /// A copy past the cap is kept whole and fires the cap at once. The
@@ -215,12 +223,12 @@ impl Inner {
     ) -> Option<String> {
         if let Some(spill) = self.spill.take() {
             let (sink, line, write_error) = spill.into_job(path, file);
-            if let Some(source) = write_error {
-                self.write_failure.get_or_insert_with(|| WriteFailure {
+            self.keep_write_failure(
+                write_error.map(|source| WriteFailure {
                     path: path.to_path_buf(),
                     source,
-                });
-            }
+                }),
+            );
             self.output_path = Some(path.to_path_buf());
             self.cap = cap;
             self.written = sink.metadata().map(|file| file.len()).unwrap_or(0);
@@ -230,10 +238,10 @@ impl Inner {
         }
         let bytes = std::mem::take(&mut self.output);
         if let Err(source) = write_or_drop(&mut file, &bytes) {
-            self.write_failure.get_or_insert_with(|| WriteFailure {
+            self.keep_write_failure(Some(WriteFailure {
                 path: path.to_path_buf(),
                 source,
-            });
+            }));
         }
         self.output_path = Some(path.to_path_buf());
         if let Some(lines) = self.lines.as_mut() {
@@ -256,12 +264,9 @@ impl Inner {
         let kept = bytes.get(..room.min(bytes.len())).unwrap_or(&[]);
         if let Some(file) = self.file.as_mut()
             && let Err(source) = write_or_drop(file, kept)
-            && let Some(path) = self.output_path.as_ref()
+            && let Some(path) = self.output_path.clone()
         {
-            self.write_failure.get_or_insert_with(|| WriteFailure {
-                path: path.clone(),
-                source,
-            });
+            self.keep_write_failure(Some(WriteFailure { path, source }));
         }
         self.written = self
             .written
@@ -344,9 +349,7 @@ pub(super) fn read_errors(read: impl Read, shared: &Shared) {
                     .map(|path| WriteFailure { path, source })
             })
         });
-        if inner.write_failure.is_none() {
-            inner.write_failure = failure;
-        }
+        inner.keep_write_failure(failure);
     });
     let mut inner = lock(&shared.inner);
     if let Some(errors) = inner.errors.as_mut() {
@@ -396,9 +399,7 @@ pub(super) fn hosted_bytes(shared: &Shared, stream: contract::keeper::Stream, by
                         .map(|path| WriteFailure { path, source })
                 })
             });
-            if inner.write_failure.is_none() {
-                inner.write_failure = failure;
-            }
+            inner.keep_write_failure(failure);
         } else if inner.file.is_some() {
             inner.sink(bytes);
         } else {

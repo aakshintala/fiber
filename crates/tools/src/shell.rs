@@ -1363,28 +1363,73 @@ pub(crate) fn assemble(
 /// a stop without either is its own kind; without one, a missing status
 /// is `tool_error` (the command could not be reaped), a foreign signal is
 /// `signal`, a nonzero exit is `nonzero_exit`, and the rest completed.
-/// Label only: the exit code and signal stay in `details`.
-pub(crate) fn pre_end_of(finished: &Finished) -> &'static str {
+/// Label only: the exit code and signal stay in `details`. The closed set
+/// crosses the crate boundary (the keeper-timeout override in `crates/main`
+/// names one), so it is an enum, never a `String` or `&str`
+/// (`docs/code-quality.md`, "Types").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReplacedEnd {
+    /// The command completed with status zero.
+    Completed,
+    /// The command was cancelled before it ran to an end.
+    Cancelled,
+    /// The command exited with a nonzero status.
+    NonzeroExit,
+    /// A foreign signal ended the command.
+    Signal,
+    /// The command ran past its timeout and was stopped.
+    Timeout,
+    /// A monitor's output was suppressed too long and it was stopped.
+    Flooded,
+    /// The command was stopped, and whether it completed is not known.
+    Indeterminate,
+    /// The output passed the cap and the command was stopped.
+    OutputCap,
+    /// The command's process could not be reaped.
+    ToolError,
+    /// The session stayed gone, so its keeper stopped the job.
+    KeeperTimeout,
+}
+
+impl ReplacedEnd {
+    /// The label the completion names: the replaced end's documented name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+            Self::NonzeroExit => "nonzero_exit",
+            Self::Signal => "signal",
+            Self::Timeout => "timeout",
+            Self::Flooded => "flooded",
+            Self::Indeterminate => "indeterminate",
+            Self::OutputCap => "output_cap",
+            Self::ToolError => "tool_error",
+            Self::KeeperTimeout => "keeper_timeout",
+        }
+    }
+}
+
+pub(crate) fn pre_end_of(finished: &Finished) -> ReplacedEnd {
     if finished.capped {
-        "output_cap"
+        ReplacedEnd::OutputCap
     } else if finished.flooded {
-        "flooded"
+        ReplacedEnd::Flooded
     } else if finished.indeterminate {
-        "indeterminate"
+        ReplacedEnd::Indeterminate
     } else {
         match finished.stop {
-            Some(StopKind::Cancel) => "cancelled",
-            Some(StopKind::Timeout) => "timeout",
+            Some(StopKind::Cancel) => ReplacedEnd::Cancelled,
+            Some(StopKind::Timeout) => ReplacedEnd::Timeout,
             None => match finished.status {
-                None => "tool_error",
+                None => ReplacedEnd::ToolError,
                 Some(status) => {
                     let (code, signal, _) = observed(status);
                     if signal.as_ref().is_some_and(|_| !finished.sent_signal) {
-                        "signal"
+                        ReplacedEnd::Signal
                     } else if code.is_some_and(|code| code != 0) {
-                        "nonzero_exit"
+                        ReplacedEnd::NonzeroExit
                     } else {
-                        "completed"
+                        ReplacedEnd::Completed
                     }
                 }
             },
@@ -1397,7 +1442,7 @@ fn assemble_output(
     mut finished: Finished,
     extra: Option<&str>,
     tail: Option<&str>,
-) -> (Output, &'static str, Option<output::WriteFailure>) {
+) -> (Output, ReplacedEnd, Option<output::WriteFailure>) {
     let pre_end = pre_end_of(&finished);
     let write_failure = finished.write_failure.take();
     let output = assemble_output_inner(limit, finished, extra, tail);

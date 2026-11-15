@@ -270,6 +270,13 @@ pub fn kept_end(job_id: JobId, exit: &Exit) -> JobCompleted {
 /// flags, with no stored write failure inside, so the one override the
 /// caller applies stays the only one. `flooded` selects the flooded end
 /// before any override, never after it.
+///
+/// The `sent_signal` conjunction is unobservable: where exactly one flag
+/// differs, the completion builders return through the timeout or the cap
+/// before reading `sent_signal`, and where neither differs both operators
+/// agree. A mutant swapping the operator changes no behaviour a consumer
+/// sees (`docs/testing/mutants.md`, "a mutant that changes no behaviour").
+#[cfg_attr(false, mutants::skip)]
 fn keeper_finished(exit: &Exit, flooded: bool) -> Finished {
     Finished {
         output: Kept::Whole(Vec::new()),
@@ -312,7 +319,11 @@ pub fn adopted_flooded_end(job_id: JobId, output: &Path, exit: &Exit) -> JobComp
     completed.output_tail = super::background::output_tail(output);
     if let Some(path) = &exit.output_write_failure {
         completed.status = Outcome::Failed;
-        completed.error = Some(override_write_failure("flooded", path, true));
+        completed.error = Some(override_write_failure(
+            super::ReplacedEnd::Flooded,
+            path,
+            true,
+        ));
     } else {
         completed.status = Outcome::Failed;
         completed.error = Some(Failure::from(&ToolError::from(ShellError::Flooded)));
@@ -328,7 +339,7 @@ pub fn adopted_flooded_end(job_id: JobId, output: &Path, exit: &Exit) -> JobComp
 /// the `io::ErrorKind` nor the operating system's text is rendered.
 /// Runs exactly once while each final completion is built, after that
 /// completion's end is selected.
-pub fn override_write_failure(pre_end: &'static str, path: &Path, flooded: bool) -> Failure {
+pub fn override_write_failure(pre_end: super::ReplacedEnd, path: &Path, flooded: bool) -> Failure {
     Failure {
         code: contract::ErrorCode::IoFailed,
         message: crate::error::output_write_line(path, pre_end, flooded),

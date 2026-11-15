@@ -401,7 +401,11 @@ impl Runtime {
                         });
                         if let Some(path) = &exit.output_write_failure {
                             completed.error =
-                                Some(tools::override_write_failure("keeper_timeout", path, false));
+                                Some(tools::override_write_failure(
+                                    tools::ReplacedEnd::KeeperTimeout,
+                                    path,
+                                    false,
+                                ));
                         }
                         log.log
                             .append(
@@ -731,7 +735,7 @@ impl Runtime {
                             (Some(path), true) => {
                                 state.write_failure = Some((path.clone(), error));
                             }
-                            _ => drop(error),
+                            _ => {}
                         }
                         match (destinations, failed) {
                             (Some((output, errors)), Some(failed)) => {
