@@ -1809,6 +1809,99 @@ fn depth_responder(request: &Request) -> Response {
 }
 
 #[test]
+fn a_delegate_tool_child_receives_the_delegates_own_session_id() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start_responding(|request| {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        if body["tools"]
+            .as_array()
+            .is_none_or(|tools| tools.is_empty())
+        {
+            return text_reply("allow");
+        }
+        if body["input"].as_array().is_some_and(|input| {
+            input.iter().any(|item| {
+                item["type"] == "function_call_output"
+                    && item["output"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("Started delegate"))
+            })
+        }) {
+            support::hello()
+        } else {
+            support::stream(&[spawn_call("fiber:pb/m")])
+        }
+    })
+    .unwrap();
+    let child = ProviderServer::start_responding(|request| {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        if body["tools"]
+            .as_array()
+            .is_none_or(|tools| tools.is_empty())
+        {
+            return text_reply("allow");
+        }
+        if body["input"].as_array().is_some_and(|input| {
+            input
+                .iter()
+                .any(|item| item["type"] == "function_call_output")
+        }) {
+            support::hello()
+        } else {
+            support::stream(&[function_call(
+                "session_id",
+                "shell",
+                &json!({"command": "printf '%s\\n' \"$FIBER_SESSION_ID\""}),
+            )])
+        }
+    })
+    .unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    let id = doors::mint("s_");
+    let parent_id = doors::mint("s_");
+    let job = doors::mint("j_");
+    let (mut running, lifeline) = Running::spawn_stdin(
+        &setup,
+        &[
+            "session",
+            "--id",
+            &id,
+            "--workspace",
+            setup.root.path().to_str().unwrap(),
+            "--model",
+            "pa/m",
+            "--prompt",
+            "delegate",
+            "--parent",
+            &parent_id,
+            "--delegate-id",
+            &job,
+            "--depth",
+            "1",
+        ],
+        Stdio::piped(),
+    );
+    running.wait_line("the parent session exits", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    drop(lifeline);
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "{stderr}");
+    let started = one(&lines, "delegate_started");
+    let child_id = started["delegate_session_id"].as_str().unwrap();
+    let child_lines = read_lines(&ask_sessions(&setup).join(child_id).join("events.jsonl"));
+    let completed = completed_for(&child_lines, "shell");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed["payload"]["content"][0]["text"],
+        format!("{child_id}\nExit code 0.\n")
+    );
+    assert_ne!(child_id, id);
+}
+
+#[test]
 fn a_depth_one_delegate_starts_depth_two_with_the_same_tools_but_no_grandchild() {
     let setup = support::Setup::new();
     let _guard = arm(&setup);

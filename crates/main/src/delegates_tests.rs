@@ -720,24 +720,6 @@ fn launched() -> jobs::Launched {
 }
 
 #[test]
-fn delegate_process_receives_its_own_session_id() {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let dir = fakes::TempDir::new("delegate-session-id");
-    let fiber = dir.path().join("fiber");
-    std::fs::write(&fiber, "#!/bin/sh\nprintf '%s' \"$FIBER_SESSION_ID\"\n").unwrap();
-    std::fs::set_permissions(&fiber, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-    let child = super::command(&fiber, &launched())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(output.status.success());
-    assert_eq!(output.stdout, b"s_child");
-}
-
-#[test]
 fn isolated_launch_carries_the_precreated_workspace_and_worktree_flag() {
     let mut launched = launched();
     launched.workspace = "/fiber/worktrees/s_child".into();
@@ -800,15 +782,6 @@ fn the_launch_runs_the_child_session_with_its_ids_model_and_prompt() {
     let launched = launched();
     let command = launcher(std::path::Path::new("/bin/fiber"))(&launched);
     assert_eq!(command.get_program(), "/bin/fiber");
-    assert_eq!(
-        command
-            .get_envs()
-            .find(|(name, _)| *name == "FIBER_SESSION_ID"),
-        Some((
-            std::ffi::OsStr::new("FIBER_SESSION_ID"),
-            Some(std::ffi::OsStr::new("s_child"))
-        ))
-    );
     let argv: Vec<_> = command
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
