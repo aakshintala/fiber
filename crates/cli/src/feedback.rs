@@ -342,18 +342,8 @@ pub fn select_session(
     let Some(id) = explicit else {
         let project = worktree::project(workspace);
         let in_project = |started: &str| worktree::project(Path::new(started)) == project;
-        let latest = log::candidate_sessions_dirs(home, &project)
-            .into_iter()
-            .filter_map(|sessions| {
-                let id = log::most_recent(&sessions, &in_project)?;
-                let dir = log::SessionDir::new(&sessions, &id);
-                Some((
-                    log::last_ts(dir.path()).or_else(|| log::opening_ts(dir.path()))?,
-                    id,
-                ))
-            })
-            .max_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)))
-            .map(|(_, id)| id);
+        let latest =
+            log::most_recent_in(&log::candidate_sessions_dirs(home, &project), &in_project);
         return Ok(latest);
     };
     let usable = log::find_logged_session(home, &id)

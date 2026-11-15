@@ -229,7 +229,7 @@ fn located_session(context: &Context, id: &SessionId) -> Option<log::SessionDir>
                     .repository
                     .as_deref()
                     .or(started.workspace.as_deref())
-                    .is_some_and(&accepted)
+                    .is_some_and(accepted)
             })
         })
 }

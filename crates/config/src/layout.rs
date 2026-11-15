@@ -11,6 +11,14 @@ use crate::{ConfigError, ProjectKey};
 
 /// Ensures layout version 2 and lazily migrates this identity's legacy project directory.
 pub fn ensure_project_layout(home: &Path, identity: &Path) -> Result<(), ConfigError> {
+    ensure_project_layout_with(home, identity, support::atomic::rename_noreplace)
+}
+
+fn ensure_project_layout_with(
+    home: &Path,
+    identity: &Path,
+    rename_noreplace: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), ConfigError> {
     let layout = home.join("layout");
     match fs::read(&layout) {
         Ok(bytes) if bytes == b"2" => {}
@@ -24,111 +32,99 @@ pub fn ensure_project_layout(home: &Path, identity: &Path) -> Result<(), ConfigE
             ));
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            support::atomic::write_atomic(&layout, b"2", 0o600).map_err(|source| {
-                ConfigError::Io {
-                    file: layout.clone(),
-                    source,
-                }
-            })?;
+            support::atomic::write_atomic(&layout, b"2", 0o600)
+                .map_err(|source| io_error(&layout, source))?;
         }
-        Err(source) => {
-            return Err(ConfigError::Io {
-                file: layout,
-                source,
-            });
-        }
+        Err(source) => return Err(io_error(&layout, source)),
     }
 
     let projects = projects_dir(home);
     match fs::symlink_metadata(&projects) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => {
-            return Err(ConfigError::Io {
-                file: projects,
-                source,
-            });
-        }
+        Err(source) => return Err(io_error(&projects, source)),
         Ok(_) => {}
     }
-    fs::create_dir_all(&projects).map_err(|source| ConfigError::Io {
-        file: projects.clone(),
-        source,
-    })?;
     let legacy = projects.join(support::project_key::legacy_project_slug(identity));
     let target = projects.join(support::project_key::project_key(identity));
-    let source_meta = match fs::symlink_metadata(&legacy) {
-        Ok(metadata) if metadata.file_type().is_dir() => metadata,
+    match fs::symlink_metadata(&legacy) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
         Ok(_) => return Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => {
-            return Err(ConfigError::Io {
-                file: legacy,
-                source,
-            });
-        }
-    };
-    let _ = source_meta;
+        Err(source) => return Err(io_error(&legacy, source)),
+    }
 
     let marker = legacy.join("legacy-key");
-    match fs::symlink_metadata(&marker) {
+    let marker_exists = match fs::symlink_metadata(&marker) {
         Ok(metadata) if metadata.file_type().is_file() => {
-            let bytes = fs::read(&marker).map_err(|source| ConfigError::Io {
-                file: marker.clone(),
-                source,
-            })?;
-            if bytes == support::project_key::legacy_project_slug(identity).as_bytes() {
+            let bytes = fs::read(&marker).map_err(|source| io_error(&marker, source))?;
+            if bytes != support::project_key::legacy_project_slug(identity).as_bytes() {
                 return Ok(());
             }
-            return Ok(());
+            true
         }
         Ok(_) => return Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(source) => {
-            return Err(ConfigError::Io {
-                file: marker,
-                source,
-            });
-        }
-    }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(source) => return Err(io_error(&marker, source)),
+    };
     if plain_dir_exists(&target) {
         return Ok(());
     }
-    support::atomic::write_atomic(
-        &marker,
-        support::project_key::legacy_project_slug(identity).as_bytes(),
-        0o600,
-    )
-    .map_err(|source| ConfigError::Io {
-        file: marker,
-        source,
-    })?;
-    match support::atomic::rename_noreplace(&legacy, &target) {
+    if !marker_exists {
+        support::atomic::write_atomic(
+            &marker,
+            support::project_key::legacy_project_slug(identity).as_bytes(),
+            0o600,
+        )
+        .map_err(|source| io_error(&marker, source))?;
+    }
+    rename_project_dir(&legacy, &target, rename_noreplace)
+        .map_err(|source| io_error(&legacy, source))
+}
+
+fn rename_project_dir(
+    legacy: &Path,
+    target: &Path,
+    rename_noreplace: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    match rename_noreplace(legacy, target) {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
-            if fs::symlink_metadata(&target).is_ok() {
-                return Ok(());
+        Err(source) if source.kind() == std::io::ErrorKind::Unsupported => {
+            if fs::symlink_metadata(target).is_ok() {
+                return if plain_dir_exists(target) {
+                    Ok(())
+                } else {
+                    Err(std::io::ErrorKind::AlreadyExists.into())
+                };
             }
-            fs::rename(&legacy, &target).map_err(|source| ConfigError::Io {
-                file: legacy,
-                source,
-            })
+            match fs::rename(legacy, target) {
+                Err(source) if rename_race(&source) => {
+                    if plain_dir_exists(target) {
+                        Ok(())
+                    } else {
+                        Err(source)
+                    }
+                }
+                result => result,
+            }
         }
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
-            if plain_dir_exists(&target) {
+        Err(source) if rename_race(&source) => {
+            if plain_dir_exists(target) {
                 Ok(())
             } else {
-                Err(ConfigError::Io {
-                    file: legacy,
-                    source,
-                })
+                Err(source)
             }
         }
-        Err(source) => Err(ConfigError::Io {
-            file: legacy,
-            source,
-        }),
+        Err(source) => Err(source),
     }
+}
+
+fn rename_race(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::AlreadyExists
+            | std::io::ErrorKind::DirectoryNotEmpty
+            | std::io::ErrorKind::NotFound
+    )
 }
 
 fn io_error(file: &Path, source: std::io::Error) -> ConfigError {
@@ -259,8 +255,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        ProjectKey, ensure_project_layout, project_protected_paths_dir, project_worktrees_dir,
-        projects_dir,
+        ProjectKey, ensure_project_layout, ensure_project_layout_with, project_protected_paths_dir,
+        project_worktrees_dir, projects_dir,
     };
 
     #[test]
@@ -324,6 +320,81 @@ mod tests {
         assert_eq!(fs::read(target.join("legacy-key")).unwrap(), b"-a-b");
         assert_eq!(fs::read(target.join("config.json")).unwrap(), b"legacy");
         assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn legacy_project_migration_resumes_marked_source() {
+        let home = fakes::TempDir::new("config-layout-resume-marked");
+        let identity = PathBuf::from("/a-b");
+        let legacy = projects_dir(home.path()).join("-a-b");
+        let target = projects_dir(home.path()).join(support::project_key::project_key(&identity));
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("legacy-key"), b"-a-b").unwrap();
+        fs::write(legacy.join("config.json"), b"legacy").unwrap();
+
+        ensure_project_layout(home.path(), &identity).unwrap();
+
+        assert!(!legacy.exists());
+        assert_eq!(fs::read(target.join("legacy-key")).unwrap(), b"-a-b");
+        assert_eq!(fs::read(target.join("config.json")).unwrap(), b"legacy");
+    }
+
+    #[test]
+    fn legacy_project_migration_refuses_malformed_marker() {
+        let identity = PathBuf::from("/a-b");
+        for marker in [b"wrong".as_slice(), b"".as_slice()] {
+            let home = fakes::TempDir::new("config-layout-malformed-marker");
+            let legacy = projects_dir(home.path()).join("-a-b");
+            let target =
+                projects_dir(home.path()).join(support::project_key::project_key(&identity));
+            fs::create_dir_all(&legacy).unwrap();
+            fs::write(legacy.join("legacy-key"), marker).unwrap();
+            fs::write(legacy.join("config.json"), b"legacy").unwrap();
+
+            ensure_project_layout(home.path(), &identity).unwrap();
+
+            assert!(legacy.is_dir());
+            assert!(!target.exists());
+            assert_eq!(fs::read(legacy.join("config.json")).unwrap(), b"legacy");
+        }
+        let home = fakes::TempDir::new("config-layout-marker-not-file");
+        let legacy = projects_dir(home.path()).join("-a-b");
+        let target = projects_dir(home.path()).join(support::project_key::project_key(&identity));
+        fs::create_dir_all(legacy.join("legacy-key")).unwrap();
+        ensure_project_layout(home.path(), &identity).unwrap();
+        assert!(legacy.is_dir());
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn legacy_project_migration_noreplace_unsupported() {
+        let identity = PathBuf::from("/a-b");
+        let home = fakes::TempDir::new("config-layout-unsupported-rename");
+        let legacy = projects_dir(home.path()).join("-a-b");
+        let target = projects_dir(home.path()).join(support::project_key::project_key(&identity));
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("config.json"), b"legacy").unwrap();
+        ensure_project_layout_with(home.path(), &identity, |_, _| {
+            Err(std::io::ErrorKind::Unsupported.into())
+        })
+        .unwrap();
+        assert!(!legacy.exists());
+        assert_eq!(fs::read(target.join("config.json")).unwrap(), b"legacy");
+
+        let home = fakes::TempDir::new("config-layout-unsupported-target");
+        let legacy = projects_dir(home.path()).join("-a-b");
+        let target = projects_dir(home.path()).join(support::project_key::project_key(&identity));
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("config.json"), b"legacy").unwrap();
+        ensure_project_layout_with(home.path(), &identity, |_, target| {
+            fs::create_dir(target)?;
+            fs::write(target.join("config.json"), b"target")?;
+            Err(std::io::ErrorKind::Unsupported.into())
+        })
+        .unwrap();
+        assert!(legacy.is_dir());
+        assert_eq!(fs::read(legacy.join("config.json")).unwrap(), b"legacy");
+        assert_eq!(fs::read(target.join("config.json")).unwrap(), b"target");
     }
 
     #[test]

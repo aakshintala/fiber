@@ -235,14 +235,6 @@ fn stale_recent_key_lists_the_marker_validated_migrated_directory() {
 }
 
 #[test]
-fn recent_row_with_another_recorded_workspace_is_not_reachable() {
-    let temp = Temp::new();
-    let mut row = temp.row(18, "p", Left::Exited, Some("idle"));
-    row.workspace = "/other".to_owned();
-    assert!(!row.dir_exists(&temp.dir));
-}
-
-#[test]
 fn retention_candidates_include_only_unarchived_exited_rows_in_newest_order() {
     let temp = Temp::new();
     let live = temp.row(1, "p", Left::Crashed, None);

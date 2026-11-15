@@ -123,8 +123,8 @@ impl Fixtures {
             "full output: RETRY BUDGET exhausted\n",
         )
         .unwrap();
-        // `<parent>-<root>` beside the root's parent used to collide with
-        // the root's key; the hashed keys keep these projects separate.
+        // `<parent>-<root>` shares the readable slug; the identity hash
+        // keeps these projects' keys separate.
         let parent = workspace.parent().unwrap();
         let colliding = parent.parent().unwrap().join(format!(
             "{}-{}",

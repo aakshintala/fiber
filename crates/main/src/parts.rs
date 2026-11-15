@@ -372,9 +372,7 @@ fn parts_inner(
     launch: Option<SessionLaunch>,
     fiber: Option<PathBuf>,
 ) -> Result<Parts, Failure> {
-    let identity = worktree::project(&workspace);
-    let project = ::cli::project_key_of(&workspace)?;
-    let sessions = log::sessions_dir(&home, &identity);
+    let (sessions, project) = ::cli::project_of(&home, &workspace)?;
     let (config, diag, mut startup_notices) = load_configuration(
         &home,
         &workspace,

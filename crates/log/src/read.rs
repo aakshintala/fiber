@@ -132,14 +132,16 @@ fn valid_id(id: &SessionId) -> bool {
     matches!(parts.next(), Some(std::path::Component::Normal(_))) && parts.next().is_none()
 }
 
+type ProjectMatcher<'a> = dyn Fn(&str, &Path) -> bool + 'a;
+
 /// The first project in key order holding `id`, with `logged` choosing
 /// the predicate: a directory, or a directory with a log file. One
 /// `read_dir` of `projects/` per call; no `sessions/` is ever scanned.
-fn walk(
+fn walk<'a>(
     home: &Path,
     id: &SessionId,
     logged: bool,
-    matches: Option<&dyn Fn(&str, &Path) -> bool>,
+    matches: Option<&'a ProjectMatcher<'a>>,
 ) -> Option<(String, PathBuf)> {
     if !valid_id(id) {
         return None;

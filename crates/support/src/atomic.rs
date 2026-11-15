@@ -13,18 +13,6 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// A no-replace rename was refused because the filesystem does not support it.
-#[derive(Debug)]
-pub struct RenameNoReplaceUnsupported;
-
-impl std::fmt::Display for RenameNoReplaceUnsupported {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("filesystem does not support atomic no-replace rename")
-    }
-}
-
-impl std::error::Error for RenameNoReplaceUnsupported {}
-
 /// Atomically renames a file or directory without replacing an existing target.
 pub fn rename_noreplace(source: &Path, target: &Path) -> Result<(), std::io::Error> {
     match rustix::fs::renameat_with(
@@ -35,11 +23,12 @@ pub fn rename_noreplace(source: &Path, target: &Path) -> Result<(), std::io::Err
         rustix::fs::RenameFlags::NOREPLACE,
     ) {
         Ok(()) => Ok(()),
-        Err(error) if error == rustix::io::Errno::INVAL || error == rustix::io::Errno::NOSYS => {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                RenameNoReplaceUnsupported,
-            ))
+        Err(error)
+            if error == rustix::io::Errno::INVAL
+                || error == rustix::io::Errno::NOSYS
+                || error == rustix::io::Errno::NOTSUP =>
+        {
+            Err(std::io::ErrorKind::Unsupported.into())
         }
         Err(error) => Err(error.into()),
     }

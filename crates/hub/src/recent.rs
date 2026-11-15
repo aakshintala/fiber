@@ -78,27 +78,6 @@ impl RecentRow {
     fn located_dir(&self, home: &Path) -> Option<(String, PathBuf)> {
         log::find_session_in_project(home, &self.project, &self.session_id)
     }
-
-    /// Whether the logged directory still records this row's workspace.
-    #[cfg(test)]
-    pub(crate) fn dir_exists(&self, home: &Path) -> bool {
-        let Some((key, dir)) =
-            log::find_logged_session_matching(home, &self.session_id, &|started| {
-                started.workspace.as_deref() == Some(self.workspace.as_str())
-            })
-        else {
-            return false;
-        };
-        if key != self.project {
-            let Some(project_dir) = dir.parent().and_then(Path::parent) else {
-                return false;
-            };
-            if !log::legacy_marker_matches(project_dir, &self.project) {
-                return false;
-            }
-        }
-        true
-    }
 }
 
 /// Whether `status` is waiting on a person.

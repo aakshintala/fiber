@@ -179,8 +179,11 @@ pub fn sessions_dir(home: &Path, project: &Path) -> PathBuf {
         .join("sessions")
 }
 
+/// The candidate session directories for a project.
+pub type SessionDirs = [PathBuf; 2];
+
 /// The current hashed and unmoved legacy session directories derived from an identity.
-pub fn candidate_sessions_dirs(home: &Path, identity: &Path) -> [PathBuf; 2] {
+pub fn candidate_sessions_dirs(home: &Path, identity: &Path) -> SessionDirs {
     [
         home.join("projects")
             .join(support::project_key::legacy_project_slug(identity))
