@@ -429,3 +429,14 @@ docs/workflow.md	fiber-4897	plan	2026-11-15T16:33:09Z	roundhouse-7010-plus-1:/ho
 docs/code-quality.md	fiber-4897	plan	2026-11-15T16:33:09Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/dependencies.md	fiber-4897	plan	2026-11-15T16:33:09Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/ci.md	fiber-4897	plan	2026-11-15T16:33:09Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+scripts/test-script-selftests	fiber-4889	plan	2026-11-15T16:35:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+xtask/src/select.rs	fiber-4889	plan	2026-11-15T16:35:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/fakes/src/jig_start.rs	fiber-4889	plan	2026-11-15T16:35:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/tests/pin_check_jig.rs	fiber-4889	plan	2026-11-15T16:35:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/examples/pin_check.rs	fiber-4889	plan	2026-11-15T16:35:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/src/models_dev.rs	fiber-4889	plan	2026-11-15T16:35:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/log/tests/check_jig.rs	fiber-4889	plan	2026-11-15T16:35:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/log/tests/support/check.rs	fiber-4889	plan	2026-11-15T16:35:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing.md	fiber-4889	plan	2026-11-15T16:35:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing/fakes.md	fiber-4889	plan	2026-11-15T16:35:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+scripts/check-docs	fiber-4889	plan	2026-11-15T16:35:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
