@@ -7,6 +7,7 @@ use crate::configure::{LoginKind, LoginTarget};
 use crate::configure_fake::Fake;
 use crate::keys::Key;
 use crate::settings_view::{Act, Ctx};
+use crate::swapped::Spot;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::path::Path;
@@ -196,6 +197,94 @@ fn body_len_counts_wrapped_status_and_short_draw_clips() {
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
     let _ = logout.draw(area, &mut buf, &mut targets);
+}
+
+/// Space and clicking a deletable row start the Enter confirmation; its
+/// rowless panel still accepts Enter or Esc only (`docs/tui.md`, "Swapped views").
+#[test]
+fn space_and_click_on_deletable_rows_open_the_enter_confirmation() {
+    let fake = fake_with(many_targets());
+    let context = ctx_h(&fake, 24);
+    let mut by_space = Logout::open(&context);
+    assert!(matches!(by_space.key(&Key::Char(' '), &context), Act::Stay));
+    assert!(matches!(by_space.mode, super::Mode::Confirm { .. }));
+    let area = Rect::new(0, 0, 80, 24);
+    let mut screen = Buffer::empty(area);
+    let _ = by_space.draw(area, &mut screen, &mut Vec::new());
+    let text = text_of(&screen, 80, 24).join("\n");
+    assert!(text.contains("Delete p00/l00?"), "{text}");
+    assert!(matches!(by_space.key(&Key::Char(' '), &context), Act::Stay));
+    assert!(matches!(by_space.mode, super::Mode::Confirm { .. }));
+    assert!(fake.deletes.lock().expect("deletes").is_empty());
+    assert!(matches!(by_space.key(&Key::Esc, &context), Act::Stay));
+    assert!(matches!(by_space.mode, super::Mode::Rows));
+    assert!(fake.deletes.lock().expect("deletes").is_empty());
+
+    let fake = fake_with(many_targets());
+    let context = ctx_h(&fake, 24);
+    let mut by_click = Logout::open(&context);
+    let selected = by_click.selected;
+    assert!(matches!(
+        by_click.click(Spot::Row(selected), &context),
+        Act::Stay
+    ));
+    assert!(matches!(by_click.mode, super::Mode::Confirm { .. }));
+    let mut screen = Buffer::empty(area);
+    let _ = by_click.draw(area, &mut screen, &mut Vec::new());
+    let text = text_of(&screen, 80, 24).join("\n");
+    assert!(text.contains("Delete p00/l00?"), "{text}");
+}
+
+/// A dim row is not an action target, whether focused by key or clicked.
+#[test]
+fn space_and_click_on_a_dim_row_do_nothing() {
+    let fake = Fake::new(Vec::new());
+    if let Ok(mut rows) = fake.logout.lock() {
+        *rows = Ok(vec![
+            crate::configure::LogoutRow::Provider {
+                name: "env".to_owned(),
+                label: "default".to_owned(),
+                default: true,
+                deletable: false,
+                origin: Some("environment".to_owned()),
+                siblings: Vec::new(),
+            },
+            crate::configure::LogoutRow::Provider {
+                name: "stored".to_owned(),
+                label: "default".to_owned(),
+                default: false,
+                deletable: true,
+                origin: None,
+                siblings: Vec::new(),
+            },
+        ]);
+    }
+    let context = ctx_h(&fake, 24);
+    let mut logout = Logout::open(&context);
+    let dim = logout
+        .items
+        .iter()
+        .position(|item| *item == crate::login_logout_view::Item::Target(0))
+        .expect("dim row");
+    logout.selected = dim;
+    assert!(matches!(logout.key(&Key::Char(' '), &context), Act::Stay));
+    assert!(matches!(logout.mode, super::Mode::Rows));
+    assert!(matches!(logout.click(Spot::Row(dim), &context), Act::Stay));
+    assert!(matches!(logout.mode, super::Mode::Rows));
+    assert!(fake.deletes.lock().expect("deletes").is_empty());
+}
+
+/// `buf`'s cell text, one line per row.
+fn text_of(buf: &Buffer, width: u16, height: u16) -> Vec<String> {
+    (0..height)
+        .map(|y| {
+            (0..width)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect()
 }
 
 /// Confirming a deletion redraws the list from the rows returned by the re-list.
