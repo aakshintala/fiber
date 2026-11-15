@@ -464,8 +464,25 @@ fn allowed_with_grant(id: &str) -> Event {
     })
 }
 
-/// A reviewer denial with no request, decided by `decided_by`: the live
-/// reviewer's own block line.
+fn allowed_by(decided_by: DecidedBy) -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        call: None,
+        request_id: None,
+        decision: Decision::Allow,
+        decided_by,
+        reason: None,
+        feedback: None,
+        grant: None,
+        rule: None,
+        reviewer: (decided_by == DecidedBy::Reviewer).then(|| contract::events::ReviewerRef {
+            model: "fake/reviewer-1".to_owned(),
+            stage: 2,
+        }),
+        hosts: None,
+    })
+}
+
+/// A reviewer denial with no request: the live reviewer's own block line.
 fn denied_by(decided_by: DecidedBy) -> Event {
     Event::PermissionResolved(PermissionResolved {
         call: None,
@@ -3336,6 +3353,118 @@ fn restored_block_consecutive_raise_counts() {
         "restored-consecutive",
         &[requested_review("r_1", consecutive_blocks())],
     );
+    assert_eq!(folded.session_blocks, 1);
+}
+
+#[test]
+fn restored_block_consecutive_denials_fold_run() {
+    // `docs/permissions.md`, "What happens on a block": 3 consecutive blocks.
+    let folded = fold_own(
+        "restored-deny-deny",
+        &[
+            denied_by(DecidedBy::Reviewer),
+            denied_by(DecidedBy::Reviewer),
+        ],
+    );
+    assert_eq!(folded.consecutive, 2);
+}
+
+#[test]
+fn restored_block_reviewer_allow_resets_run() {
+    // `docs/permissions.md`, "What happens on a block": reviewer allow resets the run.
+    let folded = fold_own(
+        "restored-deny-allow-deny",
+        &[
+            denied_by(DecidedBy::Reviewer),
+            allowed_by(DecidedBy::Reviewer),
+            denied_by(DecidedBy::Reviewer),
+        ],
+    );
+    assert_eq!(folded.consecutive, 1);
+}
+
+#[test]
+fn restored_block_person_answer_resets_escalation_run() {
+    // `docs/permissions.md`, "What happens on a block": the person's answer ends the run.
+    let folded = fold_own(
+        "restored-answer-reset",
+        &[
+            denied_by(DecidedBy::Reviewer),
+            denied_by(DecidedBy::Reviewer),
+            requested_review("r_1", consecutive_blocks()),
+            settled("r_1", DecidedBy::Person),
+        ],
+    );
+    assert_eq!(folded.consecutive, 0);
+}
+
+#[test]
+fn restored_block_non_escalation_answer_keeps_run() {
+    // `docs/permissions.md`, "What happens on a block": the person's answer ends the run only for an escalation.
+    let folded = fold_own(
+        "restored-standing-answer",
+        &[
+            denied_by(DecidedBy::Reviewer),
+            requested_permission("r_1"),
+            settled("r_1", DecidedBy::Person),
+        ],
+    );
+    assert_eq!(folded.consecutive, 1);
+}
+
+#[test]
+fn restored_block_parent_segment_does_not_contribute_to_run() {
+    let folded = fold_chain(
+        "restored-parent-run",
+        &[
+            denied_by(DecidedBy::Reviewer),
+            denied_by(DecidedBy::Reviewer),
+        ],
+        &[],
+    );
+    // `docs/permissions.md`, "What happens on a block": 20 in a session.
+    assert_eq!(folded.session_blocks, 0);
+}
+
+#[test]
+fn restored_block_cancel_keeps_run_after_escalation() {
+    // `docs/permissions.md`, "What happens on a block": the person's answer ends the run.
+    let folded = fold_own(
+        "restored-cancel-run",
+        &[
+            denied_by(DecidedBy::Reviewer),
+            denied_by(DecidedBy::Reviewer),
+            requested_review("r_1", consecutive_blocks()),
+            settled("r_1", DecidedBy::Cancel),
+        ],
+    );
+    assert_eq!(folded.consecutive, 3);
+}
+
+#[test]
+fn restored_block_hook_settlement_keeps_run_after_escalation() {
+    // `docs/permissions.md`, "What happens on a block": only a person's answer ends the run.
+    let folded = fold_own(
+        "restored-hook-run-standing",
+        &[
+            denied_by(DecidedBy::Reviewer),
+            denied_by(DecidedBy::Reviewer),
+            requested_review("r_1", consecutive_blocks()),
+            settled("r_1", DecidedBy::Hook),
+        ],
+    );
+    assert_eq!(folded.consecutive, 3);
+}
+
+#[test]
+fn restored_block_parent_hook_settlement_increments_run() {
+    // `docs/permissions.md`, "What happens on a block": 3 consecutive blocks.
+    let folded = fold_chain(
+        "restored-hook-run",
+        &[requested_review("r_1", consecutive_blocks())],
+        &[settled("r_1", DecidedBy::Hook)],
+    );
+    assert_eq!(folded.consecutive, 1);
     assert_eq!(folded.session_blocks, 1);
 }
 

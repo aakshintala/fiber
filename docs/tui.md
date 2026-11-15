@@ -1301,7 +1301,9 @@ install still running.
   turn start. Enter shows the skill's text, after every skill it shadows
   with its source and path, Ctrl+G opens its file
   (`docs/system-prompt.md`, "Skills"); on a remote terminal it opens the
-  hub's copy instead ("Swapped views"). A row is "review · checks a diff
+  hub's copy instead ("Swapped views").
+  With row focus, Enter or Space shows its text; with a focused switch,
+  Enter or Space toggles that switch. A row is "review · checks a diff
   · repo · seen · this project " and its switch, then " · everywhere " and
   its switch, as on `/tools`; a shadowing skill adds " · shadows <source>,
   …" after the switches, cut with "…" so both switches stay whole.
@@ -1313,7 +1315,7 @@ install still running.
   the description is cut first, then the name, then the skill's own source,
   keeping room for " · shadows …"; the clause is left out only when the
   fixed fields and both switches leave less than that minimum. The last row
-  is "Enter shows the text · Ctrl+G opens its file", dim.
+  is "Enter/Space opens row text or toggles the focused switch · Ctrl+G opens its file", dim.
 - **`/rewind`** ("Rewind").
 - **`/fork`:** rewinds to the end of the conversation ("Rewind").
 - **A repository's offer**, before a new session's first request ("Approving

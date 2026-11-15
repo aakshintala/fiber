@@ -436,7 +436,8 @@ fn rename_into_a_job_file_keeps_the_handle_and_leaves_no_spill() {
     let spill = Spill::start(config(&dir, 8, 8), b"0123456789abcdef".to_vec());
     let job = dir.path().join("j_1.log");
     let registry = File::create(&job).unwrap();
-    let (mut sink, line) = spill.into_job(&job, registry);
+    let (mut sink, line, write_error) = spill.into_job(&job, registry);
+    assert!(write_error.is_none());
     assert_eq!(line, None);
     sink.write_all(b"later").unwrap();
     drop(sink);
@@ -451,7 +452,8 @@ fn a_failed_rename_copies_into_the_registry_file_and_removes_the_spill() {
     let job = dir.path().join("missing").join("j_1.log");
     let registry_path = dir.path().join("registry.log");
     let registry = File::create(&registry_path).unwrap();
-    let (mut sink, line) = spill.into_job(&job, registry);
+    let (mut sink, line, write_error) = spill.into_job(&job, registry);
+    assert!(write_error.is_none());
     assert_eq!(line, None);
     sink.write_all(b"later").unwrap();
     drop(sink);
@@ -463,21 +465,44 @@ fn a_failed_rename_copies_into_the_registry_file_and_removes_the_spill() {
 }
 
 #[test]
-fn a_failed_copy_keeps_the_spilled_file_and_names_it() {
-    let dir = TempDir::new("fiber-spill-copy-fail");
+fn a_failed_rename_fallback_copy_is_reported() {
+    let dir = TempDir::new("fiber-spill-rename-copy-fail");
     let spill = Spill::start(config(&dir, 8, 8), b"0123456789abcdef".to_vec());
-    // Nowhere to rename to, and a read-only registry no copy can fill.
     let job = dir.path().join("missing").join("j_1.log");
     let readonly = dir.path().join("readonly.log");
     std::fs::write(&readonly, b"").unwrap();
     let registry = File::open(&readonly).unwrap();
-    let (_sink, line) = spill.into_job(&job, registry);
-    let line = line.expect("the receipt names the file");
-    assert!(line.contains("s_test.txt"), "{line}");
+    let (_sink, line, write_error) = spill.into_job(&job, registry);
+    assert!(write_error.is_some());
+    assert!(line.is_some_and(|line| line.contains("s_test.txt")));
+    // The failed rename keeps the spill file: the receipt points at it.
     assert_eq!(
         std::fs::read(dir.path().join("s_test.txt")).unwrap(),
         b"0123456789abcdef"
     );
+}
+
+#[test]
+fn failed_copy_to_job_output_is_reported() {
+    let dir = TempDir::new("fiber-spill-copy-fail");
+    let spill = Spill::start(
+        Config {
+            dir: dir.path().join("not-a-dir"),
+            bound: Bound { start: 8, end: 8 },
+            wrap: None,
+            name: Some("s_test.txt".to_owned()),
+        },
+        b"0123456789abcdef".to_vec(),
+    );
+    // The failed spill has no saved file, and the registry cannot accept its head.
+    let job = dir.path().join("missing").join("j_1.log");
+    let readonly = dir.path().join("readonly.log");
+    std::fs::write(&readonly, b"").unwrap();
+    let registry = File::open(&readonly).unwrap();
+    let (_sink, line, write_error) = spill.into_job(&job, registry);
+    assert!(write_error.is_some());
+    assert!(line.is_none(), "there is no spill file to retain");
+    assert!(!dir.path().join("s_test.txt").exists());
 }
 
 #[test]
@@ -494,7 +519,8 @@ fn a_failed_spill_moved_to_a_job_writes_head_then_ring() {
     );
     let job = dir.path().join("j_1.log");
     let registry = File::create(&job).unwrap();
-    let (sink, line) = spill.into_job(&job, registry);
+    let (sink, line, write_error) = spill.into_job(&job, registry);
+    assert!(write_error.is_none());
     assert_eq!(line, None);
     drop(sink);
     assert_eq!(std::fs::read(&job).unwrap(), b"01236789");
@@ -527,10 +553,11 @@ fn a_left_file_is_retried_at_the_move() {
     let mut spill = failing_spill(&dir);
     readonly(&dir);
     spill.push(b"bye");
-    let (sink, line) = spill.into_job(
+    let (sink, line, write_error) = spill.into_job(
         &job,
         std::fs::OpenOptions::new().write(true).open(&job).unwrap(),
     );
+    assert!(write_error.is_none());
     drop(sink);
     writable(&dir);
     let line = line.expect("the surviving file is named");
@@ -544,10 +571,11 @@ fn a_left_file_is_retried_at_the_move() {
     readonly(&dir);
     spill.push(b"bye");
     writable(&dir);
-    let (sink, line) = spill.into_job(
+    let (sink, line, write_error) = spill.into_job(
         &job,
         std::fs::OpenOptions::new().write(true).open(&job).unwrap(),
     );
+    assert!(write_error.is_none());
     assert_eq!(line, None);
     drop(sink);
     assert!(!dir.path().join("s_test.txt").exists());

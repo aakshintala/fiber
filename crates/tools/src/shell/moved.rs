@@ -12,7 +12,7 @@ use contract::tool::Cancel;
 use super::command::{Finished, MovePolicy, MoveReason};
 use super::drive::{LoopEnd, Run, finish, pump, view};
 use super::monitor::Feed;
-use super::output::{PacedStream, Shared, check_start, lock};
+use super::output::{PacedStream, Shared, WriteFailure, check_start, lock};
 use super::sandbox::protected::{Guard as ProtectionGuard, Report as ProtectedReport};
 use super::spill::Config as SpillConfig;
 
@@ -84,10 +84,15 @@ impl Moved {
     /// Writes a monitor's held standard error to `file` and points its
     /// reader there; with no file, its standard error is dropped from now
     /// on. Nothing for any other command.
-    pub(crate) fn attach_errors(&self, file: Option<File>) {
-        if let Some(errors) = lock(&self.progress.shared.inner).errors.as_mut() {
-            errors.attach(file, self.cap);
-        }
+    pub(crate) fn attach_errors(&self, file: Option<File>, path: Option<std::path::PathBuf>) {
+        let mut inner = lock(&self.progress.shared.inner);
+        let failure = inner.errors.as_mut().and_then(|errors| {
+            errors
+                .attach(file, path.clone(), self.cap)
+                .err()
+                .and_then(|source| path.map(|path| WriteFailure { path, source }))
+        });
+        inner.keep_write_failure(failure);
     }
 
     /// Wakes this command when `cancel` fires. The job's stop uses it.

@@ -4203,6 +4203,78 @@ fn process_package_loads_without_starting_a_vm() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn session_process_context_package_is_canonical_for_symlinked_directory() {
+    let home = Home::new();
+    let source = home.root.path().join("src/proc");
+    fs::create_dir_all(&source).unwrap();
+    let peer_plan = json!([
+        {"read": {}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"loop": [{"read": {}}]}
+    ]);
+    let (program, args) = fakes::ProcessFixture::command("peer", Some(&peer_plan));
+    let manifest = json!({
+        "name": "fiber.test/proc",
+        "version": "v1.2.3",
+        "fiber": "0.1.0",
+        "api": 1,
+        "process": {"program": program, "args": args, "exit_timeout_ms": 1000}
+    });
+    fs::write(source.join("extension.json"), manifest.to_string()).unwrap();
+    plan(
+        &home.home(),
+        &Request::Path(source),
+        "0.1.0",
+        &Origin::github(),
+        &*FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+
+    let dir = home.home().join("extensions/fiber.test-proc");
+    let real = dir.with_file_name("fiber.test-proc-real");
+    fs::rename(&dir, &real).unwrap();
+    std::os::unix::fs::symlink(&real, &dir).unwrap();
+
+    let config = home.config(&[]);
+    let session = super::SessionExtensions::load_session(
+        &home.home(),
+        &config,
+        FakeClock::new(),
+        Arc::new(FakeLock::new()),
+        None,
+        contract::hook::StateSeed::new(),
+        crate::RepositorySet::default(),
+        super::StartContext {
+            session_id: contract::SessionId("session-package-context".to_owned()),
+            reason: contract::events::ExtensionReason::New,
+            workspace: home.root.path().join("workspace"),
+            data_dirs: super::DataDirBases {
+                home: home.home(),
+                project: ProjectKey::new("p").unwrap(),
+            },
+            drive: None,
+            event_cursor: 0,
+        },
+        Default::default(),
+    );
+    let live = session
+        .processes
+        .iter()
+        .find(|live| live.name == "fiber.test/proc")
+        .unwrap();
+    let context_package = live.owner.shared().context_package();
+    assert_eq!(
+        context_package,
+        crate::package::canonicalize_package_dir(&dir).unwrap()
+    );
+    assert_ne!(context_package, dir);
+    session.finish_processes(&fakes::CancelToken::new());
+}
+
 #[test]
 fn process_package_with_undeclared_provider_file_fails_the_load() {
     let home = Home::new();

@@ -84,14 +84,27 @@ fn run_for(
     monitor: bool,
     errors: bool,
 ) -> (AdoptedRun, Case) {
+    run_for_with_sinks(name, job, keeper_bytes, monitor, errors, None, None)
+}
+
+fn run_for_with_sinks(
+    name: &str,
+    job: &str,
+    keeper_bytes: &[u8],
+    monitor: bool,
+    errors: bool,
+    output_sink: Option<std::fs::File>,
+    error_sink: Option<std::fs::File>,
+) -> (AdoptedRun, Case) {
     let root = fakes::TempDir::new(name);
     let output = root.path().join(format!("{job}.log"));
     std::fs::write(&output, keeper_bytes).unwrap();
-    let file = OpenOptions::new().append(true).open(&output).unwrap();
+    let file =
+        output_sink.unwrap_or_else(|| OpenOptions::new().append(true).open(&output).unwrap());
     let errors = errors.then(|| {
         let path = root.path().join(format!("{job}.stderr.log"));
         std::fs::write(&path, b"old\n").unwrap();
-        OpenOptions::new().append(true).open(&path).unwrap()
+        error_sink.unwrap_or_else(|| OpenOptions::new().append(true).open(&path).unwrap())
     });
     let (events, received) = mpsc::channel();
     let (end_send, completions) = mpsc::channel();
@@ -165,12 +178,31 @@ fn err(text: &str) -> HostEvent {
     }
 }
 
+fn failing_sink(name: &str) -> (fakes::TempDir, std::fs::File, std::fs::File) {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let root = fakes::TempDir::new(name);
+    let path = root.path().join("sink.fifo");
+    fakes::fifo(&path);
+    let reader = OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().try_into().unwrap())
+        .open(&path)
+        .unwrap();
+    let writer = OpenOptions::new()
+        .write(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().try_into().unwrap())
+        .open(&path)
+        .unwrap();
+    (root, reader, writer)
+}
+
 fn exit(code: i32) -> HostEvent {
     HostEvent::Exit(Exit {
         code: Some(code),
         signal: None,
         timed_out: false,
         output_cap: false,
+        output_write_failure: None,
     })
 }
 
@@ -305,9 +337,10 @@ fn closed_events_return_the_uncalled_end() {
     let (run, mut case) = run_for("restored-lost", "j_lost", b"kept\n", false, false);
     drop(take_events(&mut case));
     let report = run.run();
-    let Some(end) = report else {
+    let Some((end, completed)) = report else {
         panic!("a lost connection returns its uncalled report")
     };
+    assert!(completed.is_none());
     // Nothing was reported on its own.
     assert!(case.completions.try_recv().is_err());
     // The returned report is uncalled: invoking it reports now.
@@ -319,6 +352,7 @@ fn closed_events_return_the_uncalled_end() {
             signal: None,
             timed_out: false,
             output_cap: false,
+            output_write_failure: None,
         },
     ));
     let completed = deadline().recv_or_fail(&case.completions, "the invoked report");
@@ -496,6 +530,255 @@ fn a_restored_monitor_that_floods_for_thirty_seconds_is_stopped_and_ends_flooded
         deadline()
             .recv_or_fail(&returned, "the runner to return")
             .is_none()
+    );
+}
+
+#[test]
+fn adopted_output_write_failure_is_reported() {
+    let (_sink_root, reader, sink) = failing_sink("restored-output-write");
+    let (run, case) = run_for_with_sinks(
+        "restored-output-write-run",
+        "j_out",
+        b"",
+        false,
+        false,
+        Some(sink),
+        None,
+    );
+    drop(reader);
+    case.events.send(out("bytes\n")).unwrap();
+    case.events.send(exit(0)).unwrap();
+    assert!(run.run().is_none());
+    let completed = deadline().recv_or_fail(&case.completions, "the failed ending");
+    assert_eq!(completed.status, Outcome::Failed);
+    let failure = completed.error.unwrap();
+    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert!(failure.message.contains(case.output.to_str().unwrap()));
+    assert!(failure.message.contains("replaced end: completed"));
+}
+
+#[test]
+fn adopted_write_failure_replaces_nonzero_exit() {
+    let (_sink_root, reader, sink) = failing_sink("restored-nonzero-write");
+    let (run, case) = run_for_with_sinks(
+        "restored-nonzero-write-run",
+        "j_exit3",
+        b"",
+        false,
+        false,
+        Some(sink),
+        None,
+    );
+    drop(reader);
+    case.events.send(out("bytes\n")).unwrap();
+    case.events.send(exit(3)).unwrap();
+    assert!(run.run().is_none());
+    let completed = deadline().recv_or_fail(&case.completions, "the failed ending");
+    assert_eq!(completed.status, Outcome::Failed);
+    let failure = completed.error.unwrap();
+    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert!(failure.message.contains(case.output.to_str().unwrap()));
+    assert!(failure.message.contains("replaced end: nonzero_exit"));
+}
+
+#[test]
+fn adopted_keeper_write_failure_precedes_session_write_failure() {
+    let (_sink_root, reader, sink) = failing_sink("restored-both-write");
+    let (run, case) = run_for_with_sinks(
+        "restored-both-write-run",
+        "j_both",
+        b"",
+        false,
+        false,
+        Some(sink),
+        None,
+    );
+    drop(reader);
+    // The session append fails first, but the keeper wrote its output
+    // before the handover, so its stored path wins over the session path.
+    case.events.send(out("bytes\n")).unwrap();
+    let keeper = PathBuf::from("/keeper/job.log");
+    case.events
+        .send(HostEvent::Exit(Exit {
+            code: Some(0),
+            signal: None,
+            timed_out: false,
+            output_cap: false,
+            output_write_failure: Some(keeper.clone()),
+        }))
+        .unwrap();
+    assert!(run.run().is_none());
+    let completed = deadline().recv_or_fail(&case.completions, "the failed ending");
+    assert_eq!(completed.status, Outcome::Failed);
+    let failure = completed.error.unwrap();
+    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert!(failure.message.contains(keeper.to_str().unwrap()));
+    assert!(failure.message.contains("replaced end: completed"));
+}
+
+#[test]
+fn adopted_stderr_write_failure_is_reported() {
+    let (_sink_root, reader, sink) = failing_sink("restored-stderr-write");
+    let (run, case) = run_for_with_sinks(
+        "restored-stderr-write-run",
+        "j_err",
+        b"",
+        false,
+        true,
+        None,
+        Some(sink),
+    );
+    drop(reader);
+    case.events.send(err("bytes\n")).unwrap();
+    case.events.send(exit(0)).unwrap();
+    assert!(run.run().is_none());
+    let completed = deadline().recv_or_fail(&case.completions, "the failed ending");
+    let failure = completed.error.unwrap();
+    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert!(failure.message.contains("j_err.stderr.log"));
+}
+
+#[test]
+fn adopted_write_failure_wins_over_flooded_end() {
+    let (_sink_root, reader, sink) = failing_sink("restored-flood-write");
+    let (run, mut case) = run_for_with_sinks(
+        "restored-flood-write-run",
+        "j_flood",
+        b"",
+        true,
+        false,
+        Some(sink),
+        None,
+    );
+    drop(reader);
+    let (send, returned) = mpsc::channel();
+    std::thread::spawn(move || match send.send(run.run()) {
+        Ok(()) | Err(_) => {}
+    });
+    for n in 0..10 {
+        burst(&mut case, &format!("line {n}\n"));
+        delivered(&case);
+    }
+    for _ in 0..21 {
+        burst(&mut case, "noise\n");
+        burst(&mut case, "noise\n");
+        advance(&case, Duration::from_millis(1_500));
+    }
+    deadline().recv_or_fail(&case.stops, "the flood stop");
+    case.events.send(exit(0)).unwrap();
+    drop(take_events(&mut case));
+    let completed = deadline().recv_or_fail(&case.completions, "the flooded ending");
+    let failure = completed.error.unwrap();
+    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert!(failure.message.contains("replaced end: flooded"));
+    assert!(failure.message.contains("monitor was also flooded"));
+    assert!(deadline().recv_or_fail(&returned, "the runner").is_none());
+}
+
+#[test]
+fn adopted_write_failure_survives_connection_close() {
+    let (_sink_root, reader, sink) = failing_sink("restored-close-write");
+    let (run, mut case) = run_for_with_sinks(
+        "restored-close-write-run",
+        "j_lost_write",
+        b"",
+        false,
+        false,
+        Some(sink),
+        None,
+    );
+    drop(reader);
+    case.events.send(out("bytes\n")).unwrap();
+    drop(take_events(&mut case));
+    let Some((end, Some(completed))) = run.run() else {
+        panic!("failed connection close returns its completion")
+    };
+    assert_eq!(completed.status, Outcome::Failed);
+    let failure = completed.error.as_ref().unwrap();
+    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert!(failure.message.contains("replaced end: indeterminate"));
+    (end.0)(completed);
+    let delivered = deadline().recv_or_fail(&case.completions, "the returned completion");
+    assert_eq!(delivered.error.unwrap().code, ErrorCode::IoFailed);
+}
+
+#[test]
+fn revoked_close_before_exit_with_a_stored_failure_reports_nothing() {
+    let (_sink_root, reader, sink) = failing_sink("restored-revoked-close-write");
+    let (run, mut case) = run_for_with_sinks(
+        "restored-revoked-close-write-run",
+        "j_revoked_close",
+        b"",
+        true,
+        false,
+        Some(sink),
+        None,
+    );
+    drop(reader);
+    let revoke: AdoptedSink = run.sink();
+    let (send, returned) = mpsc::channel();
+    std::thread::spawn(move || match send.send(run.run()) {
+        Ok(()) | Err(_) => {}
+    });
+    // The runner stores the failure when it appends the burst: the
+    // delivery proves the append ran, with no spin on the runner's
+    // state. Then the handover is revoked and the connection closes
+    // before any exit: the stored failure stays stored, never reported.
+    burst(&mut case, "bytes\n");
+    let line = delivered(&case);
+    assert_eq!(line.lines, "bytes");
+    revoke.close();
+    drop(take_events(&mut case));
+    assert!(
+        deadline()
+            .recv_or_fail(&returned, "the revoked runner to return")
+            .is_none(),
+        "a revoked close reports nothing, stored failure or not"
+    );
+    assert!(
+        matches!(case.completions.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "a revoked close with a stored failure reports nothing"
+    );
+}
+
+#[test]
+fn revoked_exit_with_a_stored_failure_reports_nothing() {
+    let (_sink_root, reader, sink) = failing_sink("restored-revoked-exit-write");
+    let (run, mut case) = run_for_with_sinks(
+        "restored-revoked-exit-write-run",
+        "j_revoked_exit",
+        b"",
+        true,
+        false,
+        Some(sink),
+        None,
+    );
+    drop(reader);
+    let revoke: AdoptedSink = run.sink();
+    let (send, returned) = mpsc::channel();
+    std::thread::spawn(move || match send.send(run.run()) {
+        Ok(()) | Err(_) => {}
+    });
+    // The runner stores the failure when it appends the burst: the
+    // delivery proves the append ran, with no spin on the runner's
+    // state. Then the handover is revoked before the exit lands: the
+    // exit belongs to a job the keeper still holds, so the stored
+    // failure stays stored, never reported.
+    burst(&mut case, "bytes\n");
+    let line = delivered(&case);
+    assert_eq!(line.lines, "bytes");
+    revoke.close();
+    case.events.send(exit(0)).unwrap();
+    drop(take_events(&mut case));
+    assert!(
+        deadline()
+            .recv_or_fail(&returned, "the revoked runner to return")
+            .is_none(),
+        "a revoked exit reports nothing, stored failure or not"
+    );
+    assert!(
+        matches!(case.completions.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "a revoked exit with a stored failure reports nothing"
     );
 }
 

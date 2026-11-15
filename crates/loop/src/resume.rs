@@ -127,6 +127,8 @@ pub struct Resumed {
     pub(crate) known_hosts: crate::known_hosts::KnownHosts,
     /// The reviewer's blocks this session.
     pub(crate) session_blocks: u64,
+    /// The own session's consecutive reviewer-block run.
+    pub(crate) consecutive: u64,
     /// What the reviewer is shown: the latest `reviewer_kept`'s messages,
     /// then what followed (`docs/permissions.md`, "At a compaction").
     pub(crate) reviewed: Vec<Reviewed>,
@@ -399,6 +401,7 @@ impl Loop {
             grants,
             known_hosts,
             session_blocks,
+            consecutive,
             reviewed,
             orphans,
             delegate_sessions,
@@ -503,6 +506,7 @@ impl Loop {
                 known_hosts,
                 reviewed,
                 session_blocks,
+                consecutive,
                 repository: crate::offer::State::resumed(offers),
                 naming,
                 fired,
@@ -1133,12 +1137,24 @@ impl Loop {
             .as_ref()
             .ok()
             .and_then(|prepared| prepared.effects.hosts.clone());
-        let decision: Decided =
+        let decision: Decided = {
+            let is_review = matches!(&request.step, contract::events::AskStep::Review { .. });
             match self.await_answer(&action, &turn, &call.name, request, hosts)? {
                 // The answer allows the prepared call: it runs with no second
                 // check.
-                Asked::Allow => allow,
-                Asked::Deny(completed) | Asked::Gone(completed) => Err(completed),
+                Asked::Allow => {
+                    if is_review {
+                        self.consecutive = 0;
+                    }
+                    allow
+                }
+                Asked::Deny(completed) => {
+                    if is_review {
+                        self.consecutive = 0;
+                    }
+                    Err(completed)
+                }
+                Asked::Gone(completed) => Err(completed),
                 Asked::Cancelled => Err(self.cancelled_before_ran()),
                 Asked::Idle => {
                     self.pending.clear();
@@ -1149,7 +1165,8 @@ impl Loop {
                 // the call completes as one no person can answer
                 // (`docs/events.md`, `permission_resolved`).
                 Asked::Closed => Err(crate::calls::no_person()),
-            };
+            }
+        };
         // The resumed decision is in: the segment ends here, before the
         // batch runs and its workers start their own timers.
         drop(permission);

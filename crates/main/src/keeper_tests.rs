@@ -288,6 +288,7 @@ fn keeper_confirms_a_durable_hosted_job_end_once() {
             signal: None,
             timed_out: false,
             output_cap: false,
+            output_write_failure: None,
         },
     ));
     log.append(&event, None, None).unwrap();
@@ -740,6 +741,7 @@ fn colliding_call_0_routes_by_owner() {
                 signal: None,
                 timed_out: false,
                 output_cap: false,
+                output_write_failure: None,
             },
         ))
     };
@@ -958,6 +960,7 @@ fn handover_end_releases_client_maps() {
         signal: None,
         timed_out: false,
         output_cap: false,
+        output_write_failure: None,
     };
     log.append(
         &contract::events::Event::JobCompleted(tools::kept_end(

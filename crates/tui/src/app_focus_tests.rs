@@ -1975,12 +1975,12 @@ fn one_frames_queued_notices_group_by_code() {
         .pages()
         .ext
         .cache
-        .queue_notice(("io_failed".to_owned(), "a first read failed".to_owned()));
+        .queue_notice(("io_failed".to_owned(), "a first I/O failure".to_owned()));
     app.screen
         .pages()
         .ext
         .cache
-        .queue_notice(("io_failed".to_owned(), "a second read failed".to_owned()));
+        .queue_notice(("io_failed".to_owned(), "a second I/O failure".to_owned()));
     assert!(app.drain_renderer_failures());
     let rows: Vec<(String, String)> = app
         .notices()
@@ -1997,13 +1997,13 @@ fn one_frames_queued_notices_group_by_code() {
     assert!(
         rows[0]
             .1
-            .starts_with("2 reads failed: a first read failed\n"),
+            .starts_with("2 I/O failures: a first I/O failure\n"),
         "{}",
         rows[0].1
     );
-    assert!(rows[0].1.contains("- a first read failed"), "{}", rows[0].1);
+    assert!(rows[0].1.contains("- a first I/O failure"), "{}", rows[0].1);
     assert!(
-        rows[0].1.contains("- a second read failed"),
+        rows[0].1.contains("- a second I/O failure"),
         "{}",
         rows[0].1
     );
