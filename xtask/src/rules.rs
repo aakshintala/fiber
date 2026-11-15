@@ -1966,28 +1966,20 @@ fn function_context(tokens: &[SourceToken], at: usize) -> String {
         }) else {
             continue;
         };
-        let mut paren_depth = 0usize;
-        let mut bracket_depth = 0usize;
+        let mut depth = 0usize;
         let mut open = None;
         for (j, token) in tokens.iter().enumerate().skip(i + 2) {
             match token.kind {
-                SourceKind::Punct('(') => paren_depth += 1,
-                SourceKind::Punct(')') => {
-                    let Some(depth) = paren_depth.checked_sub(1) else {
+                SourceKind::Punct('(' | '[') => depth += 1,
+                SourceKind::Punct(')' | ']') => {
+                    let Some(next_depth) = depth.checked_sub(1) else {
                         break;
                     };
-                    paren_depth = depth;
+                    depth = next_depth;
                 }
-                SourceKind::Punct('[') => bracket_depth += 1,
-                SourceKind::Punct(']') => {
-                    let Some(depth) = bracket_depth.checked_sub(1) else {
-                        break;
-                    };
-                    bracket_depth = depth;
-                }
-                SourceKind::Punct('{') | SourceKind::Punct(';')
-                    if paren_depth == 0 && bracket_depth == 0 =>
-                {
+                // A semicolon in brackets or parentheses does not end a signature.
+                // Only top-level braces or semicolons delimit the function header.
+                SourceKind::Punct('{') | SourceKind::Punct(';') if depth == 0 => {
                     open = Some(j);
                     break;
                 }
