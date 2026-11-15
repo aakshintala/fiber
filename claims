@@ -366,7 +366,6 @@ crates/main/tests/commands/main.rs	fiber-4902	plan	2026-11-15T17:29:08Z	roundhou
 crates/main/tests/completion/bash-driver.bash	fiber-4902	plan	2026-11-15T17:29:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/completion/zsh-driver.zsh	fiber-4902	plan	2026-11-15T17:29:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/completion/fish-driver.fish	fiber-4902	plan	2026-11-15T17:29:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/src/files_tests.rs	fiber-4894	plan	2026-11-15T17:36:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/cli/src/stop.rs	fiber-4029	plan	2026-11-15T17:56:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/contract/src/events_tests.rs	fiber-4029	plan	2026-11-15T17:56:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/contract/src/keeper_tests.rs	fiber-4029	plan	2026-11-15T17:56:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -420,3 +419,4 @@ crates/main/tests/commands/completion.rs:360-361	fiber-4902	plan	2026-11-15T19:3
 crates/main/tests/commands/completion.rs:388-388	fiber-4902	plan	2026-11-15T19:38:17Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
 crates/main/tests/commands/completion.rs:424-424	fiber-4902	plan	2026-11-15T19:38:17Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
 crates/main/tests/commands/completion.rs:426-426	fiber-4902	plan	2026-11-15T19:38:17Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
+crates/tui/src/files_tests.rs:641-641	fiber-4894	plan	2026-11-15T19:41:32Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4894-files-outside-repo-flake	
