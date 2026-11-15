@@ -635,3 +635,4 @@ crates/main/tests/commands/completion.rs:718-719	fiber-4873	plan	2026-11-15T08:3
 crates/main/tests/commands/completion.rs:1064-1064	fiber-4873	plan	2026-11-15T08:39:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4873-zsh-completion-flake	
 crates/main/tests/commands/completion.rs:1080-1080	fiber-4873	plan	2026-11-15T08:39:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4873-zsh-completion-flake	
 crates/loop/tests/turn.rs	fiber-4822	plan	2026-11-15T09:00:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/hub/src/connection.rs	fiber-4042	plan	2026-11-15T09:48:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
