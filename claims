@@ -302,3 +302,8 @@ crates/bench/examples/bench/listing.rs:198-199	fiber-4935	plan	2026-11-15T22:15:
 crates/bench/examples/bench/listing.rs:207-208	fiber-4935	plan	2026-11-15T22:15:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4935-listing-keep-exited	
 crates/bench/examples/bench/listing_tests.rs:7-7	fiber-4935	plan	2026-11-15T22:15:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4935-listing-keep-exited	
 crates/bench/examples/bench/listing_tests.rs:48-49	fiber-4935	plan	2026-11-15T22:15:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4935-listing-keep-exited	
+crates/main/tests/providers/models.rs	fiber-4755	plan	2026-11-15T22:23:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/providers/login.rs	fiber-4755	plan	2026-11-15T22:23:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/providers/placeholders.rs	fiber-4755	plan	2026-11-15T22:23:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/providers/credential_signals.rs	fiber-4755	plan	2026-11-15T22:23:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/delegation/ask.rs	fiber-4755	plan	2026-11-15T22:23:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
