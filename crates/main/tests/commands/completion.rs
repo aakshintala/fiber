@@ -33,9 +33,6 @@ use fakes::clock::FakeClock;
 use fakes::{Watchdog, group_empties, kill_group, kill_matching, try_matching_exits};
 use support::{Deadline, Setup};
 
-/// How long one `fiber` or shell run may take.
-const RUN: Duration = Duration::from_secs(20);
-
 /// Runs one cleanup step on its own thread and returns failures so later
 /// cleanup checks still run before the test reports them. Each step's child
 /// wait is half the outer wait, so the inner step expires first.
@@ -357,7 +354,8 @@ fn receive_stdout(
 
 /// Runs `command` to its exit, in its own process group, with stdin a pipe
 /// the test holds open and never writes to: a run that read stdin would
-/// block until `RUN` expires. After the exit, the group and every process
+/// block until `fakes::WHOLE_SUBSYSTEM_WITHIN` expires. After the exit, the
+/// group and every process
 /// whose command line holds `tag` must be gone within the outer wait; each
 /// step's child wait is half the outer, so the inner step expires first.
 /// On expiry, both are killed and reaped before the test fails.
@@ -385,7 +383,7 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path, cases: &[String]) -
     let tag_dog = Watchdog::matching(&tag);
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap_or(()));
-    let Ok(output) = Deadline::after(RUN).recv(&finished) else {
+    let Ok(output) = Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN).recv(&finished) else {
         // Both bounded kills finish before either process check starts.
         let group_killed = within_cleanup(
             &format!("killing {what}'s process group"),
@@ -421,9 +419,10 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path, cases: &[String]) -
             Err(error) => format!("; case timings unavailable: {error}"),
         };
         panic!(
-            "waited {RUN:?} for {what} to exit; killing its group: {group_killed:?}, \
+            "waited {:?} for {what} to exit; killing its group: {group_killed:?}, \
              group empty: {group_gone:?}; killing processes matching {tag}: {tag_killed:?}, \
-             all gone: {tag_gone:?}{case_progress}"
+             all gone: {tag_gone:?}{case_progress}",
+            fakes::WHOLE_SUBSYSTEM_WITHIN
         );
     };
     let tag_for_wait = tag.clone();
