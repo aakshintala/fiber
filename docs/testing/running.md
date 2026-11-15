@@ -154,7 +154,10 @@ file's flaky tests share, such as a fixture, a wait helper or a timing
 pattern, and fixes that, not one test at a time. It shows the whole file
 passing 30 times under load, the count the CI `stress` job uses
 (`docs/ci.md`), as 30 separate runs of `cargo nextest run -E
-'binary(=<target>)'`. One `--stress-count 30` run does not qualify, because
+'binary(=<target>)'`. Where the file is one module of a shared test binary,
+such as `shell_look.rs` in `screen_looks`, each run selects that module, as
+`-E 'binary(=<target>) & test(/^<module>::/)'`, and a failure in another
+module goes on that module's own issue. One `--stress-count 30` run does not qualify, because
 nextest cannot check the load between its own attempts. Each run first prints
 its `cargo xtask threads` line, and a run counts only when the load it reports
 is at least the CPU count; an unloaded run is inconclusive and reruns, and a

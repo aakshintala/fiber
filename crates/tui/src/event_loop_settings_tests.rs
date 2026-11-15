@@ -95,7 +95,7 @@ fn ctrl_g_with_no_editor_says_so() {
         feed(&mut lp, inputs(&["\x07"]));
         lp
     });
-    assert_eq!(lp.app.notice(), Some(crate::editor::NO_EDITOR_FILE));
+    assert_eq!(lp.app.notice(), Some(crate::editor::NO_EDITOR));
     assert!(lp.app.config_view_open());
 }
 
