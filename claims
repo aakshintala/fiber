@@ -705,3 +705,5 @@ crates/extensions/tests/lua_hooks.rs	fiber-4855	plan	2026-11-15T06:29:50Z	Amoghs
 crates/extensions/tests/lua_tools.rs	fiber-4855	plan	2026-11-15T06:29:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/tests/process_activation.rs	fiber-4855	plan	2026-11-15T06:29:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/oauth/oauth_tests.rs	fiber-4855	plan	2026-11-15T06:29:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/model_lists.rs	fiber-4755	plan	2026-11-15T06:39:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/models.rs	fiber-4755	plan	2026-11-15T06:39:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
