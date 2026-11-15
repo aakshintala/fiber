@@ -18,6 +18,97 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 #[test]
+fn home_line_builders_preserve_padding_alignment_and_cut_boundaries() {
+    let app = home(80, 24);
+    let screen = app.home_screen().expect("home screen");
+    let empty = super::home_lines(&screen, 80, 0);
+    for (line, text) in empty.iter().zip([
+        "No sessions yet.",
+        "Type below and press Enter to start one.",
+    ]) {
+        assert_eq!(
+            line[0].text,
+            " ".repeat(if text == "No sessions yet." { 32 } else { 20 })
+        );
+        assert!(!line[0].dim);
+        assert_eq!(line[1].text, text);
+        assert!(line[1].dim);
+    }
+    for width in [16, 38, 3, 8] {
+        let lines = super::home_lines(&screen, width, 0);
+        for (line, text) in lines.iter().zip([
+            "No sessions yet.",
+            "Type below and press Enter to start one.",
+        ]) {
+            assert_eq!(line.last().unwrap().text, text, "width {width}");
+            assert!(line.last().unwrap().dim, "width {width}");
+            let text_width = u16::try_from(crate::format::width(text)).unwrap();
+            assert_eq!(
+                line.len(),
+                if width <= text_width { 1 } else { 2 },
+                "width {width}"
+            );
+        }
+    }
+
+    let row = super::ListRow {
+        left: vec![ratatui::text::Span::raw("left")],
+        right: vec![ratatui::text::Span::raw("right")],
+        spot: None,
+        stop: false,
+        plus: None,
+    };
+    let aligned = super::home_row_line(&row, 12);
+    assert_eq!(aligned[0].text, "left");
+    assert_eq!(aligned[1].text, "   ");
+    assert_eq!(aligned[2].text, "right");
+    let no_gap = super::home_row_line(&row, 9);
+    assert_eq!(
+        no_gap
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect::<String>(),
+        "leftright"
+    );
+    assert_eq!(no_gap.len(), 2);
+    let stop = super::ListRow { stop: true, ..row };
+    let reserved = super::home_row_line(&stop, 12);
+    assert_eq!(
+        reserved
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect::<String>(),
+        "left right"
+    );
+
+    let spans = [
+        ratatui::text::Span::raw("abc"),
+        ratatui::text::Span::raw("de"),
+    ];
+    assert!(super::cut_home_spans(&spans, 0).is_empty());
+    let exact_then_next = super::cut_home_spans(&spans, 4);
+    assert_eq!(
+        exact_then_next
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect::<Vec<_>>(),
+        ["abc", "d"]
+    );
+    let partial = super::cut_home_spans(&spans, 2);
+    assert_eq!(
+        partial
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect::<Vec<_>>(),
+        ["ab"]
+    );
+    let dropped = [ratatui::text::Span::raw(""), ratatui::text::Span::raw("x")];
+    let kept = super::cut_home_spans(&dropped, 1);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].text, "x");
+}
+
+#[test]
 fn remote_home_draws_an_unset_dim_chip_and_non_escaping_footer() {
     for typed in [false, true] {
         let mut app = home(80, 24);
