@@ -46,10 +46,10 @@ fn drive_error(message: &str) -> (contract::ErrorCode, String) {
 }
 
 /// The shared sessionless refusal: `<call>: not available here`, as
-/// `invalid_arguments` (`docs/extensions.md`, "Process extensions").
+/// `not_available` (`docs/extensions.md`, "Process extensions").
 pub(crate) fn not_available(call: &str) -> (contract::ErrorCode, String) {
     (
-        contract::ErrorCode::InvalidArguments,
+        contract::ErrorCode::NotAvailable,
         format!("{call}: not available here"),
     )
 }

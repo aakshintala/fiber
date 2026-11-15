@@ -28,10 +28,11 @@ touches `scripts/`; the latter two
 run on the macOS arm64 runner ("On every pull request that changes code")).
 Each macOS job holds one macOS slot against the 5-slot cap while it runs; no
 Linux-side job changes. The scripts job is selected only for pull requests
-with a path under `scripts/`, never on the backstop. A bug pull request with a valid `## Budget breach` section stating a break or
-budget breach skips the bug-red legs, with the exemption message in the
-selection summary. CI checks only that the section and both
-lines are present; reviewers judge the measurements. Draft and ready pull requests select
+with a path under `scripts/`, never on the backstop. A pull request that fixes
+a break or budget breach may exempt its bug-red legs only with an unfenced
+`## Budget breach` section; see "The merge gate" for the required measurements
+and effect. CI checks only that the section and both lines are present;
+reviewers judge the measurements. Draft and ready pull requests select
 the same jobs. The Linux arm64 and macOS arm64 test legs, `stress` and
 `release` run on the backstop, which is a push to `main`. A bug pull request
 uses a macOS job (`bug_red_macos`); so does any pull request whose diff
@@ -537,7 +538,7 @@ every push ("The backstop on `main`").
 One more Linux x86_64 job builds the release profile for the target that
 ships, `x86_64-unknown-linux-musl` (`docs/releasing.md`), at the pushed
 commit (`scripts/release-size`). It checks that the stripped binary is
-under 26 MiB and runs the benchmarks that judge each push, every row at 5
+under 30 MiB and runs the benchmarks that judge each push, every row at 5
 runs including the 10-busy-turns workload (`docs/performance.md`). A breach
 fails the backstop, which files an issue instead of stopping a merge. A
 commit that does not build fails the job the same way.

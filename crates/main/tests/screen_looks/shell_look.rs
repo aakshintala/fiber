@@ -48,9 +48,20 @@ fn attached(setup: &Setup) -> Run {
     let mut run = Run::spawn(setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
     run.write(b"go\r");
-    run.wait_screen("the idle session", |grid| {
-        grid.rows.iter().any(|row| row.contains("▣ completed"))
-    });
+    // An idle-session miss carries the hub log: the tail tells whether the
+    // hub was slow or failed to start. The wait still fails with its
+    // screen.
+    run.wait_screen_reporting(
+        "the idle session",
+        |grid| grid.rows.iter().any(|row| row.contains("▣ completed")),
+        || {
+            let tail = support::hub_log_tail(&setup.hub_log());
+            format!(
+                "hub.log tail (last {} lines):\n{tail}",
+                support::HUB_LOG_TAIL
+            )
+        },
+    );
     run
 }
 

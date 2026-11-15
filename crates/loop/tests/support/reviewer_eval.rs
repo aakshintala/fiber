@@ -193,6 +193,9 @@ pub(crate) struct SetLine {
     /// The recorded reviewer verdict, on deny lines; absent on the
     /// committed set.
     pub recorded: Option<RecordedVerdict>,
+    /// The proposed first-family verdict's one-line reason, present on
+    /// sampled lines and absent on synthetic and seeded lines.
+    pub reason: Option<String>,
 }
 
 /// One string field of a line object.
@@ -413,6 +416,9 @@ fn set_line_value(entry: &SetLine) -> Value {
     if let Some(recorded) = &entry.recorded {
         map.insert("recorded".to_owned(), recorded_value(recorded));
     }
+    if let Some(reason) = &entry.reason {
+        map.insert("reason".to_owned(), Value::String(reason.clone()));
+    }
     Value::Object(map)
 }
 
@@ -527,6 +533,15 @@ pub(crate) fn parse_line(line: &str) -> Result<SetLine, String> {
         None | Some(Value::Null) => None,
         Some(recorded) => Some(parse_recorded(recorded, &id)?),
     };
+    let reason = match value.get("reason") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(reason)) => Some(reason.clone()),
+        Some(_) => {
+            return Err(format!(
+                "review: bad set line {id}: the reason is not a string"
+            ));
+        }
+    };
     Ok(SetLine {
         id,
         source,
@@ -542,6 +557,7 @@ pub(crate) fn parse_line(line: &str) -> Result<SetLine, String> {
             family2: family("family2")?,
         },
         recorded,
+        reason,
     })
 }
 
@@ -1699,6 +1715,7 @@ pub(crate) fn foreign_to_label_input(input: ForeignInput<'_>) -> SetLine {
             family2: None,
         },
         recorded: None,
+        reason: None,
     }
 }
 
