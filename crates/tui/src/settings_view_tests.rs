@@ -28,7 +28,7 @@ fn shown_value(row: &SettingRow) -> (String, Option<String>) {
     super::shown_value(row, |_| None)
 }
 
-// A value shown as compact JSON.
+/// A value shown as compact JSON.
 fn value(json: &str) -> Shown {
     Shown::Value(json.to_owned())
 }
@@ -2970,7 +2970,7 @@ fn hub_picker_default_on_an_unset_key_closes_without_a_write() {
 }
 
 #[test]
-fn opening_editor_settings_focuses_its_sessions_row() {
+fn opening_editor_settings_focuses_its_row() {
     let mut fixture = row_on(
         "tui.editor",
         "Editor",

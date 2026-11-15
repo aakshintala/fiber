@@ -70,8 +70,8 @@ fn fake() -> Arc<Fake> {
     Arc::new(fake)
 }
 
-/// The configuration fixture with a free-text row for the editor picker.
-fn fake_with_editor() -> Arc<Fake> {
+/// The configuration fixture with a free-text row for routing tests.
+fn fake_with_text(key: &str) -> Arc<Fake> {
     let fake = fake();
     fake.rows
         .lock()
@@ -79,25 +79,7 @@ fn fake_with_editor() -> Arc<Fake> {
         .as_mut()
         .expect("fixture rows")
         .push(appearance(controlled(
-            "tui.editor",
-            Shown::Value("\"vim\"".to_owned()),
-            "global",
-            WriteScope::Any { repo: false },
-            SettingControl::Text,
-        )));
-    fake
-}
-
-/// The configuration fixture with a generic text field for routing tests.
-fn fake_with_text() -> Arc<Fake> {
-    let fake = fake();
-    fake.rows
-        .lock()
-        .expect("fixture rows mutex")
-        .as_mut()
-        .expect("fixture rows")
-        .push(appearance(controlled(
-            "test.text",
+            key,
             Shown::Value("\"vim\"".to_owned()),
             "global",
             WriteScope::Any { repo: false },
@@ -350,13 +332,13 @@ fn an_approval_waits_until_the_view_closes() {
 
 #[test]
 fn editor_setting_reads_the_configured_value_from_its_row() {
-    let mut app = attached(fake_with_editor());
+    let mut app = attached(fake_with_text("tui.editor"));
     assert_eq!(app.editor_setting().as_deref(), Some("vim"));
 }
 
 #[test]
 fn opening_settings_on_a_key_focuses_that_row() {
-    let mut app = attached(fake_with_editor());
+    let mut app = attached(fake_with_text("tui.editor"));
     app.open_config_view_on(ConfigView::Settings, Some("tui.editor"));
     let rows = app
         .config_view_screen()
@@ -372,7 +354,7 @@ fn opening_settings_on_a_key_focuses_that_row() {
 
 #[test]
 fn clicking_the_no_editor_notice_opens_settings_with_editor_focused() {
-    let mut app = attached(fake_with_editor());
+    let mut app = attached(fake_with_text("tui.editor"));
     app.editor_returned(
         crate::editor::Target::Draft,
         Err(crate::editor::NO_EDITOR.to_owned()),
@@ -408,7 +390,7 @@ fn clicking_the_no_editor_notice_opens_settings_with_editor_focused() {
 
 #[test]
 fn opening_a_view_drops_its_unsaved_field() {
-    let seam = fake_with_text();
+    let seam = fake_with_text("test.text");
     let mut app = attached(Arc::clone(&seam));
     app.open_config_view_on(ConfigView::Settings, Some("test.text"));
     app.on_key(Key::Enter, now());
@@ -652,7 +634,7 @@ fn a_save_says_the_reload_cost_of_the_session_on_screen() {
 
 #[test]
 fn an_edit_goes_to_the_open_field_not_the_input_box() {
-    let mut app = attached(fake_with_text());
+    let mut app = attached(fake_with_text("test.text"));
     app.open_config_view_on(ConfigView::Settings, Some("test.text"));
     app.on_key(Key::Enter, now());
     app.on_edit(Edit::Paste("9".to_owned()));

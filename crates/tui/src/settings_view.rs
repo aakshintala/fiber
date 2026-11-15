@@ -1782,6 +1782,24 @@ impl Settings {
         }
     }
 
+    fn reset_key(&mut self, ctx: &Ctx<'_>, key: &str) -> bool {
+        let Some(row) = self.rows.iter().find(|row| row.key == key) else {
+            return false;
+        };
+        match (layer_named(&row.layer), current_text(&row.value)) {
+            (Some(source), Some(expected)) => {
+                match ctx.seam.reset(ctx.workspace, source, key, &expected) {
+                    Ok(_) => true,
+                    Err(error) => {
+                        self.said = vec![error.message];
+                        false
+                    }
+                }
+            }
+            _ => true,
+        }
+    }
+
     /// Writes the field's text. A saved write closes the field; a refused
     /// one keeps it, with the draft, and says why.
     fn submit(&mut self, ctx: &Ctx<'_>) {
@@ -1796,21 +1814,7 @@ impl Settings {
         };
         let (layer, key) = (field.layer, field.key.clone());
         let saved = if key == EDITOR && typed.trim().is_empty() {
-            let Some(row) = self.rows.iter().find(|row| row.key == key) else {
-                return;
-            };
-            match (layer_named(&row.layer), current_text(&row.value)) {
-                (Some(source), Some(expected)) => {
-                    match ctx.seam.reset(ctx.workspace, source, &key, &expected) {
-                        Ok(_) => true,
-                        Err(error) => {
-                            self.said = vec![error.message];
-                            false
-                        }
-                    }
-                }
-                _ => true,
-            }
+            self.reset_key(ctx, &key)
         } else {
             self.save(ctx, layer, &key, &text)
         };
@@ -1908,21 +1912,7 @@ impl Settings {
             return Act::Stay;
         }
         let saved = if name == "Default" {
-            let Some(row) = self.rows.iter().find(|row| row.key == key) else {
-                return Act::Stay;
-            };
-            match (layer_named(&row.layer), current_text(&row.value)) {
-                (Some(source), Some(expected)) => {
-                    match ctx.seam.reset(ctx.workspace, source, &key, &expected) {
-                        Ok(_) => true,
-                        Err(error) => {
-                            self.said = vec![error.message];
-                            false
-                        }
-                    }
-                }
-                _ => true,
-            }
+            self.reset_key(ctx, &key)
         } else {
             let value = if key == EDITOR && matches!(name, "code" | "cursor" | "zed" | "subl") {
                 format!("{name} --wait")

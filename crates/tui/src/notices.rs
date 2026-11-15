@@ -541,11 +541,6 @@ impl App {
         self.notices.dismiss(id);
     }
 
-    /// The text of notice `id`, if it is still present.
-    pub(crate) fn notice_text(&self, id: usize) -> Option<&str> {
-        self.notices.text(id)
-    }
-
     /// A click on notice `id`: its whole text in the overlay.
     pub(crate) fn open_notice(&mut self, id: usize) {
         self.notices.open(id);
