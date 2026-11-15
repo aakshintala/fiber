@@ -186,6 +186,40 @@ fn shell_call_write_failure_replaces_timeout() {
 }
 
 #[test]
+fn shell_call_write_failure_replaces_signal() {
+    let path = std::path::PathBuf::from("/tmp/job.log");
+    let mut child = Command::new("sh")
+        .args(["-c", "kill -TERM $$"])
+        .spawn()
+        .unwrap();
+    let status = child.wait().unwrap();
+    let output = super::assemble(
+        None,
+        super::Finished {
+            output: super::command::Kept::Whole(Vec::new()),
+            status: Some(status),
+            stop: None,
+            indeterminate: false,
+            held_open: false,
+            sent_signal: false,
+            capped: false,
+            flooded: false,
+            write_failure: Some(super::output::WriteFailure {
+                path: path.clone(),
+                source: std::io::Error::other("private OS detail"),
+            }),
+        },
+        None,
+        None,
+    );
+    assert_eq!(code(&output), Some(ErrorCode::IoFailed));
+    let failure = output.error.unwrap();
+    assert!(failure.message.contains(&path.display().to_string()));
+    assert!(failure.message.contains("replaced end: signal"));
+    assert!(!failure.message.contains("private OS detail"));
+}
+
+#[test]
 fn nullable_optional_arguments_parse_as_absent() {
     let dir = fakes::TempDir::new("fiber-shell-nullable");
     let arguments = fakes::tool_args(json!({"command": "ls", "workdir": null, "timeout_ms": null,
