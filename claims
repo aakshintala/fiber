@@ -638,3 +638,5 @@ docs/dependencies.md	fiber-4852	plan	2026-11-15T10:47:20Z	Amoghs-MacBook-Pro:/Us
 crates/extensions/tests/models.rs	fiber-4865	plan	2026-11-15T11:05:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/check	fiber-4881	plan	2026-11-15T11:10:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/bug-red	fiber-4881	plan	2026-11-15T11:10:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/src/process.rs	fiber-4677	plan	2026-11-15T11:12:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/hooks_tests.rs	fiber-4677	plan	2026-11-15T11:12:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
