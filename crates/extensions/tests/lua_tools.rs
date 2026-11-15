@@ -1820,6 +1820,25 @@ fn run_asking_cancelled_returns_no_content_and_no_error() {
     assert!(runner.inner().is_empty(), "the call never ran");
 }
 
+/// A `host.tool` call outside a running tool call raises `not_available`,
+/// which `pcall` catches as the `{ code, message }` table.
+#[test]
+fn tool_outside_a_tool_call_raises_not_available_for_pcall() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(
+        dir.path(),
+        "outside",
+        "fiber.command(\"go\", { timeout = 5000, run = function()\n\
+         local ok, err = pcall(host.tool, \"read\", {})\n\
+         return tostring(ok) .. \"/\" .. tostring(err.code) .. \"/\" .. tostring(err) end })\n",
+        FakeClock::new(),
+    );
+    assert_eq!(
+        command(&ext, "go"),
+        "false/not_available/host.tool: called outside a running tool call"
+    );
+}
+
 // Declared and surfaced hosts (`docs/tools.md`, "What a tool declares"):
 // a static table and an effects function both carry `hosts`, and a `run`
 // result carries `hosts_surfaced`.

@@ -2881,7 +2881,7 @@ fn a_watcher_refuses_host_tool_but_runs_host_exec() {
         Some(
             "fiber.watch({\"notice\"}, { timeout = 2000, run = function(ev)\n\
              local took, err = pcall(host.tool, 'read', {})\n\
-             host.status('tool:' .. tostring(took) .. ':' .. tostring(err))\n\
+             host.status('tool:' .. tostring(took) .. ':' .. tostring(err.code) .. ':' .. tostring(err))\n\
              local ran = pcall(host.exec, 'true', {})\n\
              host.status('exec:' .. tostring(ran))\n\
              end })\n",
@@ -2896,9 +2896,9 @@ fn a_watcher_refuses_host_tool_but_runs_host_exec() {
         .recv(&statuses)
         .expect("waited for the tool refusal");
     assert!(
-        refused.starts_with("tool:false:")
+        refused.starts_with("tool:false:not_available:")
             && refused.contains("called outside a running tool call"),
-        "the refusal names the call site, {refused:?}"
+        "the refusal names the code and the call site, {refused:?}"
     );
     assert_eq!(
         Deadline::after(fakes::MUST_SUCCEED_WITHIN)
