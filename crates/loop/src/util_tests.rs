@@ -54,6 +54,15 @@ fn variables_include_session_id_name_without_value() {
     assert!(!variables.names.contains(&"s_secret_value".into()));
 }
 
+#[test]
+fn variables_do_not_duplicate_inherited_session_id_name() {
+    let variables = super::variables_from([
+        ("PATH".into(), "/bin".into()),
+        ("FIBER_SESSION_ID".into(), "s_stale".into()),
+    ]);
+    assert_eq!(variables.names, ["FIBER_SESSION_ID".to_owned()]);
+}
+
 /// How long a driven turn may take before the test fails naming the
 /// missing turn end, instead of hanging.
 const TURN_DEADLINE: Duration = Duration::from_secs(10);

@@ -212,6 +212,7 @@ impl Setup {
         args: &[&str],
         when: impl Fn(&[Value]) -> bool + Send + 'static,
         act: impl FnOnce(),
+        session_env: Option<&str>,
     ) -> StdoutRun {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -226,6 +227,9 @@ impl Setup {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if let Some(value) = session_env {
+            command.env("FIBER_SESSION_ID", value);
+        }
         let (mut child, watchdog) = spawn_watched(&mut command);
         let group = child.id();
         let guard = KillGroup(group);
@@ -1131,6 +1135,7 @@ fn a_shell_child_replaces_a_stale_caller_session_id() {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let expected = run.session_id();
     assert!(expected.starts_with("s_"));
+    // Prompt-created session IDs are 18 characters (`docs/invocation.md`, “Getting a prompt in”).
     assert_eq!(expected.len(), 18);
     let completed = run.first("tool_call_completed");
     assert_eq!(completed["payload"]["status"], "completed");
@@ -2050,7 +2055,11 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
     // final reply and the ending notice. One plain command, so a standing
     // rule can match it.
     let script = setup.workspace().join("wait.sh");
-    fs::write(&script, "read -r _ < ready\necho done\n").unwrap();
+    fs::write(
+        &script,
+        "printf '%s\\n' \"$FIBER_SESSION_ID\" > session-id\nread -r _ < ready\necho done\n",
+    )
+    .unwrap();
     // The job runs in its own session and group, outside fiber's: this
     // guard kills it if the test fails, and if this process dies before
     // the job opens the FIFO, which then has no writer.
@@ -2091,6 +2100,7 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
                 })
         },
         || std::io::Write::write_all(&mut &release, b"\n").unwrap(),
+        Some("s_stale"),
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -2158,6 +2168,11 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
     let completed = &lines[35];
     assert_eq!(completed["payload"]["job_id"], job_id);
     assert_eq!(completed["payload"]["status"], "completed");
+    let owner_id = run.first("session_started")["session_id"].as_str().unwrap();
+    assert_eq!(
+        fs::read_to_string(setup.workspace().join("session-id")).unwrap(),
+        format!("{owner_id}\n")
+    );
     job_guard.stand_down(setup.deadline.cleanup_phase());
     assert!(completed.get("action_id").is_none_or(Value::is_null));
     assert_eq!(server.requests().len(), 4);
@@ -2179,7 +2194,11 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
     // the final reply and the ending notice. Both lines go out in one
     // write, so they are one batch.
     let script = setup.workspace().join("watch.sh");
-    fs::write(&script, "read -r _ < ready\nprintf 'one\\ntwo\\n'\n").unwrap();
+    fs::write(
+        &script,
+        "printf '%s\\n' \"$FIBER_SESSION_ID\" > session-id\nread -r _ < ready\nprintf 'one\\ntwo\\n'\n",
+    )
+    .unwrap();
     // The monitor runs in its own session and group, outside fiber's: this
     // guard kills it if the test fails, and if this process dies before
     // the monitor opens the FIFO, which then has no writer.
@@ -2224,6 +2243,7 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
                 })
         },
         || std::io::Write::write_all(&mut &release, b"\n").unwrap(),
+        Some("s_stale"),
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -2339,6 +2359,11 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
     let completed = &lines[ended_at];
     assert_eq!(completed["payload"]["job_id"], job_id);
     assert_eq!(completed["payload"]["status"], "completed");
+    let owner_id = run.first("session_started")["session_id"].as_str().unwrap();
+    assert_eq!(
+        fs::read_to_string(setup.workspace().join("session-id")).unwrap(),
+        format!("{owner_id}\n")
+    );
     job_guard.stand_down(setup.deadline.cleanup_phase());
     // The deltas left out above: all of this job's, inside its life, and
     // together exactly what it printed, so a missing or duplicated one fails.

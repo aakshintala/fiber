@@ -218,7 +218,6 @@ pub(super) fn execute_with_session(
                     )]
                 })
                 .unwrap_or_default();
-            // Red-phase check: identity overlay temporarily disabled.
             if let Some(id) = session_id {
                 env.push(("FIBER_SESSION_ID".into(), id.0.clone()));
             }

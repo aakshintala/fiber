@@ -171,6 +171,7 @@ pub(crate) fn execute(
     clippy::too_many_arguments,
     reason = "spawn, the deadline, the move policy and the spill are one call"
 )]
+#[cfg(test)]
 pub(crate) fn execute_with_session(
     program: &Path,
     command: &str,
@@ -542,7 +543,7 @@ fn execute_inner(
     clippy::too_many_arguments,
     reason = "injected spawn probes keep the execution boundary testable"
 )]
-fn execute_inner_with_session(
+pub(super) fn execute_inner_with_session(
     program: &Path,
     command: &str,
     workdir: &Path,

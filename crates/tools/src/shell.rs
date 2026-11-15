@@ -891,7 +891,7 @@ impl Shell {
         };
         let ran = match &self.host {
             Some(host) => execute(Arc::clone(host)),
-            None => command::execute_with_session(
+            None => command::execute_inner_with_session(
                 program,
                 &command,
                 &parsed.workdir,
@@ -907,6 +907,9 @@ impl Shell {
                 &self.workspace,
                 protection,
                 self.session_id.as_ref(),
+                support::group::alive,
+                Path::new("ps"),
+                sandbox::install,
             ),
         };
         let mut output = match ran {

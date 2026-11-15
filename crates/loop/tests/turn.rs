@@ -1108,6 +1108,7 @@ fn session_started_records_the_path_and_the_other_names_without_values() {
         .collect();
     expected.push("FIBER_SESSION_ID".into());
     expected.sort();
+    // Sorted variable-name order is part of the event contract (`docs/events.md`, “Session and turn”).
     assert_eq!(names, expected);
 }
 

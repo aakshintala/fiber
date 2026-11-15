@@ -43,9 +43,21 @@ pub fn variables_source() -> VariablesSource {
 /// and the other names, never a value (`docs/invocation.md`, "A session's
 /// environment").
 pub(crate) fn variables(_session_id: &SessionId) -> Variables {
-    let mut variables = Variables::of(std::env::vars_os(), variables_source());
-    variables.names.push("FIBER_SESSION_ID".into());
-    variables.names.sort();
+    variables_from(std::env::vars_os())
+}
+
+fn variables_from(
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Variables {
+    let mut variables = Variables::of(vars, variables_source());
+    if !variables
+        .names
+        .iter()
+        .any(|name| name == "FIBER_SESSION_ID")
+    {
+        variables.names.push("FIBER_SESSION_ID".into());
+        variables.names.sort();
+    }
     variables
 }
 
