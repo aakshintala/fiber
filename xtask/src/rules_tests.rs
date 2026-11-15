@@ -1028,6 +1028,48 @@ fn session_paths_skip_test_files_cfg_test_items_and_test_only_modules() {
 }
 
 #[test]
+fn home_array_return_signature_keeps_function_context() {
+    let files = [source_file(
+        "main",
+        "src/array_return.rs",
+        "use std::path::PathBuf;\nfn sessions_dir() -> [PathBuf; 2] {\n    let home = home();\n    [home.join(\"projects\"), home.join(\"config.json\")]\n}\n",
+    )];
+    assert_eq!(
+        fiber_home_paths(&files),
+        [
+            "crates/main/src/array_return.rs:4: fn sessions_dir|root:home: Fiber-home path outside config",
+            "crates/main/src/array_return.rs:4: fn sessions_dir|root:home: Fiber-home path outside config"
+        ]
+    );
+}
+
+#[test]
+fn bodiless_array_return_trait_method_does_not_capture_later_join() {
+    let tokens = source_tokens(
+        "trait Paths { fn f(&self) -> [u8; 2]; }\nfn later(home: &Path) { home.join(\"projects\"); }",
+    )
+    .unwrap();
+    let join = tokens
+        .iter()
+        .position(|token| ident(Some(token), "join"))
+        .unwrap();
+    assert_eq!(function_context(&tokens, join), "fn later");
+}
+
+#[test]
+fn source_failure_includes_derived_context() {
+    let files = [source_file(
+        "main",
+        "src/context.rs",
+        "fn sessions_dir(home: &Path) { home.join(\"projects\"); }\n",
+    )];
+    assert_eq!(
+        fiber_home_paths(&files),
+        ["crates/main/src/context.rs:1: fn sessions_dir|root:home: Fiber-home path outside config"]
+    );
+}
+
+#[test]
 fn fiber_home_paths_check_construction_and_file_reads_outside_config() {
     assert!(fiber_home_paths(&[]).is_empty());
     let files = [
