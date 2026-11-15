@@ -34,6 +34,7 @@ pub(crate) fn session_continues(
     new: SessionId,
     old: SessionId,
     overrides: Vec<String>,
+    home: &Path,
     workspace: &Path,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
@@ -44,10 +45,6 @@ pub(crate) fn session_continues(
     // result; there is no worktree isolation to outlive here.
     let reads = Arc::new(crate::switch::Reads::default());
     let _cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
-    let (home, _) = match crate::startup::startup() {
-        Ok(directories) => directories,
-        Err(e) => return ask_failed(e),
-    };
     // The old session may live under either its hashed project directory
     // or its unmoved legacy slug. Select only a candidate derived from the
     // requested workspace, then validate the recorded worktree below.

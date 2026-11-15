@@ -563,6 +563,36 @@ fn entry_child() {
 }
 
 #[test]
+fn entry_point_with_no_matching_session_returns_one() {
+    if std::env::var(ENTRY_CHILD).is_ok() {
+        entry_child();
+        return;
+    }
+    let home = fakes::TempDir::new("main-continues-no-match-entry");
+    let workspace = home.path().join("wt");
+    std::fs::create_dir(&workspace).unwrap();
+    let out = fakes::rerun_within(
+        &this("entry_point_with_no_matching_session_returns_one"),
+        &[
+            (ENTRY_CHILD, "1"),
+            ("FIBER_HOME", home.path().to_string_lossy().as_ref()),
+            (
+                "FIBER_MAIN_CONTINUES_ENTRY_WS",
+                workspace.to_string_lossy().as_ref(),
+            ),
+            ("FIBER_MAIN_CONTINUES_ENTRY_OLD", OLD),
+            ("FIBER_MAIN_CONTINUES_ENTRY_NEW", "s_bbbbbbbbbbbbbbbb"),
+        ],
+        fakes::Deadline::after(ENTRY_WITHIN),
+    );
+    assert_eq!(out.status.code(), Some(1), "the refusal returns exactly 1");
+    assert!(
+        !home.path().join("sessions").exists(),
+        "no session was created"
+    );
+}
+
+#[test]
 fn alias_spellings_of_the_workspace_refuse() {
     for alias in ["slash", "link"] {
         let (home, old_dir, workspace) = fixture(&format!("main-continues-alias-{alias}"), None);
