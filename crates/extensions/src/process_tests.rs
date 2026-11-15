@@ -21,6 +21,22 @@ use super::runtime::Runtime;
 use super::test_support::Home;
 use crate::lua::HookPhase;
 
+/// Standard call context for host-operation tests.
+fn test_call_context() -> super::process::context::ProcessContext {
+    super::process::context::ProcessContext {
+        run: super::process::context::ProcessRun::Call,
+        workspace: std::path::PathBuf::from("/work"),
+        package: std::path::PathBuf::from("/"),
+        data_dirs: contract::events::ExtensionDataDirs {
+            machine: "/m".to_owned(),
+            project: "/p".to_owned(),
+        },
+        state: serde_json::Map::new(),
+        extension: "fiber.test/proc".to_owned(),
+        home: std::path::PathBuf::from("/home"),
+    }
+}
+
 /// A process package directory holding `manifest_extra`, read back as the
 /// registry's manifest.
 fn package_dir(extra: Value) -> fakes::TempDir {
@@ -1891,10 +1907,7 @@ impl Harness {
         let context = ProcessContext {
             run,
             workspace: dir.path().to_path_buf(),
-            package: dir
-                .path()
-                .canonicalize()
-                .expect("canonical package directory"),
+            package: dir.path().to_path_buf(),
             data_dirs: contract::events::ExtensionDataDirs {
                 machine: dir.path().join("machine").display().to_string(),
                 project: dir.path().join("project").display().to_string(),
@@ -3941,18 +3954,7 @@ fn process_http_records_the_calling_extension() {
         session: std::sync::Mutex::new(None),
         diagnostics: Some(sink.clone() as std::sync::Arc<dyn contract::diag::DebugLog>),
     };
-    let context = super::process::context::ProcessContext {
-        run: super::process::context::ProcessRun::Call,
-        workspace: std::path::PathBuf::from("/work"),
-        package: std::path::PathBuf::from("/"),
-        data_dirs: contract::events::ExtensionDataDirs {
-            machine: "/m".to_owned(),
-            project: "/p".to_owned(),
-        },
-        state: serde_json::Map::new(),
-        extension: "fiber.test/proc".to_owned(),
-        home: std::path::PathBuf::from("/home"),
-    };
+    let context = test_call_context();
     let callback = crate::host::admission::CallbackContext::entry("fiber.test/proc");
     let operation = super::process::context::HostOperation::Http {
         method: "GET".to_owned(),
@@ -4024,18 +4026,7 @@ fn process_http_in_a_provider_callback_keeps_the_provider_purpose() {
         session: std::sync::Mutex::new(None),
         diagnostics: Some(sink.clone() as std::sync::Arc<dyn contract::diag::DebugLog>),
     };
-    let context = super::process::context::ProcessContext {
-        run: super::process::context::ProcessRun::Call,
-        workspace: std::path::PathBuf::from("/work"),
-        package: std::path::PathBuf::from("/"),
-        data_dirs: contract::events::ExtensionDataDirs {
-            machine: "/m".to_owned(),
-            project: "/p".to_owned(),
-        },
-        state: serde_json::Map::new(),
-        extension: "fiber.test/proc".to_owned(),
-        home: std::path::PathBuf::from("/home"),
-    };
+    let context = test_call_context();
     let callback = crate::host::admission::CallbackContext::request(
         "fiber.test/proc",
         contract::RequestId("r_1".into()),
@@ -4112,18 +4103,7 @@ fn process_http_in_a_sign_callback_stays_silent() {
         session: std::sync::Mutex::new(None),
         diagnostics: Some(sink.clone() as std::sync::Arc<dyn contract::diag::DebugLog>),
     };
-    let context = super::process::context::ProcessContext {
-        run: super::process::context::ProcessRun::Call,
-        workspace: std::path::PathBuf::from("/work"),
-        package: std::path::PathBuf::from("/"),
-        data_dirs: contract::events::ExtensionDataDirs {
-            machine: "/m".to_owned(),
-            project: "/p".to_owned(),
-        },
-        state: serde_json::Map::new(),
-        extension: "fiber.test/proc".to_owned(),
-        home: std::path::PathBuf::from("/home"),
-    };
+    let context = test_call_context();
     let callback = crate::host::admission::CallbackContext::request(
         "fiber.test/proc",
         contract::RequestId("r_1".into()),
@@ -4171,18 +4151,7 @@ fn process_http_without_a_sink_stays_silent() {
         session: std::sync::Mutex::new(None),
         diagnostics: None,
     };
-    let context = super::process::context::ProcessContext {
-        run: super::process::context::ProcessRun::Call,
-        workspace: std::path::PathBuf::from("/work"),
-        package: std::path::PathBuf::from("/"),
-        data_dirs: contract::events::ExtensionDataDirs {
-            machine: "/m".to_owned(),
-            project: "/p".to_owned(),
-        },
-        state: serde_json::Map::new(),
-        extension: "fiber.test/proc".to_owned(),
-        home: std::path::PathBuf::from("/home"),
-    };
+    let context = test_call_context();
     let callback = crate::host::admission::CallbackContext::entry("fiber.test/proc");
     let operation = super::process::context::HostOperation::Http {
         method: "GET".to_owned(),
@@ -4228,18 +4197,7 @@ fn process_http_scripted_requests_stay_silent() {
         session: std::sync::Mutex::new(None),
         diagnostics: Some(sink.clone() as std::sync::Arc<dyn contract::diag::DebugLog>),
     };
-    let context = super::process::context::ProcessContext {
-        run: super::process::context::ProcessRun::Call,
-        workspace: std::path::PathBuf::from("/work"),
-        package: std::path::PathBuf::from("/"),
-        data_dirs: contract::events::ExtensionDataDirs {
-            machine: "/m".to_owned(),
-            project: "/p".to_owned(),
-        },
-        state: serde_json::Map::new(),
-        extension: "fiber.test/proc".to_owned(),
-        home: std::path::PathBuf::from("/home"),
-    };
+    let context = test_call_context();
     let callback = crate::host::admission::CallbackContext::entry("fiber.test/proc");
     let operation = super::process::context::HostOperation::Http {
         method: "GET".to_owned(),
@@ -4278,18 +4236,7 @@ fn process_http_never_sent_records_nothing() {
         session: std::sync::Mutex::new(None),
         diagnostics: Some(sink.clone() as std::sync::Arc<dyn contract::diag::DebugLog>),
     };
-    let context = super::process::context::ProcessContext {
-        run: super::process::context::ProcessRun::Call,
-        workspace: std::path::PathBuf::from("/work"),
-        package: std::path::PathBuf::from("/"),
-        data_dirs: contract::events::ExtensionDataDirs {
-            machine: "/m".to_owned(),
-            project: "/p".to_owned(),
-        },
-        state: serde_json::Map::new(),
-        extension: "fiber.test/proc".to_owned(),
-        home: std::path::PathBuf::from("/home"),
-    };
+    let context = test_call_context();
     let callback = crate::host::admission::CallbackContext::entry("fiber.test/proc");
     let operation = super::process::context::HostOperation::Http {
         method: "GET".to_owned(),
@@ -4369,7 +4316,7 @@ impl contract::tool::InnerCalls for InnerCallRecords {
 /// A process tool callback uses its own runner and refuses calls without an anchor.
 #[test]
 fn process_tool_runner_threading() {
-    use super::process::context::{HostOperation, NativeHostServices, ProcessContext, ProcessRun};
+    use super::process::context::{HostOperation, NativeHostServices};
     use crate::host::admission::CallbackContext;
 
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
@@ -4386,18 +4333,7 @@ fn process_tool_runner_threading() {
         session: Mutex::new(None),
         diagnostics: None,
     };
-    let context = ProcessContext {
-        run: ProcessRun::Call,
-        workspace: std::path::PathBuf::from("/work"),
-        package: std::path::PathBuf::from("/"),
-        data_dirs: contract::events::ExtensionDataDirs {
-            machine: "/m".to_owned(),
-            project: "/p".to_owned(),
-        },
-        state: serde_json::Map::new(),
-        extension: "fiber.test/proc".to_owned(),
-        home: std::path::PathBuf::from("/home"),
-    };
+    let context = test_call_context();
     let callback = CallbackContext::request(
         "fiber.test/proc",
         contract::RequestId("tool-runner".to_owned()),
@@ -4469,7 +4405,7 @@ fn process_tool_runner_threading() {
 /// Process host-call admission matches the shared Lua callback policy.
 #[test]
 fn process_admission_parity() {
-    use super::process::context::{HostOperation, NativeHostServices, ProcessContext, ProcessRun};
+    use super::process::context::{HostOperation, NativeHostServices};
     use crate::host::admission::CallbackContext;
 
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
@@ -4485,18 +4421,7 @@ fn process_admission_parity() {
         session: Mutex::new(None),
         diagnostics: None,
     };
-    let context = ProcessContext {
-        run: ProcessRun::Call,
-        workspace: std::path::PathBuf::from("/work"),
-        package: std::path::PathBuf::from("/"),
-        data_dirs: contract::events::ExtensionDataDirs {
-            machine: "/m".to_owned(),
-            project: "/p".to_owned(),
-        },
-        state: serde_json::Map::new(),
-        extension: "fiber.test/proc".to_owned(),
-        home: std::path::PathBuf::from("/home"),
-    };
+    let context = test_call_context();
     let request = || contract::model::HostModelRequest {
         model: "test/model".to_owned(),
         system: None,
@@ -7063,10 +6988,7 @@ fn set_reason_moves_only_a_session_run() {
             reason: SessionReason::New,
         },
         workspace: dir.path().to_path_buf(),
-        package: dir
-            .path()
-            .canonicalize()
-            .expect("canonical package directory"),
+        package: dir.path().to_path_buf(),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: "m".to_owned(),
             project: "p".to_owned(),
@@ -7149,18 +7071,7 @@ fn process_delegate_services(
         session: Mutex::new(None),
         diagnostics: None,
     });
-    let context = super::process::context::ProcessContext {
-        run: super::process::context::ProcessRun::Call,
-        workspace: std::path::PathBuf::from("/work"),
-        package: std::path::PathBuf::from("/"),
-        data_dirs: contract::events::ExtensionDataDirs {
-            machine: "/m".to_owned(),
-            project: "/p".to_owned(),
-        },
-        state: serde_json::Map::new(),
-        extension: "fiber.test/proc".to_owned(),
-        home: std::path::PathBuf::from("/home"),
-    };
+    let context = test_call_context();
     (services, context)
 }
 
@@ -7393,7 +7304,7 @@ impl contract::emit::Emit for ProcessUsageEmitter {
 /// Process host.model usage lines carry the calling extension's identity.
 #[test]
 fn process_model_usage_attribution() {
-    use super::process::context::{HostOperation, NativeHostServices, ProcessContext, ProcessRun};
+    use super::process::context::{HostOperation, NativeHostServices};
     use super::process::requests::HostCallHandle;
     use crate::host::admission::CallbackContext;
 
@@ -7413,18 +7324,7 @@ fn process_model_usage_attribution() {
         session: Mutex::new(None),
         diagnostics: None,
     };
-    let context = ProcessContext {
-        run: ProcessRun::Call,
-        workspace: std::path::PathBuf::from("/work"),
-        package: std::path::PathBuf::from("/"),
-        data_dirs: contract::events::ExtensionDataDirs {
-            machine: "/m".to_owned(),
-            project: "/p".to_owned(),
-        },
-        state: serde_json::Map::new(),
-        extension: "fiber.test/proc".to_owned(),
-        home: std::path::PathBuf::from("/home"),
-    };
+    let context = test_call_context();
     let callback = CallbackContext::request(
         "fiber.test/proc",
         contract::RequestId("r_model_usage".to_owned()),

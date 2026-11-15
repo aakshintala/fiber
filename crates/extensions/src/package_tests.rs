@@ -248,10 +248,7 @@ fn process_context(dir: &fakes::TempDir) -> super::process::context::ProcessCont
             reason: contract::events::SessionReason::New,
         },
         workspace: dir.path().to_path_buf(),
-        package: dir
-            .path()
-            .canonicalize()
-            .expect("canonical package directory"),
+        package: dir.path().to_path_buf(),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: dir.path().join("machine").display().to_string(),
             project: dir.path().join("project").display().to_string(),
