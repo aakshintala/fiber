@@ -286,7 +286,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         area: "The input box",
         id: "open_in_editor",
         when: "",
-        description: "Open the draft, or a pasted token, in $VISUAL or $EDITOR",
+        description: "Open the draft, or a pasted token, in the editor",
         keys: "Ctrl+G",
         other_paths: "click the token",
         contexts: Contexts::INPUT_STEERING_CONVERSATION,

@@ -1077,6 +1077,17 @@ pub const KEYS: &[Key] = &[
         ),
     ),
     key(
+        "tui.editor",
+        Str,
+        NO,
+        None,
+        tabbed(
+            SettingsTab::Sessions,
+            "Editor",
+            "The editor command for Ctrl+G and Open in editor; Default uses VISUAL, then EDITOR.",
+        ),
+    ),
+    key(
         "tui.slots.*",
         Str,
         NO,

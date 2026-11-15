@@ -566,7 +566,7 @@ pub(super) fn admit<'a>(
                 false => {
                     drop(shared);
                     Admitted::Replied(Reply::Model(Err((
-                        contract::ErrorCode::InvalidArguments,
+                        contract::ErrorCode::NotAvailable,
                         "host.model: not available here".to_owned(),
                     ))))
                 }
@@ -586,7 +586,7 @@ pub(super) fn admit<'a>(
                 false => {
                     drop(shared);
                     Admitted::Replied(Reply::Delegate(Err((
-                        contract::ErrorCode::InvalidArguments,
+                        contract::ErrorCode::NotAvailable,
                         "host.delegate: not available here".to_owned(),
                     ))))
                 }

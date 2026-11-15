@@ -310,6 +310,7 @@ const TABBED: &[(SettingsTab, &[&str])] = &[
             "compaction.window_fraction",
             "compaction.nudge",
             "budget.usd",
+            "tui.editor",
             "repository_extensions",
         ],
     ),
@@ -479,6 +480,7 @@ fn model_and_theme_keys_are_not_plain_text() {
     assert_eq!(control_of("model"), SettingControl::Model);
     assert_eq!(control_of("reviewer.model"), SettingControl::Model);
     assert_eq!(control_of("tui.theme"), SettingControl::Theme);
+    assert_eq!(control_of("tui.editor"), SettingControl::Text);
     // A free-text key stays text.
     assert_eq!(control_of("hub.default"), SettingControl::Text);
 }

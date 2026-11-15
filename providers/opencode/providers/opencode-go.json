@@ -536,7 +536,7 @@
         "text",
         "image"
       ],
-      "max_output_tokens": 131072,
+      "max_output_tokens": 1048576,
       "name": "Kimi K3",
       "protocol": "openai-completions",
       "subscription": true,
@@ -565,7 +565,7 @@
         "text",
         "image"
       ],
-      "max_output_tokens": 131072,
+      "max_output_tokens": 1048576,
       "name": "Kimi K3.1 Pro",
       "protocol": "openai-completions",
       "subscription": true,
