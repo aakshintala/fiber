@@ -457,6 +457,45 @@ fn in_project_scope_a_session_from_another_project_is_excluded_and_a_missing_wor
 }
 
 #[test]
+fn project_scope_rejects_non_candidate_directory_even_for_missing_workspace() {
+    let root = fakes::TempDir::new("cli-prune-scope-noncandidate");
+    let repo = root.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    fakes::git::git(&repo, &["init", "--quiet"]);
+    let workspace = fs::canonicalize(&repo).unwrap();
+    let home = root.path().join("home");
+    let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
+    let missing_workspace = "/definitely/not/on/disk/prune-scope-test";
+    session_in(
+        &sessions.join("s_candidate_missing_workspace"),
+        missing_workspace,
+        None,
+        old_ts(),
+    );
+    let non_candidate = home.join("projects/not-a-candidate/sessions");
+    session_in(
+        &non_candidate.join("s_non_candidate_missing_workspace"),
+        missing_workspace,
+        None,
+        old_ts(),
+    );
+
+    let all = log::started_sessions(&home);
+    let selected = select(&home, &all, &workspace, Some(older_than()), false, wall());
+    assert_eq!(
+        selected
+            .deletes
+            .iter()
+            .map(|delete| delete.id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["s_candidate_missing_workspace"]
+    );
+    // The candidate row passes the sessions-dir gate, then its nonexistent
+    // workspace makes it eligible. The non-candidate row is rejected before
+    // that branch can return true.
+}
+
+#[test]
 fn project_scope_selects_matching_workspace_and_rejects_another_project() {
     let root = fakes::TempDir::new("cli-prune-scope-comparison");
     let repo = root.path().join("repo");
