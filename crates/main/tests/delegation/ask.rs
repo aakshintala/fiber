@@ -1850,7 +1850,14 @@ fn muse_recording() -> Response {
 #[test]
 fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
     let setup = Setup::new_with_started_deadline();
-    let server = ProviderServer::start([muse_recording()]).unwrap();
+    let server = ProviderServer::start([
+        Response::status(
+            200,
+            r#"{"object":"list","data":[{"id":"muse-spark-1.3-contributor"}]}"#,
+        ),
+        muse_recording(),
+    ])
+    .unwrap();
     install(
         &setup,
         &setup.package("muse", "https://api.meta.ai", &server.url()),
@@ -1885,12 +1892,13 @@ fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
     assert_eq!(exited["usage"]["tokens"]["input"], 10);
     assert_eq!(exited["usage"]["tokens"]["output"], 16);
     let requests = server.requests();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].path, "/v1/responses");
-    assert_fingerprint(&requests[0], "authorization", "Bearer sk-test-muse");
-    assert_eq!(requests[0].header("x-opencode-session"), None);
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].path, "/v1/models");
+    assert_eq!(requests[1].path, "/v1/responses");
+    assert_fingerprint(&requests[1], "authorization", "Bearer sk-test-muse");
+    assert_eq!(requests[1].header("x-opencode-session"), None);
     assert!(
-        requests[0]
+        requests[1]
             .header("user-agent")
             .unwrap()
             .starts_with("fiber/")
@@ -1938,7 +1946,13 @@ fn allow_text() -> Response {
 #[test]
 fn the_providers_reviewer_model_decides_a_reviewed_call() {
     let setup = Setup::new_with_started_deadline();
-    let server = ProviderServer::start([shell_true_call(), allow_text(), hello()]).unwrap();
+    let server = ProviderServer::start([
+        Response::status(200, r#"{"object":"list","data":[{"id":"muse-spark-1.3"}]}"#),
+        shell_true_call(),
+        allow_text(),
+        hello(),
+    ])
+    .unwrap();
     install(
         &setup,
         &setup.package("muse", "https://api.meta.ai", &server.url()),
