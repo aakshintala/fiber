@@ -366,10 +366,6 @@ crates/support/src/atomic.rs	fiber-4755	plan	2026-11-15T13:23:39Z	Amoghs-MacBook
 crates/support/src/atomic_tests.rs	fiber-4755	plan	2026-11-15T13:23:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/state.md	fiber-4755	plan	2026-11-15T13:23:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/delegation/ask.rs	fiber-4865	plan	2026-11-15T13:39:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4891
-crates/contract/src/settings.rs	fiber-4770	plan	2026-11-15T13:52:54Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/src/app/config_views.rs	fiber-4770	plan	2026-11-15T13:52:54Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/tui.md	fiber-4770	plan	2026-11-15T13:52:54Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/configuration.md	fiber-4770	plan	2026-11-15T13:52:54Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/jobs/src/delegate/fork_tests.rs	fiber-4042	plan	2026-11-15T14:27:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/tests/process_activation.rs	fiber-4899	plan	2026-11-15T15:01:30Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/process/context/native.rs	fiber-4899	plan	2026-11-15T15:01:30Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
@@ -380,13 +376,6 @@ docs/extensions.md	fiber-4899	plan	2026-11-15T15:01:30Z	roundhouse-7010-plus-1:/
 docs/testing.md	fiber-4899	plan	2026-11-15T15:01:30Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/workflow.md	fiber-4899	plan	2026-11-15T15:01:30Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/check	fiber-4899	plan	2026-11-15T15:01:30Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/src/settings_view.rs:2777-2778	fiber-4770	plan	2026-11-15T15:10:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/feat/4770-stepped-lists	
-crates/tui/src/settings_view.rs:2979-2983	fiber-4770	plan	2026-11-15T15:10:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/feat/4770-stepped-lists	
-crates/tui/src/settings_view_tests.rs:3962-3962	fiber-4770	plan	2026-11-15T15:10:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/feat/4770-stepped-lists	
-crates/tui/src/settings_view_tests.rs:4000-4001	fiber-4770	plan	2026-11-15T15:10:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/feat/4770-stepped-lists	
-crates/tui/src/settings_view_tests.rs:4006-4010	fiber-4770	plan	2026-11-15T15:10:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/feat/4770-stepped-lists	
-crates/tui/src/settings_view_tests.rs:4441-4442	fiber-4770	plan	2026-11-15T15:10:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/feat/4770-stepped-lists	
-crates/tui/src/settings_view_tests.rs:4478-4479	fiber-4770	plan	2026-11-15T15:10:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/feat/4770-stepped-lists	
 crates/hub/src/start.rs	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/hub/src/spawn.rs	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/hub/src/lib.rs	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
