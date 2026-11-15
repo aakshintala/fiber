@@ -353,10 +353,7 @@ impl App {
             // Enter resolves the selected row to its serial at key time,
             // where no press/release race exists; opening the item's view
             // closes the list.
-            if key.is_enter_or_space() && !matches!(self.session_views.open, Some(Open::Jobs(_))) {
-                return Some(self.session_view_open_selected());
-            }
-            if *key == Key::Enter {
+            if key.is_enter_or_space() {
                 return Some(self.session_view_open_selected());
             }
             if let Some(Open::Delegates(list) | Open::Jobs(list) | Open::AllDelegates(list)) =
