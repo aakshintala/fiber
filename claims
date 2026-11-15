@@ -408,3 +408,6 @@ crates/hub/src/start_tests.rs	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-70
 crates/hub/src/spawn_tests.rs	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/hub_daemon	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/errors.md	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/cli/src/models_tests.rs	fiber-4888	plan	2026-11-15T15:43:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/manage.rs	fiber-4888	plan	2026-11-15T15:43:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/installed.rs	fiber-4888	plan	2026-11-15T15:43:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
