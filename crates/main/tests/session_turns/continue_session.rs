@@ -269,7 +269,8 @@ fn logged_supervised(setup: &Setup, id: &str) -> Option<bool> {
 /// request's own argument (absent when `None`), runs its one turn, and
 /// returns its id.
 fn start_continuing(
-    client: &Socket,
+    client: &mut Socket,
+    setup: &Setup,
     path: &str,
     old: &str,
     supervised: Option<bool>,
@@ -306,6 +307,7 @@ fn start_continuing(
         "the new subscribe acknowledgement",
         &format!("s_new_{tag}"),
     );
+    client.set_deadline(Deadline::after(Duration::from_secs(30)));
     until(client, "the new turn_completed", |line| {
         assert!(
             line["kind"] != "command_rejected"
@@ -314,6 +316,7 @@ fn start_continuing(
         );
         line["kind"] == "turn_completed" && line["session_id"] == id
     });
+    client.set_deadline(setup.deadline);
     id
 }
 
@@ -326,7 +329,7 @@ fn continues_takes_supervised_from_the_new_request_only() {
     let workspace = setup.workspace().to_string_lossy().into_owned();
 
     let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
-    let (client, _) = connect_hub(&setup, &hub);
+    let (mut client, _) = connect_hub(&setup, &hub);
     let guard_ws = SessionGuard::arm(setup.deadline, &workspace);
 
     let (old, path) = start_old(&client, &workspace, "sup");
@@ -336,7 +339,7 @@ fn continues_takes_supervised_from_the_new_request_only() {
         "the old session is not supervised"
     );
     let guard_w = SessionGuard::arm(setup.deadline, &path);
-    let supervised = start_continuing(&client, &path, &old, Some(true), "true");
+    let supervised = start_continuing(&mut client, &setup, &path, &old, Some(true), "true");
     assert_eq!(
         logged_supervised(&setup, &supervised),
         Some(true),
@@ -344,13 +347,20 @@ fn continues_takes_supervised_from_the_new_request_only() {
     );
     // A continuation of the supervised session that does not ask for
     // supervised is not supervised: the flag is never inherited.
-    let plain = start_continuing(&client, &path, &supervised, None, "absent");
+    let plain = start_continuing(&mut client, &setup, &path, &supervised, None, "absent");
     assert_eq!(
         logged_supervised(&setup, &plain),
         None,
         "an unsupervised continuation records no supervised"
     );
-    let explicit = start_continuing(&client, &path, &supervised, Some(false), "false");
+    let explicit = start_continuing(
+        &mut client,
+        &setup,
+        &path,
+        &supervised,
+        Some(false),
+        "false",
+    );
     assert_eq!(
         logged_supervised(&setup, &explicit),
         None,

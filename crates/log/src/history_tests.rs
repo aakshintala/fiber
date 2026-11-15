@@ -1296,6 +1296,23 @@ fn legacy_parent_pointer_fails_closed_without_a_matching_marker() {
 }
 
 #[test]
+fn uppercase_hex_decoy_project_key_is_not_a_hashed_key() {
+    // The single-component key ends in 16 uppercase hex characters; those
+    // characters are hex, but not in the persisted lowercase alphabet.
+    let home = fakes::TempDir::new("log-history-uppercase-hex-decoy");
+    let key = "-w-AAAAAAAAAAAAAAAA";
+    let parent = project_dir(&home, key, "s_parent");
+    session_log(&parent, started("s_parent", 0, None).as_bytes());
+    let child = project_dir(&home, "-child", "s_child");
+    session_log(
+        &child,
+        started_in("s_child", 0, "s_parent", 0, Some(key)).as_bytes(),
+    );
+
+    assert!(matches!(history(&child), Err(Error::NotFound(_))));
+}
+
+#[test]
 fn legacy_parent_pointer_refuses_a_different_project_slug() {
     let home = fakes::TempDir::new("log-history-cross-project");
     let parent = project_dir(&home, "-other", "s_parent");
