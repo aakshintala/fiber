@@ -210,7 +210,7 @@ impl FakeStarter {
         lock(&exit.controlled.state).released = true;
         *lock(&starter.handshake) = Some(Handshake {
             accept: true,
-            code: String::new(),
+            code: Default::default(),
             message: String::new(),
         });
         starter
