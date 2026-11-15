@@ -2023,10 +2023,12 @@ fn anthropic_installed_by_path_completes_a_turn_on_its_recorded_streams() {
         ),
     ])
     .unwrap();
-    install(
-        &setup,
-        &setup.package("anthropic", "https://api.anthropic.com", &server.url()),
-    );
+    let package = setup.package("anthropic", "https://api.anthropic.com", &server.url());
+    install(&setup, &package);
+    let data: Value =
+        serde_json::from_slice(&fs::read(package.join("providers/anthropic.json")).unwrap())
+            .unwrap();
+    config::write_model_cache(&setup.home(), "anthropic", &data["models"]).unwrap();
 
     let run = setup.fiber_with_env(
         &[
@@ -2092,10 +2094,11 @@ fn openai_installed_by_path_completes_a_turn_and_sends_store_false() {
         ),
     ])
     .unwrap();
-    install(
-        &setup,
-        &setup.package("openai", "https://api.openai.com", &server.url()),
-    );
+    let package = setup.package("openai", "https://api.openai.com", &server.url());
+    install(&setup, &package);
+    let data: Value =
+        serde_json::from_slice(&fs::read(package.join("providers/openai.json")).unwrap()).unwrap();
+    config::write_model_cache(&setup.home(), "openai", &data["models"]).unwrap();
 
     let run = setup.fiber_with_env(
         &[
@@ -2158,10 +2161,11 @@ fn openai_responses_cache_write_is_recorded_and_priced_from_the_write() {
         {"cache_write_tokens": 2344, "cached_tokens": 0},
         "output_tokens": 3});
     let server = ProviderServer::start([fakes::wire::stream_with_usage(&events, warming)]).unwrap();
-    install(
-        &setup,
-        &setup.package("openai", "https://api.openai.com", &server.url()),
-    );
+    let package = setup.package("openai", "https://api.openai.com", &server.url());
+    install(&setup, &package);
+    let data: Value =
+        serde_json::from_slice(&fs::read(package.join("providers/openai.json")).unwrap()).unwrap();
+    config::write_model_cache(&setup.home(), "openai", &data["models"]).unwrap();
 
     let run = setup.fiber_with_env(
         &["ask", "--model", "openai/gpt-6-luna", "hi"],
@@ -2212,14 +2216,15 @@ fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
         ),
     ])
     .unwrap();
-    install(
-        &setup,
-        &setup.package(
-            "gemini",
-            "https://generativelanguage.googleapis.com",
-            &server.url(),
-        ),
+    let package = setup.package(
+        "gemini",
+        "https://generativelanguage.googleapis.com",
+        &server.url(),
     );
+    install(&setup, &package);
+    let data: Value =
+        serde_json::from_slice(&fs::read(package.join("providers/gemini.json")).unwrap()).unwrap();
+    config::write_model_cache(&setup.home(), "gemini", &data["models"]).unwrap();
 
     let run = setup.fiber_with_env(
         &[
