@@ -13,7 +13,7 @@
 //! opens with `hub_hello`, before any acknowledgement.
 
 use std::collections::HashMap;
-use std::io::BufReader;
+use std::io::{BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -1263,6 +1263,90 @@ pub(crate) fn classify(bytes: &[u8]) -> Result<Classified, Option<CommandId>> {
     })
 }
 
+#[derive(Default)]
+struct PreSessionForwardState {
+    pending: Option<String>,
+    acknowledged: bool,
+    cancelled: Option<bool>,
+}
+
+struct PreSessionForwarder {
+    writer: Arc<Mutex<UnixStream>>,
+    hub: Arc<Hub>,
+    state: Mutex<PreSessionForwardState>,
+}
+
+impl PreSessionForwarder {
+    fn deliver(&self, line: String) {
+        enum Action {
+            Buffer,
+            Send,
+            Log,
+            Drop,
+        }
+        let action = {
+            let mut state = lock(&self.state);
+            if let Some(log_closed) = state.cancelled {
+                if log_closed {
+                    Action::Log
+                } else {
+                    Action::Drop
+                }
+            } else if state.acknowledged {
+                Action::Send
+            } else {
+                state.pending = Some(line.clone());
+                Action::Buffer
+            }
+        };
+        match action {
+            Action::Buffer | Action::Drop => {}
+            Action::Send => self.write_line(&line),
+            Action::Log => self.log_line(&line),
+        }
+    }
+
+    fn acknowledged(&self) {
+        let pending = {
+            let mut state = lock(&self.state);
+            state.acknowledged = true;
+            state.pending.take()
+        };
+        if let Some(line) = pending {
+            self.write_line(&line);
+        }
+    }
+
+    fn cancel(&self, log_closed: bool) {
+        let pending = {
+            let mut state = lock(&self.state);
+            state.cancelled = Some(log_closed);
+            state.pending.take()
+        };
+        if log_closed && let Some(line) = pending {
+            self.log_line(&line);
+        }
+    }
+
+    fn write_line(&self, line: &str) {
+        let bytes = line.as_bytes();
+        let mut writer = lock(&self.writer);
+        if writer.write_all(bytes).is_err() {
+            drop(writer);
+            self.log_line(line);
+        }
+    }
+
+    fn log_line(&self, line: &str) {
+        self.hub.diag.line(
+            Severity::Warn,
+            None,
+            "io_failed",
+            &format!("Could not deliver pre-session verdict: {}", line.trim_end()),
+        );
+    }
+}
+
 /// Answers `start` (`docs/invocation.md`, "What the hub speaks"). With
 /// `content`, the answer comes first: the release entry is registered and
 /// the `hub-first-prompt` thread started, unarmed, before the answer is
@@ -1287,7 +1371,16 @@ fn on_start(
         return;
     };
     let continues = args.continues.map(|id| SessionId(id.to_owned()));
-    let (session_id, held) = match start::run(
+    let forwarder = Arc::new(PreSessionForwarder {
+        writer: Arc::clone(writer),
+        hub: Arc::clone(hub),
+        state: Mutex::new(PreSessionForwardState::default()),
+    });
+    let callback: Box<dyn FnOnce(String) + Send> = {
+        let forwarder = Arc::clone(&forwarder);
+        Box::new(move |line| forwarder.deliver(line))
+    };
+    let (session_id, held) = match start::run_with_pre_session_exit(
         hub,
         id,
         args.workspace,
@@ -1297,9 +1390,11 @@ fn on_start(
         args.content,
         continues.as_ref(),
         args.supervised,
+        Some(callback),
     ) {
         Outcome::Accepted { session_id, first } => (session_id, first),
         Outcome::Rejected(refused) => {
+            forwarder.cancel(false);
             reject(writer, hub, Some(id), &refused.code, &refused.message);
             return;
         }
@@ -1311,6 +1406,7 @@ fn on_start(
                 .awaiting
                 .push((session_id.0.clone(), Arc::clone(&first)));
             if crate::first::later(hub, relays, *held, Arc::clone(&first)).is_err() {
+                forwarder.cancel(false);
                 crate::first::forget(relays, &first);
                 let failed =
                     start::io_failed(hub, &session_id, "its first prompt could not be sent.");
@@ -1324,12 +1420,17 @@ fn on_start(
         None => None,
     };
     let result = CommandResult::Start { session_id };
-    accept_result(
+    let acknowledged = accept_start_result(
         writer,
         hub,
         id,
         serde_json::to_value(&result).unwrap_or(Value::Null),
     );
+    if acknowledged {
+        forwarder.acknowledged();
+    } else {
+        forwarder.cancel(true);
+    }
     if let Some(first) = first {
         first.arm(hub.clock.now() + FIRST_PROMPT_WAIT);
     }
@@ -1843,6 +1944,20 @@ pub(crate) fn accept_result(
     payload.insert("command_id".to_owned(), Value::String(id.0.clone()));
     payload.insert("result".to_owned(), result);
     send(writer, hub, HubEventKind::CommandAccepted, payload);
+}
+
+fn accept_start_result(
+    writer: &Arc<Mutex<UnixStream>>,
+    hub: &Hub,
+    id: &CommandId,
+    result: Value,
+) -> bool {
+    let payload = Map::from_iter([
+        ("command_id".to_owned(), Value::String(id.0.clone())),
+        ("result".to_owned(), result),
+    ]);
+    let bytes = line(hub, HubEventKind::CommandAccepted, payload);
+    support::framing::write_line(&mut *lock(writer), &bytes).is_ok()
 }
 
 /// Why a hub command is rejected: its code and Fiber's own sentence.

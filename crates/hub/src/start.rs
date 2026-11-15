@@ -87,6 +87,27 @@ pub(crate) fn run(
     continues: Option<&SessionId>,
     supervised: bool,
 ) -> Outcome {
+    run_with_pre_session_exit(
+        hub, command, workspace, model, overrides, worktree, content, continues, supervised, None,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the start call takes each launch option once"
+)]
+pub(crate) fn run_with_pre_session_exit(
+    hub: &Hub,
+    command: &CommandId,
+    workspace: &str,
+    model: Option<&str>,
+    overrides: &[&str],
+    worktree: bool,
+    content: Option<&Value>,
+    continues: Option<&SessionId>,
+    supervised: bool,
+    pre_session_exit: Option<Box<dyn FnOnce(String) + Send>>,
+) -> Outcome {
     // Admission first: the increment precedes the flag load, so a
     // sessions stop stored before this refuses it, and one stored
     // after waits for this bind in its zero-wait. The guard drops only
@@ -160,6 +181,9 @@ pub(crate) fn run(
             return io_failed(hub, &id, &detail);
         }
     };
+    if let Some(callback) = pre_session_exit {
+        started.watch_pre_session_exit(callback);
+    }
     let first = match content {
         Some(content) => {
             if let Err(outcome) = subscribe_summary(&stream, &id, started.as_ref(), hub) {

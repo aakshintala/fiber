@@ -328,7 +328,10 @@ fn names_outside_the_hub_table_are_unknown_command() {
 fn start_forwards_pre_session_fiber_exited() {
     let temp = Temp::new();
     let failure = crate::fake::failure(ErrorCode::IoFailed, "recorded");
-    let line = serde_json::to_string(&contract::PreSessionExit::new(1, failure)).unwrap();
+    let line = format!(
+        "{}\n",
+        serde_json::to_string(&contract::PreSessionExit::new(1, failure)).unwrap()
+    );
     let (starter, exit) = crate::fake::FakeStarter::bind_then_exit(&temp.dir, line.clone());
     let hub = temp.hub(starter);
     let mut client = Client::connect(&hub);
@@ -357,7 +360,7 @@ fn start_forwards_pre_session_fiber_exited() {
         crate::start::START_DEADLINE,
     );
     outcome.expect("the hub returns the terminal line");
-    assert_eq!(text.trim_end(), line);
+    assert_eq!(text, line);
 }
 
 #[test]
