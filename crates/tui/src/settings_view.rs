@@ -2776,6 +2776,12 @@ const NUMERIC_SPECS: &[NumericSpec] = &[
         format: NumberFormat::Milliseconds,
     },
     NumericSpec {
+        key: "hub.idle_exit_ms",
+        default: Some("1800000"),
+        kind: NumericKind::NumberList(SESSION_IDLE_VALUES),
+        format: NumberFormat::Milliseconds,
+    },
+    NumericSpec {
         key: "session.keep_exited",
         default: Some("10"),
         kind: NumericKind::NumberList(KEEP_EXITED_VALUES),
@@ -2976,11 +2982,7 @@ fn number_text(key: &str, text: &str) -> String {
         return as_typed(text);
     };
     let Some(spec) = numeric_spec(key) else {
-        return if key == "hub.idle_exit_ms" {
-            listed(n, SESSION_IDLE_VALUES, ms_text(n))
-        } else {
-            as_typed(text)
-        };
+        return as_typed(text);
     };
     match spec.format {
         NumberFormat::Width => format!("{}% of screen width", trimmed(n)),
