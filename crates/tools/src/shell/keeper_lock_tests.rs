@@ -135,8 +135,8 @@ fn writer_script(token: &str, ready: &Path, release: &Path, target: &Path) -> St
 /// The grandchild variant: the command leader damages nothing itself; it
 /// reports its group, starts a separately executed descendant that damages,
 /// opens the release FIFO, acknowledges past its own open, then holds the
-/// release read, then exits. As with the writer, the acknowledgement
-/// proves the release read is open.
+/// release read, then exits. Opens the release FIFO before the
+/// acknowledgement; see `writer_script`.
 #[cfg(target_os = "linux")]
 fn grandchild_script(token: &str, ready: &Path, release: &Path, target: &Path) -> String {
     format!(
@@ -151,7 +151,9 @@ fn grandchild_script(token: &str, ready: &Path, release: &Path, target: &Path) -
 /// Both scripts open the release FIFO before writing the post-damage
 /// acknowledgement: the acknowledgement proves the release read is open,
 /// so a release line written any time after it is never lost to a closed
-/// pipe. Swapping the two lines in either script fails this test.
+/// pipe (`docs/testing.md`, "Waits and timeouts"). The window is too
+/// narrow to reproduce under load, so this order pin is the reproduction:
+/// swapping the two lines in either script fails this test.
 #[cfg(target_os = "linux")]
 #[test]
 fn acknowledgement_follows_the_release_open() {
@@ -282,9 +284,8 @@ impl KeeperDeath {
             matching.stand_down(fakes::Deadline::after(WAIT));
         }
         death.group_watch = Some(group_watch);
-        // The second line arrives after the damage with the release FIFO
-        // already open: the writer is parked on its release read, so the
-        // release line below is never lost to a closed pipe.
+        // The second line proves the release read is open; see
+        // `writer_script`.
         let _ack = death.ready.wait(fakes::Deadline::after(WAIT));
         death
     }
