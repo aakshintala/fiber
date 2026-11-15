@@ -1534,7 +1534,10 @@ bare one, and a hub a terminal started inherits that terminal's.
   A changed `PATH` in a startup file reaches new sessions after
   `fiber hub refresh` rebuilds the hub's environment.
 - **A delegate gets its parent's environment**, and a session started by
-  `fiber ask` gets its caller's.
+  `fiber ask` gets its caller's. Every command a session's tools run for it—
+  shell calls, background and detached jobs, and monitors—gets
+  `FIBER_SESSION_ID` set to that session's id, replacing any inherited value.
+  A delegate's tools get the delegate's own id.
 - **Fiber reads no per-directory environment**, such as direnv's `.envrc`.
   A tool that reads its own per-directory file, such as Bazel's `.bazelrc`,
   works unchanged, because a command runs in its working directory.
