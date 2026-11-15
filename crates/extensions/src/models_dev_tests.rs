@@ -2,13 +2,19 @@ use serde_json::json;
 
 // This pins parity with the whole-document serde_json parse the streaming path replaced.
 use super::{
-    CatalogMeta, ProviderVisitor, retained_rows, url_with_override, valid_catalog, validate_catalog,
+    CatalogMeta, ProviderVisitor, retained_rows, url_from_env, valid_catalog, validate_catalog,
 };
 
 #[test]
 fn models_dev_url_override_defaults_to_the_public_catalog() {
     assert_eq!(
-        url_with_override(None, super::URL),
+        url_from_env(
+            |name| {
+                assert_eq!(name, super::URL_ENV);
+                None
+            },
+            super::URL
+        ),
         "https://models.dev/api.json"
     );
 }
@@ -16,9 +22,12 @@ fn models_dev_url_override_defaults_to_the_public_catalog() {
 #[test]
 fn models_dev_url_override_uses_the_configured_catalog() {
     assert_eq!(
-        url_with_override(
-            Some("http://127.0.0.1:1234/api.json".to_owned()),
-            super::URL
+        url_from_env(
+            |name| {
+                assert_eq!(name, super::URL_ENV);
+                Some("http://127.0.0.1:1234/api.json".to_owned())
+            },
+            super::URL,
         ),
         "http://127.0.0.1:1234/api.json"
     );
