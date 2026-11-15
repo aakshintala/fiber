@@ -440,3 +440,4 @@ crates/main/tests/commands/main.rs	fiber-4902	plan	2026-11-15T17:29:08Z	roundhou
 crates/main/tests/completion/bash-driver.bash	fiber-4902	plan	2026-11-15T17:29:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/completion/zsh-driver.zsh	fiber-4902	plan	2026-11-15T17:29:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/completion/fish-driver.fish	fiber-4902	plan	2026-11-15T17:29:08Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/files_tests.rs	fiber-4894	plan	2026-11-15T17:36:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
