@@ -41,6 +41,10 @@ fn the_bounds_match_the_shared_consts() {
         known_ms("MUST_SUCCEED_WITHIN"),
         Some(fakes::MUST_SUCCEED_WITHIN >= floor)
     );
+    assert_eq!(
+        known_ms("WHOLE_SUBSYSTEM_WITHIN"),
+        Some(fakes::WHOLE_SUBSYSTEM_WITHIN >= floor)
+    );
 }
 
 #[test]
@@ -237,6 +241,17 @@ fn a_short_named_bound_passes() {
 }
 
 #[test]
+fn the_documented_subsystem_bound_passes_on_a_changed_line() {
+    let failures = check(
+        "crates/x/tests/a.rs",
+        "tests/a.rs",
+        "fn a() { Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN); }",
+        &[1],
+    );
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
+#[test]
 fn a_long_named_bound_fails() {
     for (after, name) in [
         ("fakes::deadline::WAITS", "WAITS"),
@@ -272,7 +287,13 @@ fn an_unshown_after_fails_closed() {
                 && failures[0].ends_with("is not shown below 60 s"),
             "{case}: {failures:?}"
         );
-        for readable in ["WAIT", "DEADLINE", "MUST_SUCCEED_WITHIN", "Duration::ZERO"] {
+        for readable in [
+            "WAIT",
+            "DEADLINE",
+            "MUST_SUCCEED_WITHIN",
+            "WHOLE_SUBSYSTEM_WITHIN",
+            "Duration::ZERO",
+        ] {
             assert!(
                 failures[0].contains(readable),
                 "{case} names {readable}: {failures:?}"
