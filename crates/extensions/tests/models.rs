@@ -213,6 +213,230 @@ fn a_later_catalog_replaces_stale_cautious_values() {
 }
 
 #[test]
+fn admission_capability_filter_drops_catalog_non_text_models() {
+    let setup = Setup::new();
+    let package = setup.source(
+        "known",
+        &manifest("known"),
+        &[json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_UNSET_KEY"},
+            "models_dev": {"source": "fake"},
+            "models": []
+        })],
+    );
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"fake":{"m":{"modalities":{"output":["image"]},"tool_call":true}}}"#,
+    )
+    .unwrap();
+    let model = serde_json::from_value(json!({
+        "id": "m", "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"
+    }))
+    .unwrap();
+
+    let admitted =
+        extensions::models_dev::merge_admission(&setup.home(), &package, "fake", vec![model], true);
+
+    assert!(admitted.iter().all(|model| model.id != "m"));
+}
+
+#[test]
+fn admission_capability_filter_drops_catalog_tool_call_false_models() {
+    let setup = Setup::new();
+    let package = setup.source(
+        "known",
+        &manifest("known"),
+        &[json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_UNSET_KEY"},
+            "models_dev": {"source": "fake"},
+            "models": []
+        })],
+    );
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"fake":{"m":{"modalities":{"output":["text"]},"tool_call":false}}}"#,
+    )
+    .unwrap();
+    let model = serde_json::from_value(json!({
+        "id": "m", "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"
+    }))
+    .unwrap();
+
+    let admitted =
+        extensions::models_dev::merge_admission(&setup.home(), &package, "fake", vec![model], true);
+
+    assert!(admitted.iter().all(|model| model.id != "m"));
+}
+
+#[test]
+fn admission_capability_filter_keeps_unknown_models_new() {
+    let setup = Setup::new();
+    let package = setup.source(
+        "known",
+        &manifest("known"),
+        &[json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_UNSET_KEY"},
+            "models_dev": {"source": "fake"},
+            "models": []
+        })],
+    );
+    config::write_models_dev(&setup.home(), br#"{"fake":{}}"#).unwrap();
+    let model = serde_json::from_value(json!({
+        "id": "unknown", "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"
+    }))
+    .unwrap();
+
+    let admitted =
+        extensions::models_dev::merge_admission(&setup.home(), &package, "fake", vec![model], true);
+
+    assert_eq!(admitted.len(), 1);
+    assert!(admitted[0].is_new);
+    assert_eq!(admitted[0].input, ["text"]);
+    assert_eq!(admitted[0].context_window, Some(128_000));
+}
+
+#[test]
+fn admission_capability_filter_keeps_models_with_text_and_tool_call() {
+    let setup = Setup::new();
+    let package = setup.source(
+        "known",
+        &manifest("known"),
+        &[json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_UNSET_KEY"},
+            "models_dev": {"source": "fake"},
+            "models": []
+        })],
+    );
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"fake":{"m":{"modalities":{"output":["text"]},"tool_call":true}}}"#,
+    )
+    .unwrap();
+    let model = serde_json::from_value(json!({
+        "id": "m", "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"
+    }))
+    .unwrap();
+
+    let admitted =
+        extensions::models_dev::merge_admission(&setup.home(), &package, "fake", vec![model], true);
+
+    assert_eq!(admitted.len(), 1);
+    assert_eq!(admitted[0].id, "m");
+    assert!(!admitted[0].is_new);
+}
+
+#[test]
+fn admission_capability_filter_drops_openai_audio_and_image_models() {
+    let setup = Setup::new();
+    let package = setup.source(
+        "known",
+        &manifest("known"),
+        &[json!({
+            "name": "openai",
+            "credential": {"env": "FIBER_TEST_UNSET_KEY"},
+            "models_dev": {"source": "openai"},
+            "models": []
+        })],
+    );
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"openai":{"audio":{"modalities":{"output":["audio"]},"tool_call":false},"image":{"modalities":{"output":["image"]},"tool_call":false}}}"#,
+    )
+    .unwrap();
+    let models = ["audio", "image"].map(|id| {
+        serde_json::from_value(json!({
+            "id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"
+        }))
+        .unwrap()
+    });
+
+    let admitted = extensions::models_dev::merge_admission(
+        &setup.home(),
+        &package,
+        "openai",
+        models.into(),
+        true,
+    );
+
+    assert!(admitted.is_empty());
+}
+
+#[test]
+fn admission_capability_filter_drops_anthropic_non_tool_rows() {
+    let setup = Setup::new();
+    let package = setup.source(
+        "known",
+        &manifest("known"),
+        &[json!({
+            "name": "anthropic",
+            "credential": {"env": "FIBER_TEST_UNSET_KEY"},
+            "models_dev": {"source": "anthropic"},
+            "models": []
+        })],
+    );
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"anthropic":{"m":{"modalities":{"output":["text"]},"tool_call":false}}}"#,
+    )
+    .unwrap();
+    let model = serde_json::from_value(json!({
+        "id": "m", "protocol": "anthropic-messages", "base_url": "https://api.anthropic.com/v1"
+    }))
+    .unwrap();
+
+    let admitted = extensions::models_dev::merge_admission(
+        &setup.home(),
+        &package,
+        "anthropic",
+        vec![model],
+        true,
+    );
+
+    assert!(admitted.is_empty());
+}
+
+#[test]
+fn admission_retain_listed_hides_vendor_active_catalog_deprecated_models() {
+    let setup = Setup::new();
+    let package = setup.source(
+        "known",
+        &manifest("known"),
+        &[json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_UNSET_KEY"},
+            "models_dev": {"source": "fake"},
+            "models": [{
+                "id": "m", "protocol": "openai-responses",
+                "base_url": "http://127.0.0.1:1/v1", "context_window": 1000
+            }]
+        })],
+    );
+    install(&setup.home(), &package, "0.1.0").unwrap();
+    let (mut providers, _) = Providers::load_enabled(&setup.home(), &config(&setup, &[])).unwrap();
+    assert_eq!(providers.get("fake").unwrap().models.len(), 1);
+    config::write_models_dev(
+        &setup.home(),
+        br#"{"fake":{"m":{"status":"deprecated","modalities":{"output":["text"]},"tool_call":true}}}"#,
+    )
+    .unwrap();
+    let applied = extensions::models_dev::apply(
+        &setup.home(),
+        true,
+        None,
+        std::time::SystemTime::now(),
+        &mut providers,
+    );
+
+    applied.retain_listed(&mut providers);
+
+    assert!(providers.get("fake").unwrap().models.is_empty());
+}
+
+#[test]
 fn models_dev_merge_uses_catalog_fields_without_changing_the_model_set() {
     let mut models: Vec<ModelData> =
         serde_json::from_value(provider("acme", &["m1", "m2"])["models"].clone()).unwrap();
