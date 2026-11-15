@@ -445,7 +445,6 @@ fn focused_label(grid: &Grid) -> Option<String> {
     })
 }
 
-#[test]
 fn focus_row_with_down(run: &mut Run, mut grid: Grid, target: &str, step_cap: usize) -> Grid {
     for _ in 0..step_cap {
         let on = focused_label(&grid);
@@ -458,6 +457,7 @@ fn focus_row_with_down(run: &mut Run, mut grid: Grid, target: &str, step_cap: us
     grid
 }
 
+#[test]
 fn the_settings_view_matches_the_doc() {
     let setup = tools_setup(json!({}));
     let mut run = turned(&setup);
