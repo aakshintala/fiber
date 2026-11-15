@@ -1715,6 +1715,36 @@ fn an_empty_list_says_nothing_running_and_enter_does_nothing() {
 }
 
 #[test]
+fn space_opens_the_selected_job_and_blank_tail_is_inert() {
+    let mut app = attached(80, 24);
+    start_job(&mut app, "j_1");
+    open_jobs(&mut app);
+    app.on_key(Key::Down, now());
+    let (before, _) = screen(&app, 80, 24);
+    assert!(before.contains("task j_1"), "{before}");
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert!(app.item_open());
+    assert!(!app.session_view_open());
+    assert_eq!(
+        app.item_view().map(|view| view.description),
+        Some("task j_1".to_owned())
+    );
+
+    let mut app = attached(80, 24);
+    start_job(&mut app, "j_1");
+    open_jobs(&mut app);
+    app.on_key(Key::Down, now());
+    app.on_key(Key::Down, now());
+    assert_eq!(selected(&app), 2, "the blank tail follows the job row");
+    let (before, _) = screen(&app, 80, 24);
+    assert!(before.contains("a row opens that item's view"), "{before}");
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert!(!app.item_open());
+    assert!(app.session_view_open());
+    assert_eq!(selected(&app), 2);
+}
+
+#[test]
 fn jobs_list_draws_one_row_per_job_and_opens_on_click() {
     let mut app = attached(80, 24);
     start_job(&mut app, "j_1");
