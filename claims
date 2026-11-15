@@ -648,3 +648,6 @@ crates/loop/src/history_tests.rs	fiber-4849	plan	2026-11-15T05:01:36Z	Amoghs-Mac
 crates/loop/src/lib.rs	fiber-4849	plan	2026-11-15T05:01:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/resume.rs	fiber-4849	plan	2026-11-15T05:01:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/tests/resume.rs	fiber-4849	plan	2026-11-15T05:01:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/ci.md	fiber-4634	plan	2026-11-15T05:04:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+.github/workflows/scheduled.yml	fiber-4634	plan	2026-11-15T05:04:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+.github/workflows/models-catalog.yml	fiber-4634	plan	2026-11-15T05:04:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
