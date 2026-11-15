@@ -615,3 +615,9 @@ crates/extensions/src/process_tests.rs:6939-6940	fiber-4677	plan	2026-11-15T02:4
 crates/extensions/src/process_tests.rs:7024-7025	fiber-4677	plan	2026-11-15T02:48:20Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4677-host-exec-relative	
 crates/extensions/src/process_tests.rs:7287-7288	fiber-4677	plan	2026-11-15T02:48:20Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4677-host-exec-relative	
 crates/tools/src/lib.rs	fiber-4670	plan	2026-11-15T02:53:05Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+providers/anthropic/providers/anthropic.lua	fiber-4638	plan	2026-11-15T03:26:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/openai/providers/openai.lua	fiber-4638	plan	2026-11-15T03:26:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/gemini/providers/gemini.lua	fiber-4638	plan	2026-11-15T03:26:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/anthropic/tests/*.json	fiber-4638	plan	2026-11-15T03:26:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/openai/tests/*.json	fiber-4638	plan	2026-11-15T03:26:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/gemini/tests/*.json	fiber-4638	plan	2026-11-15T03:26:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
