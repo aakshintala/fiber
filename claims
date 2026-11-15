@@ -640,3 +640,7 @@ scripts/check	fiber-4881	plan	2026-11-15T11:10:12Z	roundhouse-7010-plus-1:/home/
 scripts/bug-red	fiber-4881	plan	2026-11-15T11:10:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/process.rs	fiber-4677	plan	2026-11-15T11:12:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/hooks_tests.rs	fiber-4677	plan	2026-11-15T11:12:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/muse/providers/muse.lua	fiber-4865	plan	2026-11-15T11:14:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/muse/tests/models-listed.json	fiber-4865	plan	2026-11-15T11:14:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/muse/tests/models-500-raises.json	fiber-4865	plan	2026-11-15T11:14:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/muse/tests/models-not-a-list-raises.json	fiber-4865	plan	2026-11-15T11:14:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
