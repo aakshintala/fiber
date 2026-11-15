@@ -256,7 +256,7 @@ mod tests {
 
     use super::{
         ProjectKey, ensure_project_layout, ensure_project_layout_with, project_protected_paths_dir,
-        project_worktrees_dir, projects_dir, rename_project_dir,
+        project_worktrees_dir, projects_dir, rename_project_dir, rename_race,
     };
 
     #[test]
@@ -380,6 +380,12 @@ mod tests {
         })
         .unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn rename_race_classifies_competing_target_and_other_errors() {
+        assert!(rename_race(&std::io::ErrorKind::AlreadyExists.into()));
+        assert!(!rename_race(&std::io::ErrorKind::PermissionDenied.into()));
     }
 
     #[test]

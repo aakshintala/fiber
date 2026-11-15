@@ -457,6 +457,49 @@ fn in_project_scope_a_session_from_another_project_is_excluded_and_a_missing_wor
 }
 
 #[test]
+fn project_scope_selects_matching_workspace_and_rejects_another_project() {
+    let root = fakes::TempDir::new("cli-prune-scope-comparison");
+    let repo = root.path().join("repo");
+    let other = root.path().join("other");
+    fs::create_dir_all(&repo).unwrap();
+    fs::create_dir_all(&other).unwrap();
+    fakes::git::git(&repo, &["init", "--quiet"]);
+    fakes::git::git(&other, &["init", "--quiet"]);
+    let workspace = fs::canonicalize(&repo).unwrap();
+    let other_workspace = fs::canonicalize(&other).unwrap();
+    let home = root.path().join("home");
+    let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
+    session_in(
+        &sessions.join("s_matching_workspace"),
+        workspace.to_str().unwrap(),
+        None,
+        old_ts(),
+    );
+    session_in(
+        &sessions.join("s_wrong_workspace"),
+        other_workspace.to_str().unwrap(),
+        None,
+        old_ts(),
+    );
+
+    let selected = select(
+        &home,
+        &log::started_sessions(&home),
+        &workspace,
+        Some(older_than()),
+        false,
+        wall(),
+    );
+    let mut deletes = selected
+        .deletes
+        .iter()
+        .map(|delete| delete.id.0.as_str())
+        .collect::<Vec<_>>();
+    deletes.sort_unstable();
+    assert_eq!(deletes, ["s_matching_workspace"]);
+}
+
+#[test]
 fn outside_a_repository_every_project_is_in_scope() {
     let setup = Setup::new();
     setup.session("s_00000000000000a1", "/w", None, old_ts());

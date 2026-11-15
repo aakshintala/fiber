@@ -12,6 +12,12 @@ use std::sync::atomic::Ordering;
 
 use super::*;
 
+#[test]
+fn rename_unsupported_classifies_unsupported_and_other_errors() {
+    assert!(rename_unsupported(rustix::io::Errno::INVAL));
+    assert!(!rename_unsupported(rustix::io::Errno::PERM));
+}
+
 fn temps(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(dir)
         .unwrap()

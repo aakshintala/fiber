@@ -1708,7 +1708,7 @@ fn missing_git_subworkspace_readers_find_the_logged_project_and_fail_closed() {
 }
 
 #[test]
-fn removed_workspace_selection_requires_the_logged_workspace_to_match() {
+fn removed_workspace_selection_truth_table_matches_and_rejects_other_workspace() {
     let root = fakes::TempDir::new("dm-removed-workspace-selection");
     let home = root.path().join("home");
     let repository = root.path().join("repository");
