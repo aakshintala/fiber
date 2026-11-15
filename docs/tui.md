@@ -2924,7 +2924,9 @@ overlay, the Ctrl+R panel, a notice's whole text, the import report, the
   wrapped at a preferred width first and the overlay shrinks to what the
   wrapped content needs: 71 columns for a question or notice, 55 for the
   workspace picker, and 96 for the model picker and the completion panels,
-  less four columns on a narrower screen.
+  less four columns on a narrower screen. A footer wider than that
+  preferred width widens the overlay to fit the footer on one row, within
+  the same limits ("The footer").
 - **Placement.** An overlay is centred across the area it covers. A question,
   a notice, the Ctrl+R panel and the workspace picker are also centred down
   it, unless that would cover the input box's top row: then the workspace
@@ -2945,7 +2947,11 @@ overlay, the Ctrl+R panel, a notice's whole text, the import report, the
 - **The footer** is dim and aligned left with the body, never centred. It is
   a legend: each key bold and its label dim, joined by " · ". It never
   repeats a key the body already lists as a choice; where the body lists every
-  key, the footer says what the mouse does instead.
+  key, the footer says what the mouse does instead. A footer never cuts
+  inside an entry. When it doesn't fit on one row even at the widest the
+  overlay may be, it wraps onto further rows, each aligned left with the
+  body. It breaks only at a " · ", which is dropped at the break, and fills
+  each row before starting the next.
 
 ```
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
