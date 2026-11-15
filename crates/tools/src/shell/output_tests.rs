@@ -11,6 +11,9 @@ use fakes::TempDir;
 use fakes::clock::FakeClock;
 use fakes::jobs::JobDeltas;
 
+use super::super::command::MoveReason;
+use super::super::drive::{Phase, Run};
+use super::super::moved::Moved;
 use super::{
     Errors, HELD_MAX, PacedStream, Pending, Shared, escaped_len, lock, read_errors, read_output,
 };
@@ -346,13 +349,90 @@ fn a_call_stream_reads_the_call_queue_and_a_job_stream_the_job_queue() {
 }
 
 #[test]
+fn held_stderr_attach_write_failure_is_recorded() {
+    let dir = TempDir::new("fiber-held-stderr-failure");
+    let path = dir.path().join("err.log");
+    std::fs::write(&path, b"").unwrap();
+    let shared = Arc::new(Shared::default());
+    {
+        let mut inner = lock(&shared.inner);
+        inner.errors = Some(Errors::default());
+    }
+    read_errors(Chunks(vec![b"held".to_vec()]), &shared);
+    // A read-only handle fails the held flush: the attach reports it, and
+    // the move records it under the shared lock with the stderr path.
+    let read_only = std::fs::File::open(&path).unwrap();
+    let moved = parked(Arc::clone(&shared));
+    moved.attach_errors(Some(read_only), Some(path.clone()));
+    let inner = lock(&shared.inner);
+    let failure = inner
+        .write_failure
+        .as_ref()
+        .expect("recorded flush failure");
+    assert_eq!(failure.path, path);
+    assert!(std::fs::read(&path).unwrap().is_empty());
+}
+
+fn parked(shared: Arc<Shared>) -> Moved {
+    Moved {
+        reason: MoveReason::StartedInBackground,
+        bridge: None,
+        progress: Run {
+            phase: Phase::Running,
+            stop: None,
+            sent_signal: false,
+            seen_empty: false,
+            stream_carry: Vec::new(),
+            timeout_at: None,
+            move_at: None,
+            members: None,
+            identity: None,
+            pgid: 2,
+            hosted: None,
+            listing: None,
+            shared,
+            ask: None,
+            job: None,
+            paced: None,
+            feed: None,
+        },
+        cap: super::OUTPUT_CAP,
+        spill: None,
+        protection: None,
+    }
+}
+
+#[test]
+fn output_file_write_failure_captures_first_path() {
+    let dir = TempDir::new("fiber-output-write-failure");
+    let path = dir.path().join("output.log");
+    std::fs::write(&path, b"").unwrap();
+    let shared = Shared::default();
+    {
+        let mut inner = lock(&shared.inner);
+        inner.output.extend_from_slice(b"initial");
+        inner.attach(std::fs::File::open(&path).unwrap(), &path, 100);
+        assert_eq!(inner.write_failure.as_ref().unwrap().path, path);
+        inner.sink(b"later");
+        assert_eq!(inner.write_failure.as_ref().unwrap().path, path);
+    }
+    assert!(std::fs::read(&path).unwrap().is_empty());
+}
+
+#[test]
 fn hosted_out_and_err_route_to_their_own_files_with_both_sinks_present() {
     let dir = TempDir::new("fiber-hosted-sinks");
     let _watchdog = fakes::Watchdog::matching(&dir.path().to_string_lossy());
     let (shared, out) = attached(&dir, b"", 100);
     let err = dir.path().join("err.log");
     let mut errors = Errors::default();
-    errors.attach(Some(std::fs::File::create(&err).unwrap()), 100);
+    errors
+        .attach(
+            Some(std::fs::File::create(&err).unwrap()),
+            Some(err.clone()),
+            100,
+        )
+        .unwrap();
     lock(&shared.inner).errors = Some(errors);
 
     super::hosted_bytes(&shared, contract::keeper::Stream::Out, b"stdout\n");
@@ -375,9 +455,15 @@ fn standard_error_is_held_then_written_to_its_file_up_to_the_cap() {
         let mut inner = lock(&shared.inner);
         let errors = inner.errors.as_mut().unwrap();
         assert!(errors.eof);
-        errors.attach(Some(std::fs::File::create(&path).unwrap()), 5);
-        errors.sink(b"cdef");
-        errors.sink(b"g");
+        errors
+            .attach(
+                Some(std::fs::File::create(&path).unwrap()),
+                Some(path.clone()),
+                5,
+            )
+            .unwrap();
+        errors.sink(b"cdef").unwrap();
+        errors.sink(b"g").unwrap();
     }
     // Past the cap the bytes are dropped; nothing stops.
     assert_eq!(std::fs::read(&path).unwrap(), b"abcde");
@@ -392,8 +478,8 @@ fn standard_error_with_no_file_is_dropped_after_the_move() {
     let mut inner = lock(&shared.inner);
     let errors = inner.errors.as_mut().unwrap();
     assert_eq!(errors.held, b"before", "held until the move");
-    errors.attach(None, 5);
-    errors.sink(b"after");
+    errors.attach(None, None, 5).unwrap();
+    errors.sink(b"after").unwrap();
     assert!(errors.held.is_empty(), "nothing is held past the move");
     assert_eq!(errors.written, 0);
 }

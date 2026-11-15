@@ -123,6 +123,23 @@ pub(crate) enum ShellError {
         /// The exit status.
         code: i32,
     },
+    /// A shell output file could not be written. `replaced` is the
+    /// documented end the failure replaced, as `&'static str` so no new
+    /// code reaches the model; the foreground never floods, so there is
+    /// no flooded sentence here (job completions add it in the shared
+    /// helper instead). Neither the `io::ErrorKind` nor the operating
+    /// system's text is rendered.
+    #[error("{}", output_write_line(path, &replaced, false))]
+    #[allow(dead_code, reason = "red-commit stub")]
+    OutputWrite {
+        /// The file that failed.
+        path: PathBuf,
+        /// The end replaced by this failure.
+        replaced: &'static str,
+        /// The underlying I/O failure.
+        #[source]
+        source: io::Error,
+    },
     /// The output passed the cap and the job was stopped.
     #[error("The output passed 5 GB and the job was stopped.")]
     Capped,
@@ -137,6 +154,22 @@ pub(crate) enum ShellError {
 /// The placeholder a bare-wait refusal names when the refused command holds
 /// no usable check command after its sleep.
 const CHECK_PLACEHOLDER: &str = "<check command>";
+
+/// What a known output-write failure says: the file that failed and the
+/// documented end it replaced, plus the flooded sentence for a job whose
+/// monitor was also flooded. The single wording every completion builder
+/// shares, so the foreground error and the shared override helper read
+/// the same line.
+pub(crate) fn output_write_line(path: &std::path::Path, replaced: &str, flooded: bool) -> String {
+    let mut line = format!(
+        "Could not write shell output file {}; replaced end: {replaced}.",
+        path.display()
+    );
+    if flooded {
+        line.push_str(" The monitor was also flooded.");
+    }
+    line
+}
 
 /// What a bare-wait refusal says: the refused command quoted verbatim, a
 /// background rewrite of that same command, and a monitor `until` snippet
@@ -314,6 +347,7 @@ impl ShellError {
             Self::NotStarted { .. } | Self::NotReaped | Self::SandboxApply { .. } => {
                 ErrorCode::ToolError
             }
+            Self::OutputWrite { .. } => ErrorCode::IoFailed,
             Self::Indeterminate => ErrorCode::Indeterminate,
             Self::TimedOut { .. } | Self::TimedOutMoved { .. } | Self::DeadlinePassed { .. } => {
                 ErrorCode::Timeout

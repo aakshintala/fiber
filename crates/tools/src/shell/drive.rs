@@ -354,7 +354,7 @@ fn finish_paced(
     carry: &mut Vec<u8>,
     paced: Option<&mut PacedStream>,
 ) -> Finished {
-    let (output, status, capped) = {
+    let (output, status, capped, write_failure) = {
         let mut inner = lock(&shared.inner);
         if !eof && !inner.artifact_sink {
             // The reader blocks in its read until the last holder closes
@@ -369,7 +369,12 @@ fn finish_paced(
             Some(spill) => Kept::Spilled(Box::new(spill)),
             None => Kept::Whole(std::mem::take(&mut inner.output)),
         };
-        (output, inner.status, inner.cap_fired)
+        (
+            output,
+            inner.status,
+            inner.cap_fired,
+            inner.write_failure.take(),
+        )
     };
     // The queue's rest goes out lossily, so below the cap the concatenated
     // delta texts equal the lossy whole output. A paced call's held text
@@ -403,6 +408,7 @@ fn finish_paced(
         sent_signal,
         capped,
         flooded: false,
+        write_failure,
     }
 }
 

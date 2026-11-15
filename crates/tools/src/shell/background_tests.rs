@@ -101,11 +101,68 @@ fn finished(
         sent_signal,
         capped: false,
         flooded: false,
+        write_failure: None,
     }
 }
 
 fn status_of(command: &str) -> std::process::ExitStatus {
     Command::new("sh").args(["-c", command]).status().unwrap()
+}
+
+#[test]
+fn output_write_failure_replaces_nonzero_exit() {
+    let path = std::path::PathBuf::from("/tmp/job.log");
+    let mut finished = finished(Some(status_of("exit 3")), None, false, false, false);
+    finished.write_failure = Some(super::super::output::WriteFailure {
+        path: path.clone(),
+        source: std::io::Error::other("private OS detail"),
+    });
+    let completed = super::to_completed_reported(
+        contract::JobId("j_1".to_owned()),
+        &path,
+        finished,
+        None,
+        None,
+    );
+    assert_eq!(completed.status, contract::events::Outcome::Failed);
+    let failure = completed.error.unwrap();
+    assert_eq!(failure.code, contract::ErrorCode::IoFailed);
+    assert!(failure.message.contains(&path.display().to_string()));
+    assert!(failure.message.contains("replaced end: nonzero_exit"));
+    assert!(!failure.message.contains("private OS detail"));
+}
+
+#[test]
+fn output_write_failure_wins_over_completion_status() {
+    let path = std::path::PathBuf::from("/tmp/job.log");
+    for (stop, flooded, displaced) in [
+        (Some(StopKind::Cancel), false, "cancelled"),
+        (None, true, "flooded"),
+    ] {
+        let mut finished = finished(None, stop, false, false, false);
+        finished.flooded = flooded;
+        finished.write_failure = Some(super::super::output::WriteFailure {
+            path: path.clone(),
+            source: std::io::Error::other("private OS detail"),
+        });
+        let completed = super::to_completed_reported(
+            contract::JobId("j_1".to_owned()),
+            &path,
+            finished,
+            None,
+            None,
+        );
+        assert_eq!(completed.status, contract::events::Outcome::Failed);
+        let failure = completed.error.unwrap();
+        assert_eq!(failure.code, contract::ErrorCode::IoFailed);
+        assert!(failure.message.contains(&path.display().to_string()));
+        assert!(failure.message.contains(displaced), "{}", failure.message);
+        assert_eq!(
+            flooded,
+            failure.message.contains("monitor was also flooded")
+        );
+        assert!(!failure.message.contains("private OS detail"));
+    }
 }
 
 #[test]

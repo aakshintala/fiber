@@ -86,6 +86,8 @@ struct State {
     cap: u64,
     timed_out: bool,
     output_cap: bool,
+    // Red-commit stub: the first path-bearing write error; never stored yet.
+    write_failure: Option<(PathBuf, io::Error)>,
     stopping: Option<Instant>,
     ended: bool,
     readers: usize,
@@ -463,6 +465,7 @@ impl Runtime {
                 cap: spec.output_cap,
                 timed_out: false,
                 output_cap: false,
+                write_failure: None,
                 stopping: None,
                 ended: false,
                 readers: if streams.errors.is_some() { 2 } else { 1 },
@@ -550,6 +553,8 @@ impl Runtime {
                     signal: status.signal(),
                     timed_out: state.timed_out,
                     output_cap: state.output_cap,
+                    // Red-commit stub: the reader still returns its write error.
+                    output_write_failure: None,
                 };
                 drop(state);
                 // Reader completion precedes exit, and the log mutex precedes sup.

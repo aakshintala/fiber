@@ -388,6 +388,7 @@ fn a_job_the_log_already_ended_is_refused() {
                     signal: None,
                     timed_out: false,
                     output_cap: false,
+                    output_write_failure: None,
                 },
             )),
             None,
@@ -462,6 +463,63 @@ fn watched_job(world: &World, id: &str, call: &str) -> (KeptJob, Writers) {
     std::fs::remove_file(&job.output_path).unwrap();
     let writers = Writers::at(&job.output_path);
     (job, writers)
+}
+
+#[test]
+fn a_keeper_that_vanishes_after_an_adopted_write_failure_reports_io_failed_once_kept() {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let mut world = world();
+    let mut job = world.job("j_write", "call_0", b"");
+    let errors = world.dir.artifacts().join("j_write.stderr.log");
+    fakes::fifo(&errors);
+    let mut reader = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().try_into().unwrap())
+        .open(&errors)
+        .unwrap();
+    job.errors_path = Some(errors.clone());
+    let mut attached = world.attach(vec![job]);
+    let deliveries = inbox(&world);
+    let restored = restored(&world, &mut attached);
+    let mut active = restored.activate();
+
+    // The first frame proves the append writer is live before its reader is
+    // closed. The next frame therefore forces the adopted stderr append to
+    // fail, and the keeper connection then closes without an Exit.
+    world.send(output_frame("call_0", "err", "first\\n"));
+    let wait = deadline();
+    let mut bytes = [0_u8; 32];
+    loop {
+        match reader.read(&mut bytes) {
+            Ok(count) if count > 0 => break,
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) => panic!("read from output FIFO: {error}"),
+        }
+        assert!(!wait.left().is_zero(), "the adopted writer did not write");
+        std::thread::yield_now();
+    }
+    drop(reader);
+    world.send(output_frame("call_0", "err", "second\\n"));
+    drop(world.keeper);
+
+    let joined = finished(&mut active);
+    deadline().recv_or_fail(&joined, "the runner to observe connection close");
+    assert!(
+        deliveries.try_recv().is_err(),
+        "the verdict is not settled yet"
+    );
+    active.keep();
+    let Delivery::Job(notice) = deadline().recv_or_fail(&deliveries, "the kept failure") else {
+        panic!("expected one failed job completion")
+    };
+    assert_eq!(notice.completed.status, Outcome::Failed);
+    let failure = notice.completed.error.unwrap();
+    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert!(failure.message.contains(errors.to_str().unwrap()));
+    assert!(failure.message.contains("replaced end: indeterminate"));
+    assert!(deliveries.try_recv().is_err(), "the end is reported once");
 }
 
 #[test]

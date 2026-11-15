@@ -3631,6 +3631,44 @@ fn ui_status(extension: &str, status: &str) -> Event {
 }
 
 #[test]
+fn history_append_failure_is_logged_without_prompt_text() {
+    let opened = Opened::open(Vec::new());
+    let path = opened.home.join("projects/p/history.jsonl");
+    fs::create_dir_all(&path).unwrap();
+    let id = CommandId("c_history_failure".into());
+    opened
+        .session
+        .gate
+        .prompts
+        .register(id.clone(), text_part("private prompt"));
+    let (tx, rx) = mpsc::channel();
+    let ack = contract::inbox::Ack(Box::new(move |answer| {
+        drop(tx.send(answer));
+    }));
+    let wrapper = crate::prompt_history::recorded(ack, path.clone(), &opened.session.gate, id);
+    (wrapper.0)(Ok(None));
+    assert!(
+        Deadline::after(DEADLINE)
+            .recv_or_fail(&rx, "accepted prompt acknowledgement")
+            .is_ok()
+    );
+    let diagnostic = fs::read_to_string(
+        opened
+            .home
+            .join("logs")
+            .join(format!("session-{}.log", opened.id.0)),
+    )
+    .unwrap();
+    assert!(diagnostic.contains("io_failed"), "{diagnostic}");
+    assert!(
+        diagnostic.contains(&path.display().to_string()),
+        "{diagnostic}"
+    );
+    assert!(!diagnostic.contains("private prompt"), "{diagnostic}");
+    close_within(opened.session, opened.log);
+}
+
+#[test]
 fn a_full_subscriber_sees_the_kept_ui_line_before_a_later_one() {
     // The seed and the registration sit under one lock: emit status A,
     // connect a client whose subscribe parks at the seed probe, append

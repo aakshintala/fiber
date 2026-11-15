@@ -243,16 +243,7 @@ pub(super) fn execute(
 // assemble_output returns through Timeout or Capped before reading sent_signal.
 #[cfg_attr(false, mutants::skip)]
 pub fn kept_end(job_id: JobId, exit: &Exit) -> JobCompleted {
-    let finished = Finished {
-        output: Kept::Whole(Vec::new()),
-        status: Some(status(exit)),
-        stop: exit.timed_out.then_some(command::StopKind::Timeout),
-        indeterminate: false,
-        held_open: false,
-        sent_signal: exit.timed_out || exit.output_cap,
-        capped: exit.output_cap,
-        flooded: false,
-    };
+    let finished = keeper_finished(exit, false);
     let mut completed = super::background::to_completed_reported(
         job_id,
         Path::new(""),
@@ -270,6 +261,24 @@ pub fn kept_end(job_id: JobId, exit: &Exit) -> JobCompleted {
     completed
 }
 
+/// The `Finished` a keeper-written completion maps: the keeper's exit
+/// flags, with no stored write failure inside, so the one override the
+/// caller applies stays the only one. `flooded` selects the flooded end
+/// before any override, never after it.
+fn keeper_finished(exit: &Exit, flooded: bool) -> Finished {
+    Finished {
+        output: Kept::Whole(Vec::new()),
+        status: Some(status(exit)),
+        stop: exit.timed_out.then_some(command::StopKind::Timeout),
+        indeterminate: false,
+        held_open: false,
+        sent_signal: exit.timed_out || exit.output_cap,
+        capped: exit.output_cap,
+        flooded,
+        write_failure: None,
+    }
+}
+
 /// The completion the session writes for a job it took over from a keeper:
 /// a live job's ending, with the tail read from the job's `output` file.
 pub fn adopted_end(job_id: JobId, output: &Path, exit: &Exit) -> JobCompleted {
@@ -279,12 +288,43 @@ pub fn adopted_end(job_id: JobId, output: &Path, exit: &Exit) -> JobCompleted {
 }
 
 /// The completion for a job taken over from a keeper that a flood stopped:
-/// [`adopted_end`] with the `flooded` failure a live monitor's flood ends in.
+/// [`adopted_end`] with the `flooded` failure a live monitor's flood ends in,
+/// selected before the write override so a stored failure still says the
+/// monitor was also flooded.
 pub fn adopted_flooded_end(job_id: JobId, output: &Path, exit: &Exit) -> JobCompleted {
-    let mut completed = adopted_end(job_id, output, exit);
+    let finished = keeper_finished(exit, true);
+    let mut completed = super::background::to_completed_reported(
+        job_id,
+        Path::new(""),
+        finished,
+        exit.timed_out.then_some(super::Limit {
+            ms: 0,
+            monitor: false,
+            has_pipe: false,
+        }),
+        None,
+    );
+    completed.output_tail = super::background::output_tail(output);
     completed.status = Outcome::Failed;
     completed.error = Some(Failure::from(&ToolError::from(ShellError::Flooded)));
     completed
+}
+
+/// Gives a known output-file write failure precedence over the selected
+/// end: the completion is `failed` with `io_failed`, naming the output
+/// path and the documented end the failure replaced. The label is the
+/// vocabulary `docs/tools.md` already uses for shell ends, so no new words
+/// reach the model; the exit code and signal stay in `details`. Neither
+/// the `io::ErrorKind` nor the operating system's text is rendered.
+/// Runs exactly once while each final completion is built, after that
+/// completion's end is selected.
+pub fn override_write_failure(pre_end: &'static str, path: &Path, flooded: bool) -> Failure {
+    Failure {
+        code: contract::ErrorCode::IoFailed,
+        message: crate::error::output_write_line(path, pre_end, flooded),
+        retry_after_ms: None,
+        provider: None,
+    }
 }
 
 /// Starts a process using the same sandbox and stream builder as the local shell.

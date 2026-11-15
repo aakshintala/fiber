@@ -20,6 +20,7 @@ use contract::shapes::{ContentPart, Failure};
 use contract::tool::{Cancel, Output};
 use support::cancel::Token;
 
+use super::Limit;
 use super::command::{Finished, MovePolicy, MoveReason, StopKind};
 use super::drive::finish;
 use super::monitor::Feed;
@@ -27,7 +28,6 @@ use super::moved::Moved;
 use super::output::{PacedStream, Shared, align_char_boundary, lock};
 use super::sandbox::protected::{Guard as ProtectionGuard, Report as ProtectedReport};
 use super::tty;
-use super::{Limit, assemble};
 use crate::error::{ShellError, ToolError};
 
 /// A description longer than this is cut, with `…` as the last character.
@@ -439,11 +439,11 @@ fn hand_off(
     let feed = opened.lines.map(|lines| {
         sink = Some(match File::create(&errors) {
             Ok(file) => {
-                moved.attach_errors(Some(file));
+                moved.attach_errors(Some(file), Some(errors.clone()));
                 Ok(())
             }
             Err(error) => {
-                moved.attach_errors(None);
+                moved.attach_errors(None, None);
                 Err(error)
             }
         });
@@ -834,6 +834,9 @@ fn to_completed(
 
 /// The adopted end with the protected-path report of its guard: the same
 /// outcome as [`to_completed`], carrying what the call's end restored.
+/// A known stored output-write failure replaces the selected end, whatever
+/// it was, with one shared override: the cap wins over every other end,
+/// then a flood, then the stop or the process end the foreground maps.
 pub(super) fn to_completed_reported(
     job_id: JobId,
     path: &Path,
@@ -850,17 +853,19 @@ pub(super) fn to_completed_reported(
     // A moved job's timeout carries the hint from its receipt: the same
     // line a foreground kill says, plus how to keep a long-running
     // process. A monitor's deadline names itself; an indeterminate end
-    // stays indeterminate, as `assemble` reads it first; and the
+    // stays indeterminate, as `assemble_output` reads it first; and the
     // foreground `assemble` above stays byte-identical. The capped and
     // flooded branches below still win when they apply. Read before
-    // `assemble` consumes the end.
+    // `assemble_output` consumes the end.
     let moved_limit = match (finished.stop, limit) {
         (Some(StopKind::Timeout), Some(limit)) if !limit.monitor && !finished.indeterminate => {
             Some((limit.ms, limit.has_pipe))
         }
         _ => None,
     };
-    let mut output = assemble(limit, finished, None, None);
+    let (mut output, _pre_end, _write_failure) =
+        super::assemble_output(limit, finished, None, None);
+    // Red-commit stub: a stored write failure does not override the end.
     if let Some((ms, has_pipe)) = moved_limit {
         output.error = Some(Failure::from(&ToolError::from(ShellError::TimedOutMoved {
             ms,

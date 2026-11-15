@@ -268,7 +268,7 @@ impl Spill {
         mut self,
         job_path: &Path,
         mut registry: File,
-    ) -> (File, Option<String>) {
+    ) -> (File, Option<String>, Option<io::Error>) {
         if self.failed.is_none() {
             // The writer wraps a duplicate handle: dropping it keeps the
             // spill's own handle as the sink.
@@ -279,27 +279,29 @@ impl Spill {
                     // The handle named the inode the rename moved: seek it
                     // to the end, so later output appends to the job's file.
                     let _position = file.seek(SeekFrom::End(0));
-                    return (file, None);
+                    return (file, None, None);
                 }
             } else {
-                let copied = File::open(&self.path)
+                match File::open(&self.path)
                     .and_then(|mut source| io::copy(&mut source, &mut registry).map(|_| ()))
-                    .is_ok();
-                if copied {
-                    self.created = false;
-                    return match fs::remove_file(&self.path) {
-                        Ok(()) => (registry, None),
-                        Err(_) => (registry, Some(still_there(&self.path))),
-                    };
+                {
+                    Ok(()) => {
+                        self.created = false;
+                        return match fs::remove_file(&self.path) {
+                            Ok(()) => (registry, None, None),
+                            Err(_) => (registry, Some(still_there(&self.path)), None),
+                        };
+                    }
+                    Err(_) => return (registry, Some(still_there(&self.path)), None),
                 }
-                return (registry, Some(still_there(&self.path)));
             }
         }
         // A failed spill, or a rename that left no handle: the job's file
         // gets the held head, then the ring, then later output.
         let mut head = self.head;
         head.extend_from_slice(&self.ring.bytes);
-        super::output::write_or_drop(&mut registry, &head);
+        // Red-commit stub: the held-head copy error is swallowed.
+        let _ = super::output::write_or_drop(&mut registry, &head);
         let mut line = None;
         if let Some(left) = self.left.take() {
             // One more try; a file that survives is named in the receipt.
@@ -307,7 +309,7 @@ impl Spill {
                 line = Some(still_there(&left));
             }
         }
-        (registry, line)
+        (registry, line, None)
     }
 }
 

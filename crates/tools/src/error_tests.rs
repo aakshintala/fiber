@@ -30,6 +30,22 @@ fn arguments_error_reports_the_schema_mismatch() {
 }
 
 #[test]
+fn shell_output_write_failure_uses_io_failed_and_names_path() {
+    let error = ShellError::OutputWrite {
+        path: PathBuf::from("/tmp/job.log"),
+        replaced: "indeterminate",
+        source: io::Error::other("private OS detail"),
+    };
+    let failure = contract::shapes::Failure::from(&ToolError::from(error));
+    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert_eq!(
+        failure.message,
+        "Could not write shell output file /tmp/job.log; replaced end: indeterminate."
+    );
+    assert!(!failure.message.contains("private OS detail"));
+}
+
+#[test]
 fn a_moved_read_names_the_read() {
     let error = FileError::ChangedBeforeRead {
         raw: "a.txt".to_owned(),

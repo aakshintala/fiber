@@ -411,6 +411,7 @@ impl Shell {
                 sent_signal: false,
                 capped: false,
                 flooded: false,
+                write_failure: None,
             },
             None,
             Some(command),
@@ -1310,7 +1311,9 @@ pub(crate) fn assemble_tailed(
         (Some(line), true) => Some(line.to_owned()),
         (Some(line), false) => Some(format!("{line}\n{}", notice.join("\n"))),
     };
-    let mut output = assemble_output(limit, finished, extra.as_deref(), tail);
+    let (mut output, _pre_end, _write_failure) =
+        assemble_output(limit, finished, extra.as_deref(), tail);
+    // Red-commit stub: a stored write failure does not override the end.
     output.details = command.map(|command| details(command, output.process.as_ref()));
     if let Some(inner) = report
         .as_ref()
@@ -1334,12 +1337,62 @@ pub(crate) fn assemble(
     extra: Option<&str>,
     command: Option<&str>,
 ) -> Output {
-    let mut output = assemble_output(limit, finished, extra, None);
+    let (mut output, _pre_end, _write_failure) = assemble_output(limit, finished, extra, None);
+    // Red-commit stub: a stored write failure does not override the end.
     output.details = command.map(|command| details(command, output.process.as_ref()));
     output
 }
 
+/// The documented end a finished command had before any stored output-write
+/// failure replaced it: `completed` or `cancelled` when that was the status,
+/// otherwise one of `nonzero_exit`, `signal`, `timeout`, `flooded`,
+/// `indeterminate`, `output_cap`, `tool_error` or `keeper_timeout`. The cap
+/// wins over every other end, then a flood, then an indeterminate stop;
+/// a stop without either is its own kind; without one, a missing status
+/// is `tool_error` (the command could not be reaped), a foreign signal is
+/// `signal`, a nonzero exit is `nonzero_exit`, and the rest completed.
+/// Label only: the exit code and signal stay in `details`.
+pub(crate) fn pre_end_of(finished: &Finished) -> &'static str {
+    if finished.capped {
+        "output_cap"
+    } else if finished.flooded {
+        "flooded"
+    } else if finished.indeterminate {
+        "indeterminate"
+    } else {
+        match finished.stop {
+            Some(StopKind::Cancel) => "cancelled",
+            Some(StopKind::Timeout) => "timeout",
+            None => match finished.status {
+                None => "tool_error",
+                Some(status) => {
+                    let (code, signal, _) = observed(status);
+                    if signal.as_ref().is_some_and(|_| !finished.sent_signal) {
+                        "signal"
+                    } else if code.is_some_and(|code| code != 0) {
+                        "nonzero_exit"
+                    } else {
+                        "completed"
+                    }
+                }
+            },
+        }
+    }
+}
+
 fn assemble_output(
+    limit: Option<Limit>,
+    mut finished: Finished,
+    extra: Option<&str>,
+    tail: Option<&str>,
+) -> (Output, &'static str, Option<output::WriteFailure>) {
+    let pre_end = pre_end_of(&finished);
+    let write_failure = finished.write_failure.take();
+    let output = assemble_output_inner(limit, finished, extra, tail);
+    (output, pre_end, write_failure)
+}
+
+fn assemble_output_inner(
     limit: Option<Limit>,
     finished: Finished,
     extra: Option<&str>,
