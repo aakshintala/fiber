@@ -1906,12 +1906,9 @@ fn combine_close_result(
         (Err(failure), _) => Err(failure),
         (Ok(code), _) if code != 0 => Ok(code),
         (Ok(_), Ok(())) => Ok(0),
-        (Ok(_), Err(source)) => match doors::stdout_write_exit_code(&source) {
-            0 => Ok(0),
-            _ => {
-                let error = doors::SessionError::StdoutFailed { source };
-                Err(failed(error.code(), error))
-            }
+        (Ok(_), Err(source)) => match doors::stdout_write_outcome(source) {
+            Ok(()) => Ok(0),
+            Err(error) => Err(failed(error.code(), error)),
         },
     }
 }

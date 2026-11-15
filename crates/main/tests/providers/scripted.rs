@@ -836,7 +836,7 @@ fn a_reviewed_call_then_a_compaction_marks_only_the_reviewer_lines() {
         // provider for `e.json` below, so it takes no step of this script.
         &json!({"steps": [
             {"tool_calls": [{"name": "shell", "arguments": {"command": "touch made && echo ran"}}],
-             "usage": {"input": 100, "output": 10}},
+             "usage": {"input": 1200, "output": 10}},
             {"text": "Compacting."},
             {"text": "Done."}
         ]}),
@@ -863,7 +863,7 @@ fn a_reviewed_call_then_a_compaction_marks_only_the_reviewer_lines() {
         &setup,
         // The `roles` entry registers `scripted/e.json` for the hook's
         // `host.model` call; no delegate runs, so it stays inert.
-        json!({"model": "scripted/s.json", "compaction": {"tokens": 5},
+        json!({"model": "scripted/s.json", "compaction": {"tokens": 1000},
                "roles": {"ext": "fiber:scripted/e.json"}}),
     );
     let run = ask(&setup);
