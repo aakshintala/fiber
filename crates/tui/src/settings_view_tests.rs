@@ -14,8 +14,8 @@ use ratatui::style::Modifier;
 use super::{
     Act, Applies, Ctx, Item, Request, SCREEN_ROWS, Screen, ScreenRow, Settings, applies,
     applies_text, as_typed, editor_default, editors_on_path, layers, next_number_value,
-    next_text_value, number_list, number_slider, number_text, refresh_millis, shown_value,
-    slider_bar, slider_step, text_list,
+    next_text_value, number_list, number_slider, number_text, refresh_millis, slider_bar,
+    slider_step, text_list,
 };
 use crate::ThemeSetting;
 use crate::configure::{Layer, SettingControl, SettingRow, Shown, WriteScope};
@@ -24,7 +24,11 @@ use crate::keys::{Edit, Key};
 use crate::swapped::{Spot, render};
 use contract::settings::SettingsTab;
 
-/// A value shown as compact JSON.
+fn shown_value(row: &SettingRow) -> (String, Option<String>) {
+    super::shown_value(row, |_| None)
+}
+
+// A value shown as compact JSON.
 fn value(json: &str) -> Shown {
     Shown::Value(json.to_owned())
 }
@@ -2959,6 +2963,38 @@ fn opening_editor_settings_focuses_its_sessions_row() {
         settings.focus,
         Some(super::Focus::Key("tui.editor".to_owned()))
     );
+}
+
+#[test]
+fn shown_editor_default_names_visual_when_set() {
+    let row = controlled(
+        "tui.editor",
+        Shown::Unset,
+        "default",
+        PERSON,
+        SettingControl::Text,
+    );
+    let rendered = super::shown_value(&row, |name| match name {
+        "VISUAL" => Some("vim".to_owned()),
+        _ => None,
+    });
+    assert_eq!(rendered.0, "Default ($VISUAL: vim)");
+}
+
+#[test]
+fn shown_editor_default_names_editor_when_visual_is_unset() {
+    let row = controlled(
+        "tui.editor",
+        Shown::Unset,
+        "default",
+        PERSON,
+        SettingControl::Text,
+    );
+    let rendered = super::shown_value(&row, |name| match name {
+        "EDITOR" => Some("nvim".to_owned()),
+        _ => None,
+    });
+    assert_eq!(rendered.0, "Default ($EDITOR: nvim)");
 }
 
 #[test]

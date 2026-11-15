@@ -2394,9 +2394,10 @@ impl Settings {
                 },
                 None,
             ),
-            Item::Key(at) => self
-                .row(at)
-                .map_or_else(|| (String::new(), None), shown_value),
+            Item::Key(at) => self.row(at).map_or_else(
+                || (String::new(), None),
+                |row| shown_value(row, |name| std::env::var(name).ok()),
+            ),
         };
         let value_ink = match item {
             Item::Screen(_) => Ink::Role(Role::Secondary),
@@ -3073,7 +3074,10 @@ fn editor_default(visual: Option<&str>, editor: Option<&str>) -> String {
 
 /// A row's value as the tab says it, and the layer tag after it when the
 /// value is set anywhere but global.
-fn shown_value(row: &SettingRow) -> (String, Option<String>) {
+fn shown_value(
+    row: &SettingRow,
+    reader: impl Fn(&str) -> Option<String>,
+) -> (String, Option<String>) {
     let list_text = |text: &str| {
         let names: Vec<String> = serde_json::from_str::<Vec<Value>>(text)
             .unwrap_or_default()
@@ -3103,7 +3107,7 @@ fn shown_value(row: &SettingRow) -> (String, Option<String>) {
         (SettingControl::Model, Shown::Unset) => "Default ›".to_owned(),
         (SettingControl::Model, Shown::Value(text)) => format!("{} ›", as_typed(text)),
         (SettingControl::Text, Shown::Unset) if row.key == EDITOR => {
-            let fallback = crate::editor::fallback(|name| std::env::var(name).ok());
+            let fallback = crate::editor::fallback(reader);
             editor_default(
                 fallback
                     .as_ref()
