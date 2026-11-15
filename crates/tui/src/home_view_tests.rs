@@ -1531,6 +1531,38 @@ fn an_exited_row_shows_id_turns_spend_and_age() {
 }
 
 #[test]
+fn an_exited_row_without_status_omits_since_from_home_input() {
+    let mut app = home(160, 48);
+    let outgoing = app.on_line(hello());
+    let recent_id = serde_json::from_str::<serde_json::Value>(&outgoing[1]).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let exited = recent_row("s_no_status", "no status", "exited");
+    app.on_line(accepted(
+        &recent_id,
+        serde_json::json!({"sessions":[exited]}),
+    ));
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["home"],
+        SlotScript::Decorate {
+            badge: Vec::new(),
+            trim: 0,
+        },
+    ));
+    app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+    let _ = screen(&app, 160, 48);
+    let inputs = renderer.home_inputs.borrow();
+    let row = inputs[0]["list"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "exited")
+        .unwrap();
+    assert!(row.get("since").is_none());
+}
+
+#[test]
 fn an_exited_row_age_comes_from_the_last_status() {
     let mut app = home(160, 48);
     app.set_wall(10_800_000);
