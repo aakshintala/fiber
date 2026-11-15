@@ -349,6 +349,12 @@ fn an_approval_waits_until_the_view_closes() {
 }
 
 #[test]
+fn editor_setting_reads_the_configured_value_from_its_row() {
+    let mut app = attached(fake_with_editor());
+    assert_eq!(app.editor_setting().as_deref(), Some("vim"));
+}
+
+#[test]
 fn opening_settings_on_a_key_focuses_that_row() {
     let mut app = attached(fake_with_editor());
     app.open_config_view_on(ConfigView::Settings, Some("tui.editor"));

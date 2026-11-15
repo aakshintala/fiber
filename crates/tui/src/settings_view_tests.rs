@@ -2790,6 +2790,26 @@ fn choice_at(settings: &Settings) -> usize {
 }
 
 #[test]
+fn ordinary_text_values_do_not_use_editor_display_rules() {
+    let unset = controlled(
+        "test.unset",
+        Shown::Unset,
+        "default",
+        ANY,
+        SettingControl::Text,
+    );
+    assert_eq!(shown_value(&unset).0, "Default");
+    let value = controlled(
+        "test.text",
+        value("\"plain\""),
+        "global",
+        ANY,
+        SettingControl::Text,
+    );
+    assert_eq!(shown_value(&value).0, "plain");
+}
+
+#[test]
 fn backend_and_hub_values_advertise_their_dynamic_picker() {
     for key in ["web_search.backend", "hub.default"] {
         let row = controlled(key, value("\"alpha\""), "global", ANY, SettingControl::Text);
@@ -2881,6 +2901,27 @@ fn hub_picker_uses_local_names_with_default_first_and_saves() {
 }
 
 #[test]
+fn choosing_the_current_hub_choice_still_saves_it() {
+    let mut fake = Fake::new(row_on(
+        "hub.default",
+        "Default hub",
+        SettingsTab::Advanced,
+        value("\"alpha\""),
+        "global",
+        WriteScope::GlobalOnly,
+        SettingControl::Text,
+    ));
+    fake.hubs = vec!["alpha".to_owned()];
+    let mut settings = at(&fake, "hub.default");
+    one(&mut settings, &fake, Key::Enter);
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "hub.default", "\"alpha\"")]
+    );
+}
+
+#[test]
 fn hub_picker_default_on_an_unset_key_closes_without_a_write() {
     let mut fake = Fake::new(row_on(
         "hub.default",
@@ -2899,6 +2940,25 @@ fn hub_picker_default_on_an_unset_key_closes_without_a_write() {
     assert!(matches!(settings.mode, super::Mode::Rows));
     assert!(fake.writes().is_empty());
     assert!(resets(&fake).is_empty());
+}
+
+#[test]
+fn opening_editor_settings_focuses_its_sessions_row() {
+    let fake = Fake::new(row_on(
+        "tui.editor",
+        "Editor",
+        SettingsTab::Sessions,
+        value("\"vim\""),
+        "global",
+        PERSON,
+        SettingControl::Text,
+    ));
+    let settings = Settings::open_on(&ctx(&fake), Vec::new(), "tui.editor");
+    assert_eq!(settings.tab, SettingsTab::Sessions);
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("tui.editor".to_owned()))
+    );
 }
 
 #[test]
@@ -2921,6 +2981,10 @@ fn editor_picker_uses_path_order_and_saves_wait_for_gui_editors() {
     let nvim = dir.path().join("nvim");
     std::fs::write(&nvim, "").unwrap();
     std::fs::set_permissions(&nvim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let non_executable = dir.path().join("vim");
+    std::fs::write(&non_executable, "").unwrap();
+    let directory = dir.path().join("hx");
+    std::fs::create_dir(&directory).unwrap();
     let code = dir.path().join("code");
     std::fs::write(&code, "").unwrap();
     std::fs::set_permissions(code, std::fs::Permissions::from_mode(0o755)).unwrap();
