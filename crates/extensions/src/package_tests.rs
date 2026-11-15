@@ -511,6 +511,43 @@ fn load_process_refuses_manifest_program_that_leaves_the_package() {
     assert!(message.contains(&dir.display().to_string()), "{message}");
 }
 
+/// A slash-relative program inside the package loads and starts.
+#[test]
+fn load_process_starts_manifest_program_inside_package() {
+    let root = fakes::TempDir::new("fiber-process-package-relative");
+    let dir = root.path().join("pkg");
+    std::fs::create_dir_all(dir.join("bin")).expect("package bin directory");
+    let (fixture, args) = fakes::ProcessFixture::command(
+        "peer",
+        Some(&json!([{"read": {}}, {"send": {"id":"ready", "command":"ready"}}])),
+    );
+    std::fs::copy(fixture, dir.join("bin/tool")).expect("copy process fixture into package");
+    std::fs::write(
+        dir.join("extension.json"),
+        json!({
+            "name": "fiber.test/proc",
+            "version": "v1.2.3",
+            "fiber": "0.1.0",
+            "api": 1,
+            "process": {"program": "bin/tool", "args": args, "exit_timeout_ms": 1000},
+        })
+        .to_string(),
+    )
+    .expect("write manifest");
+
+    let started = Package::load_process_provider_with(
+        PackageOptions {
+            dir,
+            clock: fakes::clock::FakeClock::new(),
+        },
+        super::package::ProcessProviderMode::Sessionless,
+        None,
+    )
+    .expect("an in-package slash-relative program starts");
+    let package = started.package;
+    drain(&package);
+}
+
 /// A missing program fails the package load, required or not: the
 /// session loader leaves an optional extension out with this failure's
 /// notice instead of loading an ownerless package.

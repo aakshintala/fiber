@@ -126,6 +126,7 @@ impl NativeHostServices {
         // An absent working directory is the workspace; a relative one
         // joins it, and an absolute one is used as given, as in Lua.
         let cwd = context.workspace.join(cwd);
+        // This is a refusal check even for scripted calls, matching `lua/vm.rs::host_request`.
         let resolved = crate::host::resolve::resolve_in_package(program, &context.package)
             .map_err(|message| {
                 (
