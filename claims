@@ -372,9 +372,6 @@ crates/extensions/tests/fixtures/session-host-exec/bin/*	fiber-4899	plan	2026-11
 docs/testing/running.md	fiber-4899	plan	2026-11-15T16:16:14Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/install.rs	fiber-4899	plan	2026-11-15T16:16:14Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/tests/fixtures/session-host-exec/bin	fiber-4899	grant	2026-11-15T16:16:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4899-session-host-exec	
-scripts/check	fiber-4889	plan	2026-11-15T16:19:11Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-scripts/test-check-rules-by-path	fiber-4889	plan	2026-11-15T16:19:11Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/workflow.md	fiber-4889	plan	2026-11-15T16:19:11Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/contract/src/pre_session.rs	fiber-4897	plan	2026-11-15T16:33:09Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/invocation.md	fiber-4897	plan	2026-11-15T16:33:09Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing.md	fiber-4897	plan	2026-11-15T16:33:09Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
@@ -462,3 +459,7 @@ crates/tui/src/settings_view_tests.rs	fiber-4029	plan	2026-11-15T17:56:53Z	Amogh
 crates/tui/src/swapped_tests.rs	fiber-4029	plan	2026-11-15T17:56:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/rules_tests.rs	fiber-4029	plan	2026-11-15T17:56:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/doc-citations.allow	fiber-4029	plan	2026-11-15T17:56:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/workflow.md:118-119	fiber-4889	plan	2026-11-15T17:58:23Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4889-jig-examples	
+scripts/check:167-168	fiber-4889	plan	2026-11-15T17:58:23Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4889-jig-examples	
+scripts/test-check-rules-by-path:12-12	fiber-4889	plan	2026-11-15T17:58:23Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4889-jig-examples	
+scripts/test-check-rules-by-path:57-58	fiber-4889	plan	2026-11-15T17:58:23Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4889-jig-examples	
