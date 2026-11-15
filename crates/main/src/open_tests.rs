@@ -10,7 +10,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::{
-    hub_entries, in_project, listed_latest, notice_lines, resolve_project_sessions, route,
+    hub_entries, in_project, listed_latest, notice_lines, resolve_project_sessions, resume, route,
     select_latest_project, target_in, tty_refusal,
 };
 use contract::SessionId;
@@ -25,6 +25,19 @@ fn the_terminal_refuses_unless_both_standard_input_and_output_are_ttys() {
     assert_eq!(tty_refusal(false, false), Some(SENTENCE));
     assert_eq!(tty_refusal(false, true), Some(SENTENCE));
     assert_eq!(tty_refusal(true, false), Some(SENTENCE));
+}
+
+#[test]
+fn resume_without_a_tty_returns_two_before_startup() {
+    let process = crate::startup::Process {
+        clock: fakes::clock::FakeClock::new(),
+        exe: Err(crate::failed(
+            contract::ErrorCode::IoFailed,
+            "no fiber in test",
+        )),
+    };
+
+    assert_eq!(resume(None, None, None, &process), 2);
 }
 
 /// Session `id` in `sessions` with a first line at `first` and a last
