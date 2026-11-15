@@ -348,6 +348,40 @@ fn typing_with_the_results_open_edits_the_query_and_closes_them() {
 }
 
 #[test]
+fn space_with_results_open_edits_query_without_jumping() {
+    let mut app = turned(40, 10, &["a needle here"]);
+    scan(&mut app, "needle");
+    open(&mut app);
+    assert!(app.results_open());
+    let (before, _) = draw(&app, 40, 10);
+    assert!(crate::view::text(&before).contains("needle"));
+    let focused_before = app.focused();
+
+    let generation = match app.on_key(Key::Char(' '), now()) {
+        Effect::FindPause { generation, .. } => generation,
+        other => panic!("Space edits the results query: {other:?}"),
+    };
+    assert!(app.find_due(generation).is_empty());
+    assert_eq!(query(&app), "needle ");
+    assert!(!app.results_open(), "editing the query closes results");
+    assert_eq!(
+        app.focused(),
+        focused_before,
+        "Space did not jump to a result"
+    );
+    let (after, _) = draw(&app, 40, 10);
+    let drawn = crate::view::text(&after);
+    assert!(
+        drawn.contains("needle"),
+        "the edited query stays in the bar: {drawn}"
+    );
+    assert!(
+        drawn.contains("1 of 1"),
+        "the bar retains its count: {drawn}"
+    );
+}
+
+#[test]
 fn enter_with_no_matches_jumps_nothing() {
     let mut app = turned(40, 10, &["hello there"]);
     scan(&mut app, "zzz");
