@@ -136,9 +136,19 @@ fn start_new(client: &Socket, path: &str, old: &str, tag: &str) -> String {
         &format!("s_new_{tag}"),
     );
     until(client, "the new session_started", |line| {
+        assert!(
+            line["kind"] != "command_rejected"
+                || line["payload"]["command_id"] != format!("c_new_{tag}"),
+            "the new start was rejected: {line}"
+        );
         line["kind"] == "session_started" && line["session_id"] == id
     });
     until(client, "the new turn_completed", |line| {
+        assert!(
+            line["kind"] != "command_rejected"
+                || line["payload"]["command_id"] != format!("c_new_{tag}"),
+            "the new start was rejected: {line}"
+        );
         line["kind"] == "turn_completed" && line["session_id"] == id
     });
     id
@@ -294,6 +304,11 @@ fn start_continuing(
         &format!("s_new_{tag}"),
     );
     until(client, "the new turn_completed", |line| {
+        assert!(
+            line["kind"] != "command_rejected"
+                || line["payload"]["command_id"] != format!("c_new_{tag}"),
+            "the new start was rejected: {line}"
+        );
         line["kind"] == "turn_completed" && line["session_id"] == id
     });
     id
