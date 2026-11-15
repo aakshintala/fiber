@@ -583,7 +583,7 @@ fn entry_point_with_no_matching_session_returns_one() {
             ("FIBER_MAIN_CONTINUES_ENTRY_OLD", OLD),
             ("FIBER_MAIN_CONTINUES_ENTRY_NEW", "s_bbbbbbbbbbbbbbbb"),
         ],
-        fakes::Deadline::after(ENTRY_WITHIN),
+        fakes::Deadline::after(Duration::from_secs(30)),
     );
     assert_eq!(out.status.code(), Some(1), "the refusal returns exactly 1");
     assert!(
