@@ -565,3 +565,5 @@ crates/main/tests/hub_daemon/hub_remote_terminal.rs	fiber-4685	plan	2026-11-15T0
 crates/main/tests/screens/home_rail.rs	fiber-4685	plan	2026-11-15T00:17:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screens/rail_focus.rs	fiber-4685	plan	2026-11-15T00:17:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/Cargo.toml	fiber-4669	plan	2026-11-15T00:36:21Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/tests/fixtures/reviewer_eval/check_confidential.sh	fiber-477	plan	2026-11-15T00:38:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+docs/workflow.md	fiber-477	plan	2026-11-15T00:38:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
