@@ -1426,8 +1426,7 @@ impl App {
     /// session layout exists, otherwise the screen less its built-in
     /// below-conversation rows.
     pub(crate) fn conversation_area_height(&self) -> usize {
-        let area = ratatui::layout::Rect::new(0, 0, self.screen.width(), self.screen.height());
-        if let Some(placement) = crate::view::placement(self, area) {
+        if let Some(placement) = crate::view::placement(self) {
             return usize::from(placement.conversation.height);
         }
         let below = self.below_rows();

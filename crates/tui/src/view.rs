@@ -155,7 +155,7 @@ impl Placement {
 /// the rows each built-in renderer reserves. `regions.conversation`
 /// includes its notice rows, badge and hint; `conversation` leaves them
 /// out for text drawing and hit-testing.
-pub(crate) fn placement(app: &App, _area: Rect) -> Option<Placement> {
+pub(crate) fn placement(app: &App) -> Option<Placement> {
     let split = app.chrome().layout()?;
     let (width, height) = app.screen_size();
     let area = Rect::new(0, 0, width, height);
@@ -317,7 +317,7 @@ pub(crate) fn frame_of(app: &App, surface: Surface) -> Rect {
         .chrome()
         .drawn_layout()
         .map_or(screen, |layout| layout.column);
-    let conversation = placement(app, screen).map(|placement| placement.conversation);
+    let conversation = placement(app).map(|placement| placement.conversation);
     let area = match (app.home_screen(), surface) {
         (_, Surface::DeleteQuestion) => column,
         (Some(home), Surface::Notice) if !swapped => notice_rows_area(app, &home, screen),
@@ -558,7 +558,7 @@ fn render_frame(
         panel: None,
         narrow: false,
     };
-    let placement = placement(app, area)
+    let placement = placement(app)
         .unwrap_or_else(|| placement_from_split(app, area, base_layout.unwrap_or(fallback)));
     let layout = placement.chrome(base_layout);
     if base_layout.is_some() {
@@ -872,7 +872,7 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
     if app.unwritable().is_some() {
         return None;
     }
-    let placement = placement(app, area);
+    let placement = placement(app);
     let area = app
         .chrome()
         .drawn_layout()

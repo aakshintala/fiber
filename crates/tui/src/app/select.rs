@@ -609,7 +609,7 @@ impl App {
     /// column, as now.
     pub(crate) fn conversation_area(&self) -> Rect {
         let screen = Rect::new(0, 0, self.screen.width(), self.screen.height());
-        let raw = crate::view::placement(self, screen).map_or_else(
+        let raw = crate::view::placement(self).map_or_else(
             || self.chrome.layout().map_or(screen, |layout| layout.column),
             |placement| placement.conversation,
         );

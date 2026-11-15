@@ -491,8 +491,7 @@ impl App {
             if !self.over_conversation(at) {
                 return None;
             }
-            let screen = Rect::new(0, 0, self.screen.width(), self.screen.height());
-            let content_top = crate::view::placement(self, screen).map_or_else(
+            let content_top = crate::view::placement(self).map_or_else(
                 || {
                     self.chrome()
                         .drawn_layout()
@@ -527,8 +526,7 @@ impl App {
     /// (`view.rs`, `render`). An attached item's header rows count: the
     /// wheel over them is the item's, never the conversation's.
     fn over_conversation(&self, at: Position) -> bool {
-        let screen = Rect::new(0, 0, self.screen.width(), self.screen.height());
-        if let Some(placement) = crate::view::placement(self, screen) {
+        if let Some(placement) = crate::view::placement(self) {
             return placement.conversation.contains(at);
         }
         let height = self.conversation_area_height();

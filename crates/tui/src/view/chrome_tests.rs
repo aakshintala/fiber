@@ -100,8 +100,7 @@ fn draw(app: &App, width: u16, height: u16) -> (Buffer, usize) {
 #[test]
 fn placement_shares_split_geometry_and_vertical_regions() {
     let app = app(160, 40, false);
-    let placement = super::super::placement(&app, Rect::new(0, 0, 160, 40))
-        .expect("the attached screen has a placement");
+    let placement = super::super::placement(&app).expect("the attached screen has a placement");
     let regions = placement.regions;
     assert_eq!(regions.rail, Some(Rect::new(0, 0, 24, 40)));
     assert_eq!(regions.conversation, Some(Rect::new(24, 0, 102, 35)));
@@ -161,8 +160,7 @@ fn extension_layout_places_the_same_regions_that_chrome_draws() {
     ]);
     app.use_renderer(renderer.clone() as Rc<dyn Renderer>);
 
-    let placement =
-        crate::view::placement(&app, Rect::new(0, 0, 160, 40)).expect("placed after install");
+    let placement = crate::view::placement(&app).expect("placed after install");
     assert_eq!(placement.regions.rail, Some(Rect::new(0, 0, 20, 40)));
     assert_eq!(
         placement.regions.conversation,
@@ -250,7 +248,7 @@ fn invalid_extension_layout_falls_back_whole_and_notices_once() {
 
     let mut app = app(160, 40, false);
     let area = Rect::new(0, 0, 160, 40);
-    let builtin = crate::view::placement(&app, area)
+    let builtin = crate::view::placement(&app)
         .expect("the attached screen has a placement")
         .regions;
     let renderer = Rc::new(SlotRenderer::filling(
@@ -297,7 +295,7 @@ fn invalid_extension_layout_falls_back_whole_and_notices_once() {
     ]);
     app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
 
-    let placed = crate::view::placement(&app, area).expect("fallback placement");
+    let placed = crate::view::placement(&app).expect("fallback placement");
     assert_eq!(placed.regions, builtin);
     assert_eq!(renderer.layout_inputs.borrow().len(), 1);
 
@@ -324,8 +322,7 @@ fn builtin_layout_cache_refreshes_when_input_rows_change_placement() {
     ));
     renderer.layout_builtin.set(true);
     app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
-    let area = Rect::new(0, 0, 160, 40);
-    let before = crate::view::placement(&app, area)
+    let before = crate::view::placement(&app)
         .expect("attached screen has a placement")
         .regions;
     assert_eq!(renderer.layout_inputs.borrow().len(), 1);
@@ -333,7 +330,7 @@ fn builtin_layout_cache_refreshes_when_input_rows_change_placement() {
     for _ in 0..3 {
         app.on_edit(crate::keys::Edit::ShiftEnter);
     }
-    let after = crate::view::placement(&app, area)
+    let after = crate::view::placement(&app)
         .expect("attached screen has a placement")
         .regions;
 

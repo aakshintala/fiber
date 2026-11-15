@@ -238,8 +238,7 @@ impl App {
         };
         self.chrome
             .lay_out(self.screen.width(), self.screen.height(), home);
-        let area = ratatui::layout::Rect::new(0, 0, self.screen.width(), self.screen.height());
-        let placement = crate::view::placement(self, area);
+        let placement = crate::view::placement(self);
         self.chrome.place(placement);
         let width = crate::view::scroll_bar::text_width(
             self.column_width().saturating_sub(self.chrome.gutter()),
