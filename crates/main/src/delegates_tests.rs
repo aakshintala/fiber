@@ -1748,6 +1748,31 @@ fn removed_workspace_selection_truth_table_matches_and_rejects_other_workspace()
 }
 
 #[test]
+fn delegate_sessions_rejects_a_legacy_row_from_another_project() {
+    let root = fakes::TempDir::new("dm-legacy-other-project");
+    let home = root.path().join("home");
+    let workspace = root.path().join("workspace");
+    let other_workspace = root.path().join("other-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&other_workspace).unwrap();
+    let id = SessionId("s_i2f_false_row".into());
+    let legacy_sessions = home
+        .join("projects")
+        .join(support::project_key::legacy_project_slug(&workspace))
+        .join("sessions");
+    write_log(
+        &legacy_sessions,
+        &id.0,
+        &[json!({"kind":"session_started", "payload":{"workspace":other_workspace}, "seq":1})],
+    );
+
+    assert_eq!(
+        super::delegate_sessions(&home, &workspace, &id).unwrap(),
+        log::sessions_dir(&home, &worktree::project(&workspace))
+    );
+}
+
+#[test]
 fn removed_worktree_readers_name_a_worktree_with_no_usable_project_key() {
     let root = fakes::TempDir::new("dm-bad-key");
     let home = root.path().join("home");
