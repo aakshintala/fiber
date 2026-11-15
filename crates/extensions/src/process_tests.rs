@@ -6456,6 +6456,8 @@ fn process_host_exec_resolves_inside_package_and_refuses_traversal() {
     let recorded = FakeServices::new();
     let captured = Arc::new(Mutex::new(None));
     let capture = Arc::clone(&captured);
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+    let event_emitter = Arc::new(ProcessExecInbox(event_tx));
     let plan = json!([{"read": {}}, {"send": {"id":"ready", "command":"ready"}}, {"read": {}}])
         .to_string();
     let owner = Harness::start_with_services_on_manifest(
@@ -6466,6 +6468,7 @@ fn process_host_exec_resolves_inside_package_and_refuses_traversal() {
         package,
         ProcessRun::Call,
         move |store, clock, runtime| {
+            runtime.set_emit(event_emitter);
             let services = production_services(store, clock, runtime);
             *support::lock(&capture) = Some(Arc::clone(&services));
             services
@@ -6530,6 +6533,26 @@ fn process_host_exec_resolves_inside_package_and_refuses_traversal() {
         panic!("package-relative host.exec fails: {execution:?}; traversal result: {refusal:?}");
     };
     assert_eq!(output["stdout"], json!("cGFja2FnZS1wcm9ncmFt"));
+    let expected_resolved = context.package.join("bin/tool").display().to_string();
+    let contract::inbox::Delivery::ExtensionExec(line) = event_rx
+        .try_recv()
+        .expect("the package-relative run logs extension_exec")
+    else {
+        panic!("expected extension_exec");
+    };
+    assert_eq!(line.program, expected_resolved);
+    let (run, receive) = invoke("sh".to_owned());
+    let bare = fakes::Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&receive, "host.exec bare-name run");
+    run.join().expect("bare-name host.exec thread joins");
+    assert!(bare.is_ok(), "bare-name program runs: {bare:?}");
+    let contract::inbox::Delivery::ExtensionExec(line) = event_rx
+        .try_recv()
+        .expect("the bare-name run logs extension_exec")
+    else {
+        panic!("expected extension_exec");
+    };
+    assert_eq!(line.program, "sh");
     let Err((code, message)) = refusal else {
         panic!("a traversal program is refused");
     };
@@ -7308,6 +7331,18 @@ impl contract::model::HostModel for ProcessUsageModel {
             },
             cost: None,
         })
+    }
+}
+
+struct ProcessExecInbox(std::sync::mpsc::Sender<contract::inbox::Delivery>);
+
+impl contract::emit::Emit for ProcessExecInbox {
+    fn emit(&self, event: &contract::events::Event) {
+        if let contract::events::Event::ExtensionExec(line) = event {
+            let _ = self
+                .0
+                .send(contract::inbox::Delivery::ExtensionExec(line.clone()));
+        }
     }
 }
 
