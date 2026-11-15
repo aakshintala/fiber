@@ -1047,7 +1047,19 @@ fn scoped_search_space_stays_in_query() {
     assert!(before.contains("1 of 1"), "{before}");
     let generation = match app.on_key(Key::Char(' '), now()) {
         Effect::FindPause { generation, .. } => generation,
-        other => panic!("Space edits the scoped query: {other:?}"),
+        Effect::None
+        | Effect::Send(_)
+        | Effect::SendTracked(_)
+        | Effect::Quit
+        | Effect::ExitTracked(_)
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
+        | Effect::OpenFile(_) => panic!("Space edits the scoped query"),
     };
     assert!(app.find_due(generation).is_empty());
     assert_eq!(

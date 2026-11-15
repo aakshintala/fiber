@@ -359,7 +359,19 @@ fn space_with_results_open_edits_query_without_jumping() {
 
     let generation = match app.on_key(Key::Char(' '), now()) {
         Effect::FindPause { generation, .. } => generation,
-        other => panic!("Space edits the results query: {other:?}"),
+        Effect::None
+        | Effect::Send(_)
+        | Effect::SendTracked(_)
+        | Effect::Quit
+        | Effect::ExitTracked(_)
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
+        | Effect::OpenFile(_) => panic!("Space edits the results query"),
     };
     assert!(app.find_due(generation).is_empty());
     assert_eq!(query(&app), "needle ");
