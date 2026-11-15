@@ -9,6 +9,7 @@ fiber.provider("gemini", {
           return string.format("%%%02X", string.byte(c))
         end))
       end
+      -- debt: ceiling explicit supports_content loop plus sub(1,7)/sub(8) prefix checks, upgrade trigger next touch of this callback (the P3 shrink to item.name:match plus an inline ipairs check stays deferred: the loop mirrors the plan's reviewed shape and the embed-row fake case pins it).
       local function supports_content(methods)
         if type(methods) ~= "table" then
           return false
