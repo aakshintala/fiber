@@ -39,11 +39,6 @@ fn ensure_project_layout_with(
     }
 
     let projects = projects_dir(home);
-    match fs::symlink_metadata(&projects) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => return Err(io_error(&projects, source)),
-        Ok(_) => {}
-    }
     let legacy = projects.join(support::project_key::legacy_project_slug(identity));
     let target = projects.join(support::project_key::project_key(identity));
     match fs::symlink_metadata(&legacy) {
@@ -333,6 +328,28 @@ mod tests {
         let projects = projects_dir(home.path());
         std::os::unix::fs::symlink(&projects, &projects).unwrap();
         assert!(ensure_project_layout(home.path(), PathBuf::from("/none").as_path()).is_err());
+    }
+
+    #[test]
+    fn inaccessible_legacy_marker_is_reported_even_when_target_exists() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let identity = PathBuf::from("/a-b");
+        let home = fakes::TempDir::new("config-layout-marker-denied");
+        let legacy = projects_dir(home.path()).join("-a-b");
+        let target = projects_dir(home.path()).join(support::project_key::project_key(&identity));
+        fs::create_dir_all(&legacy).unwrap();
+        fs::create_dir(&target).unwrap();
+        fs::set_permissions(&legacy, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = ensure_project_layout(home.path(), &identity);
+
+        fs::set_permissions(&legacy, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(
+            result,
+            Err(super::ConfigError::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::PermissionDenied
+        ));
     }
 
     #[test]
