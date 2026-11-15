@@ -66,6 +66,36 @@ fn streaming_visitors_report_expected_object_shapes_and_ignore_non_map_providers
 }
 
 #[test]
+fn provider_visitor_retains_negative_integer_as_an_empty_object() {
+    let models: Vec<config::ModelData> = serde_json::from_value(json!([
+        {"id": "x", "protocol": "openai-responses", "base_url": "https://example.test"}
+    ]))
+    .unwrap();
+    let meta = CatalogMeta {
+        sources: vec!["provider".into()],
+        ..Default::default()
+    };
+    let retained = retained_rows(br#"{"provider":-1}"#.as_slice(), &models, &meta).unwrap();
+    assert_eq!(retained, json!({"provider": {}}));
+}
+
+#[test]
+fn provider_visitor_retains_escaped_string_as_an_empty_object() {
+    let models: Vec<config::ModelData> = serde_json::from_value(json!([
+        {"id": "x", "protocol": "openai-responses", "base_url": "https://example.test"}
+    ]))
+    .unwrap();
+    let meta = CatalogMeta {
+        sources: vec!["provider".into()],
+        ..Default::default()
+    };
+    // This escaped string still reaches visit_str through serde_json's from_reader deserializer.
+    let retained =
+        retained_rows(br#"{"provider":"te\u0078t"}"#.as_slice(), &models, &meta).unwrap();
+    assert_eq!(retained, json!({"provider": {}}));
+}
+
+#[test]
 fn catalog_visitor_error_names_expected_json_object() {
     let models: Vec<config::ModelData> = serde_json::from_value(json!([
         {"id": "x", "protocol": "openai-responses", "base_url": "https://example.test"}

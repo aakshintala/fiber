@@ -114,16 +114,12 @@ impl<'de> Visitor<'de> for ProviderVisitor<'_> {
     fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Value, E> {
         Ok(Value::Object(Default::default()))
     }
-    fn visit_string<E: serde::de::Error>(self, _: String) -> Result<Value, E> {
-        Ok(Value::Object(Default::default()))
-    }
     fn visit_unit<E: serde::de::Error>(self) -> Result<Value, E> {
         Ok(Value::Object(Default::default()))
     }
-    fn visit_none<E: serde::de::Error>(self) -> Result<Value, E> {
-        Ok(Value::Object(Default::default()))
-    }
 }
+// removed: serde_json's from_reader deserializer dispatches strings to visit_str, never visit_string.
+// removed: serde_json deserializes JSON null through visit_unit, never visit_none for deserialize_any.
 
 fn retained_rows(
     reader: impl Read,
