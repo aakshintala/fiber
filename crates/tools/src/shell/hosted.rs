@@ -152,6 +152,7 @@ fn status(exit: &Exit) -> ExitStatus {
     clippy::too_many_arguments,
     reason = "the hosted spawn shares the ordinary execution inputs"
 )]
+#[cfg(test)]
 pub(super) fn execute(
     host: Arc<dyn CommandHost>,
     program: &Path,
@@ -169,6 +170,34 @@ pub(super) fn execute(
     workspace: &Path,
     protection: Option<&ProtectedPaths>,
 ) -> io::Result<Ran> {
+    execute_with_session(
+        host, program, command, workdir, timeout, clock, cancel, emit, policy, jobs, spill,
+        matches, settings, workspace, protection, None,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the hosted spawn shares the ordinary execution inputs"
+)]
+pub(super) fn execute_with_session(
+    host: Arc<dyn CommandHost>,
+    program: &Path,
+    command: &str,
+    workdir: &Path,
+    timeout: Option<Duration>,
+    clock: &dyn Clock,
+    cancel: &dyn Cancel,
+    emit: &dyn Emit,
+    policy: MovePolicy,
+    jobs: Option<&dyn Jobs>,
+    spill: Option<Config>,
+    matches: Option<&Path>,
+    settings: &super::sandbox::Settings,
+    workspace: &Path,
+    protection: Option<&ProtectedPaths>,
+    session_id: Option<&contract::SessionId>,
+) -> io::Result<Ran> {
     let guard = command::acquire_protection(settings, workspace, protection)?;
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let id = format!(
@@ -180,14 +209,21 @@ pub(super) fn execute(
         program: program.to_path_buf(),
         args: vec!["-c".into(), command.into()],
         cwd: workdir.to_path_buf(),
-        env: matches
-            .map(|path| {
-                vec![(
-                    crate::search::matches::MATCHES_ENV.into(),
-                    path.to_string_lossy().into_owned(),
-                )]
-            })
-            .unwrap_or_default(),
+        env: {
+            let mut env = matches
+                .map(|path| {
+                    vec![(
+                        crate::search::matches::MATCHES_ENV.into(),
+                        path.to_string_lossy().into_owned(),
+                    )]
+                })
+                .unwrap_or_default();
+            // Red-phase check: identity overlay temporarily disabled.
+            if let Some(id) = session_id {
+                env.push(("FIBER_SESSION_ID".into(), id.0.clone()));
+            }
+            env
+        },
         stdin: command::spawn_stdin(policy),
         timeout_ms: timeout.map(|time| u64::try_from(time.as_millis()).unwrap_or(u64::MAX)),
         output_cap: OUTPUT_CAP,
