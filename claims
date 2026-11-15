@@ -377,9 +377,6 @@ docs/workflow.md	fiber-477	plan	2026-11-15T00:38:13Z	Amoghs-MacBook-Pro:/Users/a
 xtask/src/select/plan.rs	fiber-4861	plan	2026-11-15T00:52:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/select/plan_tests.rs	fiber-4861	plan	2026-11-15T00:52:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/ci.md	fiber-4861	plan	2026-11-15T00:52:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/screen_looks/shell_look.rs	fiber-4839	plan	2026-11-15T00:52:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/screen_looks/look.rs	fiber-4839	plan	2026-11-15T00:52:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/screen_looks/main.rs	fiber-4839	plan	2026-11-15T00:52:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 providers/anthropic/extension.json	fiber-4638	plan	2026-11-15T01:10:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 providers/anthropic/providers/anthropic.json	fiber-4638	plan	2026-11-15T01:10:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 providers/openai/extension.json	fiber-4638	plan	2026-11-15T01:10:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
