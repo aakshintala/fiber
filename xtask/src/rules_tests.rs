@@ -961,11 +961,11 @@ fn session_paths_match_segments_joined_paths_and_raw_literals() {
     assert_eq!(
         session_paths(&files),
         [
-            "crates/hub/src/new.rs:4: session path outside log",
-            "crates/hub/src/new.rs:8: session path outside log",
-            "crates/main/src/other.rs:1: session path outside log",
-            "crates/main/src/other.rs:2: session path outside log",
-            "crates/main/src/other.rs:3: session path outside log",
+            "crates/hub/src/new.rs:4: fn first: session path outside log",
+            "crates/hub/src/new.rs:8: fn second: session path outside log",
+            "crates/main/src/other.rs:1: fn third: session path outside log",
+            "crates/main/src/other.rs:2: fn fourth: session path outside log",
+            "crates/main/src/other.rs:3: fn fifth: session path outside log",
         ]
     );
 }
@@ -989,7 +989,7 @@ fn session_paths_keep_scanning_after_a_quote_character_literal() {
     )];
     assert_eq!(
         session_paths(&files),
-        ["crates/hub/src/quotes.rs:1: session path outside log"]
+        ["crates/hub/src/quotes.rs:1: fn f: session path outside log"]
     );
 }
 
@@ -1087,9 +1087,9 @@ fn fiber_home_paths_check_construction_and_file_reads_outside_config() {
     assert_eq!(
         fiber_home_paths(&files),
         [
-            "crates/cli/src/new.rs:3: Fiber-home path outside config",
-            "crates/cli/src/new.rs:4: Fiber-home path outside config",
-            "crates/main/src/other.rs:2: Fiber-home path outside config",
+            "crates/cli/src/new.rs:3: fn f|root:inputs.home: Fiber-home path outside config",
+            "crates/cli/src/new.rs:4: fn f|root:inputs.home/projects: Fiber-home path outside config",
+            "crates/main/src/other.rs:2: fn f|root:home: Fiber-home path outside config",
         ]
     );
 }
@@ -1117,10 +1117,10 @@ fn fiber_home_paths_match_prompt_reads_but_not_os_home_or_relative_joins() {
     assert_eq!(
         fiber_home_paths(&files),
         [
-            "crates/main/src/prompt_fixture.rs:2: Fiber-home path outside config",
-            "crates/main/src/prompt_fixture.rs:3: Fiber-home path outside config",
-            "crates/main/src/prompt_fixture.rs:6: Fiber-home path outside config",
-            "crates/main/src/prompt_fixture.rs:6: Fiber-home path outside config",
+            "crates/main/src/prompt_fixture.rs:2: fn prompts: Fiber-home path outside config",
+            "crates/main/src/prompt_fixture.rs:3: fn prompts: Fiber-home path outside config",
+            "crates/main/src/prompt_fixture.rs:6: fn read_one|root:home: Fiber-home path outside config",
+            "crates/main/src/prompt_fixture.rs:6: fn read_one|root:home/projects/project: Fiber-home path outside config",
         ]
     );
 }
@@ -1134,7 +1134,9 @@ fn cfg_test_struct_fields_do_not_hide_following_production_paths() {
     )];
     assert_eq!(
         fiber_home_paths(&files),
-        ["crates/doors/src/isolation.rs:7: Fiber-home path outside config"]
+        [
+            "crates/doors/src/isolation.rs:7: fn production|root:home: Fiber-home path outside config"
+        ]
     );
 }
 
@@ -1148,10 +1150,10 @@ fn fiber_home_paths_keep_nested_self_hub_and_inputs_roots() {
     assert_eq!(
         fiber_home_paths(&files),
         [
-            "crates/main/src/nested_roots.rs:2: Fiber-home path outside config",
-            "crates/main/src/nested_roots.rs:2: Fiber-home path outside config",
-            "crates/main/src/nested_roots.rs:3: Fiber-home path outside config",
-            "crates/main/src/nested_roots.rs:4: Fiber-home path outside config",
+            "crates/main/src/nested_roots.rs:2: fn f|root:self.home: Fiber-home path outside config",
+            "crates/main/src/nested_roots.rs:2: fn f|root:self.home/projects: Fiber-home path outside config",
+            "crates/main/src/nested_roots.rs:3: fn f|root:hub.home: Fiber-home path outside config",
+            "crates/main/src/nested_roots.rs:4: fn f|root:inputs.home: Fiber-home path outside config",
         ]
     );
 }
@@ -1166,9 +1168,9 @@ fn fiber_home_paths_recognize_only_fiber_home_roots() {
     assert_eq!(
         fiber_home_paths(&files),
         [
-            "crates/main/src/roots.rs:2: Fiber-home path outside config",
-            "crates/main/src/roots.rs:3: Fiber-home path outside config",
-            "crates/main/src/roots.rs:4: Fiber-home path outside config",
+            "crates/main/src/roots.rs:2: fn f|root:self.home: Fiber-home path outside config",
+            "crates/main/src/roots.rs:3: fn f|root:hub.home: Fiber-home path outside config",
+            "crates/main/src/roots.rs:4: fn f|root:inputs.home: Fiber-home path outside config",
         ]
     );
 }
@@ -1182,7 +1184,7 @@ fn fiber_home_paths_check_configuration_literals_used_by_file_operations() {
     )];
     assert_eq!(
         fiber_home_paths(&files),
-        ["crates/main/src/config.rs:2: Fiber-home path outside config"]
+        ["crates/main/src/config.rs:2: fn read_config: Fiber-home path outside config"]
     );
 }
 
@@ -1515,8 +1517,8 @@ fn source_tokens_scan_after_block_comment_closes_and_preserve_comment_boundaries
     assert_eq!(
         session_paths(&files),
         [
-            "crates/hub/src/comments.rs:3: session path outside log",
-            "crates/hub/src/comments.rs:7: session path outside log",
+            "crates/hub/src/comments.rs:3: fn f: session path outside log",
+            "crates/hub/src/comments.rs:7: fn f: session path outside log",
         ]
     );
 }
@@ -1530,7 +1532,7 @@ fn source_tokens_count_nested_comment_closes_before_reporting_following_paths() 
     )];
     assert_eq!(
         session_paths(&files),
-        ["crates/hub/src/nested_comments.rs:3: session path outside log"]
+        ["crates/hub/src/nested_comments.rs:3: fn f: session path outside log"]
     );
 }
 
@@ -1551,7 +1553,7 @@ fn source_tokens_track_raw_and_multiline_string_delimiters_and_lines() {
     )];
     assert_eq!(
         session_paths(&files),
-        ["crates/hub/src/strings.rs:7: session path outside log"]
+        ["crates/hub/src/strings.rs:7: fn f: session path outside log"]
     );
 }
 
@@ -1568,7 +1570,7 @@ fn source_tokens_do_not_end_an_escaped_quote_string_early() {
     )];
     assert_eq!(
         session_paths(&files),
-        ["crates/hub/src/escaped_quote.rs:3: session path outside log"]
+        ["crates/hub/src/escaped_quote.rs:3: fn f: session path outside log"]
     );
 }
 
@@ -1584,7 +1586,7 @@ fn source_tokens_skip_escaped_and_unicode_character_literals() {
         let files = [source_file("hub", "src/chars.rs", &source)];
         assert_eq!(
             session_paths(&files),
-            ["crates/hub/src/chars.rs:1: session path outside log"],
+            ["crates/hub/src/chars.rs:1: fn f: session path outside log"],
             "{literal}"
         );
     }
@@ -1602,7 +1604,7 @@ fn source_tokens_skip_escaped_and_unicode_character_literals() {
             "src/malformed_char.rs",
             malformed_escape
         )]),
-        ["crates/hub/src/malformed_char.rs:1: session path outside log"]
+        ["crates/hub/src/malformed_char.rs:1: module: session path outside log"]
     );
 }
 
@@ -1890,7 +1892,7 @@ fn scanner_bound_probe() {
             let files = [source_file("hub", "src/nested.rs", &source)];
             assert_eq!(
                 session_paths(&files),
-                ["crates/hub/src/nested.rs:2: session path outside log"]
+                ["crates/hub/src/nested.rs:2: fn f: session path outside log"]
             );
         }
         "joined-literal" => {
@@ -1983,7 +1985,7 @@ fn scanner_bound_probe() {
             let deep = format!("{opens}{closes}\nfn f() {{ let _ = dir.join(\"sessions\"); }}");
             assert_eq!(
                 session_paths(&[source_file("hub", "src/deep.rs", &deep)]),
-                ["crates/hub/src/deep.rs:2: session path outside log"]
+                ["crates/hub/src/deep.rs:2: fn f: session path outside log"]
             );
 
             let nested_type = format!("fn({}u8{})", "[".repeat(512), "; 1]".repeat(512));
@@ -1992,7 +1994,7 @@ fn scanner_bound_probe() {
             );
             assert_eq!(
                 session_paths(&[source_file("hub", "src/nested_type.rs", &nested_source)]),
-                ["crates/hub/src/nested_type.rs:6: session path outside log"]
+                ["crates/hub/src/nested_type.rs:6: fn production: session path outside log"]
             );
 
             let repetitions = (0..1024)
@@ -2002,11 +2004,11 @@ fn scanner_bound_probe() {
             assert_eq!(findings.len(), 1024);
             assert_eq!(
                 findings.first().map(String::as_str),
-                Some("crates/hub/src/repetitions.rs:1: session path outside log")
+                Some("crates/hub/src/repetitions.rs:1: fn f: session path outside log")
             );
             assert_eq!(
                 findings.last().map(String::as_str),
-                Some("crates/hub/src/repetitions.rs:1024: session path outside log")
+                Some("crates/hub/src/repetitions.rs:1024: fn f: session path outside log")
             );
 
             let pathological = [
@@ -2021,7 +2023,7 @@ fn scanner_bound_probe() {
             .concat();
             assert_eq!(
                 session_paths(&[source_file("hub", "src/pathological.rs", &pathological)]),
-                ["crates/hub/src/pathological.rs:5: session path outside log"]
+                ["crates/hub/src/pathological.rs:5: fn f: session path outside log"]
             );
         }
         "home-join" => {
@@ -2166,9 +2168,9 @@ fn cfg_test_detection_distinguishes_other_attributes_and_root_attributes() {
     assert_eq!(
         session_paths(&files),
         [
-            "crates/hub/src/attributes.rs:2: session path outside log",
-            "crates/hub/src/attributes.rs:4: session path outside log",
-            "crates/hub/src/attributes.rs:6: session path outside log",
+            "crates/hub/src/attributes.rs:2: fn not_test: session path outside log",
+            "crates/hub/src/attributes.rs:4: fn feature: session path outside log",
+            "crates/hub/src/attributes.rs:6: fn combined: session path outside log",
         ]
     );
     let root_test = [source_file(
@@ -2185,7 +2187,7 @@ fn cfg_test_detection_distinguishes_other_attributes_and_root_attributes() {
     )];
     assert_eq!(
         session_paths(&inner_test),
-        ["crates/hub/src/inner_test.rs:3: session path outside log"]
+        ["crates/hub/src/inner_test.rs:3: fn production: session path outside log"]
     );
 }
 
@@ -2208,7 +2210,7 @@ fn cfg_test_struct_array_fields_do_not_hide_following_production_paths() {
     )];
     assert_eq!(
         session_paths(&files),
-        ["crates/hub/src/array_field.rs:5: session path outside log"]
+        ["crates/hub/src/array_field.rs:5: fn production: session path outside log"]
     );
 }
 
@@ -2235,7 +2237,7 @@ fn test_only_files_shared_with_a_production_module_edge_remain_production() {
     assert_eq!(paths, ["src/lib.rs", "src/shared.rs"]);
     assert_eq!(
         session_paths(&files),
-        ["crates/hub/src/shared.rs:1: session path outside log"]
+        ["crates/hub/src/shared.rs:1: fn production: session path outside log"]
     );
 }
 
@@ -2592,9 +2594,9 @@ fn conditional_cfg_attributes_remain_production_in_source_gates() {
     assert_eq!(
         session_paths(&files),
         [
-            "crates/hub/src/cfg_attributes.rs:2: session path outside log",
-            "crates/hub/src/cfg_attributes.rs:4: session path outside log",
-            "crates/hub/src/cfg_attributes.rs:5: session path outside log",
+            "crates/hub/src/cfg_attributes.rs:2: fn conditional: session path outside log",
+            "crates/hub/src/cfg_attributes.rs:4: fn deeper: session path outside log",
+            "crates/hub/src/cfg_attributes.rs:5: fn plain_code: session path outside log",
         ]
     );
 }
@@ -2616,7 +2618,7 @@ fn session_paths_match_each_side_of_the_path_and_operation_alternative() {
     )];
     assert_eq!(
         session_paths(&joined),
-        ["crates/hub/src/joined.rs:1: session path outside log"]
+        ["crates/hub/src/joined.rs:1: fn build: session path outside log"]
     );
 
     let read = [source_file(
@@ -2626,7 +2628,7 @@ fn session_paths_match_each_side_of_the_path_and_operation_alternative() {
     )];
     assert_eq!(
         session_paths(&read),
-        ["crates/hub/src/read.rs:1: session path outside log"]
+        ["crates/hub/src/read.rs:1: fn read: session path outside log"]
     );
 
     let clean = [source_file(
@@ -2659,8 +2661,8 @@ fn events_jsonl_segment_is_detected_for_joins_and_file_operations_only() {
     assert_eq!(
         session_paths(&files),
         [
-            "crates/hub/src/joined_events.rs:1: session path outside log",
-            "crates/hub/src/read_events.rs:1: session path outside log",
+            "crates/hub/src/joined_events.rs:1: fn build: session path outside log",
+            "crates/hub/src/read_events.rs:1: fn read: session path outside log",
         ]
     );
 }

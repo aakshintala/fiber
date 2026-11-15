@@ -1966,9 +1966,35 @@ fn function_context(tokens: &[SourceToken], at: usize) -> String {
         }) else {
             continue;
         };
-        let Some(open) = (i + 2..tokens.len())
-            .find(|j| punct(tokens.get(*j), '{') || punct(tokens.get(*j), ';'))
-        else {
+        let mut paren_depth = 0usize;
+        let mut bracket_depth = 0usize;
+        let mut open = None;
+        for (j, token) in tokens.iter().enumerate().skip(i + 2) {
+            match token.kind {
+                SourceKind::Punct('(') => paren_depth += 1,
+                SourceKind::Punct(')') => {
+                    let Some(depth) = paren_depth.checked_sub(1) else {
+                        break;
+                    };
+                    paren_depth = depth;
+                }
+                SourceKind::Punct('[') => bracket_depth += 1,
+                SourceKind::Punct(']') => {
+                    let Some(depth) = bracket_depth.checked_sub(1) else {
+                        break;
+                    };
+                    bracket_depth = depth;
+                }
+                SourceKind::Punct('{') | SourceKind::Punct(';')
+                    if paren_depth == 0 && bracket_depth == 0 =>
+                {
+                    open = Some(j);
+                    break;
+                }
+                SourceKind::Ident(_) | SourceKind::String(_) | SourceKind::Punct(_) => {}
+            }
+        }
+        let Some(open) = open else {
             continue;
         };
         if !punct(tokens.get(open), '{') {
@@ -2459,7 +2485,7 @@ fn source_failures(files: &[RustFile], allowances: &[SourceAllowance], home: boo
                     token_budget,
                     &mut failures,
                     site.line,
-                    format!("{}:{}: {message}", site.path, site.line),
+                    format!("{}:{}: {}: {message}", site.path, site.line, site.context),
                 ) {
                     return vec![stalled];
                 }
