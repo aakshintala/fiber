@@ -77,7 +77,7 @@ fn ensure_project_layout_with(
         )
         .map_err(|source| io_error(&marker, source))?;
     }
-    rename_project_dir(&legacy, &target, rename_noreplace)
+    rename_project_dir(&legacy, &target, rename_noreplace, |a, b| fs::rename(a, b))
         .map_err(|source| io_error(&legacy, source))
 }
 
@@ -85,6 +85,7 @@ fn rename_project_dir(
     legacy: &Path,
     target: &Path,
     rename_noreplace: impl Fn(&Path, &Path) -> std::io::Result<()>,
+    rename_fallback: impl Fn(&Path, &Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     match rename_noreplace(legacy, target) {
         Ok(()) => Ok(()),
@@ -96,7 +97,7 @@ fn rename_project_dir(
                     Err(std::io::ErrorKind::AlreadyExists.into())
                 };
             }
-            match fs::rename(legacy, target) {
+            match rename_fallback(legacy, target) {
                 Err(source) if rename_race(&source) => {
                     if plain_dir_exists(target) {
                         Ok(())
@@ -352,9 +353,12 @@ mod tests {
         let source = home.path().join("source");
         let target = home.path().join("target");
         fs::create_dir(&source).unwrap();
-        rename_project_dir(&source, &target, |_, _| {
-            Err(std::io::ErrorKind::Unsupported.into())
-        })
+        rename_project_dir(
+            &source,
+            &target,
+            |_, _| Err(std::io::ErrorKind::Unsupported.into()),
+            |a, b| fs::rename(a, b),
+        )
         .unwrap();
         assert!(target.is_dir());
         assert!(!source.exists());
@@ -363,19 +367,27 @@ mod tests {
         let target = home.path().join("target-file");
         fs::write(&source, b"source").unwrap();
         fs::write(&target, b"target").unwrap();
-        let error = rename_project_dir(&source, &target, |_, _| {
-            Err(std::io::ErrorKind::Unsupported.into())
-        })
+        let error = rename_project_dir(
+            &source,
+            &target,
+            |_, _| Err(std::io::ErrorKind::Unsupported.into()),
+            |a, b| fs::rename(a, b),
+        )
         .unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
 
         let source = home.path().join("fallback-race-source");
         let target = home.path().join("fallback-race-target");
         fs::create_dir(&source).unwrap();
-        let error = rename_project_dir(&source, &target, |source, _| {
-            fs::remove_dir(source)?;
-            Err(std::io::ErrorKind::Unsupported.into())
-        })
+        let error = rename_project_dir(
+            &source,
+            &target,
+            |source, _| {
+                fs::remove_dir(source)?;
+                Err(std::io::ErrorKind::Unsupported.into())
+            },
+            |a, b| fs::rename(a, b),
+        )
         .unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
 
@@ -383,9 +395,12 @@ mod tests {
         let target = home.path().join("race-target");
         fs::create_dir(&source).unwrap();
         fs::create_dir(&target).unwrap();
-        rename_project_dir(&source, &target, |_, _| {
-            Err(std::io::ErrorKind::AlreadyExists.into())
-        })
+        rename_project_dir(
+            &source,
+            &target,
+            |_, _| Err(std::io::ErrorKind::AlreadyExists.into()),
+            |a, b| fs::rename(a, b),
+        )
         .unwrap();
         assert!(source.is_dir());
 
@@ -394,9 +409,12 @@ mod tests {
         fs::create_dir(&source).unwrap();
         fs::create_dir(&target).unwrap();
         assert!(
-            rename_project_dir(&source, &target, |_, _| {
-                Err(std::io::ErrorKind::AlreadyExists.into())
-            })
+            rename_project_dir(
+                &source,
+                &target,
+                |_, _| { Err(std::io::ErrorKind::AlreadyExists.into()) },
+                |a, b| fs::rename(a, b)
+            )
             .is_ok()
         );
 
@@ -405,18 +423,58 @@ mod tests {
         fs::create_dir(&source).unwrap();
         fs::create_dir(&target).unwrap();
         assert!(
-            rename_project_dir(&source, &target, |_, _| {
-                Err(std::io::ErrorKind::PermissionDenied.into())
-            })
+            rename_project_dir(
+                &source,
+                &target,
+                |_, _| { Err(std::io::ErrorKind::PermissionDenied.into()) },
+                |a, b| fs::rename(a, b)
+            )
             .is_err()
         );
 
         let source = home.path().join("plain-source");
         let target = home.path().join("plain-target");
         fs::create_dir(&source).unwrap();
-        let error = rename_project_dir(&source, &target, |_, _| {
-            Err(std::io::ErrorKind::PermissionDenied.into())
-        })
+        let error = rename_project_dir(
+            &source,
+            &target,
+            |_, _| Err(std::io::ErrorKind::PermissionDenied.into()),
+            |a, b| fs::rename(a, b),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn fallback_race_rechecks_target_after_rename_error() {
+        let home = fakes::TempDir::new("config-layout-fallback-race-recheck");
+        let source = home.path().join("source");
+        let target = home.path().join("target");
+        fs::create_dir(&source).unwrap();
+        let result = rename_project_dir(
+            &source,
+            &target,
+            |_, _| Err(std::io::ErrorKind::Unsupported.into()),
+            |_, target| {
+                fs::create_dir(target)?;
+                Err(std::io::ErrorKind::AlreadyExists.into())
+            },
+        );
+        assert!(result.is_ok());
+        assert!(target.is_dir());
+
+        let source = home.path().join("source-denied");
+        let target = home.path().join("target-denied");
+        fs::create_dir(&source).unwrap();
+        let error = rename_project_dir(
+            &source,
+            &target,
+            |_, _| Err(std::io::ErrorKind::Unsupported.into()),
+            |_, target| {
+                fs::create_dir(target)?;
+                Err(std::io::ErrorKind::PermissionDenied.into())
+            },
+        )
         .unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
     }
