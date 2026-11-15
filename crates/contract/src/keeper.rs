@@ -25,6 +25,8 @@ pub const HOST_BURST_FRAMES: usize = 16;
 pub const LIFELINE_QUERY: &[u8; 8] = b"FIBERQRY";
 /// The fixed keeper reply is a tag plus four little-endian pid bytes.
 pub const LIFELINE_REPLY_LEN: usize = 5;
+/// Maximum time spent acquiring, writing and receiving a lifeline query.
+pub const LIFELINE_QUERY_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Runs shell processes outside the session process.
 pub trait CommandHost: Send + Sync {

@@ -921,7 +921,7 @@ fn until_carries_the_shared_must_succeed_bound() {
         "until's whole-wait bound matches the shared must-succeed bound"
     );
     assert_eq!(
-        crate::signals::LIFELINE_QUERY_BOUND,
+        contract::keeper::LIFELINE_QUERY_BOUND,
         support::UNTIL,
         "keeper queries keep the existing bounded-check interval"
     );
@@ -1555,7 +1555,7 @@ mod refusal_tests {
         let script = keeper_parent_target(parent);
         let mut valid = [b'P', 0, 0, 0, 0];
         valid[1..].copy_from_slice(&parent.0.to_le_bytes());
-        let query = LifelineQuery::scripted_for_test(valid);
+        let query = LifelineQuery::scripted_for_test(valid, fakes::clock::FakeClock::new());
         assert!(
             session_command_refusal_inner(
                 &local(PEER, &[HOST]),
@@ -1575,13 +1575,16 @@ mod refusal_tests {
             &other_id(),
             TARGET_PID,
             &script,
-            Some(&LifelineQuery::scripted_for_test(valid)),
+            Some(&LifelineQuery::scripted_for_test(
+                valid,
+                fakes::clock::FakeClock::new(),
+            )),
             &[],
         );
         assert!(shell.is_some(), "a shell under the keeper stays refused");
 
         valid[1..].copy_from_slice(&parent.0.saturating_add(1).to_le_bytes());
-        let changed = LifelineQuery::scripted_for_test(valid);
+        let changed = LifelineQuery::scripted_for_test(valid, fakes::clock::FakeClock::new());
         assert!(
             session_command_refusal_inner(
                 &local(PEER, &[PEER]),

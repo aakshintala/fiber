@@ -93,7 +93,6 @@ fn socket_pair_stdin_reaches_the_child_and_keeps_the_peer_in_the_spawn_result() 
     support::group::live().unlist(listing);
 }
 
-
 #[test]
 fn accept_error_keeps_acceptor_alive() {
     use std::os::unix::net::UnixListener;

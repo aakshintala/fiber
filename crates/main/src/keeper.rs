@@ -14,7 +14,8 @@ use std::time::Duration;
 use base64::Engine as _;
 use contract::clock::{Clock, Wake};
 use contract::keeper::{
-    CommandHost, FromKeeper, HostError, HostEvent, KeptJob, Spawn, Started, ToKeeper,
+    CommandHost, FromKeeper, HostError, HostEvent, KeptJob, LIFELINE_QUERY_BOUND, Spawn, Started,
+    ToKeeper,
 };
 use contract::{JobId, SessionId};
 use support::peer::Pid;
@@ -27,6 +28,7 @@ pub(crate) fn lifeline_writer() -> Option<Box<dyn Write + Send>> {
     let fd = rustix::io::dup(std::io::stdin()).ok()?;
     let stream = UnixStream::from(fd);
     support::peer::peer_pid(&stream).ok()?;
+    stream.set_write_timeout(Some(LIFELINE_QUERY_BOUND)).ok()?;
     Some(Box::new(stream))
 }
 type Spawner = Arc<dyn Fn() -> io::Result<Connection> + Send + Sync>;

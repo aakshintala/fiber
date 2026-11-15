@@ -40,11 +40,9 @@ use contract::clock::{Clock, Wake};
 use log::diag::{Diag, Severity};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 
-/// The bounded keeper query uses the shared must-succeed interval.
-pub(crate) const LIFELINE_QUERY_BOUND: Duration = Duration::from_secs(10);
 use support::lock;
 
-use contract::keeper::{LIFELINE_QUERY, LIFELINE_REPLY_LEN};
+use contract::keeper::{LIFELINE_QUERY, LIFELINE_QUERY_BOUND, LIFELINE_REPLY_LEN};
 
 /// From the signal to exit, per process (`docs/invocation.md`, "Shutdown").
 /// A delegate's stop waits this long too: `main` passes it into `jobs`
@@ -182,24 +180,42 @@ pub struct Signals {
 pub struct LifelineQuery {
     writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
     pending: Arc<Mutex<Option<SyncSender<[u8; LIFELINE_REPLY_LEN]>>>>,
+    clock: Arc<dyn Clock>,
     #[cfg(test)]
     scripted_reply: Arc<Mutex<Option<[u8; LIFELINE_REPLY_LEN]>>>,
 }
 
 impl LifelineQuery {
     #[cfg(test)]
-    pub(crate) fn scripted_for_test(reply: [u8; LIFELINE_REPLY_LEN]) -> Self {
+    pub(crate) fn scripted_for_test(
+        reply: [u8; LIFELINE_REPLY_LEN],
+        clock: Arc<dyn Clock>,
+    ) -> Self {
         Self {
             writer: Arc::new(Mutex::new(Some(Box::new(io::sink())))),
             pending: Arc::new(Mutex::new(None)),
+            clock,
             scripted_reply: Arc::new(Mutex::new(Some(reply))),
         }
     }
 
     /// Queries the keeper and returns its pid only for a complete valid reply.
     pub fn query(&self) -> Option<u32> {
-        let mut writer = lock(&self.writer);
-        let writer = writer.as_mut()?;
+        let started = self.clock.now();
+        let until = started + LIFELINE_QUERY_BOUND;
+        let mut guard = loop {
+            match self.writer.try_lock() {
+                Ok(guard) => break guard,
+                Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    if self.clock.now() >= until {
+                        return None;
+                    }
+                    thread::yield_now();
+                }
+            }
+        };
+        let writer = guard.as_mut()?;
         let (send, receive) = mpsc::sync_channel(1);
         {
             let mut pending = lock(&self.pending);
@@ -209,6 +225,7 @@ impl LifelineQuery {
             *pending = Some(send);
         }
         if writer.write_all(LIFELINE_QUERY).is_err() {
+            *guard = None;
             *lock(&self.pending) = None;
             return None;
         }
@@ -218,20 +235,28 @@ impl LifelineQuery {
         {
             let _sent = sender.send(reply);
         }
-        let reply = support::deadline::Deadline::after(LIFELINE_QUERY_BOUND)
+        let remaining = until.saturating_duration_since(self.clock.now());
+        if remaining.is_zero() {
+            *guard = None;
+            *lock(&self.pending) = None;
+            return None;
+        }
+        let reply = support::deadline::Deadline::after(remaining)
             .recv(&receive)
             .ok();
         *lock(&self.pending) = None;
-        let reply = reply?;
-        match reply {
-            [b'P', a, b, c, d] => {
-                let pid = u32::from_le_bytes([a, b, c, d]);
-                let parent = u32::try_from(rustix::process::getppid()?.as_raw_pid()).ok()?;
-                (parent == pid).then_some(pid)
-            }
+        let Some(reply) = reply else {
+            *guard = None;
+            return None;
+        };
+        let parent_before = u32::try_from(rustix::process::getppid()?.as_raw_pid()).ok()?;
+        let result = match reply {
+            [b'P', a, b, c, d] => Some(u32::from_le_bytes([a, b, c, d])),
             [b'N', 0, 0, 0, 0] => None,
             _ => None,
-        }
+        };
+        let parent_after = u32::try_from(rustix::process::getppid()?.as_raw_pid()).ok()?;
+        (parent_before == parent_after).then_some(result).flatten()
     }
 }
 
@@ -435,6 +460,7 @@ impl Signals {
         let query = LifelineQuery {
             writer: Arc::new(Mutex::new(writer)),
             pending: Arc::clone(&pending),
+            clock: Arc::clone(&self.clock),
             #[cfg(test)]
             scripted_reply: Arc::new(Mutex::new(None)),
         };
