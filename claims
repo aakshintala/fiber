@@ -635,14 +635,6 @@ docs/ci.md	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshi
 crates/cli/src/feedback.rs	fiber-4686	plan	2026-11-15T11:39:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/cli/src/feedback_tests.rs	fiber-4686	plan	2026-11-15T11:39:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/releasing.md	fiber-4686	plan	2026-11-15T11:39:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/ci.md:383-383	fiber-4881	plan	2026-11-15T12:02:41Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
-xtask/src/budget_bounds.rs:6-6	fiber-4881	plan	2026-11-15T12:02:41Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
-xtask/src/budget_bounds.rs:249-249	fiber-4881	plan	2026-11-15T12:02:41Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
-xtask/src/budget_bounds.rs:321-321	fiber-4881	plan	2026-11-15T12:02:41Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
-xtask/src/budget_bounds_tests.rs:43-44	fiber-4881	plan	2026-11-15T12:02:41Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
-xtask/src/budget_bounds_tests.rs:228-229	fiber-4881	plan	2026-11-15T12:02:41Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
-xtask/src/budget_bounds_tests.rs:275-275	fiber-4881	plan	2026-11-15T12:02:41Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
-xtask/src/main.rs:114-114	fiber-4881	plan	2026-11-15T12:02:41Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
 docs/workflow.md	fiber-4420	plan	2026-11-15T11:59:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 docs/testing.md	fiber-4420	plan	2026-11-15T11:59:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 docs/testing/running.md	fiber-4420	plan	2026-11-15T11:59:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
@@ -655,3 +647,12 @@ crates/tools/src/shell/command.rs	fiber-4420	plan	2026-11-15T11:59:48Z	Amoghs-Ma
 crates/tools/src/shell/hosted.rs	fiber-4420	plan	2026-11-15T11:59:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/tools/src/shell/output.rs	fiber-4420	plan	2026-11-15T11:59:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/main/src/builtin.rs	fiber-4420	plan	2026-11-15T11:59:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+docs/ci.md:383-383	fiber-4881	plan	2026-11-15T12:23:30Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
+xtask/src/budget_bounds.rs:6-6	fiber-4881	plan	2026-11-15T12:23:30Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
+xtask/src/budget_bounds.rs:28-29	fiber-4881	plan	2026-11-15T12:23:30Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
+xtask/src/budget_bounds.rs:249-249	fiber-4881	plan	2026-11-15T12:23:30Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
+xtask/src/budget_bounds.rs:321-321	fiber-4881	plan	2026-11-15T12:23:30Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
+xtask/src/budget_bounds_tests.rs:43-44	fiber-4881	plan	2026-11-15T12:23:30Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
+xtask/src/budget_bounds_tests.rs:228-229	fiber-4881	plan	2026-11-15T12:23:30Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
+xtask/src/budget_bounds_tests.rs:275-275	fiber-4881	plan	2026-11-15T12:23:30Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
+xtask/src/main.rs:114-114	fiber-4881	plan	2026-11-15T12:23:30Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4881-budget-known-ms	
