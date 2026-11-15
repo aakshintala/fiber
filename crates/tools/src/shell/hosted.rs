@@ -239,8 +239,9 @@ pub(super) fn execute(
 }
 
 /// Builds a keeper-written completion without session-only notice or tail fields.
-// The sent_signal || to && mutant is equivalent: where the flags differ,
-// assemble_output returns through Timeout or Capped before reading sent_signal.
+// Recording only `timed_out` in `sent_signal` is equivalent: where the flags
+// differ, assemble_output returns through Timeout or Capped before reading
+// sent_signal.
 #[cfg_attr(false, mutants::skip)]
 pub fn kept_end(job_id: JobId, exit: &Exit) -> JobCompleted {
     let finished = keeper_finished(exit, false);
@@ -266,18 +267,6 @@ pub fn kept_end(job_id: JobId, exit: &Exit) -> JobCompleted {
     completed
 }
 
-/// Whether the keeper signalled the job's group: a timeout stops it,
-/// and a cap stops it too, so either flag means a signal went out.
-// The `||` to `&&` mutant is unobservable: where exactly one flag
-// differs, the completion builders return through the timeout or the cap
-// before reading `sent_signal`, and where neither differs both operators
-// agree. A mutant swapping the operator changes no behaviour a consumer
-// sees.
-#[cfg_attr(false, mutants::skip)]
-fn sent_signal(exit: &Exit) -> bool {
-    exit.timed_out || exit.output_cap
-}
-
 /// The `Finished` a keeper-written completion maps: the keeper's exit
 /// flags, with no stored write failure inside, so the one override the
 /// caller applies stays the only one. `flooded` selects the flooded end
@@ -289,7 +278,11 @@ fn keeper_finished(exit: &Exit, flooded: bool) -> Finished {
         stop: exit.timed_out.then_some(command::StopKind::Timeout),
         indeterminate: false,
         held_open: false,
-        sent_signal: sent_signal(exit),
+        // A timeout stops the job's group, and a cap stops it too, but the
+        // timeout and capped completions return before `sent_signal` is read,
+        // so recording only the timeout flag keeps every observed completion
+        // identical with no `||` left for mutants to flip.
+        sent_signal: exit.timed_out,
         capped: exit.output_cap,
         flooded,
         write_failure: None,
