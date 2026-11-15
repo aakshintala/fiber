@@ -135,7 +135,12 @@ fn home_slot_replaces_list_lines_and_preserves_targets_and_focus() {
     let focused = app.focused().expect("first list row focused");
     assert!(before_targets.iter().any(|target| target.id == focused));
 
-    let line_count = super::home_lines(&app.home_screen().expect("home screen"), area.width).len();
+    let line_count = super::home_lines(
+        &app.home_screen().expect("home screen"),
+        area.width,
+        app.rail_state().wall(),
+    )
+    .len();
     let renderer = Rc::new(SlotRenderer::filling(
         &["home"],
         SlotScript::Replace(vec![vec![raw("extension home list")]; line_count]),
@@ -171,8 +176,8 @@ fn home_slot_replacement_keeps_scrolled_lines_aligned_with_targets() {
     let mut app = home_with_live_rows(80, 24, 12);
     let area = Rect::new(0, 0, 80, 24);
     let screen = app.home_screen().expect("home screen");
-    let lines = super::home_lines(&screen, area.width);
-    let rows = super::list_rows(&screen);
+    let lines = super::home_lines(&screen, area.width, app.rail_state().wall());
+    let rows = super::list_rows(&screen, app.rail_state().wall());
     assert_eq!(lines.len(), rows.len());
 
     let (window, max_scroll) = super::list_window(&app, &screen, area);
@@ -1493,6 +1498,36 @@ fn an_exited_row_shows_id_turns_spend_and_age() {
         serde_json::json!({"sessions":[exited]}),
     ));
     assert!(screen(&app, 160, 48).contains("s_7f20aa · 5 turns · $1.10 · 3h ago"));
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["home"],
+        SlotScript::Decorate {
+            badge: Vec::new(),
+            trim: 0,
+        },
+    ));
+    app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+    let _ = screen(&app, 160, 48);
+    let input = &renderer.home_inputs.borrow()[0];
+    let row = input["list"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "exited")
+        .unwrap();
+    assert_eq!(row["since"], 0);
+    assert!(row.get("age").is_none());
+    let before = app
+        .home_screen()
+        .unwrap()
+        .renderer_input(false, app.rail_state().wall())
+        .cache_fingerprint;
+    app.set_wall(14_400_000);
+    let after = app
+        .home_screen()
+        .unwrap()
+        .renderer_input(false, app.rail_state().wall())
+        .cache_fingerprint;
+    assert_ne!(before, after);
 }
 
 #[test]

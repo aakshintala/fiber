@@ -3604,7 +3604,7 @@ the elapsed text. Optional keys are absent when they do not apply, never `null`.
 | `glyph` | The glyph before the name in the one-row logo |
 | `header` | `counts` (state role and text pairs) and optional `spend` |
 | `chips` | Each chip's `text`, `dim`, `session_mark`, and optional `spot` (`workspace`, `worktree`, `model` or `thinking`) |
-| `list` | The rows drawn by Home: `head` fields `start`, `name`, `live`, `spend`, `waiting`; `live` fields `key`, `number`, `glyph`, `name`, `word`, `tone`, `stop`, `id`, `turns`, `branch`, `spend`, `context`, `wait`; `exited_head` `count`; `exited` fields `key`, `stop`, `glyph`, `name`, `id`, `turns`, `spend`, `age`; `more` fields `key`, `count`; and `archived_head` fields `key`, `count` |
+| `list` | The rows drawn by Home: `head` fields `start`, `name`, `live`, `spend`, `waiting`; `live` fields `key`, `number`, `glyph`, `name`, `word`, `tone`, `stop`, `id`, `turns`, `branch`, `spend`, `context`, `wait`; `exited_head` `count`; `exited` fields `key`, `stop`, `glyph`, `name`, `id`, `turns`, `spend`, `since`; `more` fields `key`, `count`; and `archived_head` fields `key`, `count` |
 | `empty` | Whether there are no live, crashed, exited or archived sessions |
 | `blockers`, `blocker_keys` | The blocker lines and matching booleans for credential-fix targets |
 | `picker` | When open, `escapes`, `recents`, optional `focus`, and optional `typed` with `text`, `completions` and `missing` |

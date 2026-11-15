@@ -350,17 +350,25 @@ pub(crate) struct HomeScreen {
 
 impl HomeScreen {
     /// The source table the home renderer receives. The logo's protocol
-    /// choice and the live row's elapsed `since` string stay out; changes
-    /// to `since` still invalidate cached built-in lines.
-    pub(crate) fn renderer_input(&self, flat: bool) -> crate::ext::HomeInput {
+    /// choice and the live row's elapsed `since` string stay out; exited
+    /// rows carry their source timestamp. Changes to rendered elapsed text
+    /// invalidate cached built-in lines.
+    pub(crate) fn renderer_input(&self, flat: bool, wall: u64) -> crate::ext::HomeInput {
         use serde_json::{Map, Value, json};
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
         let mut cache_fingerprint = DefaultHasher::new();
         for line in &self.list {
-            if let ListLine::Live { since, .. } = line {
-                since.hash(&mut cache_fingerprint);
+            match line {
+                ListLine::Live { since, .. } => since.hash(&mut cache_fingerprint),
+                ListLine::Exited { since, .. } => since
+                    .map(|since| crate::view::rail::elapsed(since, wall))
+                    .hash(&mut cache_fingerprint),
+                ListLine::Head { .. }
+                | ListLine::ExitedHead { .. }
+                | ListLine::More { .. }
+                | ListLine::ArchivedHead { .. } => {}
             }
         }
         let cache_fingerprint = cache_fingerprint.finish();
@@ -517,7 +525,7 @@ fn list_line_value(line: &ListLine) -> serde_json::Value {
             id,
             turns,
             spend,
-            age,
+            since,
         } => {
             value.insert("kind".into(), json!("exited"));
             value.insert("key".into(), json!(key));
@@ -529,8 +537,8 @@ fn list_line_value(line: &ListLine) -> serde_json::Value {
             if let Some(turns) = turns {
                 value.insert("turns".into(), json!(turns));
             }
-            if let Some(age) = age {
-                value.insert("age".into(), json!(age));
+            if let Some(since) = since {
+                value.insert("since".into(), json!(since));
             }
         }
         ListLine::More { key, count } => {
@@ -638,7 +646,7 @@ pub(crate) enum ListLine {
         id: String,
         turns: Option<u64>,
         spend: String,
-        age: Option<String>,
+        since: Option<u64>,
     },
     More {
         key: u64,

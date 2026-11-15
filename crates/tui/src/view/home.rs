@@ -212,7 +212,9 @@ pub(crate) fn notice_rows_area(app: &App, screen: &HomeScreen, area: Rect) -> Re
 pub(crate) fn list_window(app: &App, screen: &HomeScreen, area: Rect) -> (Rect, usize) {
     let placed = layout(app, screen, area);
     let tall = placed.list_end.saturating_sub(placed.list_top);
-    let max = list_rows(screen).len().saturating_sub(usize::from(tall));
+    let max = list_rows(screen, app.rail_state().wall())
+        .len()
+        .saturating_sub(usize::from(tall));
     (
         Rect::new(placed.x, placed.list_top, placed.width, tall),
         max,
@@ -227,7 +229,7 @@ struct ListRow {
     plus: Option<(u64, u16)>,
 }
 
-fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
+fn list_rows(screen: &HomeScreen, wall: u64) -> Vec<ListRow> {
     let dim = Style::new().add_modifier(Modifier::DIM);
     let mut rows = Vec::new();
     for line in &screen.list {
@@ -327,7 +329,7 @@ fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
                 id,
                 turns,
                 spend,
-                age,
+                since,
             } => {
                 row.spot = Some(Spot::Entry(*key));
                 row.stop = *stop;
@@ -338,8 +340,8 @@ fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
                     segments.push(crate::format::count(*turns, "turn", "turns"));
                 }
                 segments.push(spend.clone());
-                if let Some(age) = age {
-                    segments.push(age.clone());
+                if let Some(since) = since {
+                    segments.push(format!("{} ago", crate::view::rail::elapsed(*since, wall)));
                 }
                 row.right.push(Span::styled(segments.join(" · "), dim));
             }
@@ -361,7 +363,7 @@ fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
 
 /// The home slot's built-in list lines, independent of the height of the
 /// window that later clips them.
-fn home_lines(screen: &HomeScreen, width: u16) -> Vec<Vec<crate::ext::RawSpan>> {
+fn home_lines(screen: &HomeScreen, width: u16, wall: u64) -> Vec<Vec<crate::ext::RawSpan>> {
     if screen.empty {
         return [
             "No sessions yet.",
@@ -386,7 +388,7 @@ fn home_lines(screen: &HomeScreen, width: u16) -> Vec<Vec<crate::ext::RawSpan>> 
         })
         .collect();
     }
-    list_rows(screen)
+    list_rows(screen, wall)
         .iter()
         .map(|row| home_row_line(row, width))
         .collect()
@@ -450,7 +452,7 @@ fn draw_list(
     replacement: bool,
 ) -> (usize, usize) {
     let capacity = usize::from(placed.list_end.saturating_sub(placed.list_top));
-    let rows = list_rows(screen);
+    let rows = list_rows(screen, app.rail_state().wall());
     let max = rows.len().saturating_sub(capacity);
     let focused = app.focused().and_then(|target| {
         let TargetId::Home(spot) = target else {
@@ -986,8 +988,9 @@ pub(super) fn render(
         chip_x = chip_x.saturating_add(wide);
     }
     let bound = super::notice_rows::frame_bound(app);
-    let input = crate::ext::Input::Home(screen.renderer_input(bound.flat));
-    let builtin = |_: &crate::ext::Input<'_>, width| home_lines(screen, width);
+    let wall = app.rail_state().wall();
+    let input = crate::ext::Input::Home(screen.renderer_input(bound.flat, wall));
+    let builtin = |_: &crate::ext::Input<'_>, width| home_lines(screen, width, wall);
     let replacement = bound
         .slot_lines(
             crate::ext::SlotDraw::Paint,

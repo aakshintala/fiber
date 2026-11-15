@@ -66,7 +66,7 @@ fn home_renderer_input_projects_source_values_without_terminal_state() {
     let app = home_with(80, 24, launch());
     let mut screen = app.home_screen().unwrap();
 
-    let initial = screen.renderer_input(false).value;
+    let initial = screen.renderer_input(false, 0).value;
     assert!(initial.get("picker").is_none());
     assert!(initial.get("question").is_none());
     assert!(initial["header"].get("spend").is_none());
@@ -112,7 +112,7 @@ fn home_renderer_input_projects_source_values_without_terminal_state() {
     screen.question_scroll = 3;
     screen.logo = crate::graphics::logo::Shown::Kitty;
 
-    let input = screen.renderer_input(true);
+    let input = screen.renderer_input(true, 0);
     let value = &input.value;
     assert!(input.flat);
     assert_eq!(value["flat"], true);
@@ -135,7 +135,7 @@ fn home_renderer_input_projects_source_values_without_terminal_state() {
         panic!("the renderer input has one live row")
     };
     *since = "a later elapsed value".into();
-    let refreshed = screen.renderer_input(true);
+    let refreshed = screen.renderer_input(true, 0);
     assert_eq!(refreshed.value, input.value);
     assert_ne!(refreshed.key("home"), original_key);
 }
