@@ -387,3 +387,4 @@ crates/tui/src/settings_view_tests.rs:4000-4001	fiber-4770	plan	2026-11-15T15:10
 crates/tui/src/settings_view_tests.rs:4006-4010	fiber-4770	plan	2026-11-15T15:10:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/feat/4770-stepped-lists	
 crates/tui/src/settings_view_tests.rs:4441-4442	fiber-4770	plan	2026-11-15T15:10:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/feat/4770-stepped-lists	
 crates/tui/src/settings_view_tests.rs:4478-4479	fiber-4770	plan	2026-11-15T15:10:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/feat/4770-stepped-lists	
+crates/tui/src/files_tests.rs	fiber-4894	plan	2026-11-15T15:23:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
