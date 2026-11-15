@@ -1,0 +1,23 @@
+{
+  "call": {
+    "provider": "openai",
+    "function": "models",
+    "arg": {"key": "openai-test-key", "placeholders": {}}
+  },
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://api.openai.com/v1/models",
+          "headers": {"authorization": "Bearer openai-test-key"}
+        },
+        "reply": {"status": 500, "body": "{}"}
+      }
+    ]
+  },
+  "error": {
+    "code": "extension_failed",
+    "message": "`github.com/aakshintala/fiber/providers/openai`: openai models: unexpected status 500"
+  }
+}

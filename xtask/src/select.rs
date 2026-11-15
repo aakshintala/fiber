@@ -208,6 +208,73 @@ pub(crate) fn classify(files: &[String], members: &Members) -> Selection {
     classify_with(files, members, COMPILED_IN, PACKAGE_READERS)
 }
 
+/// The crates the compiled-in list names for a changed listed file.
+/// `narrow` keeps only rows whose path is a docs file or a crate owns
+/// (support files, crate assets, crate manifests), so a provider JSON or a
+/// probe raw with no crate owner never selects a crate on its own
+/// (`docs/workflow.md`, "Rules by path").
+fn compiled(
+    files: &[String],
+    members: &Members,
+    listed: &[(&str, &str)],
+    narrow: bool,
+) -> BTreeSet<String> {
+    files
+        .iter()
+        .flat_map(|f| {
+            listed.iter().filter_map(move |(p, krate)| {
+                (*p == f.as_str() && (!narrow || is_docs_file(p) || owner(p, members).is_some()))
+                    .then_some(*krate)
+            })
+        })
+        .filter(|name| members.contains_key(*name))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The crates that own a changed file: every non-package, non-docs file
+/// maps to its innermost crate. `listed_ok` keeps files the compiled-in
+/// list names (support files, crate assets, crate manifests) in the owner
+/// map instead of leaving them to the compiled rows alone
+/// (`docs/workflow.md`, "Rules by path").
+fn touched(
+    files: &[String],
+    members: &Members,
+    listed: &[(&str, &str)],
+    listed_ok: bool,
+) -> BTreeSet<String> {
+    let is_listed = |path: &str| listed.iter().any(|(p, _)| *p == path);
+    files
+        .iter()
+        .filter(|f| !is_package_file(f) && !is_docs_file(f) && (listed_ok || !is_listed(f)))
+        .filter_map(|f| owner(f, members))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// What a diff runs under `scripts/check --rules-by-path` (`docs/workflow.md`,
+/// "Rules by path"): the touched crates alone, plus every crate the changed
+/// docs rows name, with no dependent expansion, no package readers and no
+/// binary tests. A path that runs every job but has a crate owner (a crate
+/// manifest) maps to its crate; only globally-scoped runs-all paths with no
+/// crate owner (`scripts/`, `.github/`, the root manifests) select no crate.
+pub(crate) fn rules_selection(files: &[String], members: &Members) -> Selection {
+    // debt: duplicated docs-only preamble (classify_with at select.rs:347-352), fold both onto one helper when classify_with next changes.
+    let is_listed = |path: &str| COMPILED_IN.iter().any(|(p, _)| *p == path);
+    // A package file is checked before the docs rule, so a `.md` inside a
+    // package is not a docs-only diff (`docs/ci.md`, "Selection").
+    let has_package = files.iter().any(|f| is_package_file(f));
+    // A prototype file selects no crate but still runs the prototype trio,
+    // so the diff is `Crates` with no packages, never `Docs`.
+    let has_prototype = files.iter().any(|f| f.starts_with(PROTOTYPE_ROOT));
+    if !has_package && !has_prototype && files.iter().all(|f| is_docs_file(f) && !is_listed(f)) {
+        return Selection::Docs;
+    }
+    let mut selected = touched(files, members, COMPILED_IN, true);
+    selected.extend(compiled(files, members, COMPILED_IN, true));
+    Selection::Crates(selected.into_iter().collect())
+}
+
 /// First-party packages with direct JSON cases, when the binary-level tests
 /// are selected (`docs/ci.md`, "Selection").
 pub(crate) fn extension_packages(
@@ -286,34 +353,20 @@ fn classify_with(
     if !has_package && !has_prototype && files.iter().all(|f| is_docs_file(f) && !is_listed(f)) {
         return Selection::Docs;
     }
-    let compiled: BTreeSet<String> = files
-        .iter()
-        .flat_map(|f| {
-            listed
-                .iter()
-                .filter_map(move |(p, krate)| (*p == f.as_str()).then_some(*krate))
-        })
-        .filter(|name| members.contains_key(*name))
-        .map(str::to_owned)
-        .collect();
+    let from_list = compiled(files, members, listed, false);
     // Docs files do not own a crate; listed files run their crate without
     // dependents (`docs/ci.md`, "Selection"). Package files own no crate;
     // they run the package readers and the binary-level tests, below.
-    let touched: BTreeSet<String> = files
-        .iter()
-        .filter(|f| !is_package_file(f) && !is_docs_file(f) && !is_listed(f))
-        .filter_map(|f| owner(f, members))
-        .map(str::to_owned)
-        .collect();
+    let owned = touched(files, members, listed, false);
     // A prototype file forces the old path for the whole diff: every
     // touched crate expands through its dependents.
     let mut selected = if has_prototype {
-        dependents(touched, members)
+        dependents(owned, members)
     } else {
         // Each touched crate narrows to itself when every candidate file
         // in that crate is a test file; the rest expand with dependents.
         let mut test_only: BTreeMap<&str, bool> =
-            touched.iter().map(|krate| (krate.as_str(), true)).collect();
+            owned.iter().map(|krate| (krate.as_str(), true)).collect();
         for file in files {
             if is_package_file(file) || is_docs_file(file) || is_listed(file) {
                 continue;
@@ -340,7 +393,7 @@ fn classify_with(
         selected.extend(narrow);
         selected
     };
-    selected.extend(compiled);
+    selected.extend(from_list);
     if has_package {
         selected.extend(readers.iter().map(|name| (*name).to_owned()));
         selected.insert(BINARY_TESTS.to_owned());

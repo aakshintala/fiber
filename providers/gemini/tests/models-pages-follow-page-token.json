@@ -1,0 +1,37 @@
+{
+  "call": {
+    "provider": "gemini",
+    "function": "models",
+    "arg": {"key": "gemini-test-key", "placeholders": {}}
+  },
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",
+          "headers": {"x-goog-api-key": "gemini-test-key"}
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"models\":[{\"name\":\"models/gemini-test-a\",\"displayName\":\"Gemini Test A\",\"supportedGenerationMethods\":[\"generateContent\",\"countTokens\"]},{\"name\":\"models/gemini-test-embed\",\"displayName\":\"Gemini Test Embed\",\"supportedGenerationMethods\":[\"embedContent\"]}],\"nextPageToken\":\"page-2\"}"
+        }
+      },
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&pageToken=page-2",
+          "headers": {"x-goog-api-key": "gemini-test-key"}
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"models\":[{\"name\":\"models/gemini-test-b\",\"displayName\":\"Gemini Test B\",\"supportedGenerationMethods\":[\"generateContent\"]}]}"
+        }
+      }
+    ]
+  },
+  "returns": [
+    {"id": "gemini-test-a", "protocol": "google-generative-ai", "base_url": "https://generativelanguage.googleapis.com/v1beta"},
+    {"id": "gemini-test-b", "protocol": "google-generative-ai", "base_url": "https://generativelanguage.googleapis.com/v1beta"}
+  ]
+}

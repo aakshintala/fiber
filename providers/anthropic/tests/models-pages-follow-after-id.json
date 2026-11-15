@@ -1,0 +1,47 @@
+{
+  "call": {
+    "provider": "anthropic",
+    "function": "models",
+    "arg": {
+      "key": "anthropic-test-key",
+      "placeholders": {}
+    }
+  },
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://api.anthropic.com/v1/models?limit=1000",
+          "headers": {
+            "x-api-key": "anthropic-test-key",
+            "anthropic-version": "2023-06-01"
+          }
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"data\":[{\"type\":\"model\",\"id\":\"claude-test-active\",\"display_name\":\"Test Active\",\"created_at\":\"2025-01-01T00:00:00Z\",\"lifecycle\":\"active\",\"capabilities\":{}},{\"type\":\"model\",\"id\":\"claude-test-no-lifecycle\",\"display_name\":\"Test No Lifecycle\",\"created_at\":\"2025-01-01T00:00:00Z\",\"capabilities\":{}}],\"has_more\":true,\"first_id\":\"claude-test-active\",\"last_id\":\"claude-test-no-lifecycle\"}"
+        }
+      },
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://api.anthropic.com/v1/models?limit=1000&after_id=claude-test-no-lifecycle",
+          "headers": {
+            "x-api-key": "anthropic-test-key",
+            "anthropic-version": "2023-06-01"
+          }
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"data\":[{\"type\":\"model\",\"id\":\"claude-test-deprecated\",\"display_name\":\"Test Deprecated\",\"created_at\":\"2025-01-01T00:00:00Z\",\"lifecycle\":\"deprecated\",\"capabilities\":{}},{\"type\":\"model\",\"id\":\"claude-test-retired\",\"display_name\":\"Test Retired\",\"created_at\":\"2025-01-01T00:00:00Z\",\"lifecycle\":\"retired\",\"capabilities\":{}}],\"has_more\":false,\"first_id\":\"claude-test-deprecated\",\"last_id\":\"claude-test-retired\"}"
+        }
+      }
+    ]
+  },
+  "returns": [
+    {"id": "claude-test-active", "protocol": "anthropic-messages", "base_url": "https://api.anthropic.com/v1"},
+    {"id": "claude-test-no-lifecycle", "protocol": "anthropic-messages", "base_url": "https://api.anthropic.com/v1"},
+    {"id": "claude-test-deprecated", "protocol": "anthropic-messages", "base_url": "https://api.anthropic.com/v1"}
+  ]
+}
