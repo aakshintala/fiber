@@ -435,3 +435,4 @@ crates/tui/src/configure.rs	fiber-4675	plan	2026-11-15T16:57:16Z	roundhouse-7010
 crates/tui/src/view/request.rs	fiber-4675	plan	2026-11-15T16:57:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/tui.md	fiber-4675	plan	2026-11-15T16:57:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing.md	fiber-4675	plan	2026-11-15T16:57:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/commands/completion.rs	fiber-4902	plan	2026-11-15T17:10:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
