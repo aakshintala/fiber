@@ -578,14 +578,33 @@ fn apply_marks_the_session_for_the_startup_snapshot() {
     apply(
         &mut command,
         &Environment {
-            vars: vec![(OsString::from("MARK"), OsString::from("start"))],
+            vars: vec![
+                (OsString::from("MARK"), OsString::from("start")),
+                (
+                    OsString::from("FIBER_SESSION_ID"),
+                    OsString::from("s_stale"),
+                ),
+            ],
             source: VariablesSource::Inherited,
         },
     );
-    let marked = command
+    command.env("FIBER_SESSION_ID", "s_0123456789abcdef");
+    let env: Vec<_> = command
         .get_envs()
-        .find(|(name, _)| name.to_str() == Some(HUB_SESSION_MARKER))
-        .map(|(_, value)| value.map(|value| value.to_owned()));
+        .map(|(name, value)| (name.to_owned(), value.map(ToOwned::to_owned)))
+        .collect();
+    assert!(env.contains(&(
+        OsString::from("FIBER_SESSION_ID"),
+        Some(OsString::from("s_0123456789abcdef"))
+    )));
+    assert!(!env.contains(&(
+        OsString::from("FIBER_SESSION_ID"),
+        Some(OsString::from("s_stale"))
+    )));
+    let marked = env
+        .iter()
+        .find(|(name, _)| name == HUB_SESSION_MARKER)
+        .map(|(_, value)| value.clone());
     assert_eq!(marked, Some(Some(OsString::from("1"))));
 }
 

@@ -69,6 +69,7 @@ impl Starter for SpawnStarter {
             login_shell(&environment),
         );
         apply(&mut command, &environment);
+        command.env("FIBER_SESSION_ID", id.0.as_str());
         spawn(id, command)
     }
 
@@ -98,6 +99,7 @@ impl Starter for SpawnStarter {
         };
         let mut command = session_command_from(&self.exe, args);
         apply(&mut command, &environment);
+        command.env("FIBER_SESSION_ID", id.0.as_str());
         spawn(id, command)
     }
 
@@ -120,6 +122,7 @@ impl Starter for SpawnStarter {
             login_shell(&environment),
         );
         apply(&mut command, &environment);
+        command.env("FIBER_SESSION_ID", id.0.as_str());
         spawn(id, command)
     }
 }
