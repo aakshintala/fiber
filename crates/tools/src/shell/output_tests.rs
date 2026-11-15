@@ -1036,6 +1036,43 @@ fn attach_after_a_spill_with_a_cap_below_its_size_fires_at_once() {
 }
 
 #[test]
+fn attach_after_a_spill_with_a_failed_copy_returns_the_receipt() {
+    use super::super::spill::Spill;
+    use contract::tool::Bound;
+
+    let artifacts = TempDir::new("fiber-spill-attach-copy-fail");
+    let shared = Shared::default();
+    // A spill started directly, holding bytes the move must copy.
+    {
+        let mut inner = lock(&shared.inner);
+        inner.spill = Some(Spill::start(
+            SpillConfig {
+                dir: artifacts.path().to_path_buf(),
+                bound: Bound { start: 8, end: 8 },
+                wrap: None,
+                name: Some("s_test.txt".to_owned()),
+            },
+            b"0123456789abcdef".to_vec(),
+        ));
+    }
+    // The rename misses its directory and the registry handle cannot
+    // take the copy: attach names the raw file left behind.
+    let job = artifacts.path().join("missing").join("j_1.log");
+    let readonly = artifacts.path().join("readonly.log");
+    std::fs::write(&readonly, b"").unwrap();
+    let registry = std::fs::File::open(&readonly).unwrap();
+    let line = lock(&shared.inner).attach(registry, &job, 5_000_000_000);
+    let line = line.expect("the raw file is named in the receipt");
+    assert!(line.contains("s_test.txt"), "{line}");
+    let inner = lock(&shared.inner);
+    let failure = inner
+        .write_failure
+        .as_ref()
+        .expect("the copy failure is stored");
+    assert_eq!(failure.path, job);
+}
+
+#[test]
 fn attach_after_a_spill_at_the_cap_boundaries() {
     for (cap, fired) in [(99_u64, true), (100_u64, false), (101_u64, false)] {
         let artifacts = TempDir::new(&format!("fiber-spill-attach-exact-{cap}"));

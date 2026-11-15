@@ -136,57 +136,33 @@ struct Listening {
 /// Kills the handle for the failed file: stdout always writes the output
 /// file; stderr writes the errors file when the job declared one, else
 /// the output file. A separate healthy file keeps its stream; a declared
-/// but dead errors file discards stderr instead of falling back. Without
-/// an adoption there is no destination to compare, so the failed stream
-/// alone is discarded.
-// A dropped kill only repeats an already-failing write: the first failure
-// is stored and the completion is unchanged, so no test observes the
-// omission. The precise kills stay pinned by
-// `a_keeper_child_stderr_write_failure_keeps_stdout` and
-// `a_keeper_child_stdout_write_failure_keeps_stderr`: a wrong kill
-// discards the healthy stream's bytes.
-#[cfg_attr(false, mutants::skip)]
+/// but dead errors file discards stderr instead of falling back.
+/// `destinations` is always `Some` here: `files()` builds `Sink::Files`
+/// only for an adopted process, and the reader passes `None` only when
+/// there is no adoption, where the sink is never `Files` and there is
+/// nothing to kill.
 fn fail_handle(
     sink: &mut Sink,
     destinations: Option<(PathBuf, Option<PathBuf>)>,
     failed: Option<PathBuf>,
-    stream: Stream,
 ) {
-    match (destinations, failed) {
-        (Some((output, errors)), Some(failed)) => {
-            let errors_path = errors.as_deref().unwrap_or(&output);
-            if let Sink::Files {
-                output: live_output,
-                errors: live_errors,
-                errors_declared,
-            } = sink
-            {
-                if failed == output {
-                    *live_output = None;
-                }
-                if failed == *errors_path {
-                    *live_errors = None;
-                    *errors_declared = true;
-                }
-            }
+    let (Some((output, errors)), Some(failed)) = (destinations, failed) else {
+        return;
+    };
+    let errors_path = errors.as_deref().unwrap_or(&output);
+    if let Sink::Files {
+        output: live_output,
+        errors: live_errors,
+        errors_declared,
+    } = sink
+    {
+        if failed == output {
+            *live_output = None;
         }
-        (None, _) => {
-            if let Sink::Files {
-                output,
-                errors,
-                errors_declared,
-            } = sink
-            {
-                match stream {
-                    Stream::Out => *output = None,
-                    Stream::Err => {
-                        *errors = None;
-                        *errors_declared = true;
-                    }
-                }
-            }
+        if failed == *errors_path {
+            *live_errors = None;
+            *errors_declared = true;
         }
-        _ => {}
     }
 }
 
@@ -540,7 +516,7 @@ impl Runtime {
                         state
                             .write_failure
                             .get_or_insert_with(|| (failed.clone(), error));
-                        fail_handle(&mut sink, destinations, Some(failed), stream);
+                        fail_handle(&mut sink, destinations, Some(failed));
                     }
                 }
             }
@@ -756,9 +732,7 @@ impl Runtime {
                         // The first failure wins, with its destination
                         // path; every stream writing to that file is
                         // discarded, while a separate healthy file keeps
-                        // its stream. Without an adoption there is no
-                        // destination to compare, so the failed stream
-                        // alone is discarded.
+                        // its stream.
                         let destinations = state
                             .adoption
                             .as_ref()
@@ -774,7 +748,7 @@ impl Runtime {
                                 write_failed();
                             }
                         }
-                        fail_handle(&mut state.sink, destinations, failed, stream);
+                        fail_handle(&mut state.sink, destinations, failed);
                     }
                     let capped = state.output_cap;
                     drop(state);

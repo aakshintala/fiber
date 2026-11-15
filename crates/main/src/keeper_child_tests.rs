@@ -227,7 +227,7 @@ fn a_keeper_child_output_write_failure_drains_and_reports_io_failed() {
     let output = fakes::TempDir::new("keeper-child-write-output");
     let output_fifo = output.path().join("job.out");
     fakes::fifo(&output_fifo);
-    let mut reader = std::fs::OpenOptions::new()
+    let reader = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().try_into().unwrap())
         .open(&output_fifo)
@@ -293,23 +293,21 @@ fn a_keeper_child_output_write_failure_drains_and_reports_io_failed() {
 
     input_writer.write_all(b"go\n").expect("release child");
     let (first, first_rx) = mpsc::channel();
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty())
-                .expect("output FIFO blocks");
-            let mut bytes = [0_u8; 256];
-            first
-                .send(reader.read(&mut bytes).expect("read output FIFO"))
-                .expect("first read");
-        });
-        assert!(
-            Deadline::after(Duration::from_secs(10))
-                .recv_or_fail(&first_rx, "child did not write to the output FIFO")
-                > 0,
-            "the child closed the output FIFO without writing"
-        );
+    // Detached: `thread::scope` would join this reader even when
+    // the assert below panics, hanging the test on the open file.
+    // The thread owns the file, so `Deadline` stays the only wait.
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty()).expect("output FIFO blocks");
+        let mut bytes = [0_u8; 256];
+        let _ = first.send(reader.read(&mut bytes).expect("read output FIFO"));
     });
-    drop(reader);
+    assert!(
+        Deadline::after(Duration::from_secs(10))
+            .recv_or_fail(&first_rx, "child did not write to the output FIFO")
+            > 0,
+        "the child closed the output FIFO without writing"
+    );
 
     let exit = loop {
         match Deadline::after(Duration::from_secs(10))
@@ -356,7 +354,7 @@ fn a_keeper_child_stderr_write_failure_keeps_stdout() {
     fakes::fifo(&errors_fifo);
     let output = home.path().join("job.out");
     std::fs::write(&output, b"").expect("output file");
-    let mut reader = std::fs::OpenOptions::new()
+    let reader = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().try_into().unwrap())
         .open(&errors_fifo)
@@ -419,23 +417,21 @@ fn a_keeper_child_stderr_write_failure_keeps_stdout() {
         .expect("release flood");
     // The child floods stderr until the test sees its bytes flowing.
     let (first, first_rx) = mpsc::channel();
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty())
-                .expect("errors FIFO blocks");
-            let mut bytes = [0_u8; 256];
-            first
-                .send(reader.read(&mut bytes).expect("read errors FIFO"))
-                .expect("first read");
-        });
-        assert!(
-            Deadline::after(Duration::from_secs(10))
-                .recv_or_fail(&first_rx, "child did not flood stderr")
-                > 0,
-            "the child closed stderr without writing"
-        );
+    // Detached: `thread::scope` would join this reader even when
+    // the assert below panics, hanging the test on the open file.
+    // The thread owns the file, so `Deadline` stays the only wait.
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty()).expect("errors FIFO blocks");
+        let mut bytes = [0_u8; 256];
+        let _ = first.send(reader.read(&mut bytes).expect("read errors FIFO"));
     });
-    drop(reader);
+    assert!(
+        Deadline::after(Duration::from_secs(10))
+            .recv_or_fail(&first_rx, "child did not flood stderr")
+            > 0,
+        "the child closed stderr without writing"
+    );
     // Every later stderr append fails with no reader: the runner records
     // its failure before the child prints its stdout line.
     Deadline::after(Duration::from_secs(10)).recv_or_fail(&failed_rx, "stderr failure recorded");
@@ -499,7 +495,7 @@ fn a_keeper_child_stdout_write_failure_keeps_stderr() {
     fakes::fifo(&output_fifo);
     let errors = home.path().join("job.err");
     std::fs::write(&errors, b"").expect("errors file");
-    let mut reader = std::fs::OpenOptions::new()
+    let reader = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().try_into().unwrap())
         .open(&output_fifo)
@@ -562,23 +558,21 @@ fn a_keeper_child_stdout_write_failure_keeps_stderr() {
         .expect("release flood");
     // The child floods stdout until the test sees its bytes flowing.
     let (first, first_rx) = mpsc::channel();
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty())
-                .expect("output FIFO blocks");
-            let mut bytes = [0_u8; 256];
-            first
-                .send(reader.read(&mut bytes).expect("read output FIFO"))
-                .expect("first read");
-        });
-        assert!(
-            Deadline::after(Duration::from_secs(10))
-                .recv_or_fail(&first_rx, "child did not flood stdout")
-                > 0,
-            "the child closed stdout without writing"
-        );
+    // Detached: `thread::scope` would join this reader even when
+    // the assert below panics, hanging the test on the open file.
+    // The thread owns the file, so `Deadline` stays the only wait.
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty()).expect("output FIFO blocks");
+        let mut bytes = [0_u8; 256];
+        let _ = first.send(reader.read(&mut bytes).expect("read output FIFO"));
     });
-    drop(reader);
+    assert!(
+        Deadline::after(Duration::from_secs(10))
+            .recv_or_fail(&first_rx, "child did not flood stdout")
+            > 0,
+        "the child closed stdout without writing"
+    );
     // Every later stdout append fails with no reader: the runner records
     // its failure before the child prints its stderr line.
     Deadline::after(Duration::from_secs(10)).recv_or_fail(&failed_rx, "stdout failure recorded");
@@ -624,6 +618,61 @@ fn a_keeper_child_stdout_write_failure_keeps_stderr() {
     );
     // Stderr still lands after the stdout failure is recorded.
     assert_eq!(std::fs::read(&errors).unwrap(), b"err\n");
+}
+
+#[test]
+fn fail_handle_discards_only_the_failed_output_file() {
+    use std::fs::OpenOptions;
+
+    // A transient output failure discards every later stdout byte, even
+    // though the file would accept them again, while the healthy errors
+    // file keeps receiving stderr.
+    let dir = fakes::TempDir::new("keeper-fail-handle-output");
+    let output_path = dir.path().join("out.log");
+    let errors_path = dir.path().join("err.log");
+    std::fs::write(&output_path, b"first").unwrap();
+    std::fs::write(&errors_path, b"").unwrap();
+    let mut sink = super::Sink::Files {
+        output: Some(OpenOptions::new().append(true).open(&output_path).unwrap()),
+        errors: Some(OpenOptions::new().append(true).open(&errors_path).unwrap()),
+        errors_declared: true,
+    };
+    let destinations = Some((output_path.clone(), Some(errors_path.clone())));
+    super::fail_handle(&mut sink, destinations, Some(output_path.clone()));
+    // Later stdout is discarded: the file keeps only its earlier bytes.
+    super::write_sink(&mut sink, Stream::Out, b"second").unwrap();
+    assert_eq!(std::fs::read(&output_path).unwrap(), b"first");
+    // The healthy errors file keeps its stream.
+    super::write_sink(&mut sink, Stream::Err, b"e").unwrap();
+    assert_eq!(std::fs::read(&errors_path).unwrap(), b"e");
+}
+
+#[test]
+fn fail_handle_discards_only_the_failed_errors_file() {
+    use std::fs::OpenOptions;
+
+    // A transient errors failure discards every later stderr byte, even
+    // though the file would accept it again, while the healthy output
+    // file keeps receiving stdout. No fallback redirects stderr into
+    // the output file.
+    let dir = fakes::TempDir::new("keeper-fail-handle-errors");
+    let output_path = dir.path().join("out.log");
+    let errors_path = dir.path().join("err.log");
+    std::fs::write(&output_path, b"").unwrap();
+    std::fs::write(&errors_path, b"first").unwrap();
+    let mut sink = super::Sink::Files {
+        output: Some(OpenOptions::new().append(true).open(&output_path).unwrap()),
+        errors: Some(OpenOptions::new().append(true).open(&errors_path).unwrap()),
+        errors_declared: true,
+    };
+    let destinations = Some((output_path.clone(), Some(errors_path.clone())));
+    super::fail_handle(&mut sink, destinations, Some(errors_path.clone()));
+    // Later stderr is discarded: the file keeps only its earlier bytes.
+    super::write_sink(&mut sink, Stream::Err, b"second").unwrap();
+    assert_eq!(std::fs::read(&errors_path).unwrap(), b"first");
+    // The healthy output file keeps its stream.
+    super::write_sink(&mut sink, Stream::Out, b"o").unwrap();
+    assert_eq!(std::fs::read(&output_path).unwrap(), b"o");
 }
 
 #[test]
@@ -1303,7 +1352,7 @@ fn keeper_written_write_failure_wins_over_keeper_timeout() {
     let output = fakes::TempDir::new("keeper-timeout-write-output");
     let output_fifo = output.path().join("job.out");
     fakes::fifo(&output_fifo);
-    let mut reader = std::fs::OpenOptions::new()
+    let reader = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().try_into().unwrap())
         .open(&output_fifo)
@@ -1365,23 +1414,21 @@ fn keeper_written_write_failure_wins_over_keeper_timeout() {
         .expect("release child");
     // The child floods until the test sees its bytes flowing.
     let (first, first_rx) = mpsc::channel();
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty())
-                .expect("output FIFO blocks");
-            let mut bytes = [0_u8; 256];
-            first
-                .send(reader.read(&mut bytes).expect("read output FIFO"))
-                .expect("first read");
-        });
-        assert!(
-            Deadline::after(Duration::from_secs(10))
-                .recv_or_fail(&first_rx, "child did not flood the output")
-                > 0,
-            "the child closed the output FIFO without writing"
-        );
+    // Detached: `thread::scope` would join this reader even when
+    // the assert below panics, hanging the test on the open file.
+    // The thread owns the file, so `Deadline` stays the only wait.
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty()).expect("output FIFO blocks");
+        let mut bytes = [0_u8; 256];
+        let _ = first.send(reader.read(&mut bytes).expect("read output FIFO"));
     });
-    drop(reader);
+    assert!(
+        Deadline::after(Duration::from_secs(10))
+            .recv_or_fail(&first_rx, "child did not flood the output")
+            > 0,
+        "the child closed the output FIFO without writing"
+    );
     // Every later append fails with no reader: the runner records its
     // first path-bearing failure on its next write. The hook fires at
     // that store, so no real-clock timing leaks into the verdict.

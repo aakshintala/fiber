@@ -266,16 +266,22 @@ pub fn kept_end(job_id: JobId, exit: &Exit) -> JobCompleted {
     completed
 }
 
-/// The `Finished` a keeper-written completion maps: the keeper's exit
-/// flags, with no stored write failure inside, so the one override the
-/// caller applies stays the only one. `flooded` selects the flooded end
-/// before any override, never after it.
-// The `sent_signal` conjunction is unobservable: where exactly one flag
+/// Whether the keeper signalled the job's group: a timeout stops it,
+/// and a cap stops it too, so either flag means a signal went out.
+// The `||` to `&&` mutant is unobservable: where exactly one flag
 // differs, the completion builders return through the timeout or the cap
 // before reading `sent_signal`, and where neither differs both operators
 // agree. A mutant swapping the operator changes no behaviour a consumer
 // sees.
 #[cfg_attr(false, mutants::skip)]
+fn sent_signal(exit: &Exit) -> bool {
+    exit.timed_out || exit.output_cap
+}
+
+/// The `Finished` a keeper-written completion maps: the keeper's exit
+/// flags, with no stored write failure inside, so the one override the
+/// caller applies stays the only one. `flooded` selects the flooded end
+/// before any override, never after it.
 fn keeper_finished(exit: &Exit, flooded: bool) -> Finished {
     Finished {
         output: Kept::Whole(Vec::new()),
@@ -283,7 +289,7 @@ fn keeper_finished(exit: &Exit, flooded: bool) -> Finished {
         stop: exit.timed_out.then_some(command::StopKind::Timeout),
         indeterminate: false,
         held_open: false,
-        sent_signal: exit.timed_out || exit.output_cap,
+        sent_signal: sent_signal(exit),
         capped: exit.output_cap,
         flooded,
         write_failure: None,

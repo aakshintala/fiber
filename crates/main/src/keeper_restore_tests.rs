@@ -473,7 +473,7 @@ fn a_keeper_that_vanishes_after_an_adopted_write_failure_reports_io_failed_once_
     let mut job = world.job("j_write", "call_0", b"");
     let errors = world.dir.artifacts().join("j_write.stderr.log");
     fakes::fifo(&errors);
-    let mut reader = std::fs::OpenOptions::new()
+    let reader = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().try_into().unwrap())
         .open(&errors)
@@ -489,21 +489,19 @@ fn a_keeper_that_vanishes_after_an_adopted_write_failure_reports_io_failed_once_
     // fail, and the keeper connection then closes without an Exit.
     world.send(output_frame("call_0", "err", "first\\n"));
     let (first, first_rx) = mpsc::channel();
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty())
-                .expect("output FIFO blocks");
-            let mut bytes = [0_u8; 32];
-            first
-                .send(reader.read(&mut bytes).expect("read from output FIFO"))
-                .expect("first read");
-        });
-        assert!(
-            deadline().recv_or_fail(&first_rx, "the adopted writer did not write") > 0,
-            "the adopted writer closed the output FIFO without writing"
-        );
+    // Detached: `thread::scope` would join this reader even when
+    // the assert below panics, hanging the test on the open file.
+    // The thread owns the file, so `Deadline` stays the only wait.
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty()).expect("output FIFO blocks");
+        let mut bytes = [0_u8; 32];
+        let _ = first.send(reader.read(&mut bytes).expect("read from output FIFO"));
     });
-    drop(reader);
+    assert!(
+        deadline().recv_or_fail(&first_rx, "the adopted writer did not write") > 0,
+        "the adopted writer closed the output FIFO without writing"
+    );
     world.send(output_frame("call_0", "err", "second\\n"));
     drop(world.keeper);
 
