@@ -17,8 +17,31 @@ use std::sync::Arc;
 use contract::CommandId;
 use serde_json::{Value, json};
 
-use super::package::{Package, PackageOptions};
+use super::package::{Package, PackageOptions, canonicalize_package_dir};
 use super::process::RegisterOutcome;
+
+/// Package canonicalization resolves links and reports failures with the input path.
+#[test]
+fn canonicalize_package_dir_resolves_symlinks_and_maps_missing_to_io_failed() {
+    use std::os::unix::fs::symlink;
+
+    let root = fakes::TempDir::new("fiber-package-canonicalize");
+    let target = root.path().join("target");
+    std::fs::create_dir(&target).expect("create package target");
+    let link = root.path().join("link");
+    symlink(&target, &link).expect("link package directory");
+
+    let canonical_target = target.canonicalize().expect("canonical target");
+    let canonical = canonicalize_package_dir(&link).expect("canonicalize symlink");
+    assert_eq!(canonical, canonical_target);
+    assert!(canonical.starts_with(&canonical_target));
+
+    let missing = root.path().join("missing");
+    let source = missing.canonicalize().expect_err("missing directory fails");
+    let error = canonicalize_package_dir(&missing).expect_err("missing directory maps to error");
+    assert_eq!(error.0, contract::ErrorCode::IoFailed);
+    assert_eq!(error.1, format!("{}: {source}", missing.display()));
+}
 
 /// A package directory holding `manifest_extra` merged over a process
 /// manifest for `fiber.test/proc`.
@@ -248,7 +271,7 @@ fn process_context(dir: &fakes::TempDir) -> super::process::context::ProcessCont
             reason: contract::events::SessionReason::New,
         },
         workspace: dir.path().to_path_buf(),
-        package: dir.path().to_path_buf(),
+        package: dir.path().canonicalize().expect("canonical package"),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: dir.path().join("machine").display().to_string(),
             project: dir.path().join("project").display().to_string(),

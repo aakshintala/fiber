@@ -1432,18 +1432,10 @@ impl SessionExtensions {
                 return;
             }
         };
-        let package = match dir.canonicalize() {
+        let package = match crate::package::canonicalize_package_dir(&dir) {
             Ok(package) => package,
-            Err(source) => {
-                Self::process_failed(
-                    session,
-                    &name,
-                    &(
-                        contract::ErrorCode::IoFailed,
-                        format!("{}: {source}", dir.display()),
-                    ),
-                    required,
-                );
+            Err(error) => {
+                Self::process_failed(session, &name, &error, required);
                 return;
             }
         };

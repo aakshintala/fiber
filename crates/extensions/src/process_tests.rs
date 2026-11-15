@@ -1907,7 +1907,7 @@ impl Harness {
         let context = ProcessContext {
             run,
             workspace: dir.path().to_path_buf(),
-            package: dir.path().to_path_buf(),
+            package: dir.path().canonicalize().expect("canonical package"),
             data_dirs: contract::events::ExtensionDataDirs {
                 machine: dir.path().join("machine").display().to_string(),
                 project: dir.path().join("project").display().to_string(),
@@ -6456,8 +6456,8 @@ fn process_host_exec_resolves_inside_package_and_refuses_traversal() {
     let recorded = FakeServices::new();
     let captured = Arc::new(Mutex::new(None));
     let capture = Arc::clone(&captured);
-    let (event_tx, event_rx) = std::sync::mpsc::channel();
-    let event_emitter = Arc::new(ProcessExecInbox(event_tx));
+    let event_emitter = Arc::new(ProcessUsageEmitter::default());
+    let emitted = Arc::clone(&event_emitter);
     let plan = json!([{"read": {}}, {"send": {"id":"ready", "command":"ready"}}, {"read": {}}])
         .to_string();
     let owner = Harness::start_with_services_on_manifest(
@@ -6492,7 +6492,7 @@ fn process_host_exec_resolves_inside_package_and_refuses_traversal() {
         home: sibling.path().to_path_buf(),
     };
     let callback = CallbackContext::entry("fiber.test/proc");
-    let invoke = |program: String| {
+    let run_exec = |program: String| {
         let services = Arc::clone(&services);
         let context = context.clone();
         let callback = callback.clone();
@@ -6518,14 +6518,14 @@ fn process_host_exec_resolves_inside_package_and_refuses_traversal() {
         });
         (thread, receive)
     };
-    let (run, receive) = invoke("bin/tool".to_owned());
-    let execution = fakes::Deadline::after(Duration::from_secs(10))
+    let (run, receive) = run_exec("bin/tool".to_owned());
+    let execution = fakes::Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN)
         .recv_or_fail(&receive, "host.exec package-relative run");
     run.join().expect("host.exec thread joins");
 
     let escaped = "../outside".to_owned();
-    let (run, receive) = invoke(escaped.clone());
-    let refusal = fakes::Deadline::after(Duration::from_secs(10))
+    let (run, receive) = run_exec(escaped.clone());
+    let refusal = fakes::Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN)
         .recv_or_fail(&receive, "host.exec traversal refusal");
     run.join().expect("refusal thread joins");
 
@@ -6534,25 +6534,40 @@ fn process_host_exec_resolves_inside_package_and_refuses_traversal() {
     };
     assert_eq!(output["stdout"], json!("cGFja2FnZS1wcm9ncmFt"));
     let expected_resolved = context.package.join("bin/tool").display().to_string();
-    let contract::inbox::Delivery::ExtensionExec(line) = event_rx
-        .try_recv()
-        .expect("the package-relative run logs extension_exec")
-    else {
-        panic!("expected extension_exec");
-    };
-    assert_eq!(line.program, expected_resolved);
-    let (run, receive) = invoke("sh".to_owned());
-    let bare = fakes::Deadline::after(Duration::from_secs(10))
+    {
+        let events = support::lock(&emitted.0);
+        let line = events
+            .iter()
+            .find_map(|event| {
+                if let contract::events::Event::ExtensionExec(line) = event {
+                    Some(line)
+                } else {
+                    None
+                }
+            })
+            .expect("the package-relative run logs extension_exec");
+        assert_eq!(line.program, expected_resolved);
+    }
+    let (run, receive) = run_exec("sh".to_owned());
+    let bare = fakes::Deadline::after(fakes::WHOLE_SUBSYSTEM_WITHIN)
         .recv_or_fail(&receive, "host.exec bare-name run");
     run.join().expect("bare-name host.exec thread joins");
     assert!(bare.is_ok(), "bare-name program runs: {bare:?}");
-    let contract::inbox::Delivery::ExtensionExec(line) = event_rx
-        .try_recv()
-        .expect("the bare-name run logs extension_exec")
-    else {
-        panic!("expected extension_exec");
-    };
-    assert_eq!(line.program, "sh");
+    {
+        let events = support::lock(&emitted.0);
+        let line = events
+            .iter()
+            .filter_map(|event| {
+                if let contract::events::Event::ExtensionExec(line) = event {
+                    Some(line)
+                } else {
+                    None
+                }
+            })
+            .nth(1)
+            .expect("the bare-name run logs extension_exec");
+        assert_eq!(line.program, "sh");
+    }
     let Err((code, message)) = refusal else {
         panic!("a traversal program is refused");
     };
@@ -7030,7 +7045,7 @@ fn set_reason_moves_only_a_session_run() {
             reason: SessionReason::New,
         },
         workspace: dir.path().to_path_buf(),
-        package: dir.path().to_path_buf(),
+        package: dir.path().canonicalize().expect("canonical package"),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: "m".to_owned(),
             project: "p".to_owned(),
@@ -7331,18 +7346,6 @@ impl contract::model::HostModel for ProcessUsageModel {
             },
             cost: None,
         })
-    }
-}
-
-struct ProcessExecInbox(std::sync::mpsc::Sender<contract::inbox::Delivery>);
-
-impl contract::emit::Emit for ProcessExecInbox {
-    fn emit(&self, event: &contract::events::Event) {
-        if let contract::events::Event::ExtensionExec(line) = event {
-            self.0
-                .send(contract::inbox::Delivery::ExtensionExec(line.clone()))
-                .expect("process exec inbox receiver lives for the test");
-        }
     }
 }
 

@@ -145,6 +145,17 @@ pub struct Package {
     extension: Option<Arc<super::process::ProcessExtension>>,
 }
 
+pub(crate) fn canonicalize_package_dir(
+    dir: &std::path::Path,
+) -> Result<std::path::PathBuf, (contract::ErrorCode, String)> {
+    dir.canonicalize().map_err(|source| {
+        (
+            contract::ErrorCode::IoFailed,
+            format!("{}: {source}", dir.display()),
+        )
+    })
+}
+
 impl Package {
     /// Loads the package in `options.dir`: its manifest must read and
     /// name this Fiber's extension API, and a process package must
@@ -308,12 +319,7 @@ impl Package {
         mode: ProcessProviderMode,
         host: Option<ProcessProviderHost>,
     ) -> Result<StartedProcessProvider, (contract::ErrorCode, String)> {
-        let canonical_dir = options.dir.canonicalize().map_err(|source| {
-            (
-                contract::ErrorCode::IoFailed,
-                format!("{}: {source}", options.dir.display()),
-            )
-        })?;
+        let canonical_dir = canonicalize_package_dir(&options.dir)?;
         let manifest = config::read_manifest(&canonical_dir).map_err(|source| {
             (
                 contract::ErrorCode::IoFailed,
