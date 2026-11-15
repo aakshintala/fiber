@@ -387,17 +387,6 @@ crates/tui/src/settings_view_tests.rs:4000-4001	fiber-4770	plan	2026-11-15T15:10
 crates/tui/src/settings_view_tests.rs:4006-4010	fiber-4770	plan	2026-11-15T15:10:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/feat/4770-stepped-lists	
 crates/tui/src/settings_view_tests.rs:4441-4442	fiber-4770	plan	2026-11-15T15:10:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/feat/4770-stepped-lists	
 crates/tui/src/settings_view_tests.rs:4478-4479	fiber-4770	plan	2026-11-15T15:10:11Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/feat/4770-stepped-lists	
-crates/tui/src/files_tests.rs	fiber-4894	plan	2026-11-15T15:23:27Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/src/files.rs	fiber-4894	plan	2026-11-15T15:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/src/app/completion_tests.rs	fiber-4894	plan	2026-11-15T15:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/support/src/git.rs	fiber-4894	plan	2026-11-15T15:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/src/event_loop.rs	fiber-4894	plan	2026-11-15T15:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/src/lib.rs	fiber-4894	plan	2026-11-15T15:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/fakes/src/temp_dir.rs	fiber-4894	plan	2026-11-15T15:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/testing/running.md	fiber-4894	plan	2026-11-15T15:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/ci.md	fiber-4894	plan	2026-11-15T15:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-.config/nextest.toml	fiber-4894	plan	2026-11-15T15:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/workflow.md	fiber-4894	plan	2026-11-15T15:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/hub/src/start.rs	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/hub/src/spawn.rs	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/hub/src/lib.rs	fiber-4897	plan	2026-11-15T15:38:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
