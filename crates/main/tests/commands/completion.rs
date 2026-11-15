@@ -21,7 +21,7 @@ use contract::clock::Clock;
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, BufRead, BufReader, Read};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -82,33 +82,19 @@ fn case_progress_tracks_completed_intervals_and_the_next_case() {
         "fiber completion ".to_owned(),
     ];
     let mut timings = CaseTimings::default();
-    for byte in b"driver startup\nCASE 1\n" {
-        timings.observe_byte(*byte, || Duration::from_secs(2));
-    }
-    for byte in b"CASE-END\n" {
-        timings.observe_byte(*byte, || Duration::from_secs(5));
-    }
-    for byte in b"CASE 2\n" {
-        timings.observe_byte(*byte, || Duration::from_secs(6));
-    }
-    for byte in b"CASE-END\r\n" {
-        timings.observe_byte(*byte, || Duration::from_millis(8500));
-    }
+    timings.observe_line(b"driver startup\n", || Duration::from_secs(2));
+    timings.observe_line(b"CASE 1\n", || Duration::from_secs(2));
+    timings.observe_line(b"CASE-END\n", || Duration::from_secs(5));
+    timings.observe_line(b"CASE 2\n", || Duration::from_secs(6));
+    timings.observe_line(b"CASE-END\r\n", || Duration::from_millis(8500));
 
     assert_eq!(
-        (
-            timings.completed.clone(),
-            format_case_progress(&timings.completed, &cases),
-            format_case_progress(&[], &[]),
-        ),
-        (
-            vec![Duration::from_secs(5), Duration::from_millis(3500)],
-            Some(
-                "completed case timings: [1 `fiber --model model-`: 5s, 2 `fiber ask --model `: 3.5s]; current case: 3 `fiber completion `"
-                    .to_owned(),
-            ),
-            None,
-        )
+        timings.completed,
+        vec![Duration::from_secs(5), Duration::from_millis(3500)]
+    );
+    assert_eq!(
+        format_case_progress(&timings.completed, &cases),
+        "completed case timings: [1 `fiber --model model-`: 5s, 2 `fiber ask --model `: 3.5s]; current case: 3 `fiber completion `"
     );
 }
 
@@ -297,28 +283,22 @@ fn matching_exits_wait() -> Duration {
 struct CaseTimings {
     previous_end: Duration,
     completed: Vec<Duration>,
-    line: Vec<u8>,
 }
 
 impl CaseTimings {
-    fn observe_byte(&mut self, byte: u8, elapsed: impl FnOnce() -> Duration) {
-        self.line.push(byte);
-        if byte == b'\n' {
-            let line = self.line.strip_suffix(b"\n").unwrap_or(&self.line);
-            let line = line.strip_suffix(b"\r").unwrap_or(line);
-            if line == b"CASE-END" {
-                let elapsed = elapsed();
-                self.completed
-                    .push(elapsed.saturating_sub(self.previous_end));
-                self.previous_end = elapsed;
-            }
-            self.line.clear();
+    fn observe_line(&mut self, line: &[u8], elapsed: impl FnOnce() -> Duration) {
+        let line = line.strip_suffix(b"\n").unwrap_or(line);
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if line == b"CASE-END" {
+            let elapsed = elapsed();
+            self.completed
+                .push(elapsed.saturating_sub(self.previous_end));
+            self.previous_end = elapsed;
         }
     }
 }
 
-fn format_case_progress(completed: &[Duration], cases: &[String]) -> Option<String> {
-    cases.first()?;
+fn format_case_progress(completed: &[Duration], cases: &[String]) -> String {
     let completed_cases = completed
         .iter()
         .enumerate()
@@ -332,9 +312,7 @@ fn format_case_progress(completed: &[Duration], cases: &[String]) -> Option<Stri
         .get(completed.len())
         .map(|case| format!("{} `{case}`", completed.len() + 1))
         .unwrap_or_else(|| format!("none (all {} expected cases completed)", cases.len()));
-    Some(format!(
-        "completed case timings: [{completed_cases}]; current case: {current_case}"
-    ))
+    format!("completed case timings: [{completed_cases}]; current case: {current_case}")
 }
 
 #[derive(Default)]
@@ -343,26 +321,19 @@ struct CapturedStdout {
     completed_case_times: Vec<Duration>,
 }
 
-fn capture_stdout(mut stdout: impl Read, started: Instant) -> io::Result<CapturedStdout> {
+fn capture_stdout(stdout: impl Read, started: Instant) -> io::Result<CapturedStdout> {
     let mut captured = CapturedStdout::default();
     let mut timings = CaseTimings::default();
-    let mut buffer = [0; 8192];
-    loop {
-        let count = match stdout.read(&mut buffer) {
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            result => result?,
-        };
-        if count == 0 {
-            break;
-        }
-        captured.bytes.extend_from_slice(&buffer[..count]);
-        for byte in &buffer[..count] {
-            timings.observe_byte(*byte, || {
-                support::SystemClock
-                    .now()
-                    .saturating_duration_since(started)
-            });
-        }
+    let mut reader = BufReader::new(stdout);
+    let mut line = Vec::new();
+    while reader.read_until(b'\n', &mut line)? != 0 {
+        captured.bytes.extend_from_slice(&line);
+        timings.observe_line(&line, || {
+            support::SystemClock
+                .now()
+                .saturating_duration_since(started)
+        });
+        line.clear();
     }
     captured.completed_case_times = timings.completed;
     Ok(captured)
@@ -442,8 +413,11 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path, cases: &[String]) -
         drop(stdin);
         let stdout = receive_stdout(what, stdout_finished);
         let case_progress = match stdout {
-            Ok(captured) => format_case_progress(&captured.completed_case_times, cases)
-                .map_or_else(String::new, |progress| format!("; {progress}")),
+            Ok(captured) if !cases.is_empty() => format!(
+                "; {}",
+                format_case_progress(&captured.completed_case_times, cases)
+            ),
+            Ok(_) => String::new(),
             Err(error) => format!("; case timings unavailable: {error}"),
         };
         panic!(
@@ -582,6 +556,10 @@ fn cases(stdout: &str) -> Vec<BTreeSet<String>> {
     found
 }
 
+fn case_names(expected: &[(String, BTreeSet<String>)]) -> Vec<String> {
+    expected.iter().map(|(case, _)| case.clone()).collect()
+}
+
 /// Checks each case's candidates against what it expects, by position.
 fn assert_cases(what: &str, stdout: &str, expected: &[(String, BTreeSet<String>)]) {
     let found = cases(stdout);
@@ -635,10 +613,7 @@ fn the_bash_script_loads_and_completes_exactly_the_commands_and_flags() {
         .arg(&driver)
         .arg(&path)
         .args(expected.iter().map(|(case, _)| case));
-    let case_names = expected
-        .iter()
-        .map(|(case, _)| case.clone())
-        .collect::<Vec<_>>();
+    let case_names = case_names(&expected);
     let output = run_bounded("the bash driver", bash, setup.root.path(), &case_names);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
@@ -705,10 +680,7 @@ fn the_zsh_script_loads_and_completes_exactly_the_commands_and_flags() {
         .arg(&driver)
         .arg(&path)
         .args(expected.iter().map(|(case, _)| case));
-    let case_names = expected
-        .iter()
-        .map(|(case, _)| case.clone())
-        .collect::<Vec<_>>();
+    let case_names = case_names(&expected);
     let output = run_bounded("the zsh driver", zsh, setup.root.path(), &case_names);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(
@@ -780,10 +752,7 @@ fn the_fish_script_loads_and_completes_exactly_the_commands_and_flags() {
         .arg(&driver)
         .arg(&path)
         .args(expected.iter().map(|(case, _)| case));
-    let case_names = expected
-        .iter()
-        .map(|(case, _)| case.clone())
-        .collect::<Vec<_>>();
+    let case_names = case_names(&expected);
     let output = run_bounded("the fish driver", fish, setup.root.path(), &case_names);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(
