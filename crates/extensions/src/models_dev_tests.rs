@@ -1,7 +1,28 @@
 use serde_json::json;
 
 // This pins parity with the whole-document serde_json parse the streaming path replaced.
-use super::{CatalogMeta, ProviderVisitor, retained_rows, valid_catalog, validate_catalog};
+use super::{
+    CatalogMeta, ProviderVisitor, retained_rows, url_with_override, valid_catalog, validate_catalog,
+};
+
+#[test]
+fn models_dev_url_override_defaults_to_the_public_catalog() {
+    assert_eq!(
+        url_with_override(None, super::URL),
+        "https://models.dev/api.json"
+    );
+}
+
+#[test]
+fn models_dev_url_override_uses_the_configured_catalog() {
+    assert_eq!(
+        url_with_override(
+            Some("http://127.0.0.1:1234/api.json".to_owned()),
+            super::URL
+        ),
+        "http://127.0.0.1:1234/api.json"
+    );
+}
 
 #[test]
 fn streaming_projection_keeps_duplicate_keys_last_wins_and_mistyped_siblings() {

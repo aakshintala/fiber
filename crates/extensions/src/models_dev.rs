@@ -22,6 +22,13 @@ mod tests;
 
 /// The public models.dev catalog endpoint.
 pub const URL: &str = "https://models.dev/api.json";
+/// Environment variable that overrides the models.dev catalog endpoint.
+/// Unset uses [`URL`].
+pub const URL_ENV: &str = "FIBER_MODELS_DEV_URL";
+
+fn url_with_override(override_url: Option<String>, fallback: &str) -> String {
+    override_url.unwrap_or_else(|| fallback.to_owned())
+}
 /// A fetch operation that streams the response into a caller-owned writer.
 pub type Fetch = Arc<dyn Fn(&str, &mut dyn Write) -> Result<(), String> + Send + Sync>;
 
@@ -45,9 +52,10 @@ pub struct CatalogMeta {
 /// Build the production fetch using environment proxy settings and net limits.
 pub fn live_fetch() -> Fetch {
     Arc::new(|url, writer| {
+        let url = url_with_override(std::env::var(URL_ENV).ok(), url);
         fetch(
             &crate::prepare::agent(ureq::Proxy::try_from_env(), net::LIMITS),
-            url,
+            &url,
             writer,
         )
         .map_err(|error| error.to_string())
