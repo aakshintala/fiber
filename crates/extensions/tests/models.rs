@@ -318,6 +318,74 @@ fn admission_capability_filter_keeps_unknown_models_new() {
 }
 
 #[test]
+fn admission_muse_rows_follow_catalog_capabilities() {
+    let setup = Setup::new();
+    let package = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../providers/muse");
+    let ids = [
+        "muse-ember-1.0",
+        "muse-wonder-1.0",
+        "muse-spark-1.1",
+        "muse-spark-1.2",
+        "muse-spark-1.2-contributor",
+        "muse-spark-1.3",
+        "muse-spark-1.3-contributor",
+        "muse-voice-transcribe-1.0",
+        "muse-image-1.0",
+        "sam-3.1",
+    ];
+    let models = ids.map(|id| {
+        serde_json::from_value(json!({
+            "id": id,
+            "protocol": "openai-responses",
+            "base_url": "https://api.meta.ai/v1"
+        }))
+        .unwrap()
+    });
+    let catalog = json!({
+        "meta": {
+            "muse-ember-1.0": {"limit":{"context":1048576,"output":524288},"modalities":{"output":["text"]},"tool_call":true},
+            "muse-wonder-1.0": {"limit":{"context":1048576,"output":131072},"modalities":{"output":["text"]},"tool_call":true},
+            "muse-spark-1.1": {"limit":{"context":1048576,"output":131072},"modalities":{"output":["text"]},"tool_call":true},
+            "muse-spark-1.2": {"limit":{"context":1048576,"output":131072},"modalities":{"output":["text"]},"tool_call":true},
+            "muse-spark-1.2-contributor": {"limit":{"context":1048576,"output":131072},"modalities":{"output":["text"]},"tool_call":true},
+            "muse-spark-1.3": {"limit":{"context":1048576,"output":131072},"modalities":{"output":["text"]},"tool_call":true},
+            "muse-spark-1.3-contributor": {"limit":{"context":1048576,"output":131072},"modalities":{"output":["text"]},"tool_call":true},
+            "sam-3.1": {"modalities":{"output":["text"]},"tool_call":false}
+        }
+    });
+    config::write_models_dev(&setup.home(), &serde_json::to_vec(&catalog).unwrap()).unwrap();
+
+    let admitted = extensions::models_dev::merge_admission(
+        &setup.home(),
+        &package,
+        "muse",
+        models.into(),
+        true,
+    );
+
+    assert_eq!(admitted.len(), 9);
+    for (index, id) in ids[..7].iter().enumerate() {
+        let model = admitted.iter().find(|model| model.id == *id).unwrap();
+        assert!(!model.is_new, "{id}");
+        assert_eq!(model.context_window, Some(1_048_576), "{id}");
+        assert_eq!(
+            model.max_output_tokens,
+            Some(if index == 0 { 524_288 } else { 131_072 }),
+            "{id}"
+        );
+        assert_eq!(model.input, ["text", "image"], "{id}");
+    }
+    for id in ["muse-voice-transcribe-1.0", "muse-image-1.0"] {
+        let model = admitted.iter().find(|model| model.id == id).unwrap();
+        assert!(model.is_new, "{id}");
+        assert_eq!(model.input, ["text"], "{id}");
+        assert_eq!(model.context_window, Some(128_000), "{id}");
+        assert_eq!(model.max_output_tokens, Some(8_192), "{id}");
+    }
+    assert!(admitted.iter().all(|model| model.id != "sam-3.1"));
+}
+
+#[test]
 fn admission_capability_filter_keeps_models_with_text_and_tool_call() {
     let setup = Setup::new();
     let package = setup.source(
