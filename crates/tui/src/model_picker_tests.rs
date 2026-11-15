@@ -25,6 +25,7 @@ fn entry(
         default_level: default.map(str::to_owned),
         configured: configured.map(str::to_owned),
         roles: Vec::new(),
+        is_new: false,
         name: None,
         price: None,
     }

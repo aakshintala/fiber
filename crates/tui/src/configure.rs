@@ -514,6 +514,13 @@ pub trait Configure: Send + Sync {
         overrides: &[String],
     ) -> Result<Vec<SettingRow>, ConfigureError>;
 
+    /// Installed search backend names for `workspace`, sorted without a
+    /// synthetic Default entry.
+    fn search_backends(&self, workspace: &Path) -> Result<Vec<String>, ConfigureError>;
+
+    /// Hub names from this client's own `hubs` configuration.
+    fn hubs(&self) -> Result<Vec<String>, ConfigureError>;
+
     /// Writes `key` in `layer`'s file from `text`, through the same path
     /// as `fiber config set`.
     fn set(

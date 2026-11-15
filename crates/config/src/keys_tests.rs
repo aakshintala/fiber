@@ -286,7 +286,6 @@ const TABBED: &[(SettingsTab, &[&str])] = &[
             "model_lists.refresh_after",
             "model_lists.models_dev",
             "model",
-            "scoped_models",
             "thinking",
             "web_search.backend",
             "providers.databricks.request_tags",
@@ -298,7 +297,6 @@ const TABBED: &[(SettingsTab, &[&str])] = &[
             "reviewer.model",
             "reviewer.block_limits.consecutive",
             "reviewer.block_limits.session",
-            "reviewer.context",
             "sandbox.enabled",
             "sandbox.allow_write",
             "sandbox.deny_read",
@@ -335,9 +333,8 @@ const TABBED: &[(SettingsTab, &[&str])] = &[
     ),
 ];
 
-/// The one plain key a screen row covers (`/skills`): it has no tab so it
-/// is drawn once.
-const COVERED_PLAIN: &str = "skills.disabled";
+/// Plain keys covered by screen rows: they have no tab so each is drawn once.
+const COVERED_PLAIN: &[&str] = &["scoped_models", "reviewer.context", "skills.disabled"];
 
 #[test]
 fn settings_metadata_text_is_complete() {
@@ -397,7 +394,9 @@ fn settings_metadata_tabs_follow_key_classification() {
             // `hub.port` is deliberately absent from Settings; other plain
             // keys must be classified above or named as covered.
             assert!(
-                key.path.contains('*') || key.path == COVERED_PLAIN || key.path == "hub.port",
+                key.path.contains('*')
+                    || COVERED_PLAIN.contains(&key.path)
+                    || key.path == "hub.port",
                 "`{}` has no tab: add it to a tab, or have a screen row cover it",
                 key.path
             );

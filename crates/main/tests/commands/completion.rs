@@ -18,6 +18,7 @@
 use crate::support;
 
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -404,6 +405,8 @@ fn shell(setup: &Setup, interpreter: &str) -> Command {
         .envs(fakes::check_run())
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("HOME", setup.root.path())
+        .env("FIBER_HOME", setup.home())
+        .env("FIBER_TEST_FAKE_KEY", "sk-test")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command
@@ -430,13 +433,14 @@ fn assert_cases(what: &str, stdout: &str, expected: &[(String, BTreeSet<String>)
     let found = cases(stdout);
     assert_eq!(found.len(), expected.len(), "{what}\n{stdout}");
     for ((case, want), got) in expected.iter().zip(&found) {
-        assert_eq!(got, want, "{what}: `{case}`");
+        assert_eq!(got, want, "{what}: `{case}`\n{stdout}");
     }
 }
 
 #[test]
 fn the_bash_script_loads_and_completes_exactly_the_commands_and_flags() {
     let setup = Setup::new();
+    install_dynamic_candidates(&setup);
     let path = setup.root.path().join("fiber.bash");
     fs::write(&path, script(&setup, "bash")).unwrap();
 
@@ -447,11 +451,28 @@ fn the_bash_script_loads_and_completes_exactly_the_commands_and_flags() {
     for (path, subcommands, flags) in GRAMMAR {
         let mut both = set(subcommands);
         both.extend(set(flags));
+        if *path == "extension remove" {
+            both.extend(set(&["example/installed", "model-extension", "fake"]));
+        }
         expected.push((line(path, ""), both));
         expected.push((line(path, "-"), set(flags)));
     }
-    // A value is not completed, not even as a file name in this directory.
-    expected.push(("fiber ask --model ".to_owned(), set(&[""])));
+    expected.extend([
+        (
+            "fiber extension remove example/".to_owned(),
+            set(&["example/installed"]),
+        ),
+        ("fiber --model model-".to_owned(), set(&["model-shell"])),
+        ("fiber ask --model ".to_owned(), set(&["m", "model-shell"])),
+        (
+            "fiber setup --model model-".to_owned(),
+            set(&["model-shell"]),
+        ),
+        ("fiber extension install path-prefix".to_owned(), set(&[])),
+        ("fiber login provider-prefix".to_owned(), set(&[])),
+        ("fiber completion b".to_owned(), set(&[])),
+        ("fiber session --model model-".to_owned(), set(&[])),
+    ]);
 
     let driver = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/completion/bash-driver.bash");
     let mut bash = shell(&setup, "bash");
@@ -471,15 +492,17 @@ fn the_bash_script_loads_and_completes_exactly_the_commands_and_flags() {
         .split_once("COMPLETE\n")
         .unwrap();
     assert_eq!(errors, "\n", "sourcing the script wrote on stderr");
-    assert!(complete.contains("-F _fiber"), "{complete}");
+    assert!(complete.contains("-F _clap_complete_fiber"), "{complete}");
     assert!(complete.trim_end().ends_with(" fiber"), "{complete}");
     assert!(!complete.contains("default"), "{complete}");
-    assert_cases("bash", &format!("CASE 1\n{rest}"), &expected);
+    let diagnostics = String::from_utf8_lossy(&output.stderr);
+    assert_cases("bash", &format!("CASE 1\n{rest}\n{diagnostics}"), &expected);
 }
 
 #[test]
 fn the_zsh_script_loads_and_completes_exactly_the_commands_and_flags() {
     let setup = Setup::new();
+    install_dynamic_candidates(&setup);
     let path = setup.root.path().join("fiber.zsh");
     fs::write(&path, script(&setup, "zsh")).unwrap();
 
@@ -487,16 +510,36 @@ fn the_zsh_script_loads_and_completes_exactly_the_commands_and_flags() {
         ("fiber ext".to_owned(), set(&["extension"])),
         ("fiber extension in".to_owned(), set(&["install"])),
     ];
-    for (path, subcommands, _) in GRAMMAR {
+    for (path, subcommands, flags) in GRAMMAR {
         if !subcommands.is_empty() {
-            expected.push((line(path, ""), set(subcommands)));
+            let mut candidates = set(subcommands);
+            candidates.extend(set(flags));
+            expected.push((line(path, ""), candidates));
         }
     }
     for (path, _, flags) in GRAMMAR {
         expected.push((line(path, "-"), set(flags)));
     }
-    // A value is not completed, not even as a file name in this directory.
-    expected.push(("fiber ask --model ".to_owned(), set(&[])));
+    expected.extend([
+        (
+            "fiber extension remove example/".to_owned(),
+            set(&["example/installed"]),
+        ),
+        ("fiber ask --model ".to_owned(), set(&["m", "model-shell"])),
+        ("fiber completion ".to_owned(), set(&["--help", "-h"])),
+        (
+            "fiber extension install ".to_owned(),
+            set(&["--project", "--help", "-h"]),
+        ),
+        (
+            "fiber login ".to_owned(),
+            set(&["--as", "--device", "--help", "-h"]),
+        ),
+        ("fiber completion b".to_owned(), set(&[])),
+        ("fiber extension install path-prefix".to_owned(), set(&[])),
+        ("fiber login provider-prefix".to_owned(), set(&[])),
+        ("fiber session --model model-".to_owned(), set(&[])),
+    ]);
 
     let driver = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/completion/zsh-driver.zsh");
     let mut zsh = shell(&setup, "zsh");
@@ -518,6 +561,7 @@ fn the_zsh_script_loads_and_completes_exactly_the_commands_and_flags() {
 #[test]
 fn the_fish_script_loads_and_completes_exactly_the_commands_and_flags() {
     let setup = Setup::new();
+    install_dynamic_candidates(&setup);
     let path = setup.root.path().join("fiber.fish");
     fs::write(&path, script(&setup, "fish")).unwrap();
 
@@ -525,17 +569,48 @@ fn the_fish_script_loads_and_completes_exactly_the_commands_and_flags() {
         ("fiber ext".to_owned(), set(&["extension"])),
         ("fiber extension in".to_owned(), set(&["install"])),
     ];
-    for (path, subcommands, _) in GRAMMAR {
+    for (path, subcommands, flags) in GRAMMAR {
         if !subcommands.is_empty() {
-            expected.push((line(path, ""), set(subcommands)));
+            let mut candidates = set(subcommands);
+            candidates.extend(set(flags));
+            expected.push((line(path, ""), candidates));
         }
     }
     for (path, _, flags) in GRAMMAR {
         expected.push((line(path, "-"), set(flags)));
     }
-    // A value is not completed, not even as a file name in this directory.
-    expected.push(("fiber ask --model ".to_owned(), set(&[])));
-    expected.push(("fiber ask ".to_owned(), set(&[])));
+    expected.extend([
+        (
+            "fiber extension remove example/".to_owned(),
+            set(&["example/installed"]),
+        ),
+        ("fiber ask --model ".to_owned(), set(&["m", "model-shell"])),
+        ("fiber completion ".to_owned(), set(&["--help", "-h"])),
+        (
+            "fiber extension install ".to_owned(),
+            set(&["--project", "--help", "-h"]),
+        ),
+        (
+            "fiber login ".to_owned(),
+            set(&["--as", "--device", "--help", "-h"]),
+        ),
+        ("fiber completion b".to_owned(), set(&[])),
+        ("fiber extension install path-prefix".to_owned(), set(&[])),
+        ("fiber login provider-prefix".to_owned(), set(&[])),
+        ("fiber session --model model-".to_owned(), set(&[])),
+        (
+            "fiber ask ".to_owned(),
+            set(&[
+                "--model",
+                "-c",
+                "--resume",
+                "--credential",
+                "--worktree",
+                "--help",
+                "-h",
+            ]),
+        ),
+    ]);
 
     let driver = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/completion/fish-driver.fish");
     let mut fish = shell(&setup, "fish");
@@ -562,34 +637,26 @@ fn the_zsh_script_is_printed_without_reading_home_or_stdin() {
     let setup = Setup::new();
     let text = script(&setup, "zsh");
     assert!(text.starts_with("#compdef fiber\n"), "{text}");
+    assert!(text.contains("FIBER_COMPLETE=\"zsh\""), "{text}");
+    assert!(text.contains(env!("CARGO_BIN_EXE_fiber")), "{text}");
 }
 
 #[test]
 fn the_bash_script_is_printed_without_reading_home_or_stdin() {
     let setup = Setup::new();
     let text = script(&setup, "bash");
-    let completes: Vec<&str> = text
-        .lines()
-        .filter(|line| line.trim_start().starts_with("complete "))
-        .collect();
-    assert_eq!(
-        completes,
-        [
-            "    complete -F _fiber -o nosort fiber",
-            "    complete -F _fiber fiber"
-        ]
-    );
+    assert!(text.contains("FIBER_COMPLETE=\"bash\""), "{text}");
+    assert!(text.contains(env!("CARGO_BIN_EXE_fiber")), "{text}");
+    assert!(text.contains("complete -o nospace -o nosort -F _clap_complete_fiber"));
+    assert!(!text.contains("bashdefault"), "{text}");
 }
 
 #[test]
 fn the_fish_script_is_printed_without_reading_home_or_stdin() {
     let setup = Setup::new();
     let text = script(&setup, "fish");
-    assert!(
-        text.contains("complete -c fiber -n \"__fish_fiber_needs_command\" -f -a \"extension\""),
-        "{text}"
-    );
-    assert!(text.ends_with("\ncomplete -c fiber -f\n"), "{text}");
+    assert!(text.contains("FIBER_COMPLETE=fish"), "{text}");
+    assert!(text.contains(env!("CARGO_BIN_EXE_fiber")), "{text}");
 }
 
 #[test]
@@ -606,6 +673,401 @@ fn an_unknown_shell_is_a_usage_error_naming_the_nearest() {
         String::from_utf8_lossy(&output.stderr),
         "fiber: Invalid value 'bsh' for '<shell>' [possible values: bash, zsh, fish]; did you mean 'bash'? Run `fiber --help` for usage.\n"
     );
+}
+
+#[test]
+fn an_unusable_probe_value_runs_ordinarily() {
+    let setup = Setup::new();
+    let mut command = fiber(&setup, &["--version"]);
+    command.env("FIBER_COMPLETE", "1");
+    let output = run_bounded(
+        "FIBER_COMPLETE=1 fiber --version",
+        command,
+        setup.root.path(),
+    );
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("fiber "));
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn extension_remove_completes_installed_names() {
+    let setup = Setup::without_provider();
+    for (dir, name) in [("a", "example/alpha"), ("b", "example/beta")] {
+        let extension = setup.home().join("extensions").join(dir);
+        fs::create_dir_all(&extension).unwrap();
+        fs::write(
+            extension.join(".fiber.json"),
+            serde_json::json!({
+                "name": name,
+                "version": "1.0.0",
+                "requested": true,
+                "source": { "path": "/test" }
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+    let mut command = setup.fiber(&["--", "fiber", "extension", "remove", "example/"]);
+    command
+        .env("FIBER_COMPLETE", "bash")
+        .env("_CLAP_COMPLETE_INDEX", "3");
+    let output = run_bounded(
+        "FIBER_COMPLETE=bash fiber -- fiber extension remove example/<Tab>",
+        command,
+        setup.root.path(),
+    );
+    assert_eq!(output.status.code(), Some(0));
+    // Completion order is not significant, so the probe compares the
+    // candidate set.
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|line| line.to_owned())
+            .collect::<BTreeSet<_>>(),
+        set(&["example/alpha", "example/beta"])
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn invalid_fiber_home_values_make_dynamic_candidates_empty() {
+    let setup = Setup::new();
+    let home_file = setup.root.path().join("home-is-a-file");
+    fs::write(&home_file, "not a directory").unwrap();
+    let file_path = home_file.as_os_str();
+
+    for (name, fiber_home, home) in [
+        ("file", Some(file_path), Some(setup.root.path())),
+        (
+            "relative",
+            Some(OsStr::new("relative-home")),
+            Some(setup.root.path()),
+        ),
+        ("empty", Some(OsStr::new("")), Some(setup.root.path())),
+    ] {
+        assert!(
+            probe_candidates_with_home(
+                &setup,
+                &["--", "fiber", "extension", "remove", "example/"],
+                "3",
+                fiber_home,
+                home,
+                name,
+            )
+            .is_empty(),
+            "extension candidates with {name} FIBER_HOME"
+        );
+        assert!(
+            probe_candidates_with_home(
+                &setup,
+                &["--", "fiber", "--model", "model-"],
+                "2",
+                fiber_home,
+                home,
+                name,
+            )
+            .is_empty(),
+            "model candidates with {name} FIBER_HOME"
+        );
+    }
+
+    for (label, args, index) in [
+        (
+            "extension candidates without HOME",
+            &["--", "fiber", "extension", "remove", "example/"][..],
+            "3",
+        ),
+        (
+            "model candidates without HOME",
+            &["--", "fiber", "--model", "model-"][..],
+            "2",
+        ),
+    ] {
+        assert!(
+            probe_candidates_with_home(&setup, args, index, None, None, label).is_empty(),
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn extension_remove_with_no_installed_extensions_completes_nothing() {
+    let setup = Setup::without_provider();
+    fs::write(setup.root.path().join("a-file"), "").unwrap();
+    let candidates = probe_candidates(
+        &setup,
+        &["--", "fiber", "extension", "remove", ""],
+        "3",
+        "extension remove with no installed extensions",
+    );
+    assert!(
+        candidates
+            .iter()
+            .all(|candidate| candidate.starts_with('-')),
+        "expected no extension names or file names, got {candidates:?}"
+    );
+}
+
+#[test]
+fn model_values_complete_only_unique_switched_on_ids_on_visible_args() {
+    let setup = Setup::without_provider();
+    install_cached_provider(
+        &setup.home(),
+        "alpha-extension",
+        "alpha",
+        &["model-unique", "model-shared"],
+        true,
+    );
+    install_cached_provider(
+        &setup.home(),
+        "beta-extension",
+        "beta",
+        &["model-second", "model-shared"],
+        true,
+    );
+    install_cached_provider(
+        &setup.home(),
+        "offline-extension",
+        "offline",
+        &["model-offline"],
+        false,
+    );
+
+    for (path, args, index) in [
+        ("root", &["--", "fiber", "--model", "model-"][..], "2"),
+        ("ask", &["--", "fiber", "ask", "--model", "model-"][..], "3"),
+        (
+            "setup",
+            &["--", "fiber", "setup", "--model", "model-"][..],
+            "3",
+        ),
+    ] {
+        // Completion order is not significant, so each probe compares the
+        // candidate set.
+        assert_eq!(
+            probe_candidates(&setup, args, index, path)
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            set(&["model-second", "model-unique"]),
+            "{path} --model"
+        );
+    }
+    assert!(
+        probe_candidates(
+            &setup,
+            &["--", "fiber", "--model", "model-shared"],
+            "2",
+            "shared model id"
+        )
+        .is_empty()
+    );
+    assert!(
+        probe_candidates(
+            &setup,
+            &["--", "fiber", "ask", "--model", "model-offline"],
+            "3",
+            "logged-out model id"
+        )
+        .is_empty()
+    );
+    assert!(
+        probe_candidates(
+            &setup,
+            &["--", "fiber", "session", "--model", "model-"],
+            "3",
+            "hidden session --model"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn other_name_values_do_not_complete_installed_extensions() {
+    let setup = Setup::without_provider();
+    let extension = setup.home().join("extensions/installed");
+    fs::create_dir_all(&extension).unwrap();
+    fs::write(
+        extension.join(".fiber.json"),
+        serde_json::json!({
+            "name": "example/installed",
+            "version": "1.0.0",
+            "requested": true,
+            "source": { "path": "/test" }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    // Only `extension remove` completes installed names: the `update` and
+    // `reinstall` name values stay empty even with an install present.
+    for (label, args) in [
+        (
+            "update",
+            &["--", "fiber", "extension", "update", "example/"][..],
+        ),
+        (
+            "reinstall",
+            &["--", "fiber", "extension", "reinstall", "example/"][..],
+        ),
+    ] {
+        assert!(
+            probe_candidates(&setup, args, "3", label).is_empty(),
+            "{label} must not complete installed extensions"
+        );
+    }
+}
+
+#[test]
+fn login_values_complete_nothing() {
+    let setup = Setup::without_provider();
+    // A login value completes no provider names. This probe reads only the
+    // engine's candidates; file-name fallback is shell-side, pinned by
+    // `assert!(!complete.contains("default"))` in the bash load test.
+    assert!(
+        probe_candidates(
+            &setup,
+            &["--", "fiber", "login", "provider-prefix"],
+            "2",
+            "login value"
+        )
+        .is_empty(),
+        "login offered a candidate instead of nothing"
+    );
+}
+
+fn install_dynamic_candidates(setup: &Setup) {
+    let home = setup.home();
+    let extension = home.join("extensions/installed");
+    fs::create_dir_all(&extension).unwrap();
+    fs::write(
+        extension.join(".fiber.json"),
+        serde_json::json!({
+            "name": "example/installed",
+            "version": "1.0.0",
+            "requested": true,
+            "source": { "path": "/test" }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        extension.join("extension.json"),
+        serde_json::json!({
+            "name": "example/installed",
+            "version": "1.0.0",
+            "fiber": "0.0.0",
+            "api": 1,
+            "providers": {}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    install_cached_provider(&home, "model-extension", "models", &["model-shell"], true);
+}
+
+fn install_cached_provider(
+    home: &Path,
+    extension: &str,
+    provider: &str,
+    model_ids: &[&str],
+    logged_in: bool,
+) {
+    let url = "https://example.test/v1";
+    let directory = home.join("extensions").join(extension);
+    fs::create_dir_all(directory.join("providers")).unwrap();
+    fs::write(
+        directory.join(".fiber.json"),
+        serde_json::json!({
+            "name": extension,
+            "version": "1.0.0",
+            "requested": true,
+            "source": { "path": "/test" }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        directory.join("extension.json"),
+        serde_json::json!({
+            "name": extension,
+            "version": "1.0.0",
+            "fiber": "0.0.0",
+            "api": 1,
+            "providers": { provider: [url] }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        directory.join("providers").join(format!("{provider}.json")),
+        serde_json::json!({"name": provider, "models": []}).to_string(),
+    )
+    .unwrap();
+    config::write_model_cache(
+        home,
+        provider,
+        &serde_json::json!(
+            model_ids
+                .iter()
+                .map(|id| {
+                    serde_json::json!({
+                        "id": id,
+                        "protocol": "openai-responses",
+                        "base_url": url,
+                        "context_window": 100000
+                    })
+                })
+                .collect::<Vec<_>>()
+        ),
+    )
+    .unwrap();
+    if logged_in {
+        let credential = home.join("credentials").join(provider).join("default");
+        fs::create_dir_all(credential.parent().unwrap()).unwrap();
+        fs::write(credential, "stored credential").unwrap();
+    }
+}
+
+fn probe_candidates(setup: &Setup, args: &[&str], index: &str, label: &str) -> Vec<String> {
+    probe_candidates_with_home(
+        setup,
+        args,
+        index,
+        Some(setup.home().as_os_str()),
+        Some(setup.root.path()),
+        label,
+    )
+}
+
+fn probe_candidates_with_home(
+    setup: &Setup,
+    args: &[&str],
+    index: &str,
+    fiber_home: Option<&OsStr>,
+    home: Option<&Path>,
+    label: &str,
+) -> Vec<String> {
+    let mut command = setup.fiber(args);
+    command
+        .env("FIBER_COMPLETE", "bash")
+        .env("_CLAP_COMPLETE_INDEX", index);
+    if let Some(fiber_home) = fiber_home {
+        command.env("FIBER_HOME", fiber_home);
+    } else {
+        command.env_remove("FIBER_HOME");
+    }
+    if let Some(home) = home {
+        command.env("HOME", home);
+    } else {
+        command.env_remove("HOME");
+    }
+    let output = run_bounded(label, command, setup.root.path());
+    assert_eq!(output.status.code(), Some(0), "{label}");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "", "{label}");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect()
 }
 
 #[test]

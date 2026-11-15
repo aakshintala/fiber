@@ -242,6 +242,7 @@ fn catalog_fetch(
 /// without the picker's entries.
 struct Listed {
     models: Vec<String>,
+    entries: Vec<config::ModelData>,
     notices: Vec<Notice>,
 }
 
@@ -250,15 +251,21 @@ struct Listed {
 /// entries make.
 fn listed((providers, _config, notices): (Providers, Config, Vec<Notice>)) -> Listed {
     let mut models = Vec::new();
+    let mut entries = Vec::new();
     for name in providers.names() {
         let Some(data) = providers.get(name) else {
             continue;
         };
         for model in &data.models {
             models.push(format!("{name}/{}", model.id));
+            entries.push(model.clone());
         }
     }
-    Listed { models, notices }
+    Listed {
+        models,
+        entries,
+        notices,
+    }
 }
 
 fn references(listed: &Listed) -> Vec<&str> {
@@ -700,6 +707,40 @@ fn every_refreshes_whatever_the_cache_holds() {
 }
 
 #[test]
+fn a_refreshed_vendor_only_model_keeps_cautious_values() {
+    let setup = Setup::new("fiber-model-list-vendor-only");
+    let response = fakes::Response::status(200, json!({"data":[{"id":"vendor-only"}]}).to_string());
+    let server = fakes::ProviderServer::start_with_fallback([response.clone()], response).unwrap();
+    setup.install_lua(
+        "acme-ext",
+        &server_models(&server.url()),
+        &json!({"acme": [format!("{}/v1", server.url())]}),
+    );
+    let provider_file = setup.home().join("extensions/acme-ext/providers/acme.json");
+    std::fs::write(
+        &provider_file,
+        json!({"name":"acme", "models":[], "models_dev":{"source":"acme"}}).to_string(),
+    )
+    .unwrap();
+    let clock = Arc::new(fakes::clock::FakeClock::new());
+
+    let catalogue = bounded(&setup, &clock, ModelLists::Refresh { check_age: false }).unwrap();
+    assert_eq!(
+        references(&catalogue),
+        ["acme/vendor-only"],
+        "notices: {:?}",
+        catalogue.notices
+    );
+    let model = catalogue.entries.first().unwrap();
+    assert!(model.is_new);
+    assert_eq!(model.input, ["text"]);
+    assert!(model.thinking_levels.is_empty());
+    assert_eq!(model.context_window, Some(128_000));
+    assert_eq!(model.max_output_tokens, Some(8_192));
+    assert!(model.cost.is_none());
+}
+
+#[test]
 fn a_failed_refresh_is_a_notice_and_the_cached_list_stays() {
     let setup = Setup::new("fiber-model-list-failed");
     // The script holds one answer: the refresh past it fails.
@@ -789,7 +830,12 @@ fn a_provider_with_a_data_file_is_not_listed_twice() {
 #[test]
 fn a_held_providers_cached_invalid_model_is_not_reported_twice() {
     let setup = Setup::new("fiber-model-list-cached-invalid");
-    setup.install_data("acme-ext", "acme", &["m1"], &json!({}));
+    setup.install_data(
+        "acme-ext",
+        "acme",
+        &["m1"],
+        &json!({"context_window": null}),
+    );
     config::write_model_cache(
         &setup.home(),
         "acme",
@@ -816,15 +862,10 @@ fn a_held_providers_cached_invalid_model_is_not_reported_twice() {
     assert!(catalogue.models.is_empty());
     // The load reports each `model_invalid` once per reason
     // (`docs/model-routing.md`, "Model discovery").
-    assert!(
-        catalogue
-            .notices
-            .iter()
-            .any(|notice| notice.message.contains("acme/m1")
-                && notice.message.contains("context_window")),
-        "{:?}",
-        catalogue.notices
-    );
+    assert_eq!(catalogue.notices.len(), 1, "{:?}", catalogue.notices);
+    assert!(catalogue.notices[0].message.contains("acme/m1"));
+    assert!(catalogue.notices[0].message.contains("context_window"));
+    assert_eq!(catalogue.notices[0].code, ErrorCode::ModelInvalid);
 }
 
 #[test]
@@ -1279,11 +1320,7 @@ fn model_lists_apart_returns_the_placeholder_notices_beside_the_others() {
     );
     let setup = Setup::new("fiber-model-list-apart");
     install_placeholder(&setup, "acme-ext", "acme", HUB_ENV_HOST);
-    // A cached model with no context window: a `model_invalid` notice
-    // from the cached admission, before the placeholder fill.
-    // The load reports each `model_invalid` once per reason
-    // (`docs/model-routing.md`, "Model discovery").
-    setup.install_data("bad-ext", "bad", &["m1"], &json!({}));
+    setup.install_data("bad-ext", "bad", &["m1"], &json!({"context_window": null}));
     config::write_model_cache(
         &setup.home(),
         "bad",
@@ -1308,8 +1345,6 @@ fn model_lists_apart_returns_the_placeholder_notices_beside_the_others() {
         .unwrap()
     };
     let (_providers, _config, others, unconfigured) = read();
-    // The load reports each `model_invalid` once per reason
-    // (`docs/model-routing.md`, "Model discovery").
     assert_eq!(others.len(), 1, "{others:?}");
     assert!(others[0].message.contains("bad/m1"), "{others:?}");
     assert!(others[0].message.contains("context_window"), "{others:?}");
@@ -1651,10 +1686,7 @@ fn a_lookup_with_no_search_lists_only_credentialed_providers() {
     setup.install_data("acme-ext", "acme", &["m1"], &json!({}));
     setup.install_data("bare-ext", "bare", &["b1"], &json!({}));
     config::delete_credential(&setup.home(), "bare", "default").unwrap();
-    // An invalid cached model stays a notice beside the listed rows.
-    // The load reports each `model_invalid` once per reason
-    // (`docs/model-routing.md`, "Model discovery").
-    setup.install_data("bad-ext", "bad", &["m1"], &json!({}));
+    setup.install_data("bad-ext", "bad", &["m1"], &json!({"context_window": null}));
     config::write_model_cache(
         &setup.home(),
         "bad",
@@ -1668,10 +1700,9 @@ fn a_lookup_with_no_search_lists_only_credentialed_providers() {
     .unwrap();
     let catalogue = cached_list(&setup);
     assert_eq!(references(&catalogue), ["acme/m1"]);
-    // The load reports each `model_invalid` once per reason
-    // (`docs/model-routing.md`, "Model discovery").
     assert_eq!(catalogue.notices.len(), 1, "{:?}", catalogue.notices);
     assert!(catalogue.notices[0].message.contains("bad/m1"));
+    assert_eq!(catalogue.notices[0].code, ErrorCode::ModelInvalid);
 }
 
 #[test]

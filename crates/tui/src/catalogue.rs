@@ -67,6 +67,8 @@ pub struct ModelEntry {
     pub configured: Option<String>,
     /// The role names marking this model.
     pub roles: Vec<String>,
+    /// Whether vendor discovery found no metadata source for this model.
+    pub is_new: bool,
     /// The model's prices, when its provider data names a cost.
     pub price: Option<Price>,
 }

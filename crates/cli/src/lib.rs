@@ -191,7 +191,7 @@ pub use login::{
 pub use mcp::{DeclaredServer, McpDeclaration, declared_servers, mcp_add, mcp_list, mcp_remove};
 pub use mcp_login::{login_target, mcp_login, mcp_logout};
 pub use model_lists::{ModelLists, ModelListsError, model_lists, model_lists_grouped, roles_of};
-pub use models::{models, refresh_model_lists};
+pub use models::{models, providers_and_config, refresh_model_lists};
 pub use prune::{
     HubDelete, HubPruneRemoved, HubPruneSelection, HubPruneSession, HubPruneWant, format_size,
     remove_for_hub, select_for_hub,
@@ -248,16 +248,21 @@ fn finish<E: Into<CliError>>(result: Result<(), E>) -> i32 {
 fn finish_code<E: Into<CliError>>(result: Result<i32, E>) -> i32 {
     match result.map_err(Into::into) {
         Ok(code) => code,
-        Err(error) => {
-            if let CliError::StandardOutput(source) | CliError::DoctorReport(source) = &error {
-                match doors::stdout_write_exit_code(source) {
-                    0 => 0,
-                    _ => fail(error.into()),
-                }
-            } else {
-                fail(error.into())
+        Err(CliError::StandardOutput(source)) => match doors::stdout_write_outcome(source) {
+            Ok(()) => 0,
+            Err(doors::SessionError::StdoutFailed { source }) => {
+                fail(CliError::StandardOutput(source).into())
             }
-        }
+            Err(error) => fail(error.into()),
+        },
+        Err(CliError::DoctorReport(source)) => match doors::stdout_write_outcome(source) {
+            Ok(()) => 0,
+            Err(doors::SessionError::StdoutFailed { source }) => {
+                fail(CliError::DoctorReport(source).into())
+            }
+            Err(error) => fail(error.into()),
+        },
+        Err(error) => fail(error.into()),
     }
 }
 
