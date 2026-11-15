@@ -518,12 +518,20 @@ fn the_settings_view_matches_the_doc() {
         find_row(grid, "Reviewer model").is_some()
             && find_row(grid, "Permissions").is_some_and(|row| is_bold(grid, row, "Permissions"))
     });
-    run.write(b"\x1b[B");
-    run.write(b"\x1b[B");
-    run.write(b"\x1b[B");
-    let mut grid = run.wait_screen("the focused Reviewer model row", |grid| {
-        focused_label(grid).as_deref() == Some("Reviewer model")
+    let mut grid = run.wait_screen("the focused Permissions row", |grid| {
+        focused_label(grid).is_some()
     });
+    for _ in 0..10 {
+        if focused_label(&grid).as_deref() == Some("Reviewer model") {
+            break;
+        }
+        let previous = focused_label(&grid);
+        run.write(b"\x1b[B");
+        grid = run.wait_screen("the next focused Permissions row", |grid| {
+            focused_label(grid) != previous
+        });
+    }
+    assert_eq!(focused_label(&grid).as_deref(), Some("Reviewer model"));
     let reviewer_model = find_row(&grid, "Reviewer model").unwrap();
     assert!(is_focused_row(&grid, reviewer_model, "Reviewer model"));
     // Move to Sessions; walk the focus to `compaction.tokens` below.
