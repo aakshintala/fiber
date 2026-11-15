@@ -1032,7 +1032,7 @@ fn process_host_tool_model_delegate_live_and_sealed() {
     session.deliver_event(&drain_event, &drain);
     let watcher_delegate = read_marker(&markers.join("watch-delegate.json"));
     assert_eq!(watcher_delegate["kind"], "command_rejected");
-    assert_eq!(watcher_delegate["payload"]["code"], "invalid_arguments");
+    assert_eq!(watcher_delegate["payload"]["code"], "not_available");
     assert_eq!(
         watcher_delegate["payload"]["message"],
         "host.delegate: not available here"
