@@ -5,8 +5,9 @@
 //! refused `session_held`; resuming an archived session unarchives it,
 //! since the marker only counts past the last `fiber_started`.
 
+use std::collections::BTreeSet;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, TryLockError};
 
 use contract::clock::wall_ms;
 use contract::events::{Empty, Event};
@@ -19,6 +20,111 @@ use crate::feed::{Forgotten, invalid};
 use crate::recent::{self, Left, RecentRow};
 use crate::relay::valid_session_id;
 use crate::resume::not_found;
+
+/// Tries the archive path for a listing candidate without waiting for
+/// either lock. An empty set leaves it eligible for a later listing.
+fn try_archive(hub: &Hub, candidate: &RecentRow, snapshot: &[RecentRow]) -> Vec<RecentRow> {
+    let _gate = match hub.resume_gate.try_lock() {
+        Ok(guard) => guard,
+        Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(TryLockError::WouldBlock) => return Vec::new(),
+    };
+    let _recent = match hub.feed.recent_mutation().try_lock() {
+        Ok(guard) => guard,
+        Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(TryLockError::WouldBlock) => return Vec::new(),
+    };
+    let mut visited = BTreeSet::new();
+    let mut archived = Vec::new();
+    if archive_tree(hub, candidate, snapshot, &mut visited, &mut archived).is_err() {
+        archived.clear();
+    }
+    archived
+}
+
+/// Tries an unarchived listing candidate and updates the loaded order with
+/// every row appended by that attempt.
+pub(crate) fn try_archive_into_snapshot(
+    hub: &Hub,
+    candidate: &RecentRow,
+    snapshot: &mut Vec<RecentRow>,
+) {
+    if !snapshot
+        .iter()
+        .any(|row| row.session_id == candidate.session_id && !row.archived)
+    {
+        return;
+    }
+    for row in try_archive(hub, candidate, snapshot) {
+        snapshot.retain(|existing| existing.session_id != row.session_id);
+        snapshot.insert(0, row);
+    }
+}
+
+/// Archives a candidate and its exited delegate descendants from the same
+/// loaded index snapshot. Both serialization guards are held by the caller.
+fn archive_tree(
+    hub: &Hub,
+    candidate: &RecentRow,
+    snapshot: &[RecentRow],
+    visited: &mut BTreeSet<SessionId>,
+    archived: &mut Vec<RecentRow>,
+) -> Result<(), Refused> {
+    let session = &candidate.session_id;
+    if !visited.insert(session.clone()) {
+        return Ok(());
+    }
+    if archive_one(hub, candidate)? {
+        archived.push(marked(candidate.clone()));
+    }
+    for child in snapshot.iter().filter(|row| {
+        row.how == Left::Exited
+            && row
+                .status
+                .as_ref()
+                .and_then(|status| status.parent.as_ref())
+                == Some(session)
+    }) {
+        if archive_tree(hub, child, snapshot, visited, archived).is_err() {
+            continue;
+        }
+    }
+    Ok(())
+}
+
+/// Applies the normal archive event and index effects to one already loaded
+/// recent row. Both serialization guards are held by the caller.
+fn archive_one(hub: &Hub, candidate: &RecentRow) -> Result<bool, Refused> {
+    let session = &candidate.session_id;
+    let Some((project, dir)) = recent::lookup_logged(&hub.home, session) else {
+        return Err(not_found(session));
+    };
+    if !log::is_plain_dir(&dir) {
+        return Err(not_found(session));
+    }
+    if hub.feed.live().iter().any(|(id, _)| id == &session.0) {
+        return Err(held(session));
+    }
+    let sessions = dir.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
+    let log = match log::Log::open(&sessions, session.clone(), Arc::clone(&hub.clock)) {
+        Ok(log) => log,
+        Err(log::Error::Held { .. }) => return Err(held(session)),
+        Err(log::Error::NotFound(_)) => return Err(not_found(session)),
+        Err(error) => return Err(io_failed(session, &error)),
+    };
+    let already_archived = log::is_archived(&dir);
+    if already_archived && candidate.archived {
+        return Ok(false);
+    }
+    if !already_archived {
+        log.append(&Event::Archived(Empty {}), None, None)
+            .map_err(|error| io_failed(session, &error))?;
+    }
+    let row = marked(candidate.clone());
+    recent::append(&hub.home, &row).map_err(|error| io_failed(session, &error))?;
+    hub.feed.forget(&session.0, &project, Forgotten::Archived);
+    Ok(true)
+}
 
 /// `archive`: appends `archived` to `session`'s log and re-appends its
 /// derived row with `archived` true. Accepted with no result, once both
@@ -70,6 +176,8 @@ pub(crate) fn archive(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Val
             recent::append(&hub.home, &row).map_err(|error| io_failed(&session, &error))?;
         }
         hub.feed.forget(&session.0, &project, Forgotten::Archived);
+        let rows = recent::newest_first(recent::read_all(&hub.home));
+        cascade_descendants(hub, &session, &rows);
         return Ok(None);
     }
     log.append(&Event::Archived(Empty {}), None, None)
@@ -82,7 +190,28 @@ pub(crate) fn archive(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Val
     // append refuses without rolling back the log's event.
     recent::append(&hub.home, &row).map_err(|error| io_failed(&session, &error))?;
     hub.feed.forget(&session.0, &project, Forgotten::Archived);
+    let rows = recent::newest_first(recent::read_all(&hub.home));
+    cascade_descendants(hub, &session, &rows);
     Ok(None)
+}
+
+/// Archives exited delegates under an already archived parent; failures for
+/// individual delegates leave them eligible for a later archive attempt.
+fn cascade_descendants(hub: &Hub, parent: &SessionId, rows: &[RecentRow]) {
+    let mut visited = BTreeSet::from([parent.clone()]);
+    let mut archived = Vec::new();
+    for child in rows.iter().filter(|row| {
+        row.how == Left::Exited
+            && row
+                .status
+                .as_ref()
+                .and_then(|status| status.parent.as_ref())
+                == Some(parent)
+    }) {
+        if archive_tree(hub, child, rows, &mut visited, &mut archived).is_err() {
+            continue;
+        }
+    }
 }
 
 /// `session` (a minted id) and nothing else; `None` for any other shape.

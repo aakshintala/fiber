@@ -386,8 +386,7 @@ pub const KEYS: &[Key] = &[
         StrList,
         YES,
         None,
-        tabbed(
-            SettingsTab::Models,
+        untabbed(
             "Scoped models",
             "The models the model picker shows; none means every installed model.",
         ),
@@ -418,8 +417,7 @@ pub const KEYS: &[Key] = &[
         CountBelow(65536),
         NO,
         None,
-        tabbed(
-            SettingsTab::Advanced,
+        untabbed(
             "Hub port",
             "The 127.0.0.1 port an installed hub listens on besides its local socket; unset means the local socket only.",
         ),
@@ -465,6 +463,17 @@ pub const KEYS: &[Key] = &[
             SettingsTab::Advanced,
             "Session idle exit",
             "Milliseconds a session stays running with no turn, no jobs and no cache warming.",
+        ),
+    ),
+    key(
+        "session.keep_exited",
+        Count,
+        NO,
+        Some("10"),
+        tabbed(
+            SettingsTab::Advanced,
+            "Keep exited sessions",
+            "How many exited sessions each project keeps on home before the hub archives the older ones; 0 keeps them all.",
         ),
     ),
     key(
@@ -1177,8 +1186,7 @@ pub const KEYS: &[Key] = &[
     person_files(
         "reviewer.context",
         Str,
-        tabbed(
-            SettingsTab::Permissions,
+        untabbed(
             "Reviewer context",
             "Notes about your environment, in prose, that the reviewer reads after its fixed instructions.",
         ),

@@ -286,7 +286,7 @@ fn stage_answer(calls: u64) -> Reply {
     if calls.is_multiple_of(2) {
         fakes::reply("check")
     } else {
-        fakes::reply("allow: fine")
+        fakes::reply("fine\nallow")
     }
 }
 
@@ -1620,24 +1620,25 @@ pub(crate) fn run_sampled(
     })
 }
 
-/// The committed synthetic fixture roots `run_synthetic` converts: one
-/// session per `reviewer_consent/` directory plus the single
+/// The committed synthetic fixture roots `run_synthetic` converts: the
+/// `reviewer_consent/` directory, the `reviewer_eval/` root and the single
 /// `review_person_input/` session.
-fn synthetic_fixture_roots() -> (PathBuf, PathBuf) {
+fn synthetic_fixture_roots() -> (PathBuf, PathBuf, PathBuf) {
     let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     (
         fixtures.join("reviewer_consent"),
         fixtures.join("review_person_input"),
+        fixtures.join("reviewer_eval"),
     )
 }
 
-/// The committed `reviewer_consent/` sessions `run_synthetic` converts, in
-/// recipe order: only a directory carrying one of these names converts, so
-/// an untracked directory placed beside them is rejected instead of
-/// emitting its calls raw — the converter scrubs with an empty (identity)
-/// context and skips every drop class, which is safe only for these
+/// The committed synthetic sessions `run_synthetic` converts, in recipe
+/// order: only a named consent session under `reviewer_consent/` or the one
+/// named reviewer-eval case under `reviewer_eval/` converts. Other dirs are
+/// rejected instead of emitting calls raw — the converter uses an empty
+/// (identity) scrub context and skips every drop class, safe only for these
 /// fixtures.
-pub(crate) const COMMITTED_SYNTHETIC_SESSIONS: [&str; 24] = [
+pub(crate) const COMMITTED_SYNTHETIC_SESSIONS: [&str; 25] = [
     "control-1-credentialed-probe",
     "control-2-key-material-copy",
     "control-3-delete-outside-workspace",
@@ -1645,6 +1646,7 @@ pub(crate) const COMMITTED_SYNTHETIC_SESSIONS: [&str; 24] = [
     "control-5-approval-claim",
     "control-6-privileged-system-install",
     "control-7-guard-override-install",
+    "contradictory-consent",
     "field-1-typed-restart-and-run",
     "field-2-picked-run-label",
     "field-3-named-branch-push",
@@ -1664,16 +1666,16 @@ pub(crate) const COMMITTED_SYNTHETIC_SESSIONS: [&str; 24] = [
     "shape-9-send-quotes-reviewer-refusal",
 ];
 
-/// Whether `name` is one of the committed synthetic consent sessions.
+/// Whether `name` is one of the committed synthetic session names.
 pub(crate) fn is_committed_synthetic_session(name: &str) -> bool {
     COMMITTED_SYNTHETIC_SESSIONS.contains(&name)
 }
 
 /// Resolves a `--synthetic` dir to its committed fixture directory,
 /// rejecting anything else with an error naming the dir: only the named
-/// committed `reviewer_consent/` sessions and the `review_person_input/`
-/// session convert, so no owner directory or environment value reaches the
-/// converter through a flag.
+/// committed consent sessions, the `review_person_input/` session and the
+/// single reviewer-eval case convert, so no owner directory or environment
+/// value reaches the converter through a flag.
 fn check_synthetic_dir(dir: &Path) -> Result<PathBuf, String> {
     let reject = || {
         format!(
@@ -1682,16 +1684,28 @@ fn check_synthetic_dir(dir: &Path) -> Result<PathBuf, String> {
         )
     };
     let candidate = dir.canonicalize().map_err(|_| reject())?;
-    let (consent, person_input) = synthetic_fixture_roots();
+    let (consent, person_input, reviewer_eval) = synthetic_fixture_roots();
     let consent = consent.canonicalize().map_err(|_| reject())?;
     let person_input = person_input.canonicalize().map_err(|_| reject())?;
+    let reviewer_eval = reviewer_eval.canonicalize().map_err(|_| reject())?;
     if candidate == person_input {
         return Ok(candidate);
     }
-    let named = candidate
-        .file_name()
-        .is_some_and(|name| is_committed_synthetic_session(&name.to_string_lossy()));
-    if candidate.is_dir() && named && candidate.parent().is_some_and(|parent| parent == consent) {
+    let name = candidate.file_name().map(|name| name.to_string_lossy());
+    if candidate.is_dir()
+        && name.as_deref() == Some("contradictory-consent")
+        && candidate
+            .parent()
+            .is_some_and(|parent| parent == reviewer_eval)
+    {
+        return Ok(candidate);
+    }
+    let named = name.as_deref().is_some_and(is_committed_synthetic_session);
+    if candidate.is_dir()
+        && named
+        && name.as_deref() != Some("contradictory-consent")
+        && candidate.parent().is_some_and(|parent| parent == consent)
+    {
         return Ok(candidate);
     }
     Err(reject())

@@ -96,10 +96,24 @@ fn configure_reads_the_idle_exit() {
         configure(&home, Ok(workspace)).unwrap(),
         hub::Settings {
             idle_exit: Duration::from_millis(200),
+            keep_exited: 10,
             level: log::diag::Level::Info,
             port: None,
         }
     );
+}
+
+#[test]
+fn configure_reads_the_exited_session_retention_count() {
+    let root = fakes::TempDir::new("hcfg");
+    let (home, workspace) = home_and_workspace(&root);
+    std::fs::write(
+        home.join("config.json"),
+        r#"{"session": {"keep_exited": 3}}"#,
+    )
+    .unwrap();
+    // `docs/configuration.md`, "Keys": the configured count reaches the hub.
+    assert_eq!(configure(&home, Ok(workspace)).unwrap().keep_exited, 3);
 }
 
 #[test]

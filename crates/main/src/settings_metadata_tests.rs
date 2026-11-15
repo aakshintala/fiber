@@ -30,7 +30,7 @@ fn plain_keys_have_a_tab_unless_a_screen_covers_them() {
     let covered = covered();
     for key in SETTINGS_SCHEMA {
         let path = key.path;
-        let want_tab = !path.contains('*') && !covered.contains(&path);
+        let want_tab = path != "hub.port" && !path.contains('*') && !covered.contains(&path);
         assert_eq!(
             key.metadata.tab.is_some(),
             want_tab,
@@ -68,7 +68,14 @@ fn screen_coverage_is_exact_and_disjoint() {
             path.starts_with("tools.*.")
                 || path.starts_with("mcp.servers.*.")
                 || path.starts_with("extensions.*.tools.")
-                || ["keys.*", "providers.*.credential", "skills.disabled"].contains(path)
+                || [
+                    "keys.*",
+                    "providers.*.credential",
+                    "reviewer.context",
+                    "scoped_models",
+                    "skills.disabled",
+                ]
+                .contains(path)
         })
         .collect();
     let mut got = covered();

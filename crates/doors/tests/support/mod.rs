@@ -152,7 +152,7 @@ impl Opened {
         } = self;
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            session.close(log);
+            session.close(log).unwrap_or(());
             if let Ok(()) = tx.send(()) {}
         });
         Deadline::after(DEADLINE).recv(&rx).expect("close returned");
@@ -166,7 +166,7 @@ impl Opened {
 pub(crate) fn close_within(session: Session, log: Arc<Log>) {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        session.close(log);
+        session.close(log).unwrap_or(());
         if let Ok(()) = tx.send(()) {}
     });
     Deadline::after(DEADLINE).recv(&rx).expect("close returned");

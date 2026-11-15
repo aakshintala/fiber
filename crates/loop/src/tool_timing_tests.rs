@@ -3493,7 +3493,7 @@ fn a_check_then_second_allow_times_two_reviewer_records() {
     let tool = Arc::new(ProbeTool::executes("atlas", "atlas run"));
     let mut setup = Setup::new(Arc::clone(&rules));
     setup.tools.push(Arc::clone(&tool));
-    setup.reviewer_script = Some(vec![review_text("check", 3), review_text("allow: fine", 5)]);
+    setup.reviewer_script = Some(vec![review_text("check", 3), review_text("fine\nallow", 5)]);
     let home = fakes::TempDir::new("fiber-tool-timing");
     let mut world = build(
         &setup,
@@ -3741,7 +3741,7 @@ fn a_budget_reached_between_stages_times_only_the_first() {
         cache_write: None,
         tiers: Vec::new(),
     });
-    setup.reviewer_script = Some(vec![review_text("check", 0), review_text("allow: fine", 0)]);
+    setup.reviewer_script = Some(vec![review_text("check", 0), review_text("fine\nallow", 0)]);
     let home = fakes::TempDir::new("fiber-tool-timing");
     let mut world = build(
         &setup,
@@ -3854,7 +3854,7 @@ fn an_escalated_block_splits_stage_and_wait_durations() {
     let mut setup = Setup::new(Arc::clone(&rules));
     setup.tools.push(Arc::clone(&tool));
     setup.reviewer_limits = Some((1, 20));
-    setup.reviewer_script = Some(vec![review_text("check", 3), review_text("block: nope", 3)]);
+    setup.reviewer_script = Some(vec![review_text("check", 3), review_text("nope\nblock", 3)]);
     let home = fakes::TempDir::new("fiber-tool-timing");
     let mut world = build(
         &setup,
@@ -6098,7 +6098,7 @@ fn an_idle_unwind_commits_the_cursor_past_the_applied_first_stage() {
     setup.reviewer_script = Some(vec![
         review_text("allow", 0),
         review_text("check", 0),
-        review_text("block its reason", 0),
+        review_text("its reason\nblock", 0),
     ]);
     setup.reviewer_limits = Some((1, 20));
     setup.idle = Some(IDLE);
@@ -6139,8 +6139,8 @@ fn a_second_blocks_count_lands_the_escalation_on_the_third_call() {
         review_text("check", 1),
         review_text("check", 1),
         review_text("allow", 1),
-        review_text("block second reason", 1),
-        review_text("block third reason", 1),
+        review_text("second reason\nblock", 1),
+        review_text("third reason\nblock", 1),
     ]);
     setup.reviewer_limits = Some((2, 20));
     let home = fakes::TempDir::new("fiber-tool-timing");
@@ -6353,7 +6353,7 @@ fn a_mixed_batch_matches_the_serial_event_stream() {
     }
     let check = review_text("check", 1);
     let allow = review_text("allow", 1);
-    let block = review_text("block coral reason", 1);
+    let block = review_text("coral reason\nblock", 1);
     let batch = run(
         None,
         vec![
@@ -6430,7 +6430,7 @@ fn a_grant_remembers_across_the_rest_of_the_batch() {
         review_text("check", 1),
         review_text("check", 1),
         review_text("check", 1),
-        review_text("block atlas reason", 1),
+        review_text("atlas reason\nblock", 1),
         review_text("allow", 1),
         review_text("allow", 1),
     ]);

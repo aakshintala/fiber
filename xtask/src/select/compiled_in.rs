@@ -76,6 +76,10 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
         "crates/loop/tests/fixtures/reviewer_consent/shape-6-reason-names-different-call/events.jsonl",
         "main",
     ),
+    (
+        "crates/loop/tests/fixtures/reviewer_eval/contradictory-consent/events.jsonl",
+        "main",
+    ),
     ("extensions/hooks/extension.json", "extensions"),
     ("extensions/hooks/init.lua", "extensions"),
     ("providers/anthropic/providers/anthropic.json", "extensions"),

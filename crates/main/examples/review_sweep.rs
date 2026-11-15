@@ -34,11 +34,12 @@ fn main() -> ExitCode {
 
 /// The committed fixture roots `--dirs` folds against: the loop crate's
 /// fixture directories beside this package.
-fn fixture_roots() -> (PathBuf, PathBuf) {
+fn fixture_roots() -> (PathBuf, PathBuf, PathBuf) {
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../loop/tests/fixtures");
     (
         base.join("reviewer_consent"),
         base.join(sweep::PERSON_INPUT_DIR),
+        base.join("reviewer_eval"),
     )
 }
 
@@ -66,10 +67,10 @@ fn run(argv: &[String]) -> Result<(), String> {
                     entries.push(entry);
                 }
             }
-            let (consent, person_input) = fixture_roots();
+            let (consent, person_input, reviewer_eval) = fixture_roots();
             let mut dropped = 0usize;
             for dir in &dirs {
-                let folded = sweep::fold_session_dir(dir, &consent, &person_input)?;
+                let folded = sweep::fold_session_dir(dir, &consent, &person_input, &reviewer_eval)?;
                 dropped = dropped.saturating_add(folded.unreplayable);
                 for entry in folded.entries {
                     srcs.push("dir");

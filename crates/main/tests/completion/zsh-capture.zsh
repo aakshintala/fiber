@@ -7,7 +7,6 @@ PROMPT='' RPROMPT=''
 autoload -Uz compinit
 compinit -u -D
 source "$1"
-compdef _fiber fiber
 compadd() {
   # A call that queries or fills an array is the completion system's own.
   if [[ ${@[1,(i)(-|--)]} == *-(O|A|D)\ * ]]; then

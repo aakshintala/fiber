@@ -667,7 +667,7 @@ fn a_debug_escalation_times_two_stages_and_the_wait() {
     let server = ProviderServer::start([
         shell_true_call(),
         text_reply("check"),
-        text_reply("block: nope"),
+        text_reply("nope\nblock"),
         hello(),
         hello(),
     ])

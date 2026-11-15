@@ -88,6 +88,8 @@ pub use crate::spawn::{HUB_SESSION_MARKER, SpawnStarter};
 pub struct Settings {
     /// `hub.idle_exit_ms`.
     pub idle_exit: Duration,
+    /// `session.keep_exited`.
+    pub keep_exited: usize,
     /// `diagnostics.level`, read once: a changed value reaches the next hub.
     pub level: log::diag::Level,
     /// The `127.0.0.1` port an installed hub also listens on, from Fiber
@@ -300,7 +302,8 @@ pub fn serve(
     let mut hub = Hub::new(home, fiber_version, starter, Arc::clone(&clock), diag)
         .with_commit(fiber_commit)
         .with_environments(Arc::clone(&environments))
-        .with_machine(machine);
+        .with_machine(machine)
+        .with_keep_exited(settings.keep_exited);
     if let Some(probe) = &keeper_probe {
         hub = hub.with_keeper_probe(Arc::clone(probe));
     }

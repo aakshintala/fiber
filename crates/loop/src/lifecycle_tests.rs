@@ -3365,11 +3365,12 @@ fn a_compaction_note_request_never_reaches_the_hook() {
         Some(hooks.clone()),
         vec![Arc::new(Probe) as Arc<dyn Tool>],
     );
-    // Any reply overflows the context, so the next step compacts first.
+    // The trigger is above the fresh-conversation estimate but below the
+    // measured size, so the first request runs and the next step compacts.
     world.looped = world.looped.take().map(|looped| {
         looped.compaction(crate::CompactionSettings {
             enabled: true,
-            tokens: 1,
+            tokens: 2_500,
             window_fraction: 1.0,
             nudge: false,
         })

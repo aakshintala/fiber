@@ -100,17 +100,34 @@ impl Temp {
 
     /// Appends an exited row for session `n`, its directory made.
     fn exited_row(&self, n: u64) {
+        self.indexed(n, "/w", None);
+    }
+
+    fn indexed(&self, n: u64, workspace: &str, parent: Option<&str>) {
+        let status = crate::fake::status("session", workspace, "idle", parent);
         let row = crate::recent::RecentRow {
             session_id: SessionId(testkit::id(n)),
             ts: n,
             project: "-w".to_owned(),
-            workspace: "/w".to_owned(),
+            workspace: workspace.to_owned(),
             name: format!("session {n}"),
             how: crate::recent::Left::Exited,
-            status: None,
+            status: Some(serde_json::from_value(status).unwrap()),
             archived: false,
         };
         crate::recent::append(&self.dir, &row).unwrap();
+    }
+
+    fn hub_with_keep(&self, keep: usize) -> Arc<Hub> {
+        let timed: Arc<dyn Clock> = Arc::clone(&self.clock) as Arc<dyn Clock>;
+        Arc::new(
+            testkit::hub(
+                &self.dir,
+                Arc::new(FakeStarter::bind_and_hold(&self.dir)),
+                timed,
+            )
+            .with_keep_exited(keep),
+        )
     }
 
     /// Starts the hub's feed on the shared clock: a stop that hangs
@@ -713,14 +730,11 @@ fn a_late_on_left_neither_appends_nor_reinserts_after_archive() {
     let listed = join(
         thread::spawn({
             let hub = Arc::clone(&hub);
-            let home = temp.dir.clone();
-            let clock = Arc::clone(&temp.clock);
             move || {
                 crate::sessions::answer(
-                    &hub.feed,
-                    &home,
+                    &hub,
                     &testkit::args(serde_json::json!({})),
-                    &*clock,
+                    &*hub.clock,
                     None,
                 )
             }
@@ -740,6 +754,459 @@ fn a_late_on_left_neither_appends_nor_reinserts_after_archive() {
     assert_eq!(rows.len(), 2, "{}", temp.recent_text());
     assert_eq!(rows[1]["archived"], true);
     assert_eq!(rows[1]["how"], "crashed");
+}
+
+#[test]
+fn recent_listing_defers_a_held_lock_without_archiving_it() {
+    let temp = Temp::new();
+    let hub = temp.hub();
+    temp.logged(23, &["fiber_exited"]);
+    temp.exited_row(23);
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(temp.dir_of(23).join("session.lock"))
+        .unwrap();
+    lock.try_lock().unwrap();
+
+    let answer = feed::recent_for_hub(&hub, &args(serde_json::json!({})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(answer["total"], 1);
+    assert!(answer["sessions"][0].get("archived").is_none());
+    assert_eq!(archived_lines(&temp.log_text(23)).len(), 0);
+}
+
+#[test]
+fn recent_listing_repairs_a_marker_without_an_archived_row() {
+    let temp = Temp::new();
+    let hub = temp.hub();
+    temp.logged(22, &["fiber_exited", "archived"]);
+    temp.exited_row(22);
+
+    // `docs/invocation.md`, "Archiving": a retry repairs the derived row
+    // without appending another archive event.
+    let answer = feed::recent_for_hub(&hub, &args(serde_json::json!({})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(answer, serde_json::json!({"sessions": [], "total": 0}));
+    assert_eq!(archived_lines(&temp.log_text(22)).len(), 1);
+    let rows: Vec<Value> = temp
+        .recent_text()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1]["archived"], true);
+}
+
+// `docs/invocation.md`, "Archiving" promises these results.
+#[test]
+fn recent_listing_archives_missing_workspaces_and_archived_mode_counts_it() {
+    let temp = Temp::new();
+    let hub = temp.hub();
+    temp.logged(12, &["fiber_exited"]);
+    temp.exited_row(12);
+    let mut sub = Sub::new(&hub.feed);
+    let mut initial = String::new();
+    sub.read.read_line(&mut initial).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&initial).unwrap()["kind"],
+        "keepers"
+    );
+
+    let unarchived = feed::recent_for_hub(&hub, &args(serde_json::json!({})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(unarchived, serde_json::json!({"sessions": [], "total": 0}));
+    sub.forgot("session_archived", &testkit::id(12), "-w");
+    assert_eq!(archived_lines(&temp.log_text(12)).len(), 1);
+
+    let archived = feed::recent_for_hub(&hub, &args(serde_json::json!({"archived": true})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(archived["total"], 1);
+    assert_eq!(archived["sessions"][0]["session_id"], testkit::id(12));
+    assert_eq!(archived["sessions"][0]["archived"], true);
+    assert_eq!(archived_lines(&temp.log_text(12)).len(), 1);
+    let rows: Vec<Value> = temp
+        .recent_text()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1]["archived"], true);
+}
+
+#[test]
+fn archived_cursor_uses_the_post_archive_position_in_the_same_answer() {
+    let temp = Temp::new();
+    let hub = temp.hub();
+    let workspace = temp.dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    temp.logged(1, &["fiber_exited"]);
+    temp.logged(2, &["fiber_exited", "archived"]);
+    let rows = [
+        crate::recent::RecentRow {
+            session_id: SessionId(testkit::id(1)),
+            ts: 1,
+            project: "-w".to_owned(),
+            workspace: temp
+                .dir
+                .join("missing-workspace")
+                .to_string_lossy()
+                .into_owned(),
+            name: "newly archived".to_owned(),
+            how: crate::recent::Left::Exited,
+            status: None,
+            archived: false,
+        },
+        crate::recent::RecentRow {
+            session_id: SessionId(testkit::id(2)),
+            ts: 2,
+            project: "-w".to_owned(),
+            workspace: workspace.to_string_lossy().into_owned(),
+            name: "already archived".to_owned(),
+            how: crate::recent::Left::Exited,
+            status: None,
+            archived: true,
+        },
+    ];
+    for row in rows {
+        crate::recent::append(&temp.dir, &row).unwrap();
+    }
+
+    // `docs/invocation.md`, "Archiving": an archived query answers after
+    // automatic archive; its cursor therefore uses the appended-row order
+    // (`RULING-4598-3`).
+    let page = feed::recent_for_hub(
+        &hub,
+        &args(serde_json::json!({"archived": true, "before": testkit::id(1)})),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(page["total"], 2);
+    assert_eq!(page["sessions"][0]["session_id"], testkit::id(2));
+}
+
+#[test]
+fn an_explicit_archive_cascades_to_exited_delegate_descendants() {
+    let temp = Temp::new();
+    let hub = temp.hub();
+    for n in 30..=32 {
+        temp.logged(n, &["fiber_exited"]);
+        let parent = match n {
+            30 => None,
+            31 => Some(testkit::id(30)),
+            _ => Some(testkit::id(31)),
+        };
+        temp.indexed(n, "/w", parent.as_deref());
+    }
+    temp.logged(33, &["fiber_exited"]);
+    temp.indexed(33, "/w", None);
+
+    // `docs/invocation.md`, "Archiving": explicit parent archiving includes
+    // every exited delegate descendant.
+    assert!(
+        call(&hub, serde_json::json!({"session": testkit::id(30)}))
+            .unwrap()
+            .is_none()
+    );
+    for n in 30..=32 {
+        assert_eq!(archived_lines(&temp.log_text(n)).len(), 1, "session {n}");
+    }
+    assert!(archived_lines(&temp.log_text(33)).is_empty());
+    assert_eq!(crate::recent::read_all(&temp.dir).len(), 7);
+}
+
+#[test]
+fn a_cascaded_missing_delegate_is_not_appended_twice_in_one_listing() {
+    let temp = Temp::new();
+    let hub = temp.hub();
+    let missing = temp
+        .dir
+        .join("missing-workspace")
+        .to_string_lossy()
+        .into_owned();
+    temp.logged(20, &["fiber_exited"]);
+    temp.logged(21, &["fiber_exited"]);
+    temp.indexed(21, &missing, Some(&testkit::id(20)));
+    temp.indexed(20, &missing, None);
+
+    // `docs/invocation.md`, "Archiving": the cascade archives the exited
+    // delegate with its parent and must not append that delegate twice.
+    let answer = feed::recent_for_hub(&hub, &args(serde_json::json!({})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(answer, serde_json::json!({"sessions": [], "total": 0}));
+    assert_eq!(archived_lines(&temp.log_text(20)).len(), 1);
+    assert_eq!(archived_lines(&temp.log_text(21)).len(), 1);
+    let rows: Vec<Value> = temp
+        .recent_text()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 4, "{}", temp.recent_text());
+}
+
+// `docs/invocation.md`, "Archiving" promises these results.
+#[test]
+fn recent_cursor_uses_pre_archive_position_in_the_same_answer() {
+    let temp = Temp::new();
+    let hub = temp.hub();
+    temp.logged(1, &["fiber_exited"]);
+    temp.logged(2, &["fiber_exited"]);
+    let workspace = temp.dir.join("workspace-one");
+    fs::create_dir_all(&workspace).unwrap();
+    for (n, path) in [
+        (1, workspace.to_string_lossy().into_owned()),
+        (
+            2,
+            temp.dir
+                .join("removed-workspace")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    ] {
+        crate::recent::append(
+            &temp.dir,
+            &crate::recent::RecentRow {
+                session_id: SessionId(testkit::id(n)),
+                ts: n,
+                project: "-w".to_owned(),
+                workspace: path,
+                name: format!("session {n}"),
+                how: crate::recent::Left::Exited,
+                status: None,
+                archived: false,
+            },
+        )
+        .unwrap();
+    }
+    let page = feed::recent_for_hub(&hub, &args(serde_json::json!({"before": testkit::id(2)})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(page["total"], 1);
+    assert_eq!(page["sessions"][0]["session_id"], testkit::id(1), "{page}");
+    assert_eq!(archived_lines(&temp.log_text(2)).len(), 1);
+    assert!(archived_lines(&temp.log_text(1)).is_empty());
+}
+
+// `docs/invocation.md`, "Archiving" promises these results.
+#[test]
+fn keep_ten_returns_ten_rows_and_total_after_twelve_exited_sessions() {
+    let temp = Temp::new();
+    let workspace = temp.dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.to_string_lossy().into_owned();
+    let hub = temp.hub_with_keep(10);
+    for n in 1..=12 {
+        temp.logged(n, &["fiber_exited"]);
+        temp.indexed(n, &workspace, None);
+    }
+
+    let answer = feed::recent_for_hub(&hub, &args(serde_json::json!({})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(answer["sessions"].as_array().unwrap().len(), 10);
+    assert_eq!(answer["total"], 10);
+}
+
+#[test]
+fn keep_two_archives_the_three_oldest_top_level_sessions() {
+    let temp = Temp::new();
+    let workspace = temp.dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.to_string_lossy().into_owned();
+    let hub = temp.hub_with_keep(2);
+    for n in 1..=5 {
+        temp.logged(n, &["fiber_exited"]);
+        temp.indexed(n, &workspace, None);
+    }
+
+    let answer = feed::recent_for_hub(&hub, &args(serde_json::json!({})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(answer["total"], 2);
+    assert_eq!(
+        answer["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["session_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [testkit::id(5), testkit::id(4)]
+    );
+    for n in 1..=3 {
+        assert_eq!(archived_lines(&temp.log_text(n)).len(), 1, "session {n}");
+    }
+    for n in 4..=5 {
+        assert!(archived_lines(&temp.log_text(n)).is_empty(), "session {n}");
+    }
+}
+
+// `docs/invocation.md`, "Archiving" promises these results.
+#[test]
+fn keep_two_archives_oldest_parent_and_its_exited_delegates_only() {
+    let temp = Temp::new();
+    let workspace = temp.dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.to_string_lossy().into_owned();
+    let hub = temp.hub_with_keep(2);
+    for n in 1..=5 {
+        temp.logged(n, &["fiber_exited"]);
+        let parent = (n == 4 || n == 5).then(|| testkit::id(1));
+        temp.indexed(n, &workspace, parent.as_deref());
+    }
+    let mut sub = Sub::new(&hub.feed);
+    let mut initial = String::new();
+    sub.read.read_line(&mut initial).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&initial).unwrap()["kind"],
+        "keepers"
+    );
+
+    let answer = feed::recent_for_hub(&hub, &args(serde_json::json!({})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(answer["total"], 2);
+    for n in [1, 4, 5] {
+        assert_eq!(archived_lines(&temp.log_text(n)).len(), 1, "session {n}");
+    }
+    for n in [2, 3] {
+        assert!(archived_lines(&temp.log_text(n)).is_empty(), "session {n}");
+    }
+    let mut archived_ids = Vec::new();
+    for _ in 0..3 {
+        let mut text = String::new();
+        sub.read.read_line(&mut text).unwrap();
+        let line: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(line["kind"], "session_archived");
+        assert_eq!(line["payload"]["project"], "-w");
+        archived_ids.push(line["payload"]["session_id"].as_str().unwrap().to_owned());
+    }
+    archived_ids.sort();
+    let mut expected_ids = [testkit::id(1), testkit::id(4), testkit::id(5)];
+    expected_ids.sort();
+    assert_eq!(archived_ids, expected_ids);
+    let rows = crate::recent::read_all(&temp.dir);
+    for n in [1, 4, 5] {
+        assert!(
+            rows.iter()
+                .rev()
+                .find(|row| row.session_id.0 == testkit::id(n))
+                .unwrap()
+                .archived,
+            "session {n} has an archived recent row"
+        );
+    }
+}
+
+// `docs/invocation.md`, "Archiving" promises these results.
+#[test]
+fn a_running_delegate_does_not_block_archiving_its_parent() {
+    let mut temp = Temp::new();
+    let workspace = temp.dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.to_string_lossy().into_owned();
+    let hub = temp.hub();
+    temp.logged(1, &["fiber_exited"]);
+    temp.logged(2, &["fiber_exited"]);
+    temp.indexed(1, &workspace, None);
+    temp.indexed(2, &workspace, Some(&testkit::id(1)));
+    temp.running(2);
+    temp.start_feed(&hub);
+    temp.await_running(&hub, 2);
+
+    assert_eq!(
+        call(&hub, serde_json::json!({"session": testkit::id(1)})),
+        Ok(None)
+    );
+    assert_eq!(archived_lines(&temp.log_text(1)).len(), 1);
+    assert!(archived_lines(&temp.log_text(2)).is_empty());
+}
+
+// `docs/invocation.md`, "Archiving" promises these results.
+#[test]
+fn a_parent_archive_does_not_reappend_an_already_archived_delegate() {
+    let temp = Temp::new();
+    let workspace = temp.dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.to_string_lossy().into_owned();
+    let hub = temp.hub();
+    temp.logged(1, &["fiber_exited"]);
+    temp.logged(2, &["fiber_exited"]);
+    temp.indexed(1, &workspace, None);
+    temp.indexed(2, &workspace, Some(&testkit::id(1)));
+    assert_eq!(
+        call(&hub, serde_json::json!({"session": testkit::id(2)})),
+        Ok(None)
+    );
+    let delegate_log = temp.log_text(2);
+    let delegate_row_count = crate::recent::read_all(&temp.dir)
+        .iter()
+        .filter(|row| row.session_id.0 == testkit::id(2))
+        .count();
+
+    assert_eq!(
+        call(&hub, serde_json::json!({"session": testkit::id(1)})),
+        Ok(None)
+    );
+
+    assert_eq!(temp.log_text(2), delegate_log);
+    assert_eq!(
+        crate::recent::read_all(&temp.dir)
+            .iter()
+            .filter(|row| row.session_id.0 == testkit::id(2))
+            .count(),
+        delegate_row_count
+    );
+    assert_eq!(archived_lines(&temp.log_text(2)).len(), 1);
+}
+
+// `docs/invocation.md`, "Archiving" promises these results.
+#[test]
+fn a_missing_workspace_delegate_is_archived_independently_of_retention() {
+    let temp = Temp::new();
+    let workspace = temp.dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.to_string_lossy().into_owned();
+    let hub = temp.hub_with_keep(0);
+    temp.logged(1, &["fiber_exited"]);
+    temp.logged(2, &["fiber_exited"]);
+    temp.indexed(1, &workspace, None);
+    temp.indexed(2, "/missing-delegate-workspace", Some(&testkit::id(1)));
+
+    feed::recent_for_hub(&hub, &args(serde_json::json!({})))
+        .unwrap()
+        .unwrap();
+    assert!(archived_lines(&temp.log_text(1)).is_empty());
+    assert_eq!(archived_lines(&temp.log_text(2)).len(), 1);
+}
+
+// `docs/invocation.md`, "Archiving" promises these results.
+#[test]
+fn cursor_after_multiple_pre_archive_rows_keeps_its_exact_page_position() {
+    let temp = Temp::new();
+    let hub = temp.hub();
+    let workspace = temp.dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.to_string_lossy().into_owned();
+    for n in 1..=4 {
+        temp.logged(n, &["fiber_exited"]);
+        let path = if n == 3 {
+            temp.dir.join("removed-cursor-workspace")
+        } else {
+            PathBuf::from(&workspace)
+        };
+        temp.indexed(n, &path.to_string_lossy(), None);
+    }
+
+    let page = feed::recent_for_hub(&hub, &args(serde_json::json!({"before": testkit::id(2)})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(page["total"], 3);
+    assert_eq!(page["sessions"][0]["session_id"], testkit::id(1));
 }
 
 #[test]

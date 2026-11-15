@@ -22,7 +22,7 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::fake::{FakeSession, status, status_line};
+use crate::fake::{FakeSession, FakeStarter, status, status_line};
 use crate::recent::{Left, RecentRow};
 use crate::testkit::{args, id};
 use log::session_dir;
@@ -54,6 +54,13 @@ impl Temp {
         self.sessions.push(session);
     }
 
+    /// A real workspace directory recorded by an exited row.
+    fn workspace(&self, n: u64) -> String {
+        let path = self.dir.join("workspaces").join(n.to_string());
+        fs::create_dir_all(&path).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
     /// Appends an exited row for session `n` named `name`, its directory
     /// made when `dir`.
     fn exited(&self, n: u64, project: &str, name: &str, parent: Option<&str>, dir: bool) {
@@ -65,7 +72,7 @@ impl Temp {
             session_id: contract::SessionId(id(n)),
             ts: n,
             project: project.to_owned(),
-            workspace: "/w".to_owned(),
+            workspace: self.workspace(n),
             name: name.to_owned(),
             how: Left::Exited,
             status: Some(serde_json::from_value(payload(project, parent)).unwrap()),
@@ -82,7 +89,7 @@ impl Temp {
             session_id: contract::SessionId(id(n)),
             ts: n,
             project: project.to_owned(),
-            workspace: "/w".to_owned(),
+            workspace: self.workspace(n),
             name: name.to_owned(),
             how: Left::Exited,
             status: Some(serde_json::from_value(payload(project, None)).unwrap()),
@@ -144,14 +151,22 @@ fn answer_once(
     let (tx, rx) = mpsc::channel();
     let (answering, home, args) = (Arc::clone(feed), home.to_path_buf(), self::args(args));
     thread::spawn(move || {
-        tx.send(answer(
-            &answering,
+        let hub_clock: Arc<dyn Clock> = FakeClock::new();
+        let mut hub = crate::connection::Hub::new(
             &home,
-            &args,
-            clock.as_ref(),
-            timing.as_ref(),
-        ))
-        .unwrap_or(());
+            "0.0.0",
+            Arc::new(FakeStarter::hang(&home)),
+            Arc::clone(&hub_clock),
+            log::diag::Diag::new(
+                &home,
+                log::diag::Process::Hub,
+                log::diag::Level::Info,
+                hub_clock,
+            ),
+        );
+        hub.feed = answering;
+        tx.send(answer(&hub, &args, clock.as_ref(), timing.as_ref()))
+            .unwrap_or(());
     });
     Deadline::after(DEADLINE)
         .recv(&rx)
@@ -325,17 +340,8 @@ fn arguments_that_do_not_fit_are_invalid_arguments() {
         json!({"archived": true, "x": "q"}),
         json!({"active": true, "archived": null}),
     ] {
-        let (tx, rx) = mpsc::channel();
-        let (answering, home, sent) = (Arc::clone(&feed), temp.dir.clone(), args(bad.clone()));
-        let clock = FakeClock::new();
-        thread::spawn(move || {
-            tx.send(answer(&answering, &home, &sent, clock.as_ref(), None))
-                .unwrap_or(());
-        });
-        let got = Deadline::after(DEADLINE)
-            .recv(&rx)
-            .expect("refused without a wait");
-        let refused = got.unwrap_err();
+        let refused =
+            answer_once(&feed, &temp.dir, bad.clone(), FakeClock::new(), None).unwrap_err();
         assert_eq!(refused.code, ErrorCode::InvalidArguments, "{bad}");
     }
     feed_stop(&feed);
@@ -445,26 +451,14 @@ fn invalid_arguments_are_an_entered_attempt_with_one_line() {
     let clock = FakeClock::new();
     let timing = debug_timing(&temp.dir, &clock);
     let timed: Arc<dyn Clock> = Arc::clone(&clock) as Arc<dyn Clock>;
-    let (tx, rx) = mpsc::channel();
-    let (answering, home, sent) = (
-        Arc::clone(&feed),
-        temp.dir.clone(),
-        args(json!({"project": "sentinel-proj", "x": 1})),
-    );
-    thread::spawn(move || {
-        tx.send(answer(
-            &answering,
-            &home,
-            &sent,
-            timed.as_ref(),
-            Some(&timing),
-        ))
-        .unwrap_or(());
-    });
-    let refused = Deadline::after(DEADLINE)
-        .recv(&rx)
-        .expect("refused without a wait")
-        .unwrap_err();
+    let refused = answer_once(
+        &feed,
+        &temp.dir,
+        json!({"project": "sentinel-proj", "x": 1}),
+        timed,
+        Some(timing),
+    )
+    .unwrap_err();
     assert_eq!(refused.code, ErrorCode::InvalidArguments);
     assert_list_line(&op_timings(&temp.dir), 0);
     feed_stop(&feed);
@@ -521,13 +515,18 @@ fn the_timer_covers_settlement_and_reports_the_whole_wait() {
     let until = clock.now() + crate::feed::RUN_SCAN;
     let timing = debug_timing(&temp.dir, &clock);
     let (tx, rx) = mpsc::channel();
-    let (answering, home) = (Arc::clone(&feed), temp.dir.clone());
+    let mut listing_hub = crate::testkit::hub(
+        &temp.dir,
+        Arc::new(FakeStarter::hang(&temp.dir)),
+        FakeClock::new(),
+    );
+    listing_hub.feed = Arc::clone(&feed);
+    let listing_hub = Arc::new(listing_hub);
     let sent = args(json!({}));
     let responder = Arc::clone(&timed);
     thread::spawn(move || {
         tx.send(answer(
-            &answering,
-            &home,
+            &listing_hub,
             &sent,
             responder.as_ref(),
             Some(&timing),

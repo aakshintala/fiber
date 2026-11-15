@@ -45,6 +45,31 @@ fn settings_merge_across_the_layers_in_order() {
 }
 
 #[test]
+fn settings_at_fiber_home_are_not_read_again_as_repository_settings() {
+    let setup = Setup::new();
+    let home = setup.workspace().join(".fiber");
+    setup.write(&home.join(FILE), r#"{"token_command":"global"}"#);
+    let loaded = config::Config::load(config::Sources {
+        home,
+        workspace: setup.workspace(),
+        project: common::key(),
+        overrides: Vec::new(),
+    })
+    .unwrap();
+    let (settings, notices) = loaded.extensions().merged(ACME, &[]).unwrap();
+    assert_eq!(settings, json!({"token_command": "global"}));
+    assert!(notices.is_empty(), "{notices:?}");
+    let (Some((_, source)), _) = loaded
+        .extensions()
+        .get_layered(ACME, &[], "token_command")
+        .unwrap()
+    else {
+        panic!("global setting was not found");
+    };
+    assert!(matches!(source, config::Source::Global(_)), "{source:?}");
+}
+
+#[test]
 fn a_repository_key_not_in_repo_settings_is_a_notice_and_ignored() {
     let setup = Setup::new();
     let repo_file = setup.workspace().join(".fiber").join(FILE);

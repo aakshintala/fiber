@@ -92,6 +92,31 @@ impl Setup {
 }
 
 #[test]
+fn set_refuses_repository_when_workspace_fiber_is_fiber_home_before_extension_lookup() {
+    let setup = Setup::new();
+    let home = setup.workspace().join(".fiber");
+    fs::create_dir_all(&home).unwrap();
+    let file = home.join("config.json");
+    fs::write(&file, br#"{"model":"kept/model"}"#).unwrap();
+    let before = fs::read(&file).unwrap();
+    for key in ["model", "extensions.acme.settings.endpoint"] {
+        let error = run_set(
+            &home,
+            &setup.workspace(),
+            Layer::Repository,
+            key,
+            "new/value",
+            &mut std::io::sink(),
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::Usage);
+        assert!(error.to_string().contains("global"), "{error}");
+        assert_eq!(fs::read(&file).unwrap(), before);
+    }
+}
+
+#[test]
 fn get_of_a_set_key_prints_compact_json_and_the_file() {
     let setup = Setup::new();
     setup.write(&setup.home().join("config.json"), &json!({"model": "a/b"}));

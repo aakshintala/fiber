@@ -1365,10 +1365,10 @@ fn started_session() -> Session {
     );
     session.reviewer(vec![
         fakes::Scripted::text("check"),
-        fakes::Scripted::text("allow: fine"),
+        fakes::Scripted::text("fine\nallow"),
         fakes::Scripted::text("1"),
         fakes::Scripted::text("check"),
-        fakes::Scripted::text("block: no"),
+        fakes::Scripted::text("no\nblock"),
     ]);
     prompt_turn(&mut session, "never push to main");
     prompt_turn(&mut session, "say hi");
@@ -1977,11 +1977,11 @@ fn scan_drops_matches_and_keeps_clean_lines() {
     );
 }
 
-/// The committed synthetic consent sessions, compiled in
-/// (`docs/testing.md`, "What a test asserts"): every `reviewer_consent/`
-/// session's `events.jsonl`, in recipe order. An explicit list — the
-/// converter tests never enumerate the fixture directories at run time.
-const EMBEDDED_CONSENT_SESSIONS: [EmbeddedSession; 24] = [
+/// The committed synthetic sessions, compiled in (`docs/testing.md`,
+/// "What a test asserts"): the `reviewer_consent/` sessions in recipe order
+/// plus the one reviewer-eval case. An explicit list — the converter tests
+/// never enumerate fixture directories at run time.
+const EMBEDDED_CONSENT_SESSIONS: [EmbeddedSession; 25] = [
     EmbeddedSession {
         name: "control-1-credentialed-probe",
         events: include_str!("fixtures/reviewer_consent/control-1-credentialed-probe/events.jsonl"),
@@ -2017,6 +2017,10 @@ const EMBEDDED_CONSENT_SESSIONS: [EmbeddedSession; 24] = [
         events: include_str!(
             "fixtures/reviewer_consent/control-7-guard-override-install/events.jsonl"
         ),
+    },
+    EmbeddedSession {
+        name: "contradictory-consent",
+        events: include_str!("fixtures/reviewer_eval/contradictory-consent/events.jsonl"),
     },
     EmbeddedSession {
         name: "field-1-typed-restart-and-run",
@@ -2115,8 +2119,9 @@ const EMBEDDED_PERSON_INPUT: EmbeddedSession = EmbeddedSession {
     events: include_str!("fixtures/review_person_input/events.jsonl"),
 };
 
-/// Every embedded synthetic fixture session in recipe order: the 22
-/// consent sessions plus the person-input session.
+/// Every embedded synthetic fixture session in recipe order: the consent
+/// sessions, the contradictory-consent reviewer-eval case, and the
+/// person-input session.
 fn embedded_synthetic_sessions() -> Vec<EmbeddedSession> {
     let mut sessions = EMBEDDED_CONSENT_SESSIONS.to_vec();
     sessions.push(EMBEDDED_PERSON_INPUT);
@@ -2129,7 +2134,7 @@ fn embedded_synthetic_sessions() -> Vec<EmbeddedSession> {
 /// other name instead of emitting its calls raw with the identity scrub
 /// context and no drop classes.
 #[test]
-fn synthetic_allowlist_names_the_committed_consent_sessions() {
+fn synthetic_allowlist_names_the_committed_sessions() {
     let mut embedded: Vec<&str> = EMBEDDED_CONSENT_SESSIONS
         .iter()
         .map(|session| session.name)
@@ -2216,6 +2221,7 @@ fn synthetic_converter_emits_unlabelled_lines() {
     assert_eq!(
         ids,
         vec![
+            "contradictory-consent-1",
             "control-1-credentialed-probe-1",
             "control-2-key-material-copy-1",
             "control-3-delete-outside-workspace-1",

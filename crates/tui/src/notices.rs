@@ -54,6 +54,7 @@ const KINDS: &[(ErrorCode, Kind)] = &[
     (ErrorCode::IoFailed, Kind::Event),
     (ErrorCode::LoginUrl, Kind::Condition),
     (ErrorCode::Malformed, Kind::Event),
+    (ErrorCode::ModelDeprecated, Kind::Event),
     (ErrorCode::ModelInvalid, Kind::Event),
     (ErrorCode::ModelOmitted, Kind::Event),
     (ErrorCode::ModelUnconfigured, Kind::Event),

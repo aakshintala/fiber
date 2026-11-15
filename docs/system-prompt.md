@@ -322,7 +322,9 @@ Claude Code need no copy.
 
 When two skills share a name, the more specific source wins: the repository,
 then personal, then an extension, then built-in. One `skill_shadowed` notice
-per pass names every shadowed skill with both paths.
+per pass names every shadowed skill with both paths. When a Repository skill
+directory is the same canonical directory as a Personal one, Fiber reads it
+once as Personal, not Repository.
 
 The first-party `init` extension (`docs/extensions.md`, "A fresh install") ships
 one prompt template, `init`, so `/init` works on a fresh install. It asks the

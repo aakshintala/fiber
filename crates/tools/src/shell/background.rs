@@ -897,8 +897,31 @@ pub(super) fn to_completed_reported(
 
 /// The last [`TAIL_BYTES`] of the file, read from there, decoded lossily.
 pub(super) fn output_tail(path: &Path) -> Option<String> {
-    let mut file = File::open(path).ok()?;
-    let len = file.metadata().ok()?.len();
+    output_tail_from(path, None)
+}
+
+/// Reads a detached log only when it is still a regular direct child of its
+/// expected root. `O_NOFOLLOW | O_NONBLOCK` closes the symlink/FIFO race.
+pub(super) fn output_tail_from(path: &Path, expected_root: Option<&Path>) -> Option<String> {
+    if let Some(root) = expected_root
+        && (!path.is_absolute() || path.parent() != Some(root) || path.file_name().is_none())
+    {
+        return None;
+    }
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.file_type().is_file() {
+        return None;
+    }
+    let flags = rustix::fs::OFlags::RDONLY
+        .union(rustix::fs::OFlags::NOFOLLOW)
+        .union(rustix::fs::OFlags::NONBLOCK);
+    let fd = rustix::fs::open(path, flags, rustix::fs::Mode::empty()).ok()?;
+    let mut file = std::fs::File::from(fd);
+    let opened = file.metadata().ok()?;
+    if opened_file_is_rejected(&metadata, &opened) {
+        return None;
+    }
+    let len = opened.len();
     let window = u64::try_from(TAIL_BYTES).unwrap_or(u64::MAX);
     file.seek(SeekFrom::Start(len.saturating_sub(window)))
         .ok()?;
@@ -906,6 +929,13 @@ pub(super) fn output_tail(path: &Path) -> Option<String> {
     file.take(window).read_to_end(&mut bytes).ok()?;
     let text = String::from_utf8_lossy(align_char_boundary(&bytes)).into_owned();
     if text.is_empty() { None } else { Some(text) }
+}
+
+fn opened_file_is_rejected(metadata: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    !opened.file_type().is_file()
+        || (opened.dev(), opened.ino()) != (metadata.dev(), metadata.ino())
 }
 
 #[cfg(test)]

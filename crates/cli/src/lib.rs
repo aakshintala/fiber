@@ -191,7 +191,7 @@ pub use login::{
 pub use mcp::{DeclaredServer, McpDeclaration, declared_servers, mcp_add, mcp_list, mcp_remove};
 pub use mcp_login::{login_target, mcp_login, mcp_logout};
 pub use model_lists::{ModelLists, ModelListsError, model_lists, model_lists_grouped, roles_of};
-pub use models::{models, refresh_model_lists};
+pub use models::{models, providers_and_config, refresh_model_lists};
 pub use prune::{
     HubDelete, HubPruneRemoved, HubPruneSelection, HubPruneSession, HubPruneWant, format_size,
     remove_for_hub, select_for_hub,
@@ -248,11 +248,20 @@ fn finish<E: Into<CliError>>(result: Result<(), E>) -> i32 {
 fn finish_code<E: Into<CliError>>(result: Result<i32, E>) -> i32 {
     match result.map_err(Into::into) {
         Ok(code) => code,
-        Err(CliError::StandardOutput(error) | CliError::DoctorReport(error))
-            if error.kind() == io::ErrorKind::BrokenPipe =>
-        {
-            0
-        }
+        Err(CliError::StandardOutput(source)) => match doors::stdout_write_outcome(source) {
+            Ok(()) => 0,
+            Err(doors::SessionError::StdoutFailed { source }) => {
+                fail(CliError::StandardOutput(source).into())
+            }
+            Err(error) => fail(error.into()),
+        },
+        Err(CliError::DoctorReport(source)) => match doors::stdout_write_outcome(source) {
+            Ok(()) => 0,
+            Err(doors::SessionError::StdoutFailed { source }) => {
+                fail(CliError::DoctorReport(source).into())
+            }
+            Err(error) => fail(error.into()),
+        },
         Err(error) => fail(error.into()),
     }
 }
@@ -289,4 +298,25 @@ fn with_dirs_code<E: Into<CliError>>(run: impl FnOnce(&Path, &Path) -> Result<i3
         Err(error) => Err(CliError::Forwarded(failed(error.code(), error))),
     };
     finish_code(ran)
+}
+
+#[cfg(test)]
+mod stdout_write_tests {
+    use super::{CliError, finish_code};
+
+    #[test]
+    fn finish_code_quiets_only_broken_pipe_for_both_stdout_errors() {
+        for error in [
+            CliError::StandardOutput(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+            CliError::DoctorReport(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+        ] {
+            assert_eq!(finish_code(Err::<i32, _>(error)), 0);
+        }
+        for error in [
+            CliError::StandardOutput(std::io::Error::other("full disk")),
+            CliError::DoctorReport(std::io::Error::other("full disk")),
+        ] {
+            assert_eq!(finish_code(Err::<i32, _>(error)), 1);
+        }
+    }
 }

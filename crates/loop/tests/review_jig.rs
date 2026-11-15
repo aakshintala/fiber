@@ -79,10 +79,10 @@ fn native_session() -> (Session, Arc<fakes::ScriptedProvider>, String) {
     .reviewer_notes(notes.clone());
     let reviewer = session.reviewer(vec![
         Scripted::text("check"),
-        Scripted::text("allow: fine"),
+        Scripted::text("fine\nallow"),
         Scripted::text("1"),
         Scripted::text("check"),
-        Scripted::text("allow: fine"),
+        Scripted::text("fine\nallow"),
     ]);
     prompt_turn(&mut session, "never push to main");
     prompt_turn(&mut session, "say hi");

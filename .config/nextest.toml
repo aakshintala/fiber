@@ -14,6 +14,13 @@ slow-timeout = { period = "30s", terminate-after = 9 }
 [profile.mutants]
 fail-fast = { max-fail = 1, terminate = "immediate" }
 
+# Run in-source unit tests first so they catch mutants before integration
+# binaries spend time on their longer waits (docs/testing/mutants.md,
+# "Proving a test bites").
+[[profile.mutants.overrides]]
+filter = 'kind(lib) | kind(bin)'
+priority = 100
+
 # docs/ci.md, "On every pull request that changes code": the stress job runs
 # nextest under this profile, so a selected test fails instead of passing
 # on retry, and the selected tests share every core.

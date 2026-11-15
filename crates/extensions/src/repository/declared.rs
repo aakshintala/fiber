@@ -93,7 +93,7 @@ pub(crate) enum Named {
 /// never blocks on it. `declared_items` returns extensions, hooks, then
 /// exactly these, so `fiber approve`, the offer and startup hash identically.
 pub(crate) fn declared_servers(workspace: &Path) -> Result<Vec<RepoItem>, Error> {
-    let declared = config::declared(workspace)?;
+    let declared = config::declared(workspace, &config::fiber_home_path_from_env()?)?;
     let root = workspace.canonicalize().map_err(io_error(workspace))?;
     let mut items = Vec::new();
     for (name, entry) in &declared.mcp_servers {
@@ -131,7 +131,7 @@ pub fn mcp_server_item(workspace: &Path, name: &str, entry: &Value) -> Result<Re
 /// then hooks, then MCP servers, each by name. The file list runs through
 /// `git`, stopped at the git deadline on `clock`.
 pub fn declared_items(workspace: &Path, clock: &dyn Clock) -> Result<Vec<RepoItem>, Error> {
-    let declared = config::declared(workspace)?;
+    let declared = config::declared(workspace, &config::fiber_home_path_from_env()?)?;
     let root = workspace.canonicalize().map_err(io_error(workspace))?;
     let mut items = Vec::new();
     // Where the `hooks` extension's declarations live in a repository.

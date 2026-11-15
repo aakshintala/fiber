@@ -313,7 +313,7 @@ fn a_supervised_steer_grants_a_fresh_review_and_allows() {
         hello(),
         shell_call("touch .fiber-review-marker"),
         verdict("check"),
-        verdict("allow the supervisor granted it"),
+        verdict("the supervisor granted it\nallow"),
         hello(),
     ])
     .unwrap();

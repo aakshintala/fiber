@@ -486,15 +486,25 @@ fn the_settings_view_matches_the_doc() {
     assert_eq!(grid.rows[usize::from(footer)].trim(), keys);
     assert!(is_bold(&grid, footer, "Enter"));
     assert!(!is_bold(&grid, footer, "change"));
-    // Two tabs right: the model's value draws unquoted, ending in " ›".
-    for _ in 0..2 {
-        run.write(b"\x1b[C");
-    }
-    grid = run.wait_screen("the Models tab", |grid| {
+    // Notifications: wait for the slider, then move to Bell before using
+    // Right to leave the tab.
+    run.write(b"\x1b[C");
+    run.wait_screen("the focused Quota notice slider", |grid| {
+        focused_label(grid).as_deref() == Some("Quota notice")
+    });
+    run.write(b"\x1b[B");
+    run.wait_screen("the focused Bell row", |grid| {
+        focused_label(grid).as_deref() == Some("Bell")
+    });
+    run.write(b"\x1b[C");
+    run.wait_screen("the Models tab", |grid| {
         find_row(grid, "Default model").is_some_and(|y| {
             let text = grid.rows[usize::from(y)].trim_end();
             text.contains("scripted/s.json ›") && !text.contains("\"scripted/s.json\"")
         }) && find_row(grid, "Models").is_some_and(|y| is_bold(grid, y, "Models"))
+    });
+    grid = run.wait_screen("the focused non-numeric Models row", |grid| {
+        focused_label(grid).as_deref() == Some("Default model")
     });
     let model = row_with(&grid, "Default model");
     // settled: "the Models tab" checked the row text.
@@ -502,11 +512,22 @@ fn the_settings_view_matches_the_doc() {
     assert!(text.contains("scripted/s.json ›"), "{text}");
     assert!(!text.contains("\"scripted/s.json\""), "unquoted: {text}");
     assert!(is_bold(&grid, find_row(&grid, "Models").unwrap(), "Models"));
-    // Two more reach Sessions; walk the focus to `compaction.tokens`, each
-    // press waiting for the gutter to move.
-    for _ in 0..2 {
-        run.write(b"\x1b[C");
-    }
+    // Move to Permissions and pin the documented focus walk to Reviewer model.
+    run.write(b"\x1b[C");
+    run.wait_screen("the Permissions tab", |grid| {
+        find_row(grid, "Reviewer model").is_some()
+            && find_row(grid, "Permissions").is_some_and(|row| is_bold(grid, row, "Permissions"))
+    });
+    run.write(b"\x1b[B");
+    run.write(b"\x1b[B");
+    run.write(b"\x1b[B");
+    let mut grid = run.wait_screen("the focused Reviewer model row", |grid| {
+        focused_label(grid).as_deref() == Some("Reviewer model")
+    });
+    let reviewer_model = find_row(&grid, "Reviewer model").unwrap();
+    assert!(is_focused_row(&grid, reviewer_model, "Reviewer model"));
+    // Move to Sessions; walk the focus to `compaction.tokens` below.
+    run.write(b"\x1b[C");
     grid = run.wait_screen("the Sessions tab", |grid| {
         find_row(grid, "Compaction tokens").is_some()
     });

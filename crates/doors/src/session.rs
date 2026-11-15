@@ -54,7 +54,7 @@ pub(crate) use shells::Stopped;
 pub struct Session {
     dir: PathBuf,
     socket: PathBuf,
-    printer: JoinHandle<()>,
+    printer: JoinHandle<std::io::Result<()>>,
     printer_stop: Injector,
     gate: Arc<Gate>,
     listener: Mutex<Option<UnixListener>>,
@@ -818,7 +818,7 @@ impl Session {
     /// that shell starts cancelled, its answer is written before its writer
     /// ends or the line is cut `indeterminate` at the grace, and the second
     /// `wait_shells` waits for it.
-    pub fn close(self, log: Arc<Log>) {
+    pub fn close(self, log: Arc<Log>) -> std::io::Result<()> {
         self.gate.cancel_shells();
         self.gate.wait_shells();
         #[cfg(test)]
@@ -869,7 +869,7 @@ impl Session {
         ));
         #[cfg(test)]
         self.gate.note(tests::Probe::PrinterStopQueued);
-        join(self.printer);
+        join_printer(self.printer)
     }
 
     /// One `warn` line in the session's diagnostic log: the close stopped
@@ -1214,9 +1214,10 @@ fn open_in(
     })
 }
 
-fn spawn<F>(name: &str, body: F) -> Result<JoinHandle<()>, SessionError>
+fn spawn<F, T>(name: &str, body: F) -> Result<JoinHandle<T>, SessionError>
 where
-    F: FnOnce() + Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
 {
     thread::Builder::new()
         .name(name.to_owned())
@@ -1227,6 +1228,13 @@ where
 fn join(handle: JoinHandle<()>) {
     match handle.join() {
         Ok(()) | Err(_) => {}
+    }
+}
+
+fn join_printer(handle: JoinHandle<std::io::Result<()>>) -> std::io::Result<()> {
+    match handle.join() {
+        Ok(result) => result,
+        Err(_) => Ok(()),
     }
 }
 
@@ -1309,29 +1317,27 @@ fn prompt_message(prompt: String) -> Message {
 /// and `moved` close the process boundary as `fiber_exited` does: nothing
 /// follows them, so the copy ends there even while the log itself is still
 /// held (`docs/events.md`, "Rewind", "Change workspace").
-fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) {
+fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) -> std::io::Result<()> {
     while let Ok(Some(line)) = watcher.recv() {
         if client::ControlKind::recognize(&line.kind()) == Some(client::ControlKind::Stop) {
-            drain(&mut watcher, out.as_mut());
-            return;
+            return drain(&mut watcher, out.as_mut());
         }
-        if write_until_stop(out.as_mut(), &line) {
-            return;
+        if write_until_stop(out.as_mut(), &line)? {
+            return Ok(());
         }
     }
+    Ok(())
 }
 
-/// Writes `line`, reporting whether printing stops after it: a failed
-/// write, `fiber_exited`, `rewound` or `moved` (`docs/invocation.md`,
+/// Writes `line`, reporting whether printing stops after it:
+/// `fiber_exited`, `rewound` or `moved` (`docs/invocation.md`,
 /// "What a caller gets back"). A reader that went away, or a line that
 /// cannot be written, stops the copy, never the session.
-fn write_until_stop(out: &mut dyn Write, line: &contract::Envelope) -> bool {
-    if client::write_line(out, line).is_err() {
-        return true;
-    }
-    line.kind() == EventKind::FiberExited
+fn write_until_stop(out: &mut dyn Write, line: &contract::Envelope) -> std::io::Result<bool> {
+    client::write_line(out, line)?;
+    Ok(line.kind() == EventKind::FiberExited
         || line.kind() == EventKind::Rewound
-        || line.kind() == EventKind::Moved
+        || line.kind() == EventKind::Moved)
 }
 
 /// Prints what `print` has not yet reached once its stop control arrived: the
@@ -1339,15 +1345,16 @@ fn write_until_stop(out: &mut dyn Write, line: &contract::Envelope) -> bool {
 /// until none is available or the copy stops as `print` stops it. The
 /// stop control is kept ahead of the catch-up, so returning on it would end
 /// printing before those lines are recovered, including `fiber_exited`.
-fn drain(watcher: &mut Watcher, out: &mut dyn Write) {
+fn drain(watcher: &mut Watcher, out: &mut dyn Write) -> std::io::Result<()> {
     while let Ok(Some(line)) = watcher.try_recv() {
         if client::ControlKind::recognize(&line.kind()) == Some(client::ControlKind::Stop) {
             continue;
         }
-        if write_until_stop(out, &line) {
-            return;
+        if write_until_stop(out, &line)? {
+            break;
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

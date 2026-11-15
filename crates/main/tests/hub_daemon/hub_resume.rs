@@ -378,6 +378,17 @@ fn echo_call() -> Response {
     }})])
 }
 
+/// An `openai-responses` stream that writes a file into a worktree.
+fn write_call(path: &str, content: &str) -> Response {
+    stream(&[json!({"type": "response.output_item.done", "item": {
+        "type": "function_call",
+        "id": "fc_write_1",
+        "call_id": "call_write_1",
+        "name": "write",
+        "arguments": json!({"path": path, "content": content}).to_string()
+    }})])
+}
+
 /// Waits for the relayed `fiber_exited`, then for the session process to
 /// be gone: until then it still holds its connections and its log, and
 /// answers a command `closing`. A subscription bounds the exit wait past
@@ -1072,6 +1083,108 @@ fn a_full_subscribe_for_a_gone_workspace_replays_its_fold_with_the_missing_path(
     );
     let log = setup.log(child);
     assert_eq!(log.last().unwrap()["kind"], "archived", "{log:?}");
+    drop(client);
+    hub.lock().unwrap().take().expect("the hub ran").finish();
+}
+
+#[test]
+fn an_auto_archived_worktree_session_resumes_and_is_listed_unarchived() {
+    let setup = Setup::new_with_fr_root();
+    let server =
+        ProviderServer::start([hello(), write_call("kept.txt", "worktree\n"), hello()]).unwrap();
+    setup.provider(&server);
+    let repository = setup.workspace();
+    support::git(setup.deadline, &repository, &["init", "--quiet"]);
+    fs::write(repository.join("tracked.txt"), "base\n").unwrap();
+    support::git(setup.deadline, &repository, &["add", "."]);
+    support::git(
+        setup.deadline,
+        &repository,
+        &["commit", "--quiet", "-m", "base"],
+    );
+
+    let (code, lines) = setup.run(&["ask", "--worktree", "one"]);
+    assert_eq!(code, Some(0));
+    let id = lines
+        .iter()
+        .find(|line| line["kind"] == "session_started")
+        .expect("session_started was written")["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let original = setup.log(&id);
+    let worktree = original
+        .iter()
+        .find(|line| line["kind"] == "session_started")
+        .and_then(|line| line["payload"]["workspace"].as_str())
+        .expect("the worktree path is recorded")
+        .to_owned();
+    assert!(
+        !PathBuf::from(&worktree).exists(),
+        "clean worktree was removed"
+    );
+    assert!(
+        setup.workspace().join(".git").exists(),
+        "repository remains"
+    );
+
+    let hub = Arc::new(Mutex::new(None));
+    let client = connect_hub(&setup, &hub);
+    client.send(&json!({"id": "c_archived", "command": "sessions", "args": {"archived": true}}));
+    let archived = until_hub(&client, "the archived listing", |line| {
+        acknowledges(line, "c_archived")
+    });
+    let archived_rows = &archived.last().unwrap()["payload"]["result"]["exited"];
+    assert!(
+        archived_rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| { row["session_id"] == id && row["archived"] == true }),
+        "the absent worktree was automatically archived: {archived_rows}"
+    );
+
+    client.send(&subscribe_line("c_sub", &id));
+    let subscribed = until_hub(&client, "the resumed-session subscription", |line| {
+        acknowledges(line, "c_sub")
+    });
+    let sub = support::Subscribed::from_ack(Some(&id), subscribed.last().unwrap().clone());
+
+    client.send(&prompt("c_prompt", &id, "write a file"));
+    let mut resumed = false;
+    let mut completed = false;
+    let turn = until_hub(&client, "the resumed worktree turn", |line| {
+        if resumed && line["kind"] == "turn_completed" {
+            completed = true;
+        }
+        resumed |= line["kind"] == "fiber_started" && line["payload"]["resumed"] == true;
+        resumed && completed
+    });
+    assert!(
+        turn.iter()
+            .any(|line| line["kind"] == "tool_call_completed"),
+        "the resumed turn wrote into its worktree: {turn:?}"
+    );
+    let resumed_path = PathBuf::from(&worktree);
+    assert_eq!(
+        fs::read_to_string(resumed_path.join("kept.txt")).unwrap(),
+        "worktree\n"
+    );
+
+    client.send(&close(&id));
+    until_exited(&client, &setup, Some(&sub));
+    client.send(&json!({"id": "c_unarchived", "command": "sessions", "args": {}}));
+    let listed = until_hub(&client, "the unarchived listing", |line| {
+        acknowledges(line, "c_unarchived")
+    });
+    let rows = &listed.last().unwrap()["payload"]["result"]["exited"];
+    assert!(
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .any(|row| { row["session_id"] == id && row["archived"] != true }),
+        "resuming unarchived the row: {rows}"
+    );
     drop(client);
     hub.lock().unwrap().take().expect("the hub ran").finish();
 }

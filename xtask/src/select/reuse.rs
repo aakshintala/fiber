@@ -3,13 +3,17 @@
 //!
 //! The runs file holds one page of the Actions runs list
 //! (`workflow_runs[]` with `id`, `head_sha`, `status` and `pull_requests[]`
-//! carrying `number`, `head.sha` and `base.sha`); the jobs file holds one
-//! object mapping a run id to that run's jobs list (`jobs[]` with `name`
-//! and `conclusion`). Only the runs' top-level `head_sha` pins the tested
-//! code: a run's `pull_requests[].head.sha` tracks the pull request's live
-//! head, so it is never compared.
+//! carrying `number`, `head.sha` and `base.sha`); each candidate's jobs file
+//! holds its raw paginated response as one JSON page per document, each with
+//! a `jobs[]` array whose entries carry `name` and `conclusion`. Only the
+//! runs' top-level `head_sha` pins the tested code: a run's
+//! `pull_requests[].head.sha` tracks the pull request's live head, so it is
+//! never compared.
 
-use serde_json::Value;
+use std::fs;
+use std::path::Path;
+
+use serde_json::{Map, Value};
 
 use super::plan::mutant_shards;
 
@@ -97,6 +101,9 @@ fn match_in_run(
                 }
             })
         })?;
+    if pr_head.is_empty() {
+        return None;
+    }
     let jobs = jobs_by_run.get(id.to_string()).and_then(Value::as_array)?;
     let shards: Vec<&Value> = jobs
         .iter()
@@ -126,30 +133,62 @@ fn match_in_run(
     }
 }
 
-/// The first candidate run the current run would reuse, if any: the same
-/// guard clauses as the reuse decision, so an absent match always means the
-/// decision is false and a logged match always names a real pass.
-pub(crate) fn matched_reuse(
+/// Unique run IDs from the raw runs response, in source order. Invalid JSON
+/// or a response without `workflow_runs` is a failed lookup.
+pub(crate) fn reuse_candidate_ids(runs_json: &str) -> Option<Vec<u64>> {
+    let runs: Value = serde_json::from_str(runs_json).ok()?;
+    let candidates = runs.get("workflow_runs")?.as_array()?;
+    let mut ids = Vec::new();
+    for run in candidates {
+        if let Some(id) = run.get("id").and_then(Value::as_u64)
+            && !ids.contains(&id)
+        {
+            ids.push(id);
+        }
+    }
+    Some(ids)
+}
+
+/// The first candidate run the current run would reuse, if any. Each
+/// candidate's file must contain one or more raw jobs-page JSON documents;
+/// all pages are merged before the existing matcher runs. Any missing or
+/// invalid candidate file fails closed for the entire lookup.
+pub(crate) fn matched_reuse_files(
     current: &Current,
     runs_json: &str,
-    jobs_json: &str,
+    jobs_dir: &Path,
 ) -> Option<MatchedReuse> {
-    if current.draft {
+    if current.draft || mutant_shards(current.mutant_count) == 0 {
         return None;
     }
-    let total = mutant_shards(current.mutant_count);
-    if total == 0 {
-        return None;
+    let ids = reuse_candidate_ids(runs_json)?;
+    let runs: Value = serde_json::from_str(runs_json).ok()?;
+    let candidates = runs.get("workflow_runs")?.as_array()?;
+    let mut jobs_by_run = Map::new();
+    for id in ids {
+        let raw = fs::read_to_string(jobs_dir.join(format!("{id}.json"))).ok()?;
+        let pages: Vec<Value> = serde_json::Deserializer::from_str(&raw)
+            .into_iter::<Value>()
+            .collect::<Result<_, _>>()
+            .ok()?;
+        if pages.is_empty() {
+            return None;
+        }
+        let mut jobs = Vec::new();
+        for page in pages {
+            jobs.extend(page.get("jobs")?.as_array()?.iter().cloned());
+        }
+        jobs_by_run.insert(id.to_string(), Value::Array(jobs));
     }
-    let runs: Value = serde_json::from_str(runs_json).unwrap_or(Value::Null);
-    let jobs_by_run: Value = serde_json::from_str(jobs_json).unwrap_or(Value::Null);
-    runs.get("workflow_runs")
-        .and_then(Value::as_array)
-        .and_then(|candidates| {
-            candidates
-                .iter()
-                .find_map(|run| match_in_run(current, total, run, &jobs_by_run))
-        })
+    let jobs_by_run = Value::Object(jobs_by_run);
+    candidates.iter().find_map(|run| {
+        match_in_run(
+            current,
+            mutant_shards(current.mutant_count),
+            run,
+            &jobs_by_run,
+        )
+    })
 }
 
 #[cfg(test)]

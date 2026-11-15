@@ -2978,8 +2978,9 @@ fn write_log(temp: &Temp, project: &str, id: &str, text: &str) {
 /// An exited recent row for `id` in `project` with row `ts`, delegate of
 /// `parent` when given.
 fn exited_row(temp: &Temp, id: &str, project: &str, ts: u64, parent: Option<&str>) {
+    let workspace = temp.workspace();
     let row: crate::RecentRow = serde_json::from_value(json!({
-        "session_id": id, "ts": ts, "project": project, "workspace": "/w",
+        "session_id": id, "ts": ts, "project": project, "workspace": workspace,
         "name": "n", "how": "exited",
         "status": crate::fake::status("n", "/w", "idle", parent),
     }))

@@ -1,6 +1,8 @@
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 use clap::error::ContextValue;
 
@@ -4563,6 +4565,82 @@ fn session_host_commands_match_the_enum_and_the_contract_predicate() {
         assert!(
             contract::session_process::is_session_process(&argv),
             "{name} is not recognized as a session host"
+        );
+    }
+}
+
+const OVERLAP_CHILD: &str = "FIBER_MAIN_CLI_OVERLAP_CHILD";
+const OVERLAP_COMMAND: &str = "FIBER_MAIN_CLI_OVERLAP_COMMAND";
+
+fn test_path(test: &str) -> String {
+    let module = module_path!();
+    let module = module.split_once("::").map_or(module, |(_, rest)| rest);
+    format!("{module}::{test}")
+}
+
+#[test]
+fn repository_cli_commands_exit_two_and_leave_fiber_home_bytes_unchanged() {
+    if std::env::var_os(OVERLAP_CHILD).is_some() {
+        let command = std::env::var(OVERLAP_COMMAND).unwrap();
+        let code = match command.as_str() {
+            "config-set" => ::cli::config_set(
+                config::Layer::Repository,
+                "model",
+                "updated/model",
+                &crate::clock::System,
+            ),
+            "mcp-add" => crate::mcp_command(
+                super::McpCommands::Add(super::McpAddArgs {
+                    project: false,
+                    repo: true,
+                    name: "new".to_owned(),
+                    url: Some("https://example.test/mcp".to_owned()),
+                    env: Vec::new(),
+                    secret: Vec::new(),
+                    command: Vec::new(),
+                }),
+                Arc::new(crate::clock::System),
+            ),
+            "mcp-remove" => crate::mcp_command(
+                super::McpCommands::Remove(super::McpRemoveArgs {
+                    project: false,
+                    repo: true,
+                    name: "docs".to_owned(),
+                }),
+                Arc::new(crate::clock::System),
+            ),
+            other => panic!("unexpected command {other}"),
+        };
+        std::process::exit(code);
+    }
+
+    let root = fakes::TempDir::new("fiber-main-cli-overlap");
+    let workspace = root.path().join("workspace");
+    let home = workspace.join(".fiber");
+    std::fs::create_dir_all(&home).unwrap();
+    let file = home.join("config.json");
+    let original = br#"{"model":"global/model","mcp":{"servers":{"docs":{"url":"https://example.test/mcp"}}}}"#;
+
+    for command in ["config-set", "mcp-add", "mcp-remove"] {
+        std::fs::write(&file, original).unwrap();
+        let home_str = home.to_string_lossy();
+        let output = fakes::rerun_prepared(
+            &test_path("repository_cli_commands_exit_two_and_leave_fiber_home_bytes_unchanged"),
+            &[(OVERLAP_CHILD, "1"), (OVERLAP_COMMAND, command)],
+            fakes::Deadline::after(Duration::from_secs(30)),
+            |child| {
+                child
+                    .env("FIBER_HOME", home_str.as_ref())
+                    .current_dir(&workspace);
+            },
+        );
+        assert_eq!(output.status.code(), Some(2), "{command}: {output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("global"), "{command}: {stderr}");
+        assert_eq!(std::fs::read(&file).unwrap(), original, "{command}");
+        assert!(
+            !home.join("credentials").exists(),
+            "{command} created credentials"
         );
     }
 }

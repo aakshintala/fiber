@@ -350,6 +350,7 @@ fn hub_models_encodes_price_name_and_absent_fields() {
     let priced = &models[0];
     assert_eq!(priced["reference"], json!("acme/m1"));
     assert_eq!(priced["name"], json!("Acme One"));
+    assert_eq!(priced["is_new"], json!(false));
     // No `cache_write`: the input price stands in; the tier's own
     // `cache_write` names its rebuild price.
     assert_eq!(
@@ -362,6 +363,7 @@ fn hub_models_encodes_price_name_and_absent_fields() {
     );
     let plain = &models[1];
     assert_eq!(plain["reference"], json!("acme/m2"));
+    assert_eq!(plain["is_new"], json!(false));
     for key in ["name", "price", "default_level", "configured"] {
         assert!(
             plain.get(key).is_none(),

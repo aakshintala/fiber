@@ -88,7 +88,7 @@ fn approved_url(
     between: &dyn Fn(),
     clock: &Arc<dyn Clock>,
 ) -> Result<String, CliError> {
-    let declared = config::declared(workspace)?;
+    let declared = config::declared(workspace, home)?;
     let Some(entry) = declared.mcp_servers.get(server) else {
         return Err(unapproved(server));
     };

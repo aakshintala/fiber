@@ -512,6 +512,61 @@ fn try_hold_holds_through_another_descriptor_and_creates_a_missing_lock() {
 }
 
 #[test]
+fn lock_file_until_returns_none_at_or_after_the_deadline_without_opening() {
+    let home = fakes::TempDir::new("log-scan-expired-lock");
+    let dir = home.path().join("s");
+    fs::create_dir_all(&dir).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let now = clock.origin();
+    let before = now
+        .checked_sub(Duration::from_nanos(1))
+        .expect("the fake clock origin is at least one nanosecond after monotonic zero");
+
+    for until in [before, now] {
+        assert!(
+            lock_file_until(&dir, clock.as_ref(), until)
+                .unwrap()
+                .is_none()
+        );
+        assert!(!dir.join(LOCK).exists());
+    }
+}
+
+#[test]
+fn lock_file_until_waits_for_a_held_lock_to_be_released() {
+    let home = fakes::TempDir::new("log-scan-lock-wait");
+    let dir = home.path().join("s");
+    fs::create_dir_all(&dir).unwrap();
+    let held = try_lock_file(&dir).unwrap().expect("first lock is held");
+    let clock = fakes::clock::FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(10);
+    let (waiter_tx, waiter_rx) = std::sync::mpsc::channel();
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    let worker_clock = std::sync::Arc::clone(&clock);
+    let worker_dir = dir.clone();
+    std::thread::spawn(move || {
+        waiter_tx.send(std::thread::current().id()).unwrap();
+        let result = lock_file_until(&worker_dir, worker_clock.as_ref(), until);
+        result_tx.send(result).unwrap();
+    });
+
+    let waiter = fakes::Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&waiter_rx, "takeover lock waiter");
+    assert!(clock.await_thread_parked(
+        waiter,
+        Some(until),
+        fakes::Deadline::after(Duration::from_secs(10)),
+    ));
+    drop(held);
+
+    let file = fakes::Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&result_rx, "takeover lock acquisition")
+        .expect("lock acquisition succeeds")
+        .expect("the lock is acquired before the deadline");
+    drop(file);
+}
+
+#[test]
 fn last_line_where_with_a_missing_or_empty_log_gives_none() {
     let home = fakes::TempDir::new("log-scan-where-missing");
     assert_eq!(

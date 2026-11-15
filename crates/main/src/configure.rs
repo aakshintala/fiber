@@ -202,9 +202,11 @@ fn layer_to(layer: Layer) -> config::Layer {
 }
 
 /// One key's row.
-fn row(config: &Config, info: config::SettingInfo) -> SettingRow {
+fn row(config: &Config, info: config::SettingInfo, repository_available: bool) -> SettingRow {
     let scope = match info.scope {
-        config::WriteScope::Any { repo } => WriteScope::Any { repo },
+        config::WriteScope::Any { repo } => WriteScope::Any {
+            repo: repo && repository_available,
+        },
         config::WriteScope::GlobalOnly => WriteScope::GlobalOnly,
         config::WriteScope::RepoOnly => WriteScope::RepoOnly,
         config::WriteScope::PersonFiles => WriteScope::PersonFiles,
@@ -293,11 +295,35 @@ impl tui::Configure for Seam {
         overrides: &[String],
     ) -> Result<Vec<SettingRow>, ConfigureError> {
         let config = self.load_with(workspace, overrides)?;
+        let repository_available = !config::same_repository_home(workspace, &self.home);
         Ok(config
             .settings()
             .into_iter()
-            .map(|info| row(&config, info))
+            .map(|info| row(&config, info, repository_available))
             .collect())
+    }
+
+    fn hubs(&self) -> Result<Vec<String>, ConfigureError> {
+        let value = config::get_global(&self.home, "hubs").map_err(from_config)?;
+        let mut names = value
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .map(|hubs| hubs.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        names.sort();
+        Ok(names)
+    }
+
+    fn search_backends(&self, workspace: &Path) -> Result<Vec<String>, ConfigureError> {
+        let config = self.load(workspace)?;
+        let extensions = extensions::SessionExtensions::load(
+            &self.home,
+            &config,
+            Arc::new(crate::clock::System),
+            Arc::new(::tools::PathLocks::new()),
+            None,
+        );
+        Ok(extensions.search_backend_names().to_vec())
     }
 
     fn set(

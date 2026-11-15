@@ -86,6 +86,29 @@ fn settings_reads_the_session_workspaces_project_layer() {
 }
 
 #[test]
+fn settings_omit_repository_scope_when_workspace_fiber_is_home() {
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    let home = workspace.join(".fiber");
+    fs::create_dir_all(&home).unwrap_or_else(|e| panic!("mkdir: {e}"));
+    let seam = Seam::new(home);
+    assert_eq!(
+        row(&seam, &workspace, "compaction.tokens").scope,
+        WriteScope::Any { repo: false }
+    );
+    // Union settings declare Any without repository writes. With both
+    // operands false, repository scope must remain unavailable.
+    assert_eq!(
+        row(&seam, &workspace, "skills.disabled").scope,
+        WriteScope::Any { repo: false }
+    );
+    assert_eq!(
+        row(&seam, &dirs.workspace("two"), "compaction.tokens").scope,
+        WriteScope::Any { repo: true }
+    );
+}
+
+#[test]
 fn settings_carry_the_schemas_presentation_and_control() {
     let dirs = Dirs::new();
     let seam = Seam::new(dirs.home());
@@ -683,6 +706,41 @@ fn save_keys_refuses_a_keys_that_is_no_object_leaving_the_file() {
     assert_eq!(
         fs::read_to_string(dirs.home().join("config.json")).unwrap_or_else(|e| panic!("read: {e}")),
         text
+    );
+}
+
+#[test]
+fn hubs_returns_sorted_configured_names_through_the_seam() {
+    use tui::Configure;
+    let dirs = Dirs::new();
+    write(
+        &dirs.home().join("config.json"),
+        r#"{"hubs":{"zeta":{"address":"ws://z"},"alpha":{"address":"ws://a"}}}"#,
+    );
+    let seam = Seam::new(dirs.home());
+    assert_eq!(seam.hubs().unwrap(), ["alpha", "zeta"]);
+}
+
+#[test]
+fn search_backends_returns_sorted_installed_names_through_the_seam() {
+    use tui::Configure;
+    let dirs = Dirs::new();
+    let extension = dirs.home().join("extensions/searches");
+    crate::test_support::install_extension(
+        &dirs.home(),
+        "extensions/searches",
+        serde_json::json!({"name":"searches","version":"v1.0.0","fiber":"0.1.0","api":extensions::API}),
+        &[],
+    );
+    write(
+        &extension.join("init.lua"),
+        r#"fiber.search_backend("zebra", { timeout = 1000, run = function() return {} end })
+fiber.search_backend("apple", { timeout = 1000, run = function() return {} end })"#,
+    );
+    let seam = Seam::new(dirs.home());
+    assert_eq!(
+        seam.search_backends(&dirs.workspace("one")).unwrap(),
+        ["apple", "zebra"]
     );
 }
 

@@ -1189,6 +1189,8 @@ install still running.
       | `cache.warm_cap` | 0–11 | 1 | "2 cache lifetimes" |
       | `retry.attempts` | 0–10 | 1 | "3 retries" |
 
+      An off-range slider fills or empties its bar at the bound it passes, arrows step to the nearest in-range tick in their direction (from above the maximum, ← lands on the maximum), and Enter steps up or, from above the maximum, wraps to the minimum.
+
       The column count for a width is what the share gives on the current
       screen, after the rail's 22–48 and the panel's 30–60 column limits.
     - A number with no natural top is a list of values that Enter steps

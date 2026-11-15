@@ -52,6 +52,7 @@ pub fn set(
     key: &str,
     value: Value,
 ) -> Result<PathBuf, ConfigError> {
+    refuse_overlapping_repository(home, workspace, layer)?;
     // An extension's own setting never lives in `config.json`: route
     // every `extensions.<name>.settings` shape, the empty rest included,
     // to the settings write, which holds every gate in one order.
@@ -117,6 +118,7 @@ fn set_extension_setting(
     extension_dir: Option<&Path>,
 ) -> Result<PathBuf, ConfigError> {
     // The empty rest is usage, as an empty `-c` rest is.
+    refuse_overlapping_repository(home, workspace, layer)?;
     let [first, ..] = relative else {
         return Err(ConfigError::Override { arg: key.into() });
     };
@@ -484,6 +486,22 @@ impl Layer {
     }
 }
 
+/// Refuses a repository write when its `.fiber` directory is Fiber home.
+pub fn refuse_overlapping_repository(
+    home: &Path,
+    workspace: &Path,
+    layer: Layer,
+) -> Result<(), ConfigError> {
+    if matches!(layer, Layer::Repository) && crate::same_repository_home(workspace, home) {
+        return Err(ConfigError::Refused {
+            key: "repository configuration".into(),
+            file: crate::repository_config_file(workspace),
+            why: "there is no repository layer when the workspace's .fiber directory is Fiber home; use `fiber config set --global` instead",
+        });
+    }
+    Ok(())
+}
+
 /// The file and source `set` and `edit_list` write through for `layer`.
 fn layer_file(
     home: &Path,
@@ -704,6 +722,7 @@ pub fn insert_entry(
     name: &str,
     value: Value,
 ) -> Result<bool, ConfigError> {
+    refuse_overlapping_repository(home, workspace, layer)?;
     let (file, source) = layer_file(home, workspace, project, layer)?;
     let mut segments = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
     segments.push(name.to_owned());
@@ -744,6 +763,7 @@ pub fn remove_entry(
     key: &str,
     name: &str,
 ) -> Result<bool, ConfigError> {
+    refuse_overlapping_repository(home, workspace, layer)?;
     let (file, _) = layer_file(home, workspace, project, layer)?;
     let mut segments = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
     let parents = segments.len();

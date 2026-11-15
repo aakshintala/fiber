@@ -165,6 +165,17 @@ pub(crate) fn builtin_timed(
         .with_sandbox(sandbox)
         .with_detached(home.join("detached"))
         .non_interactive();
+    let dir = log::SessionDir::new(&log::sessions_dir(home, workspace), delegates.session());
+    let detached_root = home.join("detached");
+    for (opened, track) in jobs
+        .restore_detached_rows(log::lines(dir.path()).into_iter().flatten(), |pgid| {
+            shell.detached_restore_parts(pgid, detached_root.clone())
+        })
+    {
+        // The admission remains registered if tracking cannot start; its
+        // synchronous End records an indeterminate terminal state.
+        let _tracking = track(opened);
+    }
     if let Some(host) = &host {
         shell = shell.with_host(Arc::clone(host));
     }

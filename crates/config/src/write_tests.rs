@@ -12,6 +12,51 @@ use super::*;
 use super::{insert_entry, remove_entry};
 use crate::home::ProjectKey;
 
+#[test]
+fn repository_writers_refuse_when_fiber_home_is_the_workspace_fiber_directory() {
+    let dir = TempDir::new("fiber-overlapping-repository-write");
+    let workspace = dir.path().join("workspace");
+    let home = workspace.join(".fiber");
+    fs::create_dir_all(&home).unwrap();
+    let file = home.join("config.json");
+    fs::write(&file, br#"{"mcp":{"servers":{"db":{"command":"run"}}}}"#).unwrap();
+    let before = fs::read(&file).unwrap();
+    let project = ProjectKey::new("project").unwrap();
+    for result in [
+        set(
+            &home,
+            &workspace,
+            &project,
+            Layer::Repository,
+            "model",
+            json!("a/b"),
+        )
+        .map(|_| ()),
+        insert_entry(
+            &home,
+            &workspace,
+            &project,
+            Layer::Repository,
+            "mcp.servers",
+            "new",
+            json!({"command":"run"}),
+        )
+        .map(|_| ()),
+        remove_entry(
+            &home,
+            &workspace,
+            &project,
+            Layer::Repository,
+            "mcp.servers",
+            "db",
+        )
+        .map(|_| ()),
+    ] {
+        assert_eq!(result.unwrap_err().code(), contract::ErrorCode::Usage);
+        assert_eq!(fs::read(&file).unwrap(), before);
+    }
+}
+
 /// How long the test waits for a thread before failing.
 const DEADLINE: Duration = Duration::from_secs(10);
 

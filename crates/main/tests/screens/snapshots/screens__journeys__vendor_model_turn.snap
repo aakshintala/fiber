@@ -1,0 +1,37 @@
+---
+source: crates/main/tests/screens/journeys.rs
+expression: "fold_fixture_tmp(&grid_text(&opened.rows, opened.cursor, opened.hide_cursor,\n&ids))"
+---
+  Models  /model                                                               Esc returns
+   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+     Type to search █
+     2 models                                                           ⟳ refresh all
+     fake [freshness]
+     › [session] ● current                                                              —
+           fixed thinking
+       [session] · new                                            switch ~10 tokens
+           fixed thinking
+
+       anthropic · not installed
+       bedrock · not installed
+       codex · not installed
+       databricks · not installed
+⋮      gemini · not installed                                                             ⋮
+⋮      muse · not installed                                                               ⋮
+⋮      openai · not installed                                                             ⋮
+       opencode-go · not installed
+       opencode-zen · not installed
+       openrouter · not installed
+       vertex · not installed
+
+     ↑↓ move · ←→ levels · Enter choose · Ctrl+S session · Ctrl+R refresh · Esc close
+
+   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+   ›
+  ───────────────────────────────────────────────────────────────────────────────────────
+  [workspace]/w │ auto fake/[session]  │  ctx ▆▆▆▆▆▆▆▆ 13 · 0%
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+cursor=hidden

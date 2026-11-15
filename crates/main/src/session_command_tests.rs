@@ -14,7 +14,35 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 
-use super::report;
+use super::{combine_close_result, report};
+
+#[test]
+fn nonzero_session_stdout_error_keeps_existing_exit_and_stderr() {
+    for error in [
+        std::io::Error::from(std::io::ErrorKind::BrokenPipe),
+        std::io::Error::other("full disk"),
+    ] {
+        let result = combine_close_result(Ok(2), Err(error));
+        assert_eq!(
+            result.expect("the session's nonzero code takes precedence"),
+            2
+        );
+    }
+
+    assert_eq!(
+        combine_close_result(
+            Ok(0),
+            Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+        )
+        .expect("BrokenPipe is quiet for a successful session"),
+        0
+    );
+    let failure = combine_close_result(Ok(0), Err(std::io::Error::other("full disk")))
+        .expect_err("another copy failure changes success to failure");
+    assert_eq!(doors::exit_code(&failure), 1);
+    assert_eq!(failure.message, "stdout could not be written: full disk");
+    assert_eq!(combine_close_result(Ok(0), Ok(())).unwrap(), 0);
+}
 use fakes::Deadline;
 
 /// How long the child may run before the test kills it and fails: it fires
@@ -167,7 +195,7 @@ fn an_isolated_fork_adopts_before_reading_its_point() {
 /// archive that landed in between.
 #[test]
 fn close_keeps_the_session_lock_until_the_row_is_published() {
-    use super::{close, pause_before_row_arm};
+    use super::{close, combine_close_result, pause_before_row_arm};
     use contract::SessionId;
     use doors::Session;
 
@@ -207,7 +235,11 @@ fn close_keeps_the_session_lock_until_the_row_is_published() {
         let home = home.path().to_path_buf();
         let dir = dir.clone();
         move || {
-            close(session, log, &home, &dir, &workspace, &*clock, &keeper);
+            combine_close_result(
+                Ok(0),
+                close(session, log, &home, &dir, &workspace, &*clock, &keeper),
+            )
+            .expect("closing the session succeeds");
             home
         }
     });

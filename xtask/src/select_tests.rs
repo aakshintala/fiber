@@ -229,8 +229,11 @@ fn a_prototype_diff_selects_lint_and_no_tests() {
             "pull_request",
             false,
             false,
-            false,
-            0,
+            MutantPlanInput {
+                labels: Vec::new(),
+                count: 0,
+                reuse: None,
+            },
         );
         assert!(plan.jobs["lint"], "{files:?}");
         assert!(!plan.jobs["test"], "{files:?}");
@@ -247,8 +250,11 @@ fn another_research_path_stays_docs_only_and_skips_lint() {
         "pull_request",
         false,
         false,
-        false,
-        0,
+        MutantPlanInput {
+            labels: Vec::new(),
+            count: 0,
+            reuse: None,
+        },
     );
     assert!(!plan.jobs["lint"]);
 }

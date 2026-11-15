@@ -1603,15 +1603,15 @@ fn a_compaction_with_session_start_context_and_a_reviewer_completes() {
 }
 
 #[test]
-fn kept_messages_over_the_trigger_are_carried_whole_and_compact_once() {
-    // 8,000 bytes are 2,000 tokens: the kept message alone is over a
-    // trigger of 1,000.
+fn kept_messages_are_carried_whole_when_measured_context_crosses_the_trigger() {
+    // The 8,000-byte message estimates to about 2,000 tokens, below the
+    // 5,000-token trigger; the scripted reply reports 5,100 measured tokens.
     let long = format!("never push to main. {}", "x".repeat(8_000));
-    let trigger = 1_000;
-    assert!(long.len() as u64 / 4 > trigger);
+    let trigger = 5_000;
+    assert!(long.len() as u64 / 4 < trigger);
     let mut session = Session::with_tools(
         vec![
-            support::with_tokens(Scripted::text("Hi."), trigger, 0),
+            support::with_tokens(Scripted::text("Hi."), trigger + 100, 0),
             Scripted::text("The note."),
             support::with_tokens(Scripted::text("Done."), 50, 0),
         ],

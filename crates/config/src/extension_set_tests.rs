@@ -530,6 +530,32 @@ fn set_global_unknown_setting_is_refused() {
 }
 
 #[test]
+fn set_repo_extension_write_refuses_fiber_home_without_changing_bytes() {
+    let setup = SetSetup::new();
+    let dir = setup.repo_dirs();
+    let home_file = setup.home().join("config").join("acme.json");
+    fs::create_dir_all(home_file.parent().unwrap()).unwrap();
+    fs::write(&home_file, r#"{"workspace_url":"global"}"#).unwrap();
+    fs::remove_dir_all(setup.workspace().join(".fiber")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(setup.home(), setup.workspace().join(".fiber")).unwrap();
+    let before = fs::read(&home_file).unwrap();
+
+    let result = crate::set_repo_extension_setting(
+        &setup.home(),
+        &setup.workspace(),
+        &setup.project,
+        &dir,
+        "extensions.\"acme\".settings.workspace_url",
+        json!("repo-wire"),
+    );
+
+    let error = result.unwrap_err();
+    assert_eq!(error.code(), contract::ErrorCode::Usage, "{error}");
+    assert_eq!(fs::read(&home_file).unwrap(), before);
+}
+
+#[test]
 fn set_repo_valid_key_writes_the_repository_file() {
     // Kills: `set_repo_extension_setting` to `Ok(Default)`, the `!any`
     // `!` deletion and the `==` to `!=` in the repository gate (a listed

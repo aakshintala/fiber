@@ -534,6 +534,8 @@ fn marking_a_hook_required_changes_its_hash() {
 /// Present in a re-executed child, absent in the parent: the child lists
 /// files with the fixture directory first on its `PATH`.
 const LS_FILES_CHILD: &str = "FIBER_TEST_LS_FILES_CHILD";
+const FIBER_HOME_BOUNDARY_CHILD: &str = "FIBER_TEST_DECLARED_HOME_CHILD";
+const DECLARED_WORKSPACE: &str = "FIBER_TEST_DECLARED_WORKSPACE";
 
 /// The fixture's stall marker: the parent sets it to a value unique to the
 /// run, and the fixture carries it in the stall's argv, so the child matches
@@ -799,6 +801,38 @@ fn a_bare_word_command_names_nothing() {
 }
 
 #[test]
+fn declared_items_boundary_uses_child_fiber_home_and_omits_repository_items() {
+    if std::env::var_os(FIBER_HOME_BOUNDARY_CHILD).is_some() {
+        let workspace = PathBuf::from(std::env::var_os(DECLARED_WORKSPACE).unwrap());
+        let clock = FakeClock::new();
+        assert!(declared_items(&workspace, &*clock).unwrap().is_empty());
+        return;
+    }
+    let repo = Repo::new();
+    repo.write("srv/run.sh", "echo");
+    repo.config(&server("./srv/run.sh", &json!([])));
+    let workspace = repo.root();
+    let home = workspace.join(".fiber");
+    let workspace_text = workspace.to_string_lossy().into_owned();
+    let home_text = home.to_string_lossy().into_owned();
+    let output = fakes::rerun_within(
+        "repository::declared_tests::declared_items_boundary_uses_child_fiber_home_and_omits_repository_items",
+        &[
+            (FIBER_HOME_BOUNDARY_CHILD, "1"),
+            (DECLARED_WORKSPACE, workspace_text.as_str()),
+            ("FIBER_HOME", home_text.as_str()),
+        ],
+        Deadline::after(Duration::from_secs(30)),
+    );
+    assert!(
+        output.status.success(),
+        "child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn declared_servers_hashes_like_declared_items() {
     use super::declared::declared_servers;
     let repo = Repo::new();
@@ -848,7 +882,7 @@ fn mcp_server_item_builds_the_snapshot_entry_without_rereading() {
     repo.config(
         &json!({"mcp": {"servers": {"db": {"command": "./srv/run.sh", "required": true}}}}),
     );
-    let declared = config::declared(&repo.root()).unwrap();
+    let declared = config::declared(&repo.root(), &repo.root().join("fiber-home")).unwrap();
     let entry = declared.mcp_servers.get("db").unwrap().clone();
     let item = mcp_server_item(&repo.root(), "db", &entry).unwrap();
     assert_eq!(item.kind, OfferedKind::McpServer);

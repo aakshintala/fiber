@@ -224,7 +224,7 @@ fn typed_lines_are_acknowledged_and_it_exits_when_the_socket_closes() {
         .unwrap();
     let (done, done_rx) = mpsc::channel();
     thread::spawn(move || {
-        session.close(log);
+        session.close(log).unwrap_or(());
         done.send(()).unwrap();
     });
     jig.deadline.recv_or_fail(&done_rx, "the session closes");

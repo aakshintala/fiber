@@ -323,6 +323,38 @@ impl Shell {
         )
     }
 
+    /// Stop callback and one-shot tracker for a detached group restored from
+    /// the session log. The callback only signals after Registry approves it.
+    pub fn detached_restore_parts(
+        &self,
+        pgid: u32,
+        log_root: PathBuf,
+    ) -> (
+        Stop,
+        impl FnOnce(Opened) -> Result<(), std::io::Error> + Send + 'static,
+    ) {
+        let control = detached::StopControl::new();
+        let stop_control = Arc::clone(&control);
+        let stop = Stop(Box::new(move || stop_control.request_stop(pgid)));
+        let clock = Arc::clone(&self.clock);
+        let spawner = Arc::clone(&self.detached_spawner);
+        let track = move |opened| {
+            detached::track_restored(
+                opened,
+                detached::Restored {
+                    pgid,
+                    control,
+                    log_root,
+                    #[cfg(debug_assertions)]
+                    liveness: None,
+                },
+                clock,
+                &spawner,
+            )
+        };
+        (stop, track)
+    }
+
     /// Kills the child if registry admission failed; the independent reaper
     /// still owns and waits for its `Child`.
     fn abort_detached(&self, pgid: u32) {

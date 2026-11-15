@@ -65,7 +65,7 @@ fn close(log: Arc<Log>, inbox: Receiver<(Result<(), Failure>, Session)>) -> Resu
         .expect("waited for the inbox thread to finish");
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
-        session.close(log);
+        session.close(log).unwrap_or(());
         match done.send(()) {
             Ok(()) | Err(_) => {}
         }
@@ -715,8 +715,27 @@ impl Write for Broken {
     }
 }
 
+struct FailsOnWrite {
+    remaining: usize,
+    kind: std::io::ErrorKind,
+}
+
+impl Write for FailsOnWrite {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 {
+            return Err(std::io::Error::from(self.kind));
+        }
+        self.remaining -= 1;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 #[test]
-fn an_unwritable_stdout_is_an_io_failure() {
+fn attach_stdout_error_preserves_kind() {
     let opened = Opened::open(Vec::new());
     let log = Arc::clone(&opened.log);
     let inbox = run(opened.session, move |inbox| {
@@ -745,11 +764,67 @@ fn an_unwritable_stdout_is_an_io_failure() {
     let failed = failed.unwrap_err();
 
     assert!(
-        matches!(&failed, SessionError::StdoutFailed { .. }),
-        "a broken stdout is a write failure: {failed:?}"
+        matches!(&failed, SessionError::StdoutFailed { source } if source.kind() == std::io::ErrorKind::Other),
+        "the stdout error keeps its original kind: {failed:?}"
     );
     assert_eq!(failed.code(), ErrorCode::IoFailed);
     assert_eq!(close(opened.log, inbox), Ok(()));
+}
+
+#[test]
+fn attach_turn_completed_stdout_error_obeys_turn_result() {
+    for (kind, turn_code) in [
+        (std::io::ErrorKind::BrokenPipe, 0),
+        (std::io::ErrorKind::Other, 0),
+        (std::io::ErrorKind::BrokenPipe, 1),
+        (std::io::ErrorKind::Other, 1),
+    ] {
+        let opened = Opened::open(Vec::new());
+        let log = Arc::clone(&opened.log);
+        let inbox = run(opened.session, move |inbox| {
+            let (_, command, ack) = prompt_of(&inbox);
+            append(
+                &log,
+                &Event::TurnStarted(TurnStarted {
+                    input: turn_input("lost", &command),
+                }),
+                "t_1",
+            );
+            ack.0(Ok(None));
+            let event = if turn_code == 0 {
+                completed()
+            } else {
+                Event::TurnCompleted(TurnCompleted {
+                    outcome: TurnOutcome::Failed,
+                    error: Some(failure(ErrorCode::IoFailed, "turn failed")),
+                    questions: None,
+                })
+            };
+            append(&log, &event, "t_1");
+            Ok(())
+        });
+        // The first emitted turn line succeeds; the terminal line fails.
+        let writer = FailsOnWrite { remaining: 1, kind };
+        let finished = attach_on_thread(
+            opened.home.clone(),
+            opened.id.clone(),
+            None,
+            "lost".into(),
+            writer,
+            refused(&opened.id),
+        );
+        let (result, _) = attached(finished, "attach terminal write");
+        if turn_code != 0 {
+            assert_eq!(result.unwrap(), 1);
+        } else if kind == std::io::ErrorKind::BrokenPipe {
+            assert_eq!(result.unwrap(), 0);
+        } else {
+            assert!(
+                matches!(result, Err(SessionError::StdoutFailed { source }) if source.kind() == kind)
+            );
+        }
+        assert_eq!(close(opened.log, inbox), Ok(()));
+    }
 }
 
 #[test]

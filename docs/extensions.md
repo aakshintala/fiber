@@ -1005,7 +1005,7 @@ no_reviewer` and it never runs, and `tool_call_completed` has `status:
 denied`.
 
 The reviewer's first stage answers `allow` or `check`; a `check` goes to a
-second stage whose reply is `allow` or `block` plus a reason
+second stage whose reply is a reason followed by `allow` or `block`
 (`docs/permissions.md`, "Its verdict"). The case below answers the first
 stage with `allow`.
 
