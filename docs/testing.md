@@ -315,8 +315,8 @@ A test does not execute a file it wrote in the same run. On macOS, the first
 run of a newly written executable can stall for seconds under load. The test
 runs the script through its interpreter (`/bin/sh <path>`, `/bin/bash <path>`)
 or uses a checked-in fixture. A test whose subject is direct execution, such as
-a `PATH` lookup or the shebang line, keeps the executable file and passes a
-`cargo nextest run --stress-count` run.
+a `PATH` lookup or the shebang line, keeps the executable file and passes 30
+separate runs under load (`docs/testing/running.md`, "Flaky tests").
 
 ## Flaky tests
 
