@@ -366,6 +366,23 @@
       "context_window": 1048576,
       "cost": {
         "cache_read": 0.075,
+        "input": 1.5,
+        "output": 7.5
+      },
+      "id": "gemini-4-hydrogen",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65536,
+      "name": "Gemini 4 Hydrogen",
+      "protocol": "google-generative-ai"
+    },
+    {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.075,
         "input": 0.75,
         "output": 3.75
       },
@@ -438,6 +455,10 @@
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
       "context_window": 262144,
+      "cost": {
+        "input": 0,
+        "output": 0
+      },
       "id": "gemma-4-26b-a4b-it",
       "input": [
         "text",
@@ -455,6 +476,10 @@
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
       "context_window": 262144,
+      "cost": {
+        "input": 0,
+        "output": 0
+      },
       "id": "gemma-4-31b-it",
       "input": [
         "text",
