@@ -1731,6 +1731,8 @@ fn summary_failed_offers_retry_without_summary_and_cancel() {
     // Rewind without summary sends a fresh rewind with it off, even
     // with the checkbox on.
     refuse(&mut app, &out[0]["id"], "summary_failed");
+    let grown = rows(&app);
+    goto(&mut app, &clock, grown.len() - 5);
     app.on_key(crate::keys::Key::Char(' '), clock.now());
     assert!(rows(&app).contains(&CHECKED.to_owned()));
     let grown = rows(&app);
@@ -2684,34 +2686,21 @@ fn clicking_cancel_clears_the_refusal() {
     );
 }
 
-/// Clicking each row kind moves the cursor onto it.
+/// Clicking turn and checkbox rows runs their Enter actions.
 #[test]
-fn clicking_rows_moves_the_cursor_to_them() {
+fn clicking_turn_and_checkbox_rows_runs_enter() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = attached();
     let lines = open(&mut app, &clock);
     accept(&mut app, &lines[0]["id"], segment_a());
-    // Open the first turn so its boundary rows draw.
-    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
-    app.on_key(crate::keys::Key::Enter, clock.now());
-    for at in [2usize, 0, 5, 6] {
-        app.session_view_click(crate::swapped::Spot::Row(at));
-        let frame = app.session_view_screen(80).expect("the view is open");
-        // Step boundaries and the default point (`docs/tui.md`, "Rewind").
-        assert_eq!(frame.list.selected(), at, "row {at}");
-    }
-    let out = send_rewind(&mut app, &clock);
-    refuse(&mut app, &out[0]["id"], "summary_failed");
-    // The choices draw under the Rewind row: retry, without summary,
-    // then cancel.
-    // The detail names files, calls, no-undo and stopping jobs (`docs/tui.md`, "Rewind").
-    let base = rows(&app).len() - 3;
-    for at in [base, base + 1, base + 2] {
-        app.session_view_click(crate::swapped::Spot::Row(at));
-        let frame = app.session_view_screen(80).expect("the view is open");
-        // Step boundaries and the default point (`docs/tui.md`, "Rewind").
-        assert_eq!(frame.list.selected(), at, "row {at}");
-    }
+    let before = shot(&app);
+    app.session_view_click(crate::swapped::Spot::Row(0));
+    assert!(rows(&app).iter().any(|row| row.contains("start of turn")));
+    assert_ne!(shot(&app), before);
+    // The checkbox is a row action as well as a direct cell control.
+    let check = rows(&app).len() - 2;
+    app.session_view_click(crate::swapped::Spot::Row(check));
+    assert!(rows(&app).contains(&CHECKED.to_owned()));
 }
 
 /// Keying through the refusal's choices moves the cursor onto each.
