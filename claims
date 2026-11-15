@@ -417,3 +417,4 @@ docs/testing/mutants.md	fiber-4685	plan	2026-11-15T16:14:58Z	Amoghs-MacBook-Pro:
 crates/extensions/tests/fixtures/session-host-exec/bin/*	fiber-4899	plan	2026-11-15T16:16:14Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/testing/running.md	fiber-4899	plan	2026-11-15T16:16:14Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/install.rs	fiber-4899	plan	2026-11-15T16:16:14Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/tests/fixtures/session-host-exec/bin	fiber-4899	grant	2026-11-15T16:16:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4899-session-host-exec	
