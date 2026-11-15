@@ -135,7 +135,12 @@ fn valid_id(id: &SessionId) -> bool {
 /// The first project in key order holding `id`, with `logged` choosing
 /// the predicate: a directory, or a directory with a log file. One
 /// `read_dir` of `projects/` per call; no `sessions/` is ever scanned.
-fn walk(home: &Path, id: &SessionId, logged: bool) -> Option<(String, PathBuf)> {
+fn walk(
+    home: &Path,
+    id: &SessionId,
+    logged: bool,
+    matches: Option<&dyn Fn(&str, &Path) -> bool>,
+) -> Option<(String, PathBuf)> {
     if !valid_id(id) {
         return None;
     }
@@ -155,7 +160,10 @@ fn walk(home: &Path, id: &SessionId, logged: bool) -> Option<(String, PathBuf)> 
         } else {
             dir.is_dir()
         };
-        held.then_some((key, dir))
+        if !held || matches.is_some_and(|matches| !matches(&key, &project)) {
+            return None;
+        }
+        Some((key, dir))
     })
 }
 
@@ -165,7 +173,41 @@ fn walk(home: &Path, id: &SessionId, logged: bool) -> Option<(String, PathBuf)> 
 /// unreadable, no project holds it, or `id` is not one normal path
 /// component.
 pub fn find_session(home: &Path, id: &SessionId) -> Option<(String, PathBuf)> {
-    walk(home, id, false)
+    walk(home, id, false, None)
+}
+
+/// Finds `id` under the project named by a persisted key, without reading
+/// its log. Tries that key first, then its legacy slug; an older row that
+/// still names a slug can also find the hashed directory carrying that
+/// exact `legacy-key` marker. A missing directory is `None`.
+pub fn find_session_in_project(
+    home: &Path,
+    key: &str,
+    id: &SessionId,
+) -> Option<(String, PathBuf)> {
+    let legacy = legacy_slug(key);
+    let (physical_key, dir) = walk(
+        home,
+        id,
+        false,
+        Some(&|physical_key, project| {
+            physical_key == key
+                || legacy.is_some_and(|legacy| physical_key == legacy)
+                || (legacy.is_none() && crate::legacy_marker_matches(project, key))
+        }),
+    )?;
+    if legacy.is_some_and(|legacy| physical_key == legacy) {
+        Some((key.to_owned(), dir))
+    } else {
+        Some((physical_key, dir))
+    }
+}
+
+/// The legacy slug in a hash-suffixed project key. Other strings, including
+/// legacy slugs and malformed suffixes, have no derived legacy candidate.
+fn legacy_slug(key: &str) -> Option<&str> {
+    let (slug, hash) = key.rsplit_once('-')?;
+    (hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(slug)
 }
 
 /// As [`find_session`], but a project counts only when
@@ -173,7 +215,7 @@ pub fn find_session(home: &Path, id: &SessionId) -> Option<(String, PathBuf)> {
 /// before the first is chosen, so a log-less directory cannot mask a
 /// later log.
 pub fn find_logged_session(home: &Path, id: &SessionId) -> Option<(String, PathBuf)> {
-    walk(home, id, true)
+    walk(home, id, true, None)
 }
 
 /// Finds a logged session named by `id` whose first line passes `matches`,
@@ -184,28 +226,12 @@ pub fn find_logged_session_matching(
     id: &SessionId,
     matches: &dyn Fn(&crate::SessionStarted) -> bool,
 ) -> Option<(String, PathBuf)> {
-    if !valid_id(id) {
-        return None;
-    }
-    let mut projects: Vec<(String, PathBuf)> = std::fs::read_dir(home.join("projects"))
-        .ok()?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            Some((
-                entry.file_name().to_string_lossy().into_owned(),
-                entry.path(),
-            ))
-        })
-        .collect();
-    projects.sort_by(|a, b| a.0.cmp(&b.0));
-    projects.into_iter().find_map(|(key, project)| {
-        let dir = project.join("sessions").join(&id.0);
-        if !dir.join(EVENTS).is_file() {
-            return None;
-        }
-        let started = crate::started_first(&dir).ok()?;
-        matches(&started).then_some((key, dir))
-    })
+    walk(
+        home,
+        id,
+        true,
+        Some(&|_, dir| crate::started_first(dir).is_ok_and(|started| matches(&started))),
+    )
 }
 
 /// Finds a logged session named by `id` in the identity's derived legacy or

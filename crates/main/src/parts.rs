@@ -372,16 +372,9 @@ fn parts_inner(
     launch: Option<SessionLaunch>,
     fiber: Option<PathBuf>,
 ) -> Result<Parts, Failure> {
-    let (sessions, project) = if launch.is_some() {
-        // A session's project layout is claimed only after its configuration
-        // validates, just before the first session write.
-        let identity = worktree::project(&workspace);
-        let project = config::ProjectKey::new(log::project_key(&identity))
-            .map_err(|error| failed(error.code(), error))?;
-        (log::sessions_dir(&home, &identity), project)
-    } else {
-        ::cli::project_of(&home, &workspace)?
-    };
+    let identity = worktree::project(&workspace);
+    let project = ::cli::project_key_of(&workspace)?;
+    let sessions = log::sessions_dir(&home, &identity);
     let (config, diag, mut startup_notices) = load_configuration(
         &home,
         &workspace,

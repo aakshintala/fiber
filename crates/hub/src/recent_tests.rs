@@ -202,6 +202,22 @@ fn project_filters_by_exact_key() {
 
 // `docs/invocation.md`, "Archiving" promises these results.
 #[test]
+fn a_hashed_recent_key_falls_back_to_its_legacy_directory_without_a_log() {
+    let temp = Temp::new();
+    let identity = Path::new("/w");
+    let key = log::project_key(identity);
+    let legacy = support::project_key::legacy_project_slug(identity);
+    let row = row(16, &key, Left::Exited, Some("idle"));
+    fs::create_dir_all(session_dir(&temp.dir, &legacy, &row.session_id)).unwrap();
+    temp.append(&row);
+
+    let listed = listed(&temp.dir, Some(&key));
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].session_id, row.session_id);
+    assert_eq!(listed[0].project, key);
+}
+
+#[test]
 fn stale_recent_key_lists_the_marker_validated_migrated_directory() {
     let temp = Temp::new();
     let row = temp.row(17, "-w", Left::Exited, Some("idle"));

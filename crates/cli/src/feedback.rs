@@ -356,11 +356,8 @@ pub fn select_session(
             .map(|(_, id)| id);
         return Ok(latest);
     };
-    let project = worktree::project(workspace);
-    let usable = log::find_logged_session_in(home, &project, &id, &|recorded| {
-        worktree::project(Path::new(recorded)) == project
-    })
-    .is_some_and(|(_, dir)| log::started_first(&dir).is_ok_and(|started| !started.delegate));
+    let usable = log::find_logged_session(home, &id)
+        .is_some_and(|(_, dir)| log::started_first(&dir).is_ok_and(|started| !started.delegate));
     if usable {
         Ok(Some(id))
     } else {

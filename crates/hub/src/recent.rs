@@ -72,25 +72,32 @@ impl RecentRow {
         self.status.as_ref().is_some_and(is_delegate)
     }
 
-    /// The logged directory that still records this row's workspace, with
-    /// its physical project key. A stale legacy key is normalized from the
-    /// located session; a duplicate id from another workspace fails closed.
+    /// The session directory named by this row's project key. Listing uses
+    /// the persisted key and its legacy path, not the opening event: the
+    /// workspace is not a prerequisite for listing an exited row.
     fn located_dir(&self, home: &Path) -> Option<(String, PathBuf)> {
-        let (key, dir) = log::find_logged_session_matching(home, &self.session_id, &|started| {
-            started.workspace.as_deref() == Some(self.workspace.as_str())
-        })?;
-        if key != self.project {
-            let project_dir = dir.parent()?.parent()?;
-            if !log::legacy_marker_matches(project_dir, &self.project) {
-                return None;
-            }
-        }
-        Some((key, dir))
+        log::find_session_in_project(home, &self.project, &self.session_id)
     }
 
-    /// Whether the session's logged directory still records this row's workspace.
+    /// Whether the logged directory still records this row's workspace.
+    #[cfg(test)]
     pub(crate) fn dir_exists(&self, home: &Path) -> bool {
-        self.located_dir(home).is_some()
+        let Some((key, dir)) =
+            log::find_logged_session_matching(home, &self.session_id, &|started| {
+                started.workspace.as_deref() == Some(self.workspace.as_str())
+            })
+        else {
+            return false;
+        };
+        if key != self.project {
+            let Some(project_dir) = dir.parent().and_then(Path::parent) else {
+                return false;
+            };
+            if !log::legacy_marker_matches(project_dir, &self.project) {
+                return false;
+            }
+        }
+        true
     }
 }
 

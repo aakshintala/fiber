@@ -135,8 +135,6 @@ pub(crate) fn builtin_timed(
     seen: std::collections::BTreeMap<PathBuf, u64>,
     host: Option<Arc<dyn contract::keeper::CommandHost>>,
 ) -> Result<SessionTools, Failure> {
-    let identity = worktree::project(workspace);
-    config::ensure_project_layout(home, &identity).map_err(|error| failed(error.code(), error))?;
     let mut files =
         tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks)).with_seen(seen);
     // A successful write or edit advances the baseline its path landed in,

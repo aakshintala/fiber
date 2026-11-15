@@ -59,8 +59,8 @@ pub use name::session_name;
 pub use name::session_parent;
 pub use read::{
     Injector, Lines, Scan, Watcher, complete_len_of, find_logged_session, find_logged_session_in,
-    find_logged_session_matching, find_session, is_archived, kind_of, last_kind, lines, lines_from,
-    read, tail_lines,
+    find_logged_session_matching, find_session, find_session_in_project, is_archived, kind_of,
+    last_kind, lines, lines_from, read, tail_lines,
 };
 pub use resolve::{most_recent, most_recent_in, opening_ts, resolve, resolve_in};
 pub use scan::{

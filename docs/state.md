@@ -100,8 +100,10 @@ the first identity that claims it, because its files have no recorded identity.
 Distinct keys keep future project data separate. Session selectors and history
 lookup retain legacy reachability only through derived candidate directories
 and recorded workspace/repository checks; they do not scan other projects.
-`session_started` records the exact workspace and, when Fiber made one, the
-worktree's repository. The log stays the truth ([ADR
+Doctor and a startup that fails before its first session write never write
+`layout` or migrate a project; writing layout and migrating happen only at the
+first session write under `projects/`. `session_started` records the exact
+workspace and, when Fiber made one, the worktree's repository. The log stays the truth ([ADR
 0001](adr/0001-session-log-is-the-only-state-of-record.md)). A startup that
 fails before its first session, such as a `config_invalid` or `io_failed`
 error, creates nothing under `projects/`.

@@ -137,8 +137,6 @@ pub fn prune(
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
     with_dirs(|home, workspace| {
-        let identity = worktree::project(workspace);
-        config::ensure_project_layout(home, &identity)?;
         let ask = Ask {
             yes: args.yes,
             terminal,

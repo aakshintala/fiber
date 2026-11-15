@@ -361,6 +361,20 @@ fn in_launch_project(dir: &Path, in_project: &dyn Fn(&str) -> bool) -> bool {
     let Ok(Some(Event::SessionStarted(started))) = Event::from_envelope(&line) else {
         return false;
     };
+    if let Some(recorded) = started.worktree.as_ref() {
+        let path = Path::new(&recorded.path);
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => {
+                if let Some(repository) = recorded.repository.as_deref()
+                    && worktree::project(path) != worktree::project(Path::new(repository))
+                {
+                    return false;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return false,
+        }
+    }
     let identity = started
         .worktree
         .as_ref()

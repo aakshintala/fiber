@@ -61,15 +61,6 @@ pub fn history(dir: &Path) -> Result<Vec<Segment>, Error> {
                 reason: "the forked_from chain repeats a session".to_owned(),
             });
         }
-        let identity_started = crate::started_first(&at).map_err(|_| Error::Pointer {
-            path: at.join(EVENTS),
-            reason: "the log's first line does not record its workspace".to_owned(),
-        })?;
-        let recorded_identity = identity_started
-            .repository
-            .as_deref()
-            .or(identity_started.workspace.as_deref())
-            .map(Path::new);
         let forked = first_fork(&at)?;
         segments.push(Segment {
             session_id: SessionId(id),
@@ -107,6 +98,18 @@ pub fn history(dir: &Path) -> Result<Vec<Segment>, Error> {
             // (`docs/state.md`, "Projects"). Every step climbs stored
             // directories only: no git, no environment.
             Some(key) => {
+                let identity_started = crate::started_first(&at).map_err(|error| match error {
+                    crate::FirstLineError::Incomplete => Error::NotFound(at.clone()),
+                    crate::FirstLineError::Corrupt => Error::Pointer {
+                        path: at.join(EVENTS),
+                        reason: "the log's first line does not record its workspace".to_owned(),
+                    },
+                })?;
+                let recorded_identity = identity_started
+                    .repository
+                    .as_deref()
+                    .or(identity_started.workspace.as_deref())
+                    .map(Path::new);
                 let Some(identity) = recorded_identity else {
                     return Err(Error::NotFound(at.clone()));
                 };
@@ -118,6 +121,12 @@ pub fn history(dir: &Path) -> Result<Vec<Segment>, Error> {
                             .bytes()
                             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
                 });
+                if !single_component(&key) {
+                    return Err(Error::Pointer {
+                        path: at.join(EVENTS),
+                        reason: "the recorded parent project is not one path component".to_owned(),
+                    });
+                }
                 if key != legacy && !points_to_hashed_key {
                     return Err(Error::NotFound(at.clone()));
                 }

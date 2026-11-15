@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use super::{
     hub_entries, in_project, listed_latest, notice_lines, resolve_project_sessions, route,
-    select_latest, select_latest_project, target_in, tty_refusal,
+    select_latest_project, target_in, tty_refusal,
 };
 use contract::SessionId;
 
@@ -43,13 +43,19 @@ fn logged(sessions: &Path, id: &str, first: u64, last: u64) {
 
 #[test]
 fn select_latest_returns_the_session_with_the_newest_last_line() {
-    let root = fakes::TempDir::new("fiber-open");
-    let sessions = root.path().join("sessions");
+    let home = fakes::TempDir::new("fiber-open");
+    let project = Path::new("/w");
+    let sessions = log::candidate_sessions_dirs(home.path(), project)[1].clone();
     std::fs::create_dir_all(&sessions).unwrap();
     logged(&sessions, "s_old", 200, 200);
     logged(&sessions, "s_new", 100, 300);
 
-    assert_eq!(select_latest(&sessions, &|_| true).unwrap().0, "s_new");
+    assert_eq!(
+        select_latest_project(home.path(), project, &|_| true)
+            .unwrap()
+            .0,
+        "s_new"
+    );
 }
 
 #[test]
@@ -80,11 +86,10 @@ fn latest_and_selector_search_both_derived_project_directories() {
 
 #[test]
 fn select_latest_without_a_session_is_a_usage_error_naming_fiber() {
-    let root = fakes::TempDir::new("fiber-open-empty");
-    let sessions = root.path().join("sessions");
-    std::fs::create_dir_all(&sessions).unwrap();
+    let home = fakes::TempDir::new("fiber-open-empty");
+    let project = Path::new("/w");
 
-    let Err(e) = select_latest(&sessions, &|_| true) else {
+    let Err(e) = select_latest_project(home.path(), project, &|_| true) else {
         panic!("expected no session");
     };
     assert_eq!(e.code, contract::ErrorCode::Usage);

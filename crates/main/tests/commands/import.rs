@@ -530,6 +530,7 @@ fn fiber_import_matches_the_driver_command() {
         &setup.home().join("extensions"),
         &binary_home.join("extensions"),
     );
+    fs::copy(setup.home().join("layout"), binary_home.join("layout")).unwrap();
     for source in ["claude-code", "codex"] {
         let mut command = setup.fiber(&["import", source]);
         command.env("FIBER_HOME", &binary_home);

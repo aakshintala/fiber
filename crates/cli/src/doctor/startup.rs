@@ -15,7 +15,6 @@ use contract::shapes::Failure;
 use extensions::{Model, Providers, is_enabled};
 
 use super::files::clean;
-use crate::project_of;
 
 #[cfg(test)]
 #[path = "startup_tests.rs"]
@@ -82,8 +81,8 @@ pub(crate) fn startup(
         let line = clean(&failure.message);
         return Startup::blocked(line, failure.code);
     }
-    let (_, project) = match project_of(home, workspace) {
-        Ok(found) => found,
+    let project = match crate::project_key_of(workspace) {
+        Ok(project) => project,
         Err(error) => {
             let code = error.code();
             let line = configuration_line(&error.to_string(), code.clone());

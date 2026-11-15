@@ -257,7 +257,7 @@ fn inside_a_repository_without_all_the_request_names_the_project() {
     ran.unwrap();
     assert_eq!(
         sent,
-        json!({"id": "c_sessions", "command": "sessions", "args": {"project": "-r-.git"}})
+        json!({"id": "c_sessions", "command": "sessions", "args": {"project": "-r-.git-2d09593ea5e01029"}})
     );
 }
 
