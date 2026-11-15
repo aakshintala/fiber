@@ -307,8 +307,6 @@ crates/main/tests/commands/completion.rs:360-362	fiber-4902	plan	2026-11-15T21:0
 crates/main/tests/commands/completion.rs:388-388	fiber-4902	plan	2026-11-15T21:04:46Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
 crates/main/tests/commands/completion.rs:424-424	fiber-4902	plan	2026-11-15T21:04:46Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
 crates/main/tests/commands/completion.rs:426-426	fiber-4902	plan	2026-11-15T21:04:46Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4902-completion-run-const	
-crates/bench/examples/bench/listing.rs	fiber-4935	plan	2026-11-15T21:32:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/bench/examples/bench/listing_tests.rs	fiber-4935	plan	2026-11-15T21:32:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/workflow.md:118-119	fiber-4889	plan	2026-11-15T21:53:16Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4889-jig-examples	
 scripts/check:159-160	fiber-4889	plan	2026-11-15T21:53:16Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4889-jig-examples	
 scripts/check:161-167	fiber-4889	plan	2026-11-15T21:53:16Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4889-jig-examples	
@@ -320,3 +318,7 @@ crates/bench/examples/bench/home_tests.rs	fiber-4935	plan	2026-11-15T21:53:12Z	r
 crates/bench/examples/bench/main.rs	fiber-4935	plan	2026-11-15T21:53:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/invocation.md	fiber-4935	plan	2026-11-15T21:53:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/performance.md	fiber-4935	plan	2026-11-15T21:53:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/bench/examples/bench/listing.rs:198-199	fiber-4935	plan	2026-11-15T22:15:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4935-listing-keep-exited	
+crates/bench/examples/bench/listing.rs:207-208	fiber-4935	plan	2026-11-15T22:15:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4935-listing-keep-exited	
+crates/bench/examples/bench/listing_tests.rs:7-7	fiber-4935	plan	2026-11-15T22:15:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4935-listing-keep-exited	
+crates/bench/examples/bench/listing_tests.rs:48-49	fiber-4935	plan	2026-11-15T22:15:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4935-listing-keep-exited	
