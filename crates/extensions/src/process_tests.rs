@@ -6591,19 +6591,21 @@ fn process_host_exec_resolves_inside_package_and_refuses_traversal() {
         (thread, receive)
     };
     let (run, receive) = invoke("bin/tool".to_owned());
-    let result = fakes::Deadline::after(Duration::from_secs(10))
-        .recv_or_fail(&receive, "host.exec package-relative run")
-        .expect("host.exec succeeds");
+    let execution = fakes::Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&receive, "host.exec package-relative run");
     run.join().expect("host.exec thread joins");
-    let output = result.expect("the package program executes");
-    assert_eq!(output["stdout"], json!("cGFja2FnZS1wcm9ncmFt"));
 
     let escaped = "../outside".to_owned();
     let (run, receive) = invoke(escaped.clone());
-    let result = fakes::Deadline::after(Duration::from_secs(10))
+    let refusal = fakes::Deadline::after(Duration::from_secs(10))
         .recv_or_fail(&receive, "host.exec traversal refusal");
     run.join().expect("refusal thread joins");
-    let Err((code, message)) = result else {
+
+    let Ok(Some(output)) = execution else {
+        panic!("package-relative host.exec fails: {execution:?}; traversal result: {refusal:?}");
+    };
+    assert_eq!(output["stdout"], json!("cGFja2FnZS1wcm9ncmFt"));
+    let Err((code, message)) = refusal else {
         panic!("a traversal program is refused");
     };
     assert_eq!(code, ErrorCode::ExtensionFailed);
