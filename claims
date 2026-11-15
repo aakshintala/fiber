@@ -421,3 +421,4 @@ crates/extensions/tests/fixtures/session-host-exec/bin	fiber-4899	grant	2026-11-
 scripts/check	fiber-4889	plan	2026-11-15T16:19:11Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/test-check-rules-by-path	fiber-4889	plan	2026-11-15T16:19:11Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/workflow.md	fiber-4889	plan	2026-11-15T16:19:11Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/files_tests.rs	fiber-4894	grant	2026-11-15T16:24:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4894-files-outside-repo-flake	
