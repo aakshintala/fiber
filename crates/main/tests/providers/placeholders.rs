@@ -13,7 +13,20 @@
 
 use crate::support;
 
-use fakes::ProviderServer;
+use fakes::{ProviderServer, Response};
+use std::sync::OnceLock;
+
+fn models_dev_url() -> String {
+    static SERVER: OnceLock<ProviderServer> = OnceLock::new();
+    format!(
+        "{}/api.json",
+        SERVER
+            .get_or_init(|| {
+                ProviderServer::start_with_fallback([], Response::status(200, "{}")).unwrap()
+            })
+            .url()
+    )
+}
 use serde_json::json;
 use support::{Setup, run_to_exit, write_json};
 
@@ -174,7 +187,9 @@ fn fake_notice(count: usize) -> String {
 /// Runs `fiber` with `args` to its exit, asserting exit 0, and returns its
 /// stdout and stderr.
 fn models_output(setup: &Setup, args: &[&str]) -> (String, String) {
-    let output = run_to_exit(setup.deadline, "fiber models", setup.fiber(args));
+    let mut command = setup.fiber(args);
+    command.env("FIBER_MODELS_DEV_URL", models_dev_url());
+    let output = run_to_exit(setup.deadline, "fiber models", command);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     (
         String::from_utf8(output.stdout).unwrap(),
@@ -223,11 +238,9 @@ fn the_bedrock_package_prints_one_line() {
     std::fs::write(credentials, "").unwrap();
     let to = setup.root.path().join("pkg-bedrock");
     support::package::copy_package("bedrock", &to, "https://", "https://");
-    let installed = run_to_exit(
-        setup.deadline,
-        "fiber extension install",
-        setup.fiber(&["extension", "install", to.to_str().unwrap()]),
-    );
+    let mut command = setup.fiber(&["extension", "install", to.to_str().unwrap()]);
+    command.env("FIBER_MODELS_DEV_URL", models_dev_url());
+    let installed = run_to_exit(setup.deadline, "fiber extension install", command);
     assert_eq!(installed.status.code(), Some(0), "{installed:?}");
     let data: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(to.join("providers/bedrock.json")).unwrap())

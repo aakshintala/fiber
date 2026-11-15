@@ -17,15 +17,28 @@ use crate::support;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use support::repo_provider::{declare_repo_provider, git_init};
 use support::write_record;
 
-use fakes::Watchdog;
+use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{Deadline, KillGroup, Output, spawn_watched, wait_for_refresh_exit};
+
+fn models_dev_url() -> String {
+    static SERVER: OnceLock<ProviderServer> = OnceLock::new();
+    format!(
+        "{}/api.json",
+        SERVER
+            .get_or_init(|| {
+                ProviderServer::start_with_fallback([], Response::status(200, "{}")).unwrap()
+            })
+            .url()
+    )
+}
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 struct Setup {
@@ -144,6 +157,7 @@ impl Setup {
             .env("HOME", self.root.path())
             .env("FIBER_HOME", self.home())
             .envs(env.iter().copied())
+            .env("FIBER_MODELS_DEV_URL", models_dev_url())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -903,6 +917,7 @@ fn fiber_in(setup: &Setup, dir: &Path, args: &[&str]) -> Output {
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("HOME", setup.root.path())
         .env("FIBER_HOME", setup.home())
+        .env("FIBER_MODELS_DEV_URL", models_dev_url())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

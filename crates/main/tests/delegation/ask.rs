@@ -20,11 +20,24 @@ use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::OnceLock;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use fakes::{ProviderServer, Request, Response, fingerprint};
+
+fn models_dev_url() -> String {
+    static SERVER: OnceLock<ProviderServer> = OnceLock::new();
+    format!(
+        "{}/api.json",
+        SERVER
+            .get_or_init(|| {
+                ProviderServer::start_with_fallback([], Response::status(200, "{}")).unwrap()
+            })
+            .url()
+    )
+}
 use rustix::pty;
 use serde_json::{Value, json};
 use support::{
@@ -165,6 +178,7 @@ impl Setup {
             .env("FIBER_HOME", home)
             .env("FIBER_TEST_FAKE_KEY", "sk-test")
             .envs(env.iter().copied())
+            .env("FIBER_MODELS_DEV_URL", models_dev_url())
             .stdin(stdin)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -4159,6 +4173,7 @@ fn ask_without_key(setup: &Setup, args: &[&str]) -> TextRun {
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("HOME", setup.root.path())
         .env("FIBER_HOME", setup.home())
+        .env("FIBER_MODELS_DEV_URL", models_dev_url())
         .env_remove("FIBER_TEST_FAKE_KEY")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
