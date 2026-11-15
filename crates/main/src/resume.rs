@@ -279,10 +279,10 @@ pub(crate) fn ask_resume(
         Ok(id) => id,
         Err(error) => return ask_failed(failed(error.code(), error)),
     };
-    let Some(sessions) = candidates.into_iter().find(|sessions| {
-        let dir = log::SessionDir::new(sessions, &id);
-        dir.path().is_dir() && in_launch_project(dir.path(), &in_project)
-    }) else {
+    let Some(sessions) = candidates
+        .into_iter()
+        .find(|sessions| recorded_session_matches(sessions, &id, &in_project))
+    else {
         return ask_failed(failed(
             ErrorCode::SessionNotFound,
             format!("No session matches `{}`.", resuming.selector),
@@ -343,6 +343,22 @@ pub(crate) fn ask_resume(
         signals,
         process,
     )
+}
+
+/// Whether the named session directory exists and records a workspace
+/// accepted by the launch-project predicate.
+fn recorded_session_matches(
+    sessions: &Path,
+    id: &SessionId,
+    in_project: &dyn Fn(&str) -> bool,
+) -> bool {
+    let dir = log::SessionDir::new(sessions, id);
+    dir.path().is_dir() && in_launch_project(dir.path(), in_project)
+}
+
+/// Whether two recorded workspace strings name the same workspace.
+fn recorded_workspace_matches(recorded: &str, expected: &str) -> bool {
+    recorded == expected
 }
 
 /// Whether the session in `dir` runs in the launch project: its recorded
@@ -434,16 +450,17 @@ pub(crate) fn session_resume(
     let project = worktree::project(&workspace);
     let candidates = log::candidate_sessions_dirs(&home, &project);
     let in_project = crate::open::in_project(&project, &worktree::project);
-    let sessions = candidates.into_iter().find(|sessions| {
-        let dir = log::SessionDir::new(sessions, &id);
-        dir.path().is_dir() && in_launch_project(dir.path(), &in_project)
-    });
+    let sessions = candidates
+        .into_iter()
+        .find(|sessions| recorded_session_matches(sessions, &id, &in_project));
     let sessions = sessions.or_else(|| {
         if workspace.exists() {
             return None;
         }
         log::find_logged_session_matching(&home, &id, &|started| {
-            started.workspace.as_deref() == Some(workspace.to_string_lossy().as_ref())
+            started.workspace.as_deref().is_some_and(|recorded| {
+                recorded_workspace_matches(recorded, &workspace.to_string_lossy())
+            })
         })
         .and_then(|(_, dir)| dir.parent().map(Path::to_path_buf))
     });

@@ -26,8 +26,9 @@ use log::Log;
 use serde_json::{Value, json};
 
 use super::{
-    chain_seed, enter, enter_worktree, finish, fork_seed, in_launch_project, recorded_worktree,
-    recreatable, resume_refused,
+    chain_seed, enter, enter_worktree, finish, fork_seed, in_launch_project,
+    recorded_session_matches, recorded_workspace_matches, recorded_worktree, recreatable,
+    resume_refused,
 };
 use crate::failed;
 use crate::session_command::ResumeStart;
@@ -456,6 +457,28 @@ fn resume_start_rejects_a_log_from_another_session_directory() {
     let result = ResumeStart::new(dir, log, folded, None);
 
     assert!(result.is_err());
+}
+
+#[test]
+fn recorded_session_matches_requires_an_existing_accepted_session() {
+    let home = fakes::TempDir::new("main-resume-session-match");
+    let sessions = home.path().join("sessions");
+    let id = SessionId("s_0123456789abcdef".into());
+
+    assert!(!recorded_session_matches(&sessions, &id, &|_| true));
+
+    let dir = sessions.join(&id.0);
+    drop(session_with(&dir, None));
+    assert!(!recorded_session_matches(&sessions, &id, &|_| false));
+    assert!(recorded_session_matches(&sessions, &id, &|workspace| {
+        workspace == "/nowhere"
+    }));
+}
+
+#[test]
+fn recorded_workspace_matches_accepts_only_equal_strings() {
+    assert!(recorded_workspace_matches("/workspace", "/workspace"));
+    assert!(!recorded_workspace_matches("/workspace", "/other"));
 }
 
 #[test]
