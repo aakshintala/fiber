@@ -1174,7 +1174,8 @@ install still running.
       `subl` save with `--wait`: without it they return at once, and
       Ctrl+G on the draft would read the file back before any edit.
       "Other…" opens a field for a command line, holding the current value;
-      Enter saves it and Esc cancels. "Default" names the variable the
+      Enter saves it and Esc cancels. An empty field saves as unset, so
+      the row returns to Default. "Default" names the variable the
       editor rule picks and its value, "Default ($VISUAL: vim)" or
       "Default ($EDITOR: nvim)", or reads "Default (none set)" dim when
       neither is set.

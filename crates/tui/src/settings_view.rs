@@ -193,6 +193,10 @@ pub(crate) enum Request {
 
 /// The key the theme choice edits.
 pub(crate) const THEME: &str = "tui.theme";
+const EDITOR: &str = "tui.editor";
+const EDITORS: [&str; 10] = [
+    "nvim", "vim", "hx", "nano", "micro", "emacs", "code", "cursor", "zed", "subl",
+];
 
 /// The columns between a row's label and its value.
 const GAP: usize = 2;
@@ -547,6 +551,17 @@ impl Settings {
         };
         settings.reread(ctx);
         settings.entry_theme = settings.entry_setting(ctx);
+        settings
+    }
+
+    /// Opens on the named setting row when it exists.
+    pub(crate) fn open_on(ctx: &Ctx<'_>, overrides: Vec<String>, key: &str) -> Self {
+        let mut settings = Self::open(ctx, overrides);
+        if let Some(row) = settings.rows.iter().find(|row| row.key == key) {
+            settings.focus = Some(Focus::Key(key.to_owned()));
+            settings.tab = row.presentation.tab.unwrap_or(SettingsTab::Appearance);
+            settings.place(ctx);
+        }
         settings
     }
 
@@ -1437,6 +1452,10 @@ impl Settings {
 
     /// Enter or Space on the focused row, by its control.
     fn change(&mut self, ctx: &Ctx<'_>) -> Act {
+        self.change_with_path(ctx, std::env::var_os("PATH").as_deref())
+    }
+
+    fn change_with_path(&mut self, ctx: &Ctx<'_>, path: Option<&std::ffi::OsStr>) -> Act {
         self.said.clear();
         let items = self.items();
         let Some(item) = self.focused(&items) else {
@@ -1485,6 +1504,13 @@ impl Settings {
                 );
                 let next = next_choice(&names, current_text(value).as_deref());
                 self.step(ctx, layer, &row.key, next)
+            }
+            (SettingControl::Text, _) if row.key == EDITOR => {
+                let mut choices = vec!["Default".to_owned()];
+                choices.extend(editors_on_path(path));
+                choices.push("Other…".to_owned());
+                self.open_dynamic_choices(row.key, layer, choices, current_text(&row.value), ctx);
+                Act::Stay
             }
             (SettingControl::Text, _)
                 if matches!(row.key.as_str(), "web_search.backend" | "hub.default") =>
@@ -1756,6 +1782,24 @@ impl Settings {
         }
     }
 
+    fn reset_key(&mut self, ctx: &Ctx<'_>, key: &str) -> bool {
+        let Some(row) = self.rows.iter().find(|row| row.key == key) else {
+            return false;
+        };
+        match (layer_named(&row.layer), current_text(&row.value)) {
+            (Some(source), Some(expected)) => {
+                match ctx.seam.reset(ctx.workspace, source, key, &expected) {
+                    Ok(_) => true,
+                    Err(error) => {
+                        self.said = vec![error.message];
+                        false
+                    }
+                }
+            }
+            _ => true,
+        }
+    }
+
     /// Writes the field's text. A saved write closes the field; a refused
     /// one keeps it, with the draft, and says why.
     fn submit(&mut self, ctx: &Ctx<'_>) {
@@ -1769,8 +1813,14 @@ impl Settings {
             quoted(&typed)
         };
         let (layer, key) = (field.layer, field.key.clone());
-        if self.save(ctx, layer, &key, &text) {
+        let saved = if key == EDITOR && typed.trim().is_empty() {
+            self.reset_key(ctx, &key)
+        } else {
+            self.save(ctx, layer, &key, &text)
+        };
+        if saved {
             self.mode = Mode::Rows;
+            self.reread(ctx);
         }
     }
 
@@ -1810,9 +1860,10 @@ impl Settings {
         ctx: &Ctx<'_>,
     ) {
         let mut list = List::gutter();
+        let selected = selected(&key, current.as_deref());
         let at = names
             .iter()
-            .position(|name| Some(name) == current.as_ref())
+            .position(|name| Some(name.as_str()) == selected)
             .unwrap_or(0);
         list.select(at, names.len(), self.shown(ctx));
         self.mode = Mode::Choices {
@@ -1827,28 +1878,48 @@ impl Settings {
     /// Writes theme `name` to the global `tui.theme`, then asks for it to
     /// apply. A failed write applies nothing.
     fn choose(&mut self, name: &str, ctx: &Ctx<'_>) -> Act {
-        let Mode::Choices { key, layer, .. } = &self.mode else {
+        if name == "Other…"
+            && let Mode::Choices {
+                key,
+                layer,
+                current,
+                ..
+            } = &self.mode
+        {
+            let mut draft = Draft::default();
+            draft.set(current.as_deref().unwrap_or_default());
+            self.mode = Mode::Field(Field {
+                key: key.clone(),
+                layer: *layer,
+                number: false,
+                draft,
+            });
+            return Act::Stay;
+        }
+        let Mode::Choices {
+            key,
+            layer,
+            current,
+            ..
+        } = &self.mode
+        else {
             return Act::Stay;
         };
-        let (key, layer) = (key.clone(), *layer);
+        let (key, layer, current) = (key.clone(), *layer, current.clone());
+        if key == EDITOR && selected(&key, Some(name)) == selected(&key, current.as_deref()) {
+            self.mode = Mode::Rows;
+            self.reread(ctx);
+            return Act::Stay;
+        }
         let saved = if name == "Default" {
-            let Some(row) = self.rows.iter().find(|row| row.key == key) else {
-                return Act::Stay;
-            };
-            match (layer_named(&row.layer), current_text(&row.value)) {
-                (Some(source), Some(expected)) => {
-                    match ctx.seam.reset(ctx.workspace, source, &key, &expected) {
-                        Ok(_) => true,
-                        Err(error) => {
-                            self.said = vec![error.message];
-                            false
-                        }
-                    }
-                }
-                _ => true,
-            }
+            self.reset_key(ctx, &key)
         } else {
-            self.save(ctx, layer, &key, &quoted(name))
+            let value = if key == EDITOR && matches!(name, "code" | "cursor" | "zed" | "subl") {
+                format!("{name} --wait")
+            } else {
+                name.to_owned()
+            };
+            self.save(ctx, layer, &key, &quoted(&value))
         };
         if !saved {
             return Act::Stay;
@@ -1862,13 +1933,49 @@ impl Settings {
     }
 }
 
+fn selected<'a>(key: &str, current: Option<&'a str>) -> Option<&'a str> {
+    if key == EDITOR {
+        current
+            .and_then(|value| value.split_whitespace().next())
+            .and_then(|program| Path::new(program).file_name())
+            .and_then(|name| name.to_str())
+    } else {
+        current
+    }
+}
+
 /// A value's text as a field takes it: a string bare, anything else as
 /// its JSON.
-fn current_text(value: &Shown) -> Option<String> {
+pub(crate) fn current_text(value: &Shown) -> Option<String> {
     match value {
         Shown::Value(text) => Some(as_typed(text)),
         Shown::Unset | Shown::Union { .. } | Shown::Redacted(_) => None,
     }
+}
+
+/// Supported editors present on the supplied path, in the documented
+/// order. A missing PATH entry contributes no commands.
+fn editors_on_path(path: Option<&std::ffi::OsStr>) -> Vec<String> {
+    let directories: Vec<PathBuf> = path
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .collect();
+    EDITORS
+        .into_iter()
+        .filter(|name| {
+            directories.iter().any(|directory| {
+                let path = directory.join(name);
+                std::fs::metadata(path).is_ok_and(|metadata| {
+                    metadata.is_file() && {
+                        use std::os::unix::fs::PermissionsExt;
+                        metadata.permissions().mode() & 0o111 != 0
+                    }
+                })
+            })
+        })
+        .map(str::to_owned)
+        .collect()
 }
 
 /// The choice after `current` in `choices`, wrapping from the last to the
@@ -2111,7 +2218,7 @@ impl Settings {
                 rows: names
                     .iter()
                     .map(|name| {
-                        let mark = if Some(name) == current.as_ref() {
+                        let mark = if Some(name.as_str()) == selected(key, current.as_deref()) {
                             "  (current)"
                         } else {
                             ""
@@ -2277,9 +2384,10 @@ impl Settings {
                 },
                 None,
             ),
-            Item::Key(at) => self
-                .row(at)
-                .map_or_else(|| (String::new(), None), shown_value),
+            Item::Key(at) => self.row(at).map_or_else(
+                || (String::new(), None),
+                |row| shown_value(row, |name| std::env::var(name).ok()),
+            ),
         };
         let value_ink = match item {
             Item::Screen(_) => Ink::Role(Role::Secondary),
@@ -2946,9 +3054,20 @@ fn refresh_text(text: &str) -> String {
     }
 }
 
+fn editor_default(visual: Option<&str>, editor: Option<&str>) -> String {
+    match (visual, editor) {
+        (Some(value), _) => format!("Default ($VISUAL: {value})"),
+        (None, Some(value)) => format!("Default ($EDITOR: {value})"),
+        (None, None) => "Default (none set)".to_owned(),
+    }
+}
+
 /// A row's value as the tab says it, and the layer tag after it when the
 /// value is set anywhere but global.
-fn shown_value(row: &SettingRow) -> (String, Option<String>) {
+fn shown_value(
+    row: &SettingRow,
+    reader: impl Fn(&str) -> Option<String>,
+) -> (String, Option<String>) {
     let list_text = |text: &str| {
         let names: Vec<String> = serde_json::from_str::<Vec<Value>>(text)
             .unwrap_or_default()
@@ -2977,6 +3096,20 @@ fn shown_value(row: &SettingRow) -> (String, Option<String>) {
         }
         (SettingControl::Model, Shown::Unset) => "Default ›".to_owned(),
         (SettingControl::Model, Shown::Value(text)) => format!("{} ›", as_typed(text)),
+        (SettingControl::Text, Shown::Unset) if row.key == EDITOR => {
+            let fallback = crate::editor::fallback(reader);
+            editor_default(
+                fallback
+                    .as_ref()
+                    .and_then(|(name, value)| (*name == "VISUAL").then_some(value.as_str())),
+                fallback
+                    .as_ref()
+                    .and_then(|(name, value)| (*name == "EDITOR").then_some(value.as_str())),
+            )
+        }
+        (SettingControl::Text, Shown::Value(text)) if row.key == EDITOR => {
+            format!("{} ›", as_typed(text))
+        }
         (SettingControl::Text, Shown::Unset) if row.key == "web_search.backend" => {
             "Default ›".to_owned()
         }
