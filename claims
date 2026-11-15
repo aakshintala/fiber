@@ -624,3 +624,4 @@ crates/tui/tests/hover_jig.rs	fiber-4881	plan	2026-11-15T10:34:35Z	roundhouse-70
 docs/testing.md	fiber-4881	plan	2026-11-15T10:34:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/workflow.md	fiber-4881	plan	2026-11-15T10:34:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/check-docs	fiber-4881	plan	2026-11-15T10:34:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/src/builtin_tests.rs	fiber-4420	plan	2026-11-15T10:36:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
