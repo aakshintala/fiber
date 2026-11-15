@@ -111,7 +111,7 @@
 //! - `budget-bounds --base REV`: whether any line changed against the merge
 //!   base with REV raises `WAITS`, `BUDGET` or `CLEANUP`, or adds a
 //!   `Deadline::after` of 60 s or more in a test — except the known-short
-//!   bounds (`WAIT`, `DEADLINE`, `MUST_SUCCEED_WITHIN`, `Duration::ZERO`) and direct literals below 60 s — without `// ruling: #N`
+//!   bounds (`WAIT`, `DEADLINE`, `MUST_SUCCEED_WITHIN`, `WHOLE_SUBSYSTEM_WITHIN`, `Duration::ZERO`) and direct literals below 60 s — without `// ruling: #N`
 //! - `narrating-comments --base REV`: reports ruled history phrases on added
 //!   source comment lines (`docs/code-quality.md`, "Comments")
 //! - `screen-ratchet`: reads the inline per-file maxima from stdin as one
