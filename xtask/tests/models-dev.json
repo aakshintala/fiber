@@ -2481,8 +2481,7 @@
         "modalities": {
           "input": [
             "text",
-            "image",
-            "pdf"
+            "image"
           ],
           "output": [
             "text"
@@ -2517,8 +2516,7 @@
         "modalities": {
           "input": [
             "text",
-            "image",
-            "pdf"
+            "image"
           ],
           "output": [
             "text"
@@ -5754,17 +5752,7 @@
       "gemini-2.5-computer-use-preview-10-2025": {
         "cost": {
           "input": 1.25,
-          "output": 10,
-          "tiers": [
-            {
-              "input": 2.5,
-              "output": 15,
-              "tier": {
-                "size": 200000,
-                "type": "context"
-              }
-            }
-          ]
+          "output": 10
         },
         "limit": {
           "context": 128000,
@@ -6249,7 +6237,7 @@
         },
         "limit": {
           "context": 16384,
-          "output": 32768
+          "output": 16384
         },
         "modalities": {
           "input": [
@@ -6386,6 +6374,31 @@
           ]
         },
         "name": "Gemini 4 Carbon",
+        "tool_call": true
+      },
+      "gemini-4-hydrogen": {
+        "cost": {
+          "cache_read": 0.075,
+          "input": 1.5,
+          "output": 7.5
+        },
+        "limit": {
+          "context": 1048576,
+          "output": 65536
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Gemini 4 Hydrogen",
         "tool_call": true
       },
       "gemini-embedding-001": {
@@ -6541,6 +6554,10 @@
         "tool_call": true
       },
       "gemma-4-26b-a4b-it": {
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
         "limit": {
           "context": 262144,
           "output": 32768
@@ -6558,6 +6575,10 @@
         "tool_call": true
       },
       "gemma-4-31b-it": {
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
         "limit": {
           "context": 262144,
           "output": 32768
@@ -7724,6 +7745,31 @@
         "name": "Gemini 4 Carbon",
         "tool_call": true
       },
+      "gemini-4-hydrogen": {
+        "cost": {
+          "cache_read": 0.075,
+          "input": 1.5,
+          "output": 7.5
+        },
+        "limit": {
+          "context": 1048576,
+          "output": 65536
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Gemini 4 Hydrogen",
+        "tool_call": true
+      },
       "gemini-embedding-001": {
         "cost": {
           "input": 0.15,
@@ -8140,18 +8186,7 @@
         "cost": {
           "cache_read": 0.2,
           "input": 1.25,
-          "output": 2.5,
-          "tiers": [
-            {
-              "cache_read": 0.4,
-              "input": 2.5,
-              "output": 5,
-              "tier": {
-                "size": 200000,
-                "type": "context"
-              }
-            }
-          ]
+          "output": 2.5
         },
         "limit": {
           "context": 200000,
@@ -8515,6 +8550,11 @@
   "openai": {
     "models": {
       "chatgpt-image-latest": {
+        "cost": {
+          "cache_read": 1.25,
+          "input": 5,
+          "output": 10
+        },
         "limit": {
           "context": 0,
           "output": 0
@@ -9555,6 +9595,11 @@
         "tool_call": false
       },
       "gpt-image-1.5": {
+        "cost": {
+          "cache_read": 1.25,
+          "input": 5,
+          "output": 10
+        },
         "limit": {
           "context": 0,
           "output": 0
@@ -10948,6 +10993,34 @@
         },
         "tool_call": true
       },
+      "gemini-4-hydrogen": {
+        "cost": {
+          "cache_read": 0.075,
+          "input": 1.5,
+          "output": 7.5
+        },
+        "limit": {
+          "context": 1048576,
+          "output": 65536
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Gemini 4 Hydrogen",
+        "provider": {
+          "npm": "@ai-sdk/google"
+        },
+        "tool_call": true
+      },
       "glm-4.6": {
         "cost": {
           "cache_read": 0.1,
@@ -12306,7 +12379,7 @@
         },
         "limit": {
           "context": 1048576,
-          "output": 131072
+          "output": 1048576
         },
         "modalities": {
           "input": [
@@ -14007,7 +14080,7 @@
         },
         "limit": {
           "context": 1048576,
-          "output": 131072
+          "output": 1048576
         },
         "modalities": {
           "input": [
@@ -14032,7 +14105,7 @@
         },
         "limit": {
           "context": 1048576,
-          "output": 131072
+          "output": 1048576
         },
         "modalities": {
           "input": [

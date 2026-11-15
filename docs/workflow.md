@@ -130,6 +130,8 @@ those.
   request" says; `scripts/bug-red BASE` runs CI's check locally. Tests added
   in a review round go in new commits on top; history before them is never
   rewritten.
+- To run only these checks for the diff before a push:
+  `scripts/check --rules-by-path --base origin/main`.
 
 `research/tui-prototype/`, which is not a workspace member:
 

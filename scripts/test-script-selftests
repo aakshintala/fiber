@@ -5,6 +5,7 @@ for test_name in \
   leak-scan \
   look-diff \
   flaky-tests \
+  check-rules-by-path \
   flake-report \
   retry-filter \
   stress-plan \

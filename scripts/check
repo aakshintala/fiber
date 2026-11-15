@@ -2,10 +2,11 @@
 # The gate (`docs/workflow.md`, "The gate"). Runs the checks `docs/ci.md`,
 # "Selection", chooses for the diff.
 #
-# Usage: scripts/check [--base REV] [--platform-only | --shared-only]
+# Usage: scripts/check [--base REV] [--platform-only | --shared-only | --rules-by-path]
 #
 #   --base REV       compare against the merge base with REV (default origin/main);
 #                    uncommitted and untracked files count as changed
+#   --rules-by-path  only the "Rules by path" checks (`docs/workflow.md`)
 #   --platform-only  only clippy, nextest and doc-tests: what CI runs on
 #                    every platform
 #   --shared-only    only the platform-independent checks: what CI runs on
@@ -34,14 +35,17 @@ cd "$(git rev-parse --show-toplevel)"
 
 base=origin/main
 scope=all
+rules=0
 while [ $# -gt 0 ]; do
   case $1 in
     --base) base=$2; shift 2 ;;
     --platform-only) scope=platform; shift ;;
     --shared-only) scope=shared; shift ;;
-    *) sed -n '5,14p' "$0" >&2; exit 2 ;;
+    --rules-by-path) rules=1; shift ;;
+    *) sed -n '5,15p' "$0" >&2; exit 2 ;;
   esac
 done
+if [ "$rules" = 1 ] && [ "$scope" != all ]; then sed -n '5,15p' "$0" >&2; exit 2; fi
 
 # A compile or link step, wrapped: the pipeline status is the step's (tee
 # exits 0, and pipefail keeps cargo's), so a pass truncates the shared log
@@ -82,7 +86,9 @@ log=$(mktemp)
 # ends; a cold xtask build shows no progress until it finishes. A pass
 # truncates the log, so a later failure cannot mislabel this output as its
 # own. step_failed turns a killed compile or link step into exit 75.
-if selection=$(cargo xtask select --base "$base" 2>"$log"); then step_rc=0; else step_rc=$?; fi
+select_args=(--base "$base")
+if [ "$rules" = 1 ]; then select_args+=(--rules-by-path); fi
+if selection=$(cargo xtask select "${select_args[@]}" 2>"$log"); then step_rc=0; else step_rc=$?; fi
 cat "$log" >&2
 if [ "$step_rc" -ne 0 ]; then step_failed "$step_rc"; fi
 : >"$log"
@@ -94,6 +100,100 @@ library_specs=$(value library_specs)
 extension_packages=$(value extension_packages)
 echo "== selection: $mode; crates: ${packages:-none}"
 echo "== extension cases: ${extension_packages:-none}"
+
+if [ "$rules" = 1 ]; then
+  # rules-by-path: start
+  echo "== docs check"
+  scripts/check-docs
+  # An empty or docs-only diff runs check-docs alone.
+  if [ "$mode" = docs ]; then
+    exit 0
+  fi
+  # research/tui-prototype is not a workspace member, so nothing else here lints
+  # it. It has its own manifest and target directory; lint it when the diff
+  # touches it (`docs/workflow.md`, "Rules by path").
+  prototype=research/tui-prototype
+  changed=$( { git diff --name-only "$(git merge-base "$base" HEAD)"; git ls-files --others --exclude-standard; } )
+  if grep -q "^$prototype/" <<<"$changed"; then
+    echo "== tui-prototype: cargo fmt --check, cargo clippy, cargo test"
+    cargo fmt --check --manifest-path "$prototype/Cargo.toml"
+    build_step cargo clippy --all-targets --manifest-path "$prototype/Cargo.toml" -- -D warnings
+    build_step cargo test --manifest-path "$prototype/Cargo.toml"
+  fi
+  scripts_touched=0
+  if grep -q "^scripts/" <<<"$changed"; then
+    scripts_touched=1
+  fi
+  if [ -n "$packages" ]; then
+    # debt: duplicated nonce and fakes pre-build (full-mode block ~line 518), fold both into one function when either changes.
+    # A per-run nonce in the environment: every descendant inherits it, so
+    # the EXIT trap's scan names only this run's leaked processes. uuidgen
+    # ships on Linux CI and macOS; the fallback needs only bash and date.
+    if [ -z "${FIBER_CHECK_RUN-}" ]; then
+      if ! FIBER_CHECK_RUN=$(uuidgen 2>/dev/null); then
+        FIBER_CHECK_RUN="$$-$(date +%s)-$RANDOM"
+      fi
+    fi
+    export FIBER_CHECK_RUN
+    scan_leaks=1
+    # nextest builds the fakes library as a dev dependency but not its
+    # example; ProcessFixture::example_path starts that example, so build
+    # it before any narrowed nextest run.
+    echo "== build the process-extension example"
+    build_step cargo build -q -p fakes --example process-extension
+    case " $packages " in
+      *" main "*)
+        # `--bins --tests` doesn't build `main`'s examples, the jigs its
+        # tests run, so every narrowed `main` nextest run comes after this
+        # build, with the same environment (`docs/workflow.md`, "Rules by path").
+        echo "== build main examples"
+        build_step cargo build -p main --examples
+        ;;
+    esac
+    for spec in $package_specs; do
+      # `cargo fmt` only matches a bare name among workspace members, while
+      # clippy and nextest resolve `-p` against the whole dependency graph,
+      # so they take the `name@version` spec (`docs/ci.md`, "Selection").
+      crate=${spec%%@*}
+      echo "== $crate: cargo fmt --check"
+      cargo fmt --check -p "$crate"
+      echo "== $crate: cargo clippy"
+      if [ "$crate" = main ]; then
+        # `main` has no library target, so its clippy and nextest take
+        # `--bins --tests` in place of `--all-targets`.
+        build_step cargo clippy --bins --tests -p "$spec" -- -D warnings
+      else
+        build_step cargo clippy --all-targets -p "$spec" -- -D warnings
+      fi
+      echo "== $crate: cargo nextest run"
+      if [ "$crate" = main ]; then
+        build_step cargo nextest run --bins --tests -p "$spec"
+      else
+        build_step cargo nextest run --all-targets -p "$spec"
+      fi
+    done
+    case " $packages " in
+      *" main "*)
+        echo "== leak probe"
+        scripts/test-leak-probe
+        ;;
+    esac
+    echo "== signal sites, compiled-in list, image and tui isolation, crate edges"
+    cargo xtask signal-sites
+    cargo xtask compiled-in
+    cargo xtask image-isolation
+    cargo xtask tui-isolation
+    cargo xtask crate-edges
+    echo "== must-succeed, dependency list"
+    cargo xtask must-succeed
+    cargo xtask dependency-list
+  fi
+  if [ "$scripts_touched" = 1 ]; then
+    /bin/bash scripts/test-script-selftests || exit $?
+  fi
+  # rules-by-path: end
+  exit 0
+fi
 
 # cargo fmt only matches a bare name among workspace members. The other
 # commands below resolve `-p` against the whole dependency graph, so they
