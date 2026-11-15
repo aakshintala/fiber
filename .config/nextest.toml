@@ -21,6 +21,13 @@ fail-fast = { max-fail = 1, terminate = "immediate" }
 filter = 'kind(lib) | kind(bin)'
 priority = 100
 
+# continue_session.rs:46:5 replace session_continues -> i32 with 1.
+# These two e2e tests are its only killers; otherwise the suite reaches them
+# after the 120 s mutant timeout.
+[[profile.mutants.overrides]]
+filter = 'binary(=session_turns) & (test(=continue_session::continues_keeps_the_worktree_in_both_exit_orders) | test(=continue_session::continues_takes_supervised_from_the_new_request_only))'
+priority = 50
+
 # docs/ci.md, "On every pull request that changes code": the stress job runs
 # nextest under this profile, so a selected test fails instead of passing
 # on retry, and the selected tests share every core.
