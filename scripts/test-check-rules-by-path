@@ -71,7 +71,6 @@ if [[ "$*" == "xtask select"* ]]; then
   printf '%s\n' 'mode=crates' 'packages=log' 'package_specs=log@0.0.0' 'library_specs=log@0.0.0' 'extension_packages='
   exit 0
 fi
-if [[ "$*" == "build -q -p fakes --example process-extension" ]]; then exit 0; fi
 if [[ "$*" == "build -p log@0.0.0 --examples" ]]; then
   if [[ "${NO_EXAMPLES-}" != 1 ]]; then
     mkdir -p "$CARGO_TARGET_DIR/debug/examples"

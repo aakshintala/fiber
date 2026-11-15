@@ -163,22 +163,18 @@ if [ "$rules" = 1 ]; then
           # `--bins --tests` in place of `--all-targets`.
           clippy_targets=(--bins --tests)
           nextest_targets=(--bins --tests)
-          build_examples=0
           ;;
         *)
           clippy_targets=(--all-targets)
           nextest_targets=(--all-targets)
-          build_examples=1
+          # A jig test starts the plain example binary; nextest's all-targets
+          # test harness is a separate hashed artifact.
+          echo "== $crate: cargo build --examples"
+          build_step cargo build -p "$spec" --examples
           ;;
       esac
       echo "== $crate: cargo clippy"
       build_step cargo clippy "${clippy_targets[@]}" -p "$spec" -- -D warnings
-      if [ "$build_examples" -eq 1 ]; then
-        # A jig test starts the plain example binary; nextest's all-targets
-        # test harness is a separate hashed artifact.
-        echo "== $crate: cargo build --examples"
-        build_step cargo build -p "$spec" --examples
-      fi
       echo "== $crate: cargo nextest run"
       build_step cargo nextest run "${nextest_targets[@]}" -p "$spec"
     done
