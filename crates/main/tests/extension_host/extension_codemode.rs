@@ -61,7 +61,7 @@ impl Run {
     /// The session's directory, from its id.
     fn session_dir(&self, setup: &Setup) -> PathBuf {
         let workspace = std::fs::canonicalize(setup.workspace()).unwrap();
-        let key = workspace.to_string_lossy().replace('/', "-");
+        let key = log::project_key(&workspace);
         setup
             .home()
             .join("projects")

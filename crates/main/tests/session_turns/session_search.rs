@@ -123,15 +123,15 @@ impl Fixtures {
             "full output: RETRY BUDGET exhausted\n",
         )
         .unwrap();
-        // `<parent>-<root>` beside the root's parent has the root's key
-        // and is another project.
+        // `<parent>-<root>` shares the readable slug; the identity hash
+        // keeps these projects' keys separate.
         let parent = workspace.parent().unwrap();
         let colliding = parent.parent().unwrap().join(format!(
             "{}-{}",
             parent.file_name().unwrap().to_string_lossy(),
             workspace.file_name().unwrap().to_string_lossy()
         ));
-        assert_eq!(log::project_key(&colliding), log::project_key(&workspace));
+        assert_ne!(log::project_key(&colliding), log::project_key(&workspace));
         let other = session(
             &sessions,
             "s_other",

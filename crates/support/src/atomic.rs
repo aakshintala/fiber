@@ -13,6 +13,27 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Atomically renames a file or directory without replacing an existing target.
+pub fn rename_noreplace(source: &Path, target: &Path) -> Result<(), std::io::Error> {
+    match rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        source,
+        rustix::fs::CWD,
+        target,
+        rustix::fs::RenameFlags::NOREPLACE,
+    ) {
+        Ok(()) => Ok(()),
+        Err(error) if rename_unsupported(error) => Err(std::io::ErrorKind::Unsupported.into()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn rename_unsupported(error: rustix::io::Errno) -> bool {
+    error == rustix::io::Errno::INVAL
+        || error == rustix::io::Errno::NOSYS
+        || error == rustix::io::Errno::NOTSUP
+}
+
 /// How many fresh temporary names one write draws before giving up with
 /// [`std::io::ErrorKind::AlreadyExists`].
 const TEMP_TRIES: u32 = 64;

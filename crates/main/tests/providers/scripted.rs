@@ -137,7 +137,7 @@ const RESUMED_TURN: [&str; 11] = [
 /// The `sessions` directory of the workspace's project.
 fn sessions(setup: &Setup) -> std::path::PathBuf {
     let workspace = std::fs::canonicalize(setup.workspace()).unwrap();
-    let key = workspace.to_string_lossy().replace('/', "-");
+    let key = log::project_key(&workspace);
     setup.home().join("projects").join(key).join("sessions")
 }
 

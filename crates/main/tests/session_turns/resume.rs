@@ -64,7 +64,7 @@ impl Setup {
     /// The project's sessions directory.
     fn resume_sessions(&self) -> PathBuf {
         let workspace = fs::canonicalize(self.workspace()).unwrap();
-        let key = workspace.to_string_lossy().replace('/', "-");
+        let key = log::project_key(&workspace);
         self.home().join("projects").join(key).join("sessions")
     }
 

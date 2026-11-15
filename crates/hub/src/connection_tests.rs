@@ -82,6 +82,14 @@ impl Temp {
     }
 }
 
+fn project_sessions(temp: &Temp) -> PathBuf {
+    log::sessions_dir(&temp.dir, Path::new(&temp.workspace()))
+}
+
+fn workspace_project() -> String {
+    log::project_key(Path::new("/w"))
+}
+
 /// One side of a client connection: the hub serves the other end.
 struct Client {
     write: UnixStream,
@@ -1910,7 +1918,7 @@ fn start_with_continues_naming_no_session_is_session_not_found() {
 fn start_with_continues_and_a_gone_log_is_session_not_found() {
     let temp = Temp::new();
     // The session directory without its log: pruned away.
-    fs::create_dir_all(temp.dir.join("projects/-w/sessions").join(OLD)).unwrap();
+    fs::create_dir_all(project_sessions(&temp).join(OLD)).unwrap();
     let workspace = temp.workspace();
     refused_start(
         &temp,
@@ -1930,7 +1938,7 @@ fn start_with_continues_and_a_corrupt_first_line_is_log_corrupt() {
         "{\"kind\":\"session_started\"".to_owned(),
     ] {
         let temp = Temp::new();
-        let dir = temp.dir.join("projects/-w/sessions").join(OLD);
+        let dir = project_sessions(&temp).join(OLD);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("events.jsonl"), first.as_bytes()).unwrap();
         let workspace = temp.workspace();
@@ -1960,11 +1968,7 @@ fn start_with_continues_and_an_unreadable_log_is_log_corrupt() {
 
     let temp = Temp::new();
     let worktree = continues_setup(&temp);
-    let log = temp
-        .dir
-        .join("projects/-w/sessions")
-        .join(OLD)
-        .join("events.jsonl");
+    let log = log::session_dir(&temp.dir, "-w", &SessionId(OLD.to_owned())).join("events.jsonl");
     fs::set_permissions(&log, fs::Permissions::from_mode(0o000)).unwrap();
     if fs::File::open(&log).is_ok() {
         panic!("running as root: root bypasses file modes, so the read cannot fail here");
@@ -1981,7 +1985,7 @@ fn start_with_continues_and_an_unreadable_log_is_log_corrupt() {
 fn start_with_continues_and_a_non_object_worktree_is_log_corrupt() {
     let temp = Temp::new();
     let workspace = temp.workspace();
-    let dir = temp.dir.join("projects/-w/sessions").join(OLD);
+    let dir = project_sessions(&temp).join(OLD);
     fs::create_dir_all(&dir).unwrap();
     let first = json!({"kind": "session_started", "payload": {
         "workspace": workspace,
@@ -2003,7 +2007,7 @@ fn start_with_continues_and_a_null_worktree_is_log_corrupt() {
     // `null`, so a `null` worktree is foreign data and malformed.
     let temp = Temp::new();
     let workspace = temp.workspace();
-    let dir = temp.dir.join("projects/-w/sessions").join(OLD);
+    let dir = project_sessions(&temp).join(OLD);
     fs::create_dir_all(&dir).unwrap();
     let first = json!({"kind": "session_started", "payload": {
         "workspace": workspace,
@@ -2025,7 +2029,7 @@ fn start_with_continues_and_a_worktree_without_repository_is_log_corrupt() {
     let worktree = temp.dir.join("wt");
     fs::create_dir_all(&worktree).unwrap();
     let worktree = worktree.to_string_lossy().into_owned();
-    let dir = temp.dir.join("projects/-w/sessions").join(OLD);
+    let dir = project_sessions(&temp).join(OLD);
     fs::create_dir_all(&dir).unwrap();
     let first = json!({"kind": "session_started", "payload": {
         "workspace": worktree,
@@ -2047,7 +2051,7 @@ fn start_with_continues_and_a_relative_worktree_path_is_log_corrupt() {
     // foreign data and malformed: the starter records nothing.
     let temp = Temp::new();
     let workspace = temp.workspace();
-    let dir = temp.dir.join("projects/-w/sessions").join(OLD);
+    let dir = project_sessions(&temp).join(OLD);
     fs::create_dir_all(&dir).unwrap();
     let first = json!({"kind": "session_started", "payload": {
         "workspace": workspace,
@@ -2819,13 +2823,12 @@ fn sessions_default_listing_omits_active() {
     // log: neither answer names any activity without `active: true`.
     let live = "s_00000000000000a1";
     let session = crate::fake::FakeSession::bind(&temp.dir, live);
-    session.say(&crate::fake::status_line(
-        live,
-        &crate::fake::status("n", "/w", "idle", None),
-    ));
+    let mut status = crate::fake::status("n", "/w", "idle", None);
+    status["project"] = json!(workspace_project());
+    session.say(&crate::fake::status_line(live, &status));
     write_log(
         &temp,
-        "-w",
+        &workspace_project(),
         live,
         &format!(
             "{}{}",
@@ -2834,7 +2837,7 @@ fn sessions_default_listing_omits_active() {
         ),
     );
     let exited = "s_00000000000000b2";
-    exited_row(&temp, exited, "p", 3, None);
+    exited_row(&temp, exited, &workspace_project(), 3, None);
     write_log(
         &temp,
         "p",
@@ -2977,10 +2980,10 @@ fn write_log(temp: &Temp, project: &str, id: &str, text: &str) {
 
 /// An exited recent row for `id` in `project` with row `ts`, delegate of
 /// `parent` when given.
-fn exited_row(temp: &Temp, id: &str, project: &str, ts: u64, parent: Option<&str>) {
+fn exited_row(temp: &Temp, id: &str, _project: &str, ts: u64, parent: Option<&str>) {
     let workspace = temp.workspace();
     let row: crate::RecentRow = serde_json::from_value(json!({
-        "session_id": id, "ts": ts, "project": project, "workspace": workspace,
+        "session_id": id, "ts": ts, "project": "p", "workspace": workspace,
         "name": "n", "how": "exited",
         "status": crate::fake::status("n", "/w", "idle", parent),
     }))
@@ -2996,13 +2999,12 @@ fn sessions_entries_carry_the_last_line_ts_never_since_or_row_ts() {
     // log's last line is far newer.
     let live = "s_00000000000000a1";
     let session = crate::fake::FakeSession::bind(&temp.dir, live);
-    session.say(&crate::fake::status_line(
-        live,
-        &crate::fake::status("n", "/w", "idle", None),
-    ));
+    let mut status = crate::fake::status("n", "/w", "idle", None);
+    status["project"] = json!(workspace_project());
+    session.say(&crate::fake::status_line(live, &status));
     write_log(
         &temp,
-        "-w",
+        &workspace_project(),
         live,
         &format!(
             "{}{}",
@@ -3012,7 +3014,7 @@ fn sessions_entries_carry_the_last_line_ts_never_since_or_row_ts() {
     );
     // An exited row from long ago whose log ran on.
     let exited = "s_00000000000000b2";
-    exited_row(&temp, exited, "p", 3, None);
+    exited_row(&temp, exited, &workspace_project(), 3, None);
     write_log(
         &temp,
         "p",
@@ -3052,7 +3054,7 @@ fn sessions_torn_tail_uses_the_last_complete_line() {
     // The first line's `ts` differs from the last complete line's, and a
     // torn write follows it: the torn bytes are not activity.
     let id = "s_00000000000000c3";
-    exited_row(&temp, id, "p", 3, None);
+    exited_row(&temp, id, &workspace_project(), 3, None);
     let mut text = started_line(id, 100);
     text.push_str(&log_line("session_status", id, 200));
     text.push_str("{\"kind\": \"sess");
@@ -3075,7 +3077,7 @@ fn sessions_ts_less_tail_falls_back_to_the_opening_ts() {
     // The tail is complete JSON but carries no `ts`: only the opening
     // line dates the session.
     let id = "s_00000000000000d4";
-    exited_row(&temp, id, "p", 3, None);
+    exited_row(&temp, id, &workspace_project(), 3, None);
     let tail = format!(
         "{}\n",
         json!({"kind": "session_status", "session_id": id, "schema_version": 1, "payload": {}})
@@ -3103,7 +3105,7 @@ fn sessions_row_ts_never_decides_active_either_direction() {
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
     // An ancient row whose log ran on, and a fresh row whose log is older.
     let old_row = "s_00000000000000e5";
-    exited_row(&temp, old_row, "p", 1, None);
+    exited_row(&temp, old_row, &workspace_project(), 1, None);
     write_log(
         &temp,
         "p",
@@ -3115,7 +3117,7 @@ fn sessions_row_ts_never_decides_active_either_direction() {
         ),
     );
     let new_row = "s_00000000000000f6";
-    exited_row(&temp, new_row, "p", 99999, None);
+    exited_row(&temp, new_row, &workspace_project(), 99999, None);
     write_log(
         &temp,
         "p",
