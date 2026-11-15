@@ -733,7 +733,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - Exit code 0 is `completed`. A nonzero exit is `failed` with code
   `nonzero_exit` and `process.exit_code`. A command killed by a signal
   Fiber did not send is `failed` with code `signal` and `process.signal`.
-  A timeout is as above; a cancellation is `cancelled`.
+  A timeout is as above; a cancellation is `cancelled`. A known failure to write output for a shell call or job makes its result `failed` with `io_failed`, whatever end it would otherwise have had; the message names the output path and the end it replaced.
 - The output the model reads ends with a closing line that says how the
   command ended. If the command's own output is non-empty and does not end
   in a newline, a newline goes first. An empty output gets the closing line

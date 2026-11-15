@@ -3084,7 +3084,7 @@ fn the_default_lead_names_the_count_and_first_item() {
         (ErrorCode::SkillShadowed, "skills are shadowed"),
         (ErrorCode::ExtensionShadowed, "extensions are shadowed"),
         (ErrorCode::SkillInvalid, "skills are invalid"),
-        (ErrorCode::IoFailed, "reads failed"),
+        (ErrorCode::IoFailed, "I/O failures"),
         (ErrorCode::CommandConflict, "command conflicts"),
         (ErrorCode::HookFailed, "hooks failed"),
         (ErrorCode::ModelUnconfigured, "models are unconfigured"),
