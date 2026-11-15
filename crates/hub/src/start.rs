@@ -72,6 +72,7 @@ pub(crate) struct Held {
 /// With `content`, the
 /// prompt is held, not sent: the caller answers first, then sends it with
 /// [`prompt`].
+#[cfg(test)]
 #[allow(
     clippy::too_many_arguments,
     reason = "the start call takes each launch option once"
