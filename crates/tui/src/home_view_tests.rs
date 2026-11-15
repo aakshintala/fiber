@@ -215,6 +215,65 @@ fn home_only(app: &App, area: Rect, buf: &mut Buffer) -> Vec<crate::mouse::Targe
 }
 
 #[test]
+fn home_input_serializes_footer_span_text_and_only_present_styles() {
+    let mut app = home(80, 24);
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["home"],
+        SlotScript::Replace(vec![vec![raw("probe")]]),
+    ));
+    app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    home_only(&app, area, &mut buf);
+    let input = &renderer.home_inputs.borrow()[0];
+    let spans = input["foot"]["spans"].as_array().expect("footer spans");
+    assert_eq!(
+        spans
+            .iter()
+            .map(|span| span["text"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "Enter",
+            " opens the focused session, or starts one from the box",
+            " · ",
+            "↑↓",
+            " move",
+            " · ",
+            "Shift+↑↓",
+            " project",
+            " · ",
+            "Delete",
+            " stops a live one, deletes an exited one",
+            " · ",
+            "Backspace",
+            " archives an exited one",
+            " · ",
+            "F1",
+            " the key map",
+            " · ",
+            "Ctrl+C",
+            " twice to quit",
+        ]
+    );
+    for (span, bold) in spans.iter().zip([
+        true, false, false, true, false, false, true, false, false, true, false, false, true,
+        false, false, true, false, false, true, false,
+    ]) {
+        assert_eq!(
+            span.get("bold").and_then(serde_json::Value::as_bool),
+            bold.then_some(true)
+        );
+        assert_eq!(
+            span.get("dim").and_then(serde_json::Value::as_bool),
+            (!bold).then_some(true)
+        );
+        for absent in ["fg", "bg", "italic", "underline"] {
+            assert!(span.get(absent).is_none(), "{span}");
+        }
+    }
+}
+
+#[test]
 fn home_slot_replaces_list_lines_and_preserves_targets_and_focus() {
     let mut app = focus_home();
     let now = fakes::clock::FakeClock::new().now();
