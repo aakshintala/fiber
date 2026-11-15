@@ -55,7 +55,7 @@ fn models_dev_streaming_opener_returns_only_regular_files() {
         let path = models_dev_cache_file(&home).unwrap();
         let mut permissions = std::fs::metadata(&path).unwrap().permissions();
         use std::os::unix::fs::PermissionsExt;
-        permissions.set_mode(0);
+        permissions.set_mode(0o0);
         std::fs::set_permissions(&path, permissions).unwrap();
         assert!(open_models_dev(&home).unwrap().is_none());
         let mut permissions = std::fs::metadata(&path).unwrap().permissions();
