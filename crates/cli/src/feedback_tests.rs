@@ -95,8 +95,8 @@ fn the_doctor_output_stays_verbatim() {
 }
 
 #[test]
-fn install_is_install_sh_with_a_commit_and_unknown_without() {
-    assert_eq!(install_method("0.3.0 (abc123)"), "install.sh");
+fn install_is_source_with_a_commit_and_unknown_without() {
+    assert_eq!(install_method("0.3.0 (abc123)"), "source");
     assert_eq!(install_method("0.3.0"), "unknown");
 }
 
