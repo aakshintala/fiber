@@ -1708,6 +1708,35 @@ fn missing_git_subworkspace_readers_find_the_logged_project_and_fail_closed() {
 }
 
 #[test]
+fn removed_workspace_selection_requires_the_logged_workspace_to_match() {
+    let root = fakes::TempDir::new("dm-removed-workspace-selection");
+    let home = root.path().join("home");
+    let repository = root.path().join("repository");
+    let workspace = repository.join("removed");
+    std::fs::create_dir_all(&workspace).unwrap();
+    fakes::git::git(&repository, &["init", "--quiet"]);
+    let identity = worktree::project(&workspace);
+    let sessions = log::sessions_dir(&home, &identity);
+    let id = SessionId("s_removed_workspace".into());
+    write_log(
+        &sessions,
+        &id.0,
+        &[json!({"kind":"session_started", "payload":{"workspace":workspace}, "seq":1})],
+    );
+    std::fs::remove_dir_all(&workspace).unwrap();
+
+    // The exact recorded path selects its logged project's sessions.
+    assert_eq!(
+        super::delegate_sessions(&home, &workspace, &id).unwrap(),
+        sessions
+    );
+
+    // A different missing path must not select the same logged session.
+    let other = repository.join("other-removed");
+    assert!(super::delegate_sessions(&home, &other, &id).is_err());
+}
+
+#[test]
 fn removed_worktree_readers_name_a_worktree_with_no_usable_project_key() {
     let root = fakes::TempDir::new("dm-bad-key");
     let home = root.path().join("home");

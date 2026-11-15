@@ -492,6 +492,27 @@ fn in_launch_project_passes_the_recorded_workspace_once() {
     assert_eq!(*seen.borrow(), vec!["/nowhere"]);
     let absent = sessions.join("s_absent");
     assert!(!in_launch_project(&absent, &|_| true));
+
+    // A file at an ancestor makes symlink_metadata fail with ENOTDIR, not
+    // NotFound. It must refuse rather than treating every error as absence.
+    let blocker = home.path().join("blocker");
+    std::fs::write(&blocker, "not a directory").unwrap();
+    let blocked_path = blocker.join("worktree");
+    let blocked = sessions.join("s_blocked");
+    let _log = session_with(
+        &blocked,
+        Some(Worktree {
+            path: blocked_path.to_string_lossy().into_owned(),
+            branch: "fiber/x".to_owned(),
+            repository: None,
+        }),
+    );
+    let predicate_called = RefCell::new(false);
+    assert!(!in_launch_project(&blocked, &|_| {
+        *predicate_called.borrow_mut() = true;
+        true
+    }));
+    assert!(!predicate_called.into_inner());
 }
 
 #[test]
