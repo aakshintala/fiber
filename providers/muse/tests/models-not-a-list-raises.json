@@ -1,0 +1,23 @@
+{
+  "call": {
+    "provider": "muse",
+    "function": "models",
+    "arg": {"key": "muse-test-key", "placeholders": {}}
+  },
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://api.meta.ai/v1/models",
+          "headers": {"authorization": "Bearer muse-test-key"}
+        },
+        "reply": {"status": 200, "body": "{\"object\":\"list\",\"data\":\"not-a-list\"}"}
+      }
+    ]
+  },
+  "error": {
+    "code": "extension_failed",
+    "message": "`github.com/aakshintala/fiber/providers/muse`: muse models: the reply holds no model list"
+  }
+}
