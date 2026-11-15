@@ -567,3 +567,16 @@ docs/errors.md:357-357	fiber-4670	plan	2026-11-15T01:06:30Z	roundhouse-7010-plus
 docs/tools.md:736-736	fiber-4670	plan	2026-11-15T01:06:30Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4670-dropped-writes	
 opencode-go/muse-spark-1.3-contributor:scripts/check:scripts/test-script-selftests:scripts/test-check-rules-by-path:xtask/src/main.rs:xtask/src/select.rs:xtask/src/select_tests.rs:docs/workflow.md	fiber-4861	grant	2026-11-15T01:32:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4861-rules-by-path	
 crates/tui/src/app/home.rs	fiber-688	plan	2026-11-15T01:34:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/models_dev_table.rs	fiber-4866	plan	2026-11-15T01:46:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/tests/models-dev.json	fiber-4866	plan	2026-11-15T01:46:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/anthropic/providers/anthropic.json	fiber-4866	plan	2026-11-15T01:46:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/gemini/providers/gemini.json	fiber-4866	plan	2026-11-15T01:46:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/openai/providers/openai.json	fiber-4866	plan	2026-11-15T01:46:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/codex/providers/codex.json	fiber-4866	plan	2026-11-15T01:46:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/muse/providers/muse.json	fiber-4866	plan	2026-11-15T01:46:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/opencode/providers/opencode-go.json	fiber-4866	plan	2026-11-15T01:46:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/opencode/providers/opencode-zen.json	fiber-4866	plan	2026-11-15T01:46:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/vertex/providers/vertex.json	fiber-4866	plan	2026-11-15T01:46:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/databricks/thinking.lua	fiber-4866	plan	2026-11-15T01:46:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/databricks/thinking-overlay.json	fiber-4866	plan	2026-11-15T01:46:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/models-corrections.toml	fiber-4866	plan	2026-11-15T01:46:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
