@@ -196,10 +196,11 @@ pub(crate) struct ListingPrepared {
     pub(crate) ids: Vec<String>,
 }
 
-/// Keeps every exited session in this fixture's listing.
-fn set_keep_exited(config: &std::path::Path) -> Result<(), String> {
+/// Applies the listing-specific setting to this home's generated config.
+pub(crate) fn prepare_listing_home(home: &Home) -> Result<(), String> {
+    let config = home.home().join("config.json");
     let mut value: Value = serde_json::from_slice(
-        &fs::read(config).map_err(|err| format!("reading {}: {err}", config.display()))?,
+        &fs::read(&config).map_err(|err| format!("reading {}: {err}", config.display()))?,
     )
     .map_err(|err| format!("parsing {}: {err}", config.display()))?;
     let fields = value
@@ -211,7 +212,7 @@ fn set_keep_exited(config: &std::path::Path) -> Result<(), String> {
         .as_object_mut()
         .ok_or_else(|| format!("{} has no session object", config.display()))?
         .insert("keep_exited".to_owned(), json!(0));
-    fs::write(config, value.to_string())
+    fs::write(&config, value.to_string())
         .map_err(|err| format!("writing {}: {err}", config.display()))
 }
 
@@ -224,7 +225,7 @@ pub(crate) fn prepare_listing(
 ) -> Result<ListingPrepared, String> {
     let home = ctx.home.child(SEED.script())?;
     let prepared = (|| {
-        set_keep_exited(&home.home().join("config.json"))?;
+        prepare_listing_home(&home)?;
         init_git(ctx, &home)?;
         let seed = doors::mint("s_");
         resume::generate(ctx, &home, &SEED, &seed, notes)?;
