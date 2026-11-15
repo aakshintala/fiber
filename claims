@@ -315,3 +315,8 @@ scripts/check:161-167	fiber-4889	plan	2026-11-15T21:53:16Z	roundhouse-7010-plus-
 scripts/check:169-173	fiber-4889	plan	2026-11-15T21:53:16Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4889-jig-examples	
 scripts/test-check-rules-by-path:12-12	fiber-4889	plan	2026-11-15T21:53:16Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4889-jig-examples	
 scripts/test-check-rules-by-path:57-58	fiber-4889	plan	2026-11-15T21:53:16Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4889-jig-examples	
+crates/bench/examples/bench/home.rs	fiber-4935	plan	2026-11-15T21:53:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/bench/examples/bench/home_tests.rs	fiber-4935	plan	2026-11-15T21:53:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/bench/examples/bench/main.rs	fiber-4935	plan	2026-11-15T21:53:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/invocation.md	fiber-4935	plan	2026-11-15T21:53:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/performance.md	fiber-4935	plan	2026-11-15T21:53:12Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
