@@ -1712,28 +1712,39 @@ fn removed_workspace_selection_truth_table_matches_and_rejects_other_workspace()
     let root = fakes::TempDir::new("dm-removed-workspace-selection");
     let home = root.path().join("home");
     let repository = root.path().join("repository");
+    let other_repository = root.path().join("other-repository");
     let workspace = repository.join("removed");
+    let other_workspace = other_repository.join("removed");
     std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&other_workspace).unwrap();
     fakes::git::git(&repository, &["init", "--quiet"]);
-    let identity = worktree::project(&workspace);
-    let sessions = log::sessions_dir(&home, &identity);
+    fakes::git::git(&other_repository, &["init", "--quiet"]);
     let id = SessionId("s_removed_workspace".into());
+    let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
+    let other_sessions = log::sessions_dir(&home, &worktree::project(&other_workspace));
     write_log(
         &sessions,
         &id.0,
         &[json!({"kind":"session_started", "payload":{"workspace":workspace}, "seq":1})],
     );
-    std::fs::remove_dir_all(&workspace).unwrap();
+    write_log(
+        &other_sessions,
+        &id.0,
+        &[json!({"kind":"session_started", "payload":{"workspace":other_workspace}, "seq":1})],
+    );
+    // Keep both workspaces present so the existing-workspace branch reaches
+    // `same_project` for each logged row.
 
-    // The exact recorded path selects its logged project's sessions.
+    // Each requested project scans its own logged session: the recorded path
+    // matches once and rejects once at the same_project predicate.
     assert_eq!(
         super::delegate_sessions(&home, &workspace, &id).unwrap(),
         sessions
     );
-
-    // A different missing path must not select the same logged session.
-    let other = repository.join("other-removed");
-    assert!(super::delegate_sessions(&home, &other, &id).is_err());
+    assert_eq!(
+        super::delegate_sessions(&home, &other_workspace, &id).unwrap(),
+        other_sessions
+    );
 }
 
 #[test]

@@ -475,28 +475,27 @@ fn project_scope_selects_matching_workspace_and_rejects_another_project() {
         None,
         old_ts(),
     );
+    let other_sessions = log::sessions_dir(&home, &worktree::project(&other_workspace));
     session_in(
-        &sessions.join("s_wrong_workspace"),
+        &other_sessions.join("s_wrong_workspace"),
         other_workspace.to_str().unwrap(),
         None,
         old_ts(),
     );
 
-    let selected = select(
-        &home,
-        &log::started_sessions(&home),
-        &workspace,
-        Some(older_than()),
-        false,
-        wall(),
+    let all = log::started_sessions(&home);
+    let selected = select(&home, &all, &workspace, Some(older_than()), false, wall());
+    assert_eq!(
+        selected
+            .deletes
+            .iter()
+            .map(|delete| delete.id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["s_matching_workspace"]
     );
-    let mut deletes = selected
-        .deletes
-        .iter()
-        .map(|delete| delete.id.0.as_str())
-        .collect::<Vec<_>>();
-    deletes.sort_unstable();
-    assert_eq!(deletes, ["s_matching_workspace"]);
+    // Both rows have session directories under this project's candidate directory,
+    // so each reaches the workspace/project comparison; only one matches.
+    assert_eq!(all.len(), 2);
 }
 
 #[test]
