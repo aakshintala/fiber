@@ -17,15 +17,17 @@
 
 use crate::support;
 
+use contract::clock::Clock;
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs;
+use std::io::{self, Read};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use fakes::clock::FakeClock;
 use fakes::{Watchdog, group_empties, kill_group, kill_matching, try_matching_exits};
@@ -70,6 +72,44 @@ fn within_cleanup_hands_its_closure_half_of_what_the_wait_has_left() {
 #[test]
 fn a_matching_exits_step_gets_twice_the_child_budget_of_a_plain_wait() {
     assert_eq!(matching_exits_wait(), fakes::MUST_SUCCEED_WITHIN * 2);
+}
+
+#[test]
+fn case_progress_tracks_completed_intervals_and_the_next_case() {
+    let cases = vec![
+        "fiber --model model-".to_owned(),
+        "fiber ask --model ".to_owned(),
+        "fiber completion ".to_owned(),
+    ];
+    let mut timings = CaseTimings::default();
+    for byte in b"driver startup\nCASE 1\n" {
+        timings.observe_byte(*byte, || Duration::from_secs(2));
+    }
+    for byte in b"CASE-END\n" {
+        timings.observe_byte(*byte, || Duration::from_secs(5));
+    }
+    for byte in b"CASE 2\n" {
+        timings.observe_byte(*byte, || Duration::from_secs(6));
+    }
+    for byte in b"CASE-END\r\n" {
+        timings.observe_byte(*byte, || Duration::from_millis(8500));
+    }
+
+    assert_eq!(
+        (
+            timings.completed.clone(),
+            format_case_progress(&timings.completed, &cases),
+            format_case_progress(&[], &[]),
+        ),
+        (
+            vec![Duration::from_secs(5), Duration::from_millis(3500)],
+            Some(
+                "completed case timings: [1 `fiber --model model-`: 5s, 2 `fiber ask --model `: 3.5s]; current case: 3 `fiber completion `"
+                    .to_owned(),
+            ),
+            None,
+        )
+    );
 }
 
 /// The grammar a person completes, taken from the parser: every visible
@@ -253,6 +293,97 @@ fn matching_exits_wait() -> Duration {
     fakes::MUST_SUCCEED_WITHIN * 2 // ruling: #4078
 }
 
+#[derive(Default)]
+struct CaseTimings {
+    previous_end: Duration,
+    completed: Vec<Duration>,
+    line: Vec<u8>,
+}
+
+impl CaseTimings {
+    fn observe_byte(&mut self, byte: u8, elapsed: impl FnOnce() -> Duration) {
+        self.line.push(byte);
+        if byte == b'\n' {
+            let line = self.line.strip_suffix(b"\n").unwrap_or(&self.line);
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            if line == b"CASE-END" {
+                let elapsed = elapsed();
+                self.completed
+                    .push(elapsed.saturating_sub(self.previous_end));
+                self.previous_end = elapsed;
+            }
+            self.line.clear();
+        }
+    }
+}
+
+fn format_case_progress(completed: &[Duration], cases: &[String]) -> Option<String> {
+    cases.first()?;
+    let completed_cases = completed
+        .iter()
+        .enumerate()
+        .map(|(index, elapsed)| {
+            let case = cases.get(index).map(String::as_str).unwrap_or("<unknown>");
+            format!("{} `{case}`: {elapsed:?}", index + 1)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let current_case = cases
+        .get(completed.len())
+        .map(|case| format!("{} `{case}`", completed.len() + 1))
+        .unwrap_or_else(|| format!("none (all {} expected cases completed)", cases.len()));
+    Some(format!(
+        "completed case timings: [{completed_cases}]; current case: {current_case}"
+    ))
+}
+
+#[derive(Default)]
+struct CapturedStdout {
+    bytes: Vec<u8>,
+    completed_case_times: Vec<Duration>,
+}
+
+fn capture_stdout(mut stdout: impl Read, started: Instant) -> io::Result<CapturedStdout> {
+    let mut captured = CapturedStdout::default();
+    let mut timings = CaseTimings::default();
+    let mut buffer = [0; 8192];
+    loop {
+        let count = match stdout.read(&mut buffer) {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        if count == 0 {
+            break;
+        }
+        captured.bytes.extend_from_slice(&buffer[..count]);
+        for byte in &buffer[..count] {
+            timings.observe_byte(*byte, || {
+                support::SystemClock
+                    .now()
+                    .saturating_duration_since(started)
+            });
+        }
+    }
+    captured.completed_case_times = timings.completed;
+    Ok(captured)
+}
+
+fn receive_stdout(
+    what: &str,
+    finished: mpsc::Receiver<io::Result<CapturedStdout>>,
+) -> Result<CapturedStdout, String> {
+    match within_cleanup(
+        &format!("{what}'s stdout reader to finish"),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move |wait| wait.recv(&finished),
+    ) {
+        Ok(Ok(Ok(captured))) => Ok(captured),
+        Ok(Ok(Err(error))) => Err(format!("reading {what}'s stdout: {error}")),
+        Ok(Err(error)) => Err(format!("waiting for {what}'s stdout reader: {error}")),
+        Err(error) => Err(error),
+    }
+}
+
 /// Runs `command` to its exit, in its own process group, with stdin a pipe
 /// the test holds open and never writes to: a run that read stdin would
 /// block until `RUN` expires. After the exit, the group and every process
@@ -260,7 +391,7 @@ fn matching_exits_wait() -> Duration {
 /// step's child wait is half the outer, so the inner step expires first.
 /// On expiry, both are killed and reaped before the test fails.
 #[track_caller]
-fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
+fn run_bounded(what: &str, mut command: Command, tag: &Path, cases: &[String]) -> Output {
     let tag = tag.to_str().unwrap().to_owned();
     let mut child = command
         .stdin(Stdio::piped())
@@ -268,6 +399,16 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
         .spawn()
         .unwrap();
     let stdin = child.stdin.take();
+    let stdout = child.stdout.take();
+    let started = support::SystemClock.now();
+    let (stdout_done, stdout_finished) = mpsc::channel();
+    thread::spawn(move || {
+        let captured = match stdout {
+            Some(stdout) => capture_stdout(stdout, started),
+            None => Ok(CapturedStdout::default()),
+        };
+        let _sent = stdout_done.send(captured);
+    });
     let group = child.id();
     let group_dog = Watchdog::group(group);
     let tag_dog = Watchdog::matching(&tag);
@@ -298,10 +439,17 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
             move |inner| try_matching_exits(&tag_for_wait, inner),
         );
         drop((group_dog, tag_dog));
+        drop(stdin);
+        let stdout = receive_stdout(what, stdout_finished);
+        let case_progress = match stdout {
+            Ok(captured) => format_case_progress(&captured.completed_case_times, cases)
+                .map_or_else(String::new, |progress| format!("; {progress}")),
+            Err(error) => format!("; case timings unavailable: {error}"),
+        };
         panic!(
             "waited {RUN:?} for {what} to exit; killing its group: {group_killed:?}, \
              group empty: {group_gone:?}; killing processes matching {tag}: {tag_killed:?}, \
-             all gone: {tag_gone:?}"
+             all gone: {tag_gone:?}{case_progress}"
         );
     };
     let tag_for_wait = tag.clone();
@@ -338,6 +486,7 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
         None
     };
     drop(stdin);
+    let stdout = receive_stdout(what, stdout_finished);
     assert!(
         group_gone.as_ref() == Ok(&true),
         "{what} left a process in its group behind: {group_gone:?}"
@@ -356,7 +505,11 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
             "{what}'s matching watchdog did not exit: {tag_stood_down:?}"
         );
     }
-    output.unwrap()
+    let mut output = output.unwrap();
+    output.stdout = stdout
+        .unwrap_or_else(|error| panic!("{what}'s stdout reader did not finish: {error}"))
+        .bytes;
+    output
 }
 
 /// `fiber completion <shell>` with `FIBER_HOME` a regular file: a run that
@@ -377,6 +530,7 @@ fn script(setup: &Setup, shell: &str) -> String {
         &format!("fiber completion {shell}"),
         fiber(setup, &["completion", shell]),
         setup.root.path(),
+        &[],
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
@@ -481,7 +635,11 @@ fn the_bash_script_loads_and_completes_exactly_the_commands_and_flags() {
         .arg(&driver)
         .arg(&path)
         .args(expected.iter().map(|(case, _)| case));
-    let output = run_bounded("the bash driver", bash, setup.root.path());
+    let case_names = expected
+        .iter()
+        .map(|(case, _)| case.clone())
+        .collect::<Vec<_>>();
+    let output = run_bounded("the bash driver", bash, setup.root.path(), &case_names);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
 
@@ -547,7 +705,11 @@ fn the_zsh_script_loads_and_completes_exactly_the_commands_and_flags() {
         .arg(&driver)
         .arg(&path)
         .args(expected.iter().map(|(case, _)| case));
-    let output = run_bounded("the zsh driver", zsh, setup.root.path());
+    let case_names = expected
+        .iter()
+        .map(|(case, _)| case.clone())
+        .collect::<Vec<_>>();
+    let output = run_bounded("the zsh driver", zsh, setup.root.path(), &case_names);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -618,7 +780,11 @@ fn the_fish_script_loads_and_completes_exactly_the_commands_and_flags() {
         .arg(&driver)
         .arg(&path)
         .args(expected.iter().map(|(case, _)| case));
-    let output = run_bounded("the fish driver", fish, setup.root.path());
+    let case_names = expected
+        .iter()
+        .map(|(case, _)| case.clone())
+        .collect::<Vec<_>>();
+    let output = run_bounded("the fish driver", fish, setup.root.path(), &case_names);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -666,6 +832,7 @@ fn an_unknown_shell_is_a_usage_error_naming_the_nearest() {
         "fiber completion bsh",
         fiber(&setup, &["completion", "bsh"]),
         setup.root.path(),
+        &[],
     );
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "");
@@ -684,6 +851,7 @@ fn an_unusable_probe_value_runs_ordinarily() {
         "FIBER_COMPLETE=1 fiber --version",
         command,
         setup.root.path(),
+        &[],
     );
     assert_eq!(output.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&output.stdout).starts_with("fiber "));
@@ -716,6 +884,7 @@ fn extension_remove_completes_installed_names() {
         "FIBER_COMPLETE=bash fiber -- fiber extension remove example/<Tab>",
         command,
         setup.root.path(),
+        &[],
     );
     assert_eq!(output.status.code(), Some(0));
     // Completion order is not significant, so the probe compares the
@@ -1061,7 +1230,7 @@ fn probe_candidates_with_home(
     } else {
         command.env_remove("HOME");
     }
-    let output = run_bounded(label, command, setup.root.path());
+    let output = run_bounded(label, command, setup.root.path(), &[]);
     assert_eq!(output.status.code(), Some(0), "{label}");
     assert_eq!(String::from_utf8_lossy(&output.stderr), "", "{label}");
     String::from_utf8_lossy(&output.stdout)
@@ -1077,7 +1246,7 @@ fn a_closed_stdout_still_exits_0() {
     drop(reader);
     let mut command = fiber(&setup, &["completion", "zsh"]);
     command.stdout(writer);
-    let output = run_bounded("fiber completion zsh", command, setup.root.path());
+    let output = run_bounded("fiber completion zsh", command, setup.root.path(), &[]);
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 }
