@@ -572,3 +572,7 @@ xtask/src/select.rs:311-311	fiber-4861	plan	2026-11-15T02:06:42Z	Amoghs-MacBook-
 xtask/src/select.rs:316-316	fiber-4861	plan	2026-11-15T02:06:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4861-rules-by-path	
 xtask/src/select.rs:343-343	fiber-4861	plan	2026-11-15T02:06:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4861-rules-by-path	
 xtask/src/select_tests.rs:973-974	fiber-4861	plan	2026-11-15T02:06:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4861-rules-by-path	
+crates/main/tests/providers/models.rs	fiber-4638	plan	2026-11-15T02:14:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/models_dev.rs	fiber-4638	plan	2026-11-15T02:14:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/tests/models.rs	fiber-4638	plan	2026-11-15T02:14:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/model-routing.md	fiber-4638	plan	2026-11-15T02:14:10Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
