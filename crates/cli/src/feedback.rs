@@ -102,13 +102,17 @@ pub fn build_report(
     )
 }
 
-/// How Fiber was installed: a release install reports its commit in the
-/// version text, and a source build reports none.
-fn install_method(version: &str) -> &'static str {
-    if version.contains('(') {
+/// How Fiber was installed: a release build reports its commit in the
+/// version text, and a source build reports none. Only a release binary
+/// carries the compile-time marker, so a commit without it is a source
+/// build, and a build with no commit names no method either way.
+fn install_method(version: &str, release: bool) -> &'static str {
+    if !version.contains('(') {
+        "unknown"
+    } else if release {
         "install.sh"
     } else {
-        "unknown"
+        "source"
     }
 }
 
@@ -561,7 +565,7 @@ pub fn write(
     let report = build_report(
         ctx.version,
         &platform(),
-        install_method(ctx.version),
+        install_method(ctx.version, option_env!("FIBER_RELEASE_BUILD").is_some()),
         description,
         &doctor,
     );
