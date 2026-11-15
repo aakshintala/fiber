@@ -6584,7 +6584,9 @@ fn process_host_exec_resolves_inside_package_and_refuses_traversal() {
                 &HostCallHandle::detached(),
                 &support::cancel::Token::new(),
             );
-            let _ = send.send(result);
+            match send.send(result) {
+                Ok(()) | Err(_) => {}
+            }
         });
         (thread, receive)
     };
