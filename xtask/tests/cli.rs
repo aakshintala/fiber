@@ -1925,7 +1925,8 @@ fn session_paths_cli_reports_an_untracked_production_violation_only() {
         xtask(&dir, &["session-paths"], &[], ""),
         (
             1,
-            "session-paths: crates/b/src/new.rs:1: session path outside log\n".to_owned()
+            "session-paths: crates/b/src/new.rs:1: fn open_session: session path outside log\n"
+                .to_owned()
         )
     );
 }
@@ -1949,7 +1950,7 @@ fn fiber_home_paths_cli_reports_an_untracked_production_violation_only() {
         xtask(&dir, &["fiber-home-paths"], &[], ""),
         (
             1,
-            "fiber-home-paths: crates/b/src/new.rs:1: Fiber-home path outside config\n".to_owned()
+            "fiber-home-paths: crates/b/src/new.rs:1: fn read_project|root:home: Fiber-home path outside config\n".to_owned()
         )
     );
 }

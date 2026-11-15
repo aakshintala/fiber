@@ -27,7 +27,7 @@ fn visual_wins_then_editor_and_empty_values_do_not_count() {
     let env = |visual: Option<&str>, editor: Option<&str>| {
         let visual = visual.map(str::to_owned);
         let editor = editor.map(str::to_owned);
-        command(move |name| match name {
+        command(None, move |name| match name {
             "VISUAL" => visual.clone(),
             "EDITOR" => editor.clone(),
             _ => None,
@@ -39,6 +39,14 @@ fn visual_wins_then_editor_and_empty_values_do_not_count() {
     assert_eq!(env(Some(" "), Some("vi")), Some("vi".to_owned()));
     assert_eq!(env(None, Some("")), None);
     assert_eq!(env(None, None), None);
+    assert_eq!(
+        command(Some("nvim".to_owned()), |_| Some("vi".to_owned())),
+        Some("nvim".to_owned())
+    );
+    assert_eq!(
+        command(Some("  ".to_owned()), |_| Some("vi".to_owned())),
+        Some("vi".to_owned())
+    );
 }
 
 /// A fake editor in its own directory, and the directory the temporary
