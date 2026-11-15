@@ -696,6 +696,127 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
     );
 }
 
+// debt: restored_block_mix_matches_live_limit plus review_request_with stay beside the 15 fold rows and the sibling loop test, ceiling: one loop test and one helper pinning the 20-live-block mix, headless resume and 21st-block Failed, upgrade trigger: drop only if the acceptance no longer requires a loop test holding each kind of block
+#[test]
+fn restored_block_mix_matches_live_limit() {
+    // `docs/permissions.md`, "What happens on a block": 3 consecutive
+    // blocks, or 20 in a session, hand the call to a person as an
+    // escalation, and a reviewer that fails is a block. 6 rounds of (2
+    // reviewer denies plus 1 person-answered consecutive-blocks
+    // escalation), then 1 reviewer deny plus 1 person-answered
+    // session-blocks escalation: 20 live-reachable blocks. Block 19 leaves
+    // consecutive at 1 and session at 19; block 20 reaches the session
+    // limit and escalates as session blocks, so no third consecutive
+    // reviewer deny ever stands.
+    let mut history = History::new(vec![
+        support::tool_call_reply("Go.", &["exec"]),
+        Scripted::text("After."),
+    ]);
+    let mut tool = support::TestTool::declaring(
+        "exec",
+        "done",
+        vec![contract::shapes::Effect::Executes],
+        None,
+    );
+    tool.subject = Some("run tests".into());
+    let tool = Arc::new(tool);
+    for round in 0..6 {
+        let id = format!("r_esc_{}", round * 3);
+        history.write(reviewer_denied(), Some("a_old"));
+        history.write(reviewer_denied(), Some("a_old"));
+        history.write(
+            review_request_with(
+                &id,
+                Escalation::ConsecutiveBlocks {
+                    reason: "it writes".into(),
+                },
+            ),
+            Some("a_old"),
+        );
+        history.write(person_denied(&id), Some("a_old"));
+    }
+    history.write(reviewer_denied(), Some("a_old"));
+    history.write(
+        review_request_with(
+            "r_esc_19",
+            Escalation::SessionBlocks {
+                reason: "it writes".into(),
+            },
+        ),
+        Some("a_old"),
+    );
+    history.write(person_denied("r_esc_19"), Some("a_old"));
+    history.freeze();
+    // The pre-resume log holds the 20 counted blocks in write order
+    // (`docs/permissions.md`, "What happens on a block").
+    let mut expected = vec![EventKind::SessionStarted];
+    for _ in 0..6 {
+        expected.extend([
+            EventKind::PermissionResolved,
+            EventKind::PermissionResolved,
+            EventKind::PermissionRequested,
+            EventKind::PermissionResolved,
+        ]);
+    }
+    expected.extend([
+        EventKind::PermissionResolved,
+        EventKind::PermissionRequested,
+        EventKind::PermissionResolved,
+    ]);
+    assert_eq!(history.history_kinds(), expected);
+
+    let reviewer = Arc::new(ScriptedProvider::new(vec![
+        Scripted::text("check"),
+        Scripted::text("it writes\nblock"),
+    ]));
+    let looped = history
+        .resume_headless(vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)])
+        .reviewer(
+            Ok(r#loop::Reviewer {
+                provider: reviewer,
+                model: Model {
+                    reference: "fake/reviewer-1".into(),
+                    cost: None,
+                    subscription: false,
+                },
+                cache_lifetime: contract::events::CacheLifetime::OneHour,
+                context_window: fakes::CONTEXT_WINDOW,
+                thinking_levels: Vec::new(),
+            }),
+            r#loop::BlockLimits::default(),
+        );
+    let outcome = history.run(looped, "two");
+
+    // The 21st session block escalates with no person to answer: the turn
+    // fails `blocked` (`docs/permissions.md`, "What happens on a block").
+    assert_eq!(outcome, contract::events::TurnOutcome::Failed);
+    assert_eq!(
+        history.new_kinds(),
+        [
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::UsageRecorded,
+            EventKind::UsageRecorded,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallCompleted,
+            EventKind::TurnCompleted,
+        ]
+    );
+    let completed = history
+        .new_lines()
+        .into_iter()
+        .find(|l| l.kind() == EventKind::TurnCompleted)
+        .unwrap();
+    assert_eq!(completed.payload["error"]["code"], "blocked");
+}
+
 #[test]
 fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
     let mut history = History::new(vec![
@@ -1225,9 +1346,9 @@ use contract::events::{
 use contract::inbox::{Ack, Answer};
 use contract::shapes::{Effect, Usage};
 
-/// A review approval for `action`, carrying `request_id`, an escalation and
-/// a rule offer.
-fn review_request(request_id: &str) -> Event {
+/// A review approval for `request_id`, carrying `escalation` and a rule
+/// offer.
+fn review_request_with(request_id: &str, escalation: Escalation) -> Event {
     Event::PermissionRequested(PermissionRequested {
         always_reviewed: false,
         request_id: contract::RequestId(request_id.into()),
@@ -1238,9 +1359,7 @@ fn review_request(request_id: &str) -> Event {
             confined: false,
         },
         step: AskStep::Review {
-            escalation: Some(Escalation::ConsecutiveBlocks {
-                reason: "it writes".into(),
-            }),
+            escalation: Some(escalation),
             rule: Some(RuleOffer {
                 subject: "run tests".into(),
                 prefix: "run tests".into(),
@@ -1249,6 +1368,17 @@ fn review_request(request_id: &str) -> Event {
         arguments: None,
         changed_by: None,
     })
+}
+
+/// A review approval for `action`, carrying `request_id`, an escalation and
+/// a rule offer.
+fn review_request(request_id: &str) -> Event {
+    review_request_with(
+        request_id,
+        Escalation::ConsecutiveBlocks {
+            reason: "it writes".into(),
+        },
+    )
 }
 
 fn fiber_exited(suspended_on: Option<&str>) -> Event {
@@ -1290,6 +1420,41 @@ fn denied_resolved(request_id: Option<&str>) -> Event {
         grant: None,
         rule: None,
         reviewer: None,
+        hosts: None,
+    })
+}
+
+/// A person's denial answering `request_id`, as the live answer writes it.
+fn person_denied(request_id: &str) -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        call: None,
+        request_id: Some(contract::RequestId(request_id.into())),
+        decision: Decision::Deny,
+        decided_by: DecidedBy::Person,
+        reason: None,
+        feedback: None,
+        grant: None,
+        rule: None,
+        reviewer: None,
+        hosts: None,
+    })
+}
+
+/// A reviewer denial with no request, as the live reviewer writes it.
+fn reviewer_denied() -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        call: None,
+        request_id: None,
+        decision: Decision::Deny,
+        decided_by: DecidedBy::Reviewer,
+        reason: Some("no".into()),
+        feedback: None,
+        grant: None,
+        rule: None,
+        reviewer: Some(ReviewerRef {
+            model: "fake/reviewer-1".into(),
+            stage: 2,
+        }),
         hosts: None,
     })
 }
