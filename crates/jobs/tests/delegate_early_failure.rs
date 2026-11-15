@@ -82,6 +82,7 @@ impl contract::keeper::CommandHost for IdleHost {
                         signal: status.signal(),
                         timed_out: false,
                         output_cap: false,
+                        output_write_failure: None,
                     }));
             }
         });

@@ -960,6 +960,7 @@ pub(crate) mod test_rig {
                                 signal,
                                 timed_out: false,
                                 output_cap: false,
+                                output_write_failure: None,
                             },
                         ));
                     }
