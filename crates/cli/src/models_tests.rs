@@ -346,6 +346,8 @@ impl Setup {
     }
 }
 
+// Emit lock diagnostics only on install failure; prefer the lock file's PID,
+// falling back to Linux `lsof` when its contents do not identify the holder.
 #[allow(
     clippy::print_stderr,
     reason = "failure-only lock diagnostics identify a future flaky test sighting"
