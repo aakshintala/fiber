@@ -41,6 +41,10 @@ fn the_bounds_match_the_shared_consts() {
         known_ms("MUST_SUCCEED_WITHIN"),
         Some(fakes::MUST_SUCCEED_WITHIN >= floor)
     );
+    assert_eq!(
+        known_ms("WHOLE_SUBSYSTEM_WITHIN"),
+        Some(fakes::WHOLE_SUBSYSTEM_WITHIN >= floor)
+    );
 }
 
 #[test]
@@ -226,6 +230,7 @@ fn a_short_named_bound_passes() {
     for after in [
         "MUST_SUCCEED_WITHIN",
         "fakes::MUST_SUCCEED_WITHIN",
+        "fakes::WHOLE_SUBSYSTEM_WITHIN",
         "Duration::ZERO",
     ] {
         let source = format!("fn a() {{ Deadline::after({after}); }}");
@@ -272,7 +277,13 @@ fn an_unshown_after_fails_closed() {
                 && failures[0].ends_with("is not shown below 60 s"),
             "{case}: {failures:?}"
         );
-        for readable in ["WAIT", "DEADLINE", "MUST_SUCCEED_WITHIN", "Duration::ZERO"] {
+        for readable in [
+            "WAIT",
+            "DEADLINE",
+            "MUST_SUCCEED_WITHIN",
+            "WHOLE_SUBSYSTEM_WITHIN",
+            "Duration::ZERO",
+        ] {
             assert!(
                 failures[0].contains(readable),
                 "{case} names {readable}: {failures:?}"
