@@ -346,11 +346,6 @@ crates/loop/tests/resume.rs:1228-1230	fiber-4669	plan	2026-11-14T20:56:25Z	round
 crates/loop/tests/resume.rs:1241-1243	fiber-4669	plan	2026-11-14T20:56:25Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4669-block-count	
 crates/loop/tests/resume.rs:1253-1254	fiber-4669	plan	2026-11-14T20:56:25Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4669-block-count	
 crates/loop/tests/resume.rs:1296-1297	fiber-4669	plan	2026-11-14T20:56:25Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4669-block-count	
-crates/main/tests/tool_calls/tools.rs	fiber-4829	plan	2026-11-14T21:15:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/testing/running.md	fiber-4829	plan	2026-11-14T21:15:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/tools.md	fiber-4829	plan	2026-11-14T21:15:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/performance.md	fiber-4829	plan	2026-11-14T21:15:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/workflow.md	fiber-4829	plan	2026-11-14T21:15:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/log/src/search_tests.rs	fiber-4685	plan	2026-11-14T21:35:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/process/context.rs	fiber-4677	plan	2026-11-14T21:54:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/process/context/native.rs	fiber-4677	plan	2026-11-14T21:54:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
