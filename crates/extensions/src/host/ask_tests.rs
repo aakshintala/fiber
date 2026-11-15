@@ -590,13 +590,14 @@ fn bad_specs_raise_strings_and_nothing_reaches_the_inbox() {
 }
 
 #[test]
-fn host_ask_in_init_lua_raises_the_entry_string() {
+fn host_ask_in_init_lua_raises_not_available() {
     let clock = FakeClock::new();
     let dir = fakes::TempDir::new("fiber-ask");
     std::fs::write(
         dir.path().join("init.lua"),
-        "host.ask(\"confirm\", { prompt = \"go?\" })\n\
-         fiber.command(\"go\", { timeout = 5000, run = function() end })\n",
+        "local ok, err = pcall(host.ask, \"confirm\", { prompt = \"go?\" })\n\
+         ENTRY = tostring(ok) .. \"/\" .. tostring(err.code) .. \"/\" .. tostring(err)\n\
+         fiber.command(\"go\", { timeout = 5000, run = function() return ENTRY end })\n",
     )
     .unwrap();
     let ext = LuaExtension::new(
@@ -607,12 +608,13 @@ fn host_ask_in_init_lua_raises_the_entry_string() {
     );
     let ext = Arc::new(ext);
     let held = Arc::clone(&ext);
-    let Err(Error::Lua { message, .. }) = fakes::within(
-        "held.commands",
-        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-        move || held.commands(),
-    ) else {
-        panic!("the entry script fails to load");
-    };
-    assert_eq!(message, "host.ask: not available while init.lua runs");
+    assert_eq!(
+        fakes::within(
+            "held.command",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.command("go", "")
+        )
+        .unwrap(),
+        "false/not_available/host.ask: not available while init.lua runs"
+    );
 }

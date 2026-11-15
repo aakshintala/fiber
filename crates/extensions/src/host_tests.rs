@@ -916,8 +916,12 @@ fn successful_tool_memory_error_resumes_as_the_precreated_string() {
 fn tool_reply_error_is_returned_as_the_original_shim_message() {
     let lua = lua();
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
-    let values =
-        super::resume_values(&lua, &clock, Reply::Tool(Err("tool failed".to_owned()))).unwrap();
+    let values = super::resume_values(
+        &lua,
+        &clock,
+        Reply::Tool(Err(ToolError::Arg("tool failed".to_owned()))),
+    )
+    .unwrap();
     let mut values = values.into_iter();
     assert!(matches!(values.next(), Some(LuaValue::Nil)));
     let Some(LuaValue::String(message)) = values.next() else {

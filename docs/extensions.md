@@ -405,7 +405,8 @@ json.decode(str [, { lenient }]) / json.encode(value)   -- JSON, host-provided (
   string or a list of `text`, `image` or `pdf` parts; `max_tokens` a
   positive integer. `usage.cost` is null when the provider knew no cost
   for the call. Any callback may call it, bounded by that callback's
-  timeout.
+  timeout. While the entry script runs it raises `not_available`
+  (`host.model: not available while init.lua runs`).
 - **`host.exec`** runs a program in its own process group, which is stopped on
   cancel and at shutdown as a tool's is (`docs/tools.md`, "Shell"). A `program`
   containing `/` that is not absolute resolves against the extension's
@@ -424,8 +425,13 @@ json.decode(str [, { lenient }]) / json.encode(value)   -- JSON, host-provided (
   without asking: the person approved the extension, and a process extension
   can start programs unseen anyway. Fiber logs each such run as
   `extension_exec` (`docs/events.md`), so the session shows it happened.
+  While the entry script runs it raises `not_available`
+  (`host.exec: not available while init.lua runs`).
 - **`host.tool`** runs a tool through the same path a model's call takes,
-  judged at the extension's own tool call ("Running a tool").
+  judged at the extension's own tool call ("Running a tool"). While the
+  entry script runs it raises `not_available` (`host.tool: not available
+  while init.lua runs`); outside a running tool call it raises
+  `not_available` (`host.tool: called outside a running tool call`).
 - **`host.delegate`** takes the arguments the model's delegate tool takes and
   starts a job the session owns, with the same limits and the same stop
   (`docs/delegates.md`). `job_started` names the extension. The delegate's
@@ -490,10 +496,12 @@ json.decode(str [, { lenient }]) / json.encode(value)   -- JSON, host-provided (
   extension uses `steer` or `prompt`; a `/goal` extension may use `cancel`.
   This is the extension contract, not a wall: a process extension could open
   the session's socket as an ordinary client, and the trust model accepts
-  that.
+  that. While the entry script runs it raises `not_available`
+  (`host.drive: not available while init.lua runs`).
 - **`host.ask`** raises one of the closed interactions ("Commands and
   screens"). With nobody to answer, as in a session started by `fiber ask`,
-  it returns declined.
+  it returns declined. While the entry script runs it raises `not_available`
+  (`host.ask: not available while init.lua runs`).
 - **`host.oauth`** is what a provider's `credential()` builds an OAuth login
   from (`docs/model-routing.md`, "Credentials"). The extension adds its
   vendor's own steps. `host.oauth.refresh` takes the lock on the stored
@@ -516,7 +524,10 @@ json.decode(str [, { lenient }]) / json.encode(value)   -- JSON, host-provided (
   `show` the code, to every attached client as a `notice` with code
   `login_url`, so a person on another machine can finish a device-code login.
   A `credential()` still waiting in `callback`, or between `poll` requests,
-  when its timeout passes fails with `authentication_failed`.
+  when its timeout passes fails with `authentication_failed`. While the
+  entry script runs, `callback`, `poll` and `refresh` raise `not_available`
+  (`host.oauth.callback: needs a running callback, not the entry script`,
+  and likewise for `poll` and `refresh`).
 - **`host.sha256`** and **`host.hmac_sha256`** exist so `sign()` never needs
   crypto written in Lua. `host.hmac_sha256` returns raw bytes because a
   signing scheme such as AWS SigV4 feeds each HMAC into the next as its key,
@@ -565,8 +576,8 @@ that is running when it makes one is the **outer call**.
   is running, or while one of its commands runs ("Commands and screens"),
   where the command's invocation is the anchor. A person or a driver invoked
   the command, which is the admission. A watcher, a timer or a hook has no
-  anchor: `host.tool` called from one is an error in the calling code, which
-  fails as any callback error does ("When an extension misbehaves").
+  anchor: `host.tool` called from one raises `not_available`, which fails
+  the callback as any uncaught error does ("When an extension misbehaves").
 - **A tool cannot run itself.** A chain of inner calls across extensions, in
   which A's tool runs B's and B's runs A's, is cut at a depth of 8. That is
   a starting point, not a measurement. Both are errors in the calling code.

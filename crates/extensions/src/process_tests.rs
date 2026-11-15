@@ -3067,7 +3067,7 @@ fn entry_refusals_land_before_decode() {
     assert_eq!(owner.drain(), CloseReason::Eof);
     let answer = read_json_file(&out_path, "the entry answer");
     assert_eq!(answer["kind"], json!("command_rejected"));
-    assert_eq!(answer["payload"]["code"], json!("invalid_arguments"));
+    assert_eq!(answer["payload"]["code"], json!("not_available"));
     assert_eq!(
         answer["payload"]["message"],
         json!("host.exec: not available while init.lua runs")
@@ -3737,7 +3737,7 @@ fn refresh_without_a_scope_names_the_callback() {
         owner.pump();
     }
     let seen = read_json_file(&out_path, "the refresh refusals");
-    assert_eq!(seen["e1"]["code"], json!("invalid_arguments"));
+    assert_eq!(seen["e1"]["code"], json!("not_available"));
     assert_eq!(
         seen["e1"]["message"],
         json!("host.oauth.refresh: needs a running callback, not the entry script")
@@ -4396,7 +4396,7 @@ fn process_tool_runner_threading() {
     ) else {
         panic!("an anchorless callback cannot make an inner call");
     };
-    assert_eq!(code, ErrorCode::InvalidArguments);
+    assert_eq!(code, ErrorCode::NotAvailable);
     assert_eq!(message, "host.tool: called outside a running tool call");
     // `docs/extensions.md`, "Running a tool": host.tool records one inner call.
     assert_eq!(runner.0.lock().unwrap().len(), 1);
