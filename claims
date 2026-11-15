@@ -556,3 +556,12 @@ docs/ci.md	fiber-4861	plan	2026-11-15T00:52:05Z	Amoghs-MacBook-Pro:/Users/aakshi
 crates/main/tests/screen_looks/shell_look.rs	fiber-4839	plan	2026-11-15T00:52:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screen_looks/look.rs	fiber-4839	plan	2026-11-15T00:52:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screen_looks/main.rs	fiber-4839	plan	2026-11-15T00:52:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/anthropic/extension.json	fiber-4638	plan	2026-11-15T01:10:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/anthropic/providers/anthropic.json	fiber-4638	plan	2026-11-15T01:10:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/openai/extension.json	fiber-4638	plan	2026-11-15T01:10:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/openai/providers/openai.json	fiber-4638	plan	2026-11-15T01:10:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/gemini/extension.json	fiber-4638	plan	2026-11-15T01:10:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/gemini/providers/gemini.json	fiber-4638	plan	2026-11-15T01:10:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/codex/extension.json	fiber-4638	plan	2026-11-15T01:10:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/codex/providers/codex.json	fiber-4638	plan	2026-11-15T01:10:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/codex/providers/codex.lua	fiber-4638	plan	2026-11-15T01:10:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
