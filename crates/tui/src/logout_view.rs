@@ -115,7 +115,7 @@ impl Logout {
         if *key == Key::Esc {
             return Act::Close;
         }
-        if *key == Key::Enter {
+        if key.is_enter_or_space() {
             if let Some(Item::Target(at)) = self.selected()
                 && let Some(row) = self.rows.get(at)
                 && row.deletable()
@@ -294,6 +294,7 @@ impl Logout {
                         if deletable {
                             self.selected = at;
                             self.said.clear();
+                            self.mode = Mode::Confirm { target: *t };
                         }
                     }
                     Some(Item::Heading(_)) | Some(Item::Gap) | Some(Item::Note) | None => {}
