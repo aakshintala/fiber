@@ -622,3 +622,17 @@ providers/muse/providers/muse.lua	fiber-4865	plan	2026-11-15T11:14:49Z	Amoghs-Ma
 providers/muse/tests/models-listed.json	fiber-4865	plan	2026-11-15T11:14:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 providers/muse/tests/models-500-raises.json	fiber-4865	plan	2026-11-15T11:14:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 providers/muse/tests/models-not-a-list-raises.json	fiber-4865	plan	2026-11-15T11:14:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/muse/providers/muse.json	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/muse/extension.json	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/openai/providers/openai.lua	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/openai/tests/models-listed.json	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/openai/tests/models-500-raises.json	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/anthropic/providers/anthropic.lua	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/openrouter/providers/openrouter.lua	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/extensions/src/models_dev.rs	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/extensions/src/lua_provider.rs	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/extensions/src/lua_provider/models_arg.rs	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+docs/model-routing.md	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+docs/extensions.md	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+docs/testing/fakes.md	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+docs/ci.md	fiber-4865	plan	2026-11-15T11:32:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
