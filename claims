@@ -234,7 +234,6 @@ xtask/src/main.rs	fiber-4029	plan	2026-11-15T18:52:47Z	Amoghs-MacBook-Pro:/Users
 xtask/tests/cli.rs	fiber-4029	plan	2026-11-15T18:52:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/hub/src/first.rs	fiber-4897	plan	2026-11-15T19:43:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/rules.rs	fiber-4897	plan	2026-11-15T19:43:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/files_tests.rs:641-641	fiber-4894	plan	2026-11-15T20:09:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4894-files-outside-repo-flake	
 docs/workflow.md:118-119	fiber-4889	plan	2026-11-15T21:53:16Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4889-jig-examples	
 scripts/check:159-160	fiber-4889	plan	2026-11-15T21:53:16Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4889-jig-examples	
 scripts/check:161-167	fiber-4889	plan	2026-11-15T21:53:16Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4889-jig-examples	
