@@ -476,9 +476,37 @@ fn recorded_session_matches_requires_an_existing_accepted_session() {
 }
 
 #[test]
-fn recorded_workspace_matches_accepts_only_equal_strings() {
+fn recorded_workspace_matches_accepts_equal_paths_and_rejects_other_paths() {
     assert!(recorded_workspace_matches("/workspace", "/workspace"));
     assert!(!recorded_workspace_matches("/workspace", "/other"));
+}
+
+#[test]
+fn recorded_workspace_matches_normalizes_missing_path_aliases() {
+    use std::os::unix::fs::symlink;
+
+    let temp = fakes::TempDir::new("main-resume-workspace-alias");
+    let actual = temp.path().join("actual");
+    std::fs::create_dir(&actual).unwrap();
+    let alias = temp.path().join("alias");
+    symlink(&actual, &alias).unwrap();
+    let tail = Path::new("gone").join("workspace");
+    let recorded = actual.join(&tail);
+    let expected = alias.join(&tail);
+    assert!(!recorded.exists());
+    assert!(!expected.exists());
+    assert!(recorded_workspace_matches(
+        &recorded.to_string_lossy(),
+        &expected.to_string_lossy()
+    ));
+
+    let other = temp.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    let distinct = other.join(tail);
+    assert!(!recorded_workspace_matches(
+        &recorded.to_string_lossy(),
+        &distinct.to_string_lossy()
+    ));
 }
 
 #[test]
