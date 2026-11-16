@@ -48,14 +48,14 @@ impl Home {
     /// Copies `fiber` into a new root and installs the provider and the
     /// configuration. The provider answers no request.
     pub(crate) fn new(fiber: &Path) -> Result<Self, String> {
-        Self::start(fiber, [], None)
+        Self::start(fiber, [], None, None)
     }
 
     /// [`Home::new`] with `diagnostics.level` set to `debug`. The home's
     /// `logs/` are read into the returned sink when it drops.
     pub(crate) fn debug(fiber: &Path) -> Result<(Self, DiagnosticLogs), String> {
         let logs = DiagnosticLogs::default();
-        let home = Self::start(fiber, [], Some(Rc::clone(&logs)))?;
+        let home = Self::start(fiber, [], Some(Rc::clone(&logs)), None)?;
         Ok((home, logs))
     }
 
@@ -63,13 +63,28 @@ impl Home {
     /// each request with the next response of `script`. It shares this
     /// home's sink, so it is debug when this home is.
     pub(crate) fn child(&self, script: impl IntoIterator<Item = Response>) -> Result<Self, String> {
-        Self::start(self.fiber(), script, self.diagnostic_logs.clone())
+        Self::start(self.fiber(), script, self.diagnostic_logs.clone(), None)
+    }
+
+    /// A child home configured for the listing workload.
+    pub(crate) fn listing_with_keep_exited(
+        &self,
+        script: impl IntoIterator<Item = Response>,
+        keep_exited: Option<usize>,
+    ) -> Result<Self, String> {
+        Self::start(
+            self.fiber(),
+            script,
+            self.diagnostic_logs.clone(),
+            keep_exited,
+        )
     }
 
     fn start(
         fiber: &Path,
         script: impl IntoIterator<Item = Response>,
         diagnostic_logs: Option<DiagnosticLogs>,
+        keep_exited: Option<usize>,
     ) -> Result<Self, String> {
         let server = ProviderServer::start(script)
             .map_err(|err| format!("starting the fake provider: {err}"))?;
@@ -91,11 +106,11 @@ impl Home {
             server,
             diagnostic_logs,
         };
-        home.install()?;
+        home.install(keep_exited)?;
         Ok(home)
     }
 
-    fn install(&self) -> Result<(), String> {
+    fn install(&self, keep_exited: Option<usize>) -> Result<(), String> {
         let source = self.root.path().join("src");
         write(
             &source.join("extension.json"),
@@ -130,9 +145,10 @@ impl Home {
         .map_err(|err| format!("planning the provider install: {err:?}"))?
         .commit()
         .map_err(|err| format!("installing the provider: {err:?}"))?;
-        write(
+        write_config(
             &self.home().join("config.json"),
-            &config(self.diagnostic_logs.is_some()),
+            self.diagnostic_logs.is_some(),
+            keep_exited,
         )
     }
 
@@ -202,12 +218,15 @@ impl Drop for Home {
 
 /// The `config.json` a home installs. `diagnostics.level` is `debug` only
 /// when the harness reads the home's log lines back.
-fn config(debug: bool) -> Value {
+fn config(debug: bool, keep_exited: Option<usize>) -> Value {
     let mut config = json!({
         "model": "fake/m",
         "session": {"idle_exit_ms": SESSION_IDLE_EXIT_MS},
         "hub": {"idle_exit_ms": HUB_IDLE_EXIT_MS}
     });
+    if let Some(keep_exited) = keep_exited {
+        config["session"]["keep_exited"] = json!(keep_exited);
+    }
     if let Some(fields) = config.as_object_mut().filter(|_| debug) {
         fields.insert("diagnostics".to_owned(), json!({"level": "debug"}));
     }
@@ -239,6 +258,10 @@ fn read_logs(dir: &Path) -> Vec<Result<String, String>> {
 
 fn create(dir: &Path) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|err| format!("creating {}: {err}", dir.display()))
+}
+
+fn write_config(file: &Path, debug: bool, keep_exited: Option<usize>) -> Result<(), String> {
+    write(file, &config(debug, keep_exited))
 }
 
 fn write(file: &Path, value: &Value) -> Result<(), String> {
