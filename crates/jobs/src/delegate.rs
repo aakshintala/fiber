@@ -894,6 +894,7 @@ pub(crate) mod test_rig {
     ) -> Arc<dyn contract::keeper::CommandHost> {
         struct TestHost {
             pgids: std::sync::Mutex<std::collections::HashMap<String, u32>>,
+            stdin: std::sync::Mutex<std::collections::HashMap<String, std::process::ChildStdin>>,
             actions: Arc<std::sync::Mutex<Vec<&'static str>>>,
             fail_adopt: Arc<std::sync::atomic::AtomicBool>,
         }
@@ -910,7 +911,7 @@ pub(crate) mod test_rig {
                 let mut command = Command::new(spec.program);
                 command.args(spec.args).current_dir(spec.cwd).envs(spec.env);
                 command
-                    .stdin(std::process::Stdio::null())
+                    .stdin(std::process::Stdio::piped())
                     .stdout(std::process::Stdio::piped());
                 command.process_group(0);
                 let mut child = command
@@ -921,6 +922,9 @@ pub(crate) mod test_rig {
                     })?;
                 let pgid = child.id();
                 self.pgids.lock().unwrap().insert(id.clone(), pgid);
+                if let Some(stdin) = child.stdin.take() {
+                    self.stdin.lock().unwrap().insert(id.clone(), stdin);
+                }
                 let mut stdout = child.stdout.take().expect("stdout was piped");
                 let out_events = events.clone();
                 let reader = std::thread::spawn(move || {
@@ -972,6 +976,7 @@ pub(crate) mod test_rig {
                 let Some(pgid) = self.pgids.lock().unwrap().get(id).copied() else {
                     return false;
                 };
+                self.stdin.lock().unwrap().remove(id);
                 support::group::signal(pgid, rustix::process::Signal::TERM).is_ok()
             }
             fn write(&self, id: &str, _text: &str) -> Result<(), contract::keeper::HostError> {
@@ -1001,6 +1006,7 @@ pub(crate) mod test_rig {
         }
         Arc::new(TestHost {
             pgids: std::sync::Mutex::new(std::collections::HashMap::new()),
+            stdin: std::sync::Mutex::new(std::collections::HashMap::new()),
             actions,
             fail_adopt,
         })
