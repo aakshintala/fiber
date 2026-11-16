@@ -923,7 +923,8 @@ Fiber drains each marked entry into one `model_omitted` notice naming the
 model and the reason, the way `model_invalid` names a defective declaration.
 Each omission is also named once in the diagnostic log. The mark applies to
 static provider data too: a static entry carrying `omit_reason` drains the
-same way.
+same way. When a catalog entry repeats a key, the last value wins, matching the
+whole-document parse the streaming projection replaces.
 
 The load reports each `model_invalid` once per reason and each
 `model_omitted` once per marked entry; a later admission on the same registry

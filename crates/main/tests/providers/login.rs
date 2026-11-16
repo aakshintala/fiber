@@ -25,6 +25,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -32,6 +33,18 @@ use support::repo_provider::{declare_repo_provider, git_init};
 use support::write_record;
 
 use fakes::{MUST_SUCCEED_WITHIN, ProviderServer, Response, Watchdog};
+
+fn models_dev_url() -> String {
+    static SERVER: OnceLock<ProviderServer> = OnceLock::new();
+    format!(
+        "{}/api.json",
+        SERVER
+            .get_or_init(|| {
+                ProviderServer::start_with_fallback([], Response::status(200, "{}")).unwrap()
+            })
+            .url()
+    )
+}
 use rustix::pty;
 use rustix::termios::{self, LocalModes};
 use serde_json::{Value, json};
@@ -142,7 +155,8 @@ impl Setup {
             .envs(fakes::check_run())
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", self.root.path())
-            .env("FIBER_HOME", self.home());
+            .env("FIBER_HOME", self.home())
+            .env("FIBER_MODELS_DEV_URL", models_dev_url());
         command
     }
 
