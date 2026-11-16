@@ -317,13 +317,6 @@ crates/hub/src/start.rs:88-89	fiber-4897	plan	2026-11-16T02:37:32Z	roundhouse-70
 crates/hub/src/start.rs:162-163	fiber-4897	plan	2026-11-16T02:37:32Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4897-hub-silent-child-exit	
 docs/errors.md:97-97	fiber-4897	plan	2026-11-16T02:37:32Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4897-hub-silent-child-exit	
 xtask/src/rules.rs:1255-1256	fiber-4897	plan	2026-11-16T02:37:32Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4897-hub-silent-child-exit	
-crates/bench/examples/bench/home.rs	fiber-4948	plan	2026-11-16T02:42:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/bench/examples/bench/home_tests.rs	fiber-4948	plan	2026-11-16T02:42:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/bench/examples/bench/listing.rs	fiber-4948	plan	2026-11-16T02:42:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/bench/examples/bench/listing_tests.rs	fiber-4948	plan	2026-11-16T02:42:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/configuration.md	fiber-4948	plan	2026-11-16T02:42:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/performance.md	fiber-4948	plan	2026-11-16T02:42:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/bench/examples/bench/main.rs	fiber-4948	plan	2026-11-16T02:42:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/doors/src/session_tests.rs	fiber-4042	plan	2026-11-16T02:47:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/keeper_child_tests.rs:683-684	fiber-4646	plan	2026-11-16T03:38:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-child-fifo	
 crates/main/src/keeper_child_tests.rs:704-715	fiber-4646	plan	2026-11-16T03:38:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-child-fifo	
