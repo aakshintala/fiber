@@ -204,7 +204,7 @@ fn cancellation_stops_the_host_once_without_a_local_signal() {
         }))
         .expect("exit");
     let _ = Deadline::after(Duration::from_secs(10)).recv_or_fail(&result, "cancelled end");
-    // docs/tools.md, "Stopping a command": later cancels never start a second stop.
+    // `docs/tools.md`, "Stopping a command": later cancels never start a second stop.
     assert_eq!(*host.stops.lock().expect("stops"), vec![spec.id]);
 }
 
@@ -248,7 +248,7 @@ fn a_background_call_adopts_after_job_started_and_keeps_writing_its_file() {
         lines,
     } = Deadline::after(Duration::from_secs(10)).recv_or_fail(&adopts, "adopt");
     assert_eq!((errors, lines), (None, false), "a plain background job");
-    // docs/tools.md, "The keeper": adoption follows the durable job start.
+    // `docs/tools.md`, "The keeper": adoption follows the durable job start.
     assert_eq!(
         jobs.started()
             .iter()
