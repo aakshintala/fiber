@@ -9,7 +9,7 @@ top=$PWD
 fail() { echo "test-check-rules-by-path: $1" >&2; exit 1; }
 
 work=$(mktemp -d)
-trap 'git worktree remove --force "${proto_wt-}" 2>/dev/null || true; rm -rf "$work" "${proto_parent-}"' EXIT
+trap 'git worktree remove --force "${proto_wt-}" 2>/dev/null || true; git worktree remove --force "${example_wt-}" 2>/dev/null || true; rm -rf "$work" "${proto_parent-}" "${example_parent-}"' EXIT
 
 # A flag conflict prints usage and exits 2, like any unknown flag.
 code=0
@@ -54,6 +54,65 @@ printf '%s\n' "research/tui-prototype/src/main.rs" >"$work/changed"
 grep -q "^$pattern/" "$work/changed" || fail "a prototype-only diff trips no trigger"
 printf '%s\n' "crates/log/src/lib.rs" >"$work/unchanged"
 grep -q "^$pattern/" "$work/unchanged" && fail "a non-prototype file trips the prototype trigger"
+
+# A selected non-main jig package builds its plain example binary before
+# nextest. Cargo's test harness is a separate hashed artifact and cannot stand
+# in for the binary a jig starts (`docs/workflow.md`, "Rules by path").
+example_parent=$(mktemp -d)
+example_wt="$example_parent/wt"
+git worktree add -q --detach "$example_wt" HEAD
+mkdir -p "$example_wt/crates/log/src" "$work/example-bin"
+printf '%s\n' '//! selected log package' >"$example_wt/crates/log/src/rules-selftest-probe.rs"
+cat >"$work/example-bin/cargo" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$CARGO_CALLS"
+if [[ "$*" == "xtask select"* ]]; then
+  printf '%s\n' 'mode=crates' 'packages=log' 'package_specs=log@0.0.0' 'library_specs=log@0.0.0' 'extension_packages='
+  exit 0
+fi
+if [[ "$*" == "build -p log@0.0.0 --examples" ]]; then
+  if [[ "${NO_EXAMPLES-}" != 1 ]]; then
+    mkdir -p "$CARGO_TARGET_DIR/debug/examples"
+    : >"$CARGO_TARGET_DIR/debug/examples/check"
+  fi
+  exit 0
+fi
+if [[ "$*" == "nextest run --all-targets -p log@0.0.0" ]]; then
+  if [[ "${NO_EXAMPLES-}" != 1 ]]; then
+    test -e "$CARGO_TARGET_DIR/debug/examples/check" || { echo 'jig example check is absent' >&2; exit 1; }
+  fi
+  exit 0
+fi
+exit 0
+STUB
+chmod +x "$work/example-bin/cargo"
+export CARGO_CALLS="$work/calls" CARGO_TARGET_DIR="$work/example-target"
+if ! (cd "$example_wt" && PATH="$work/example-bin:$PATH" bash "$top/scripts/check" --rules-by-path --base HEAD >"$work/example-check" 2>&1); then
+  cat "$work/example-check" >&2
+  fail "selected log jig ran without its plain example build"
+fi
+build_line=$(grep -n '^build -p log@0.0.0 --examples$' "$work/calls" | cut -d: -f1 || true)
+test_line=$(grep -n '^nextest run --all-targets -p log@0.0.0$' "$work/calls" | cut -d: -f1 || true)
+if ! { [ -n "$build_line" ] && [ -n "$test_line" ] && [ "$build_line" -lt "$test_line" ]; }; then
+  fail "log examples were not built before nextest"
+fi
+[ "$(grep -c '^build -p main --examples$' "$work/calls" || true)" -eq 0 ] || fail "main examples build was unexpectedly duplicated"
+grep -q '^build -q -p fakes --example process-extension$' "$work/calls" || fail "fakes process-extension build changed"
+# A selected package with no examples still passes through the examples build
+# and narrowed test without requiring an example artifact.
+: >"$work/no-examples-calls"
+export CARGO_CALLS="$work/no-examples-calls"
+if ! (cd "$example_wt" && PATH="$work/example-bin:$PATH" NO_EXAMPLES=1 bash "$top/scripts/check" --rules-by-path --base HEAD >"$work/no-examples-check" 2>&1); then
+  cat "$work/no-examples-check" >&2
+  fail "selected package with no examples failed its narrowed run"
+fi
+build_line=$(grep -n '^build -p log@0.0.0 --examples$' "$work/no-examples-calls" | cut -d: -f1 || true)
+test_line=$(grep -n '^nextest run --all-targets -p log@0.0.0$' "$work/no-examples-calls" | cut -d: -f1 || true)
+if ! { [ -n "$build_line" ] && [ -n "$test_line" ] && [ "$build_line" -lt "$test_line" ]; }; then
+  fail "no-example package build did not precede nextest"
+fi
+
 
 # A narrowed smoke run through the built xtask carries no dependent crate.
 cargo build -q -p xtask
