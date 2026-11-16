@@ -325,3 +325,4 @@ crates/bench/examples/bench/listing_tests.rs	fiber-4948	plan	2026-11-16T02:42:25
 docs/configuration.md	fiber-4948	plan	2026-11-16T02:42:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/performance.md	fiber-4948	plan	2026-11-16T02:42:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/bench/examples/bench/main.rs	fiber-4948	plan	2026-11-16T02:42:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/doors/src/session_tests.rs	fiber-4042	plan	2026-11-16T02:47:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
