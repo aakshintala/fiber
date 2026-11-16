@@ -725,7 +725,13 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
             match deadline.recv_or_fail(&keeper.read, "keeper child Started") {
                 FromKeeper::Started { id: started, pgid } if started == id => break pgid,
                 FromKeeper::Output { .. } | FromKeeper::Started { .. } => {}
-                _ => panic!("unexpected keeper frame while starting {id}"),
+                FromKeeper::Failed { .. }
+                | FromKeeper::Exit { .. }
+                | FromKeeper::Identity { .. }
+                | FromKeeper::Handover { .. }
+                | FromKeeper::AdoptDone(_) => {
+                    panic!("unexpected keeper frame while starting {id}")
+                }
             }
         };
         let watchdog = fakes::Watchdog::group(pgid);
@@ -785,7 +791,13 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
         match child1_deadline.recv_or_fail(&keeper.read, "bad child Exit") {
             FromKeeper::Exit { id, .. } if id == "bad" => break,
             FromKeeper::Output { .. } | FromKeeper::Started { .. } => {}
-            _ => panic!("unexpected keeper frame before bad child Exit"),
+            FromKeeper::Failed { .. }
+            | FromKeeper::Exit { .. }
+            | FromKeeper::Identity { .. }
+            | FromKeeper::Handover { .. }
+            | FromKeeper::AdoptDone(_) => {
+                panic!("unexpected keeper frame before bad child Exit")
+            }
         }
     }
 
@@ -818,7 +830,13 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
         match child2_deadline.recv_or_fail(&keeper.read, "good child Exit") {
             FromKeeper::Exit { id, .. } if id == "good" => break,
             FromKeeper::Output { .. } | FromKeeper::Started { .. } => {}
-            _ => panic!("unexpected keeper frame before good child Exit"),
+            FromKeeper::Failed { .. }
+            | FromKeeper::Exit { .. }
+            | FromKeeper::Identity { .. }
+            | FromKeeper::Handover { .. }
+            | FromKeeper::AdoptDone(_) => {
+                panic!("unexpected keeper frame before good child Exit")
+            }
         }
     }
 
