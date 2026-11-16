@@ -476,9 +476,19 @@ fn recorded_session_matches_requires_an_existing_accepted_session() {
 }
 
 #[test]
-fn recorded_workspace_matches_accepts_equal_paths_and_rejects_other_paths() {
+fn recorded_workspace_matches_compares_path_identity() {
     assert!(recorded_workspace_matches("/workspace", "/workspace"));
     assert!(!recorded_workspace_matches("/workspace", "/other"));
+}
+
+#[test]
+fn recorded_workspace_matches_falls_back_to_literal_equality_when_canonicalization_fails() {
+    let invalid = "/workspace/\0invalid";
+    assert!(recorded_workspace_matches(invalid, invalid));
+    assert!(!recorded_workspace_matches(
+        invalid,
+        "/workspace/\0different"
+    ));
 }
 
 #[test]

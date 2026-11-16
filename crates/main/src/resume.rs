@@ -359,23 +359,17 @@ fn recorded_session_matches(
 /// Whether two recorded workspace strings name the same workspace.
 pub(super) fn recorded_workspace_matches(recorded: &str, expected: &str) -> bool {
     fn canonicalize_missing_tail(path: &Path) -> Option<std::path::PathBuf> {
-        let mut ancestor = path;
-        let mut tail = Vec::new();
-        loop {
+        for ancestor in path.ancestors() {
             match std::fs::canonicalize(ancestor) {
                 Ok(mut canonical) => {
-                    for component in tail.into_iter().rev() {
-                        canonical.push(component);
-                    }
+                    canonical.push(path.strip_prefix(ancestor).ok()?);
                     return Some(canonical);
                 }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    tail.push(ancestor.file_name()?.to_os_string());
-                    ancestor = ancestor.parent()?;
-                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(_) => return None,
             }
         }
+        None
     }
 
     match (
