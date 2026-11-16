@@ -32,7 +32,7 @@ fn models_dev_url_override_uses_the_configured_catalog() {
     );
 }
 
-// This pins parity with the whole-document serde_json parse: docs/model-routing.md,
+// This pins parity with the whole-document serde_json parse: `docs/model-routing.md`,
 // "Model discovery" promises the last value wins for repeated catalog keys.
 #[test]
 fn streaming_projection_keeps_duplicate_keys_last_wins_and_mistyped_siblings() {
