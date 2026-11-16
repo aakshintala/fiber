@@ -25,11 +25,12 @@ use crate::pty::{OFFER_NEEDLE, Terminal};
 use crate::run::PROBE;
 use crate::run::{Proc, System};
 
-/// Debt: keep this benchmark-local test driver below 100 lines; upgrade when
+/// debt: keep this benchmark-local test driver below 100 lines; upgrade when
 /// keeper test helpers move into shared test support without crossing the
 /// ruling's fence.
 enum RefreshEvent {
     Read,
+    Slept,
     Done(Result<(), String>),
 }
 
@@ -37,6 +38,7 @@ enum RefreshEvent {
 /// the named worker is parked before advancing the fake clock.
 struct RefreshClock {
     inner: Arc<FakeClock>,
+    tx: mpsc::Sender<RefreshEvent>,
 }
 
 impl Clock for RefreshClock {
@@ -49,6 +51,9 @@ impl Clock for RefreshClock {
     }
 
     fn sleep(&self, duration: Duration) {
+        // This signal proves the worker passed its expiry check and is
+        // waiting on this clock before the test advances fake time.
+        self.tx.send(RefreshEvent::Slept).unwrap_or(());
         self.inner.sleep(duration);
     }
 
@@ -73,6 +78,7 @@ fn refresh_wait(
     let (tx, rx) = mpsc::channel();
     let worker_clock = RefreshClock {
         inner: Arc::clone(&clock),
+        tx: tx.clone(),
     };
     let worker = thread::spawn(move || {
         let result = crate::run::poll(
@@ -130,6 +136,7 @@ fn a_present_models_dev_thread_waits_until_the_snapshot_is_absent() {
         event(&rx, "the initial thread snapshot"),
         RefreshEvent::Read
     ));
+    assert!(matches!(event(&rx, "the poll sleep"), RefreshEvent::Slept));
     step(&clock, &worker, PROBE);
     assert!(matches!(
         event(&rx, "the absent thread snapshot"),
@@ -151,6 +158,7 @@ fn a_refresh_still_present_at_the_deadline_fails_the_wait() {
             event(&rx, "the thread snapshot"),
             RefreshEvent::Read
         ));
+        assert!(matches!(event(&rx, "the poll sleep"), RefreshEvent::Slept));
         step(&clock, &worker, offset + PROBE);
     }
     assert!(matches!(
@@ -162,7 +170,7 @@ fn a_refresh_still_present_at_the_deadline_fails_the_wait() {
             error.contains("timed out waiting for models.dev refresh thread to exit"),
             "{error}"
         ),
-        RefreshEvent::Read | RefreshEvent::Done(Ok(())) => {
+        RefreshEvent::Read | RefreshEvent::Slept | RefreshEvent::Done(Ok(())) => {
             panic!("the refresh did not fail at its deadline")
         }
     }
@@ -180,7 +188,7 @@ fn a_thread_snapshot_read_error_fails_without_retry() {
     ));
     match event(&rx, "refresh thread snapshot error") {
         RefreshEvent::Done(Err(error)) => assert_eq!(error, "procfs read failed"),
-        RefreshEvent::Read | RefreshEvent::Done(Ok(())) => {
+        RefreshEvent::Read | RefreshEvent::Slept | RefreshEvent::Done(Ok(())) => {
             panic!("the refresh read error was not returned")
         }
     }
