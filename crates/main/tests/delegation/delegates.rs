@@ -7123,16 +7123,6 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
         let child_id = started["delegate_session_id"].as_str().unwrap();
         let path = PathBuf::from(started["workspace"].as_str().unwrap());
         let child_lines = read_lines(&sessions.join(child_id).join("events.jsonl"));
-        let recorded_workspace = child_lines
-            .iter()
-            .find(|line| line["kind"] == "session_started")
-            .and_then(|line| line["payload"]["workspace"].as_str());
-        let diagnostic = format!(
-            "DIAG test mode={mode} recorded={recorded_workspace:?} requested={:?}\n",
-            path.to_string_lossy()
-        );
-        std::io::Write::write_all(&mut std::io::stderr().lock(), diagnostic.as_bytes())
-            .unwrap_or(());
         let completed = completed_for(&lines, "delegate_message");
         if fails {
             assert_eq!(
