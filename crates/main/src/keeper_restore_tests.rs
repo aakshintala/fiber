@@ -496,7 +496,9 @@ fn a_keeper_that_vanishes_after_an_adopted_write_failure_reports_io_failed_once_
         let mut reader = reader;
         rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty()).expect("output FIFO blocks");
         let mut bytes = [0_u8; 32];
-        let _sent = first.send(reader.read(&mut bytes).expect("read from output FIFO"));
+        let read = reader.read(&mut bytes).expect("read from output FIFO");
+        drop(reader);
+        let _sent = first.send(read);
     });
     assert!(
         deadline().recv_or_fail(&first_rx, "the adopted writer did not write") > 0,
