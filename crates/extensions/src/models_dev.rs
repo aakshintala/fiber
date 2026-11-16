@@ -305,10 +305,12 @@ pub fn spawn_if_due(
     fetcher: Fetch,
 ) -> Option<JoinHandle<()>> {
     if should_fetch(&home, enabled, max_age, now) {
-        std::thread::Builder::new()
-            .name("models.dev".to_owned())
-            .spawn(move || refresh_if_due(&home, enabled, max_age, now, &fetcher))
-            .ok()
+        Some(
+            std::thread::Builder::new()
+                .name("models.dev".to_owned())
+                .spawn(move || refresh_if_due(&home, enabled, max_age, now, &fetcher))
+                .expect("spawn models.dev thread"),
+        )
     } else {
         None
     }

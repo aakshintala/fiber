@@ -18,7 +18,7 @@ use fakes::{Deadline, clock::FakeClock};
 use support::clock::Sleep;
 
 use super::settle;
-use super::{FIRST_FRAME_READY, IDLE_READY, wait_for_refresh};
+use super::{FIRST_FRAME_READY, IDLE_READY};
 
 use crate::linux::Counts;
 use crate::pty::{OFFER_NEEDLE, Terminal};
@@ -49,8 +49,8 @@ impl Clock for RefreshClock {
     }
 
     fn sleep(&self, duration: Duration) {
-        self.tx.send(RefreshEvent::Slept).unwrap_or(());
         self.inner.sleep(duration);
+        self.tx.send(RefreshEvent::Slept).unwrap_or(());
     }
 
     fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
@@ -77,10 +77,15 @@ fn refresh_wait(
         tx: tx.clone(),
     };
     let worker = thread::spawn(move || {
-        let result = wait_for_refresh(&worker_clock, within, || {
-            tx.send(RefreshEvent::Read).unwrap_or(());
-            reader()
-        });
+        let result = crate::run::poll(
+            &worker_clock,
+            within,
+            "models.dev refresh thread to exit",
+            || {
+                tx.send(RefreshEvent::Read).unwrap_or(());
+                reader()
+            },
+        );
         tx.send(RefreshEvent::Done(result)).unwrap_or(());
     });
     (clock, worker, rx)
@@ -117,6 +122,8 @@ fn an_absent_models_dev_thread_skips_the_clock_wait() {
 
 #[test]
 fn a_present_models_dev_thread_waits_until_the_snapshot_is_absent() {
+    // The second snapshot follows the completed wait, as required by
+    // `docs/testing.md`, "Waits and timeouts".
     let calls = std::sync::atomic::AtomicUsize::new(0);
     let (clock, worker, rx) = refresh_wait(Duration::from_secs(30), move || {
         let call = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -126,11 +133,11 @@ fn a_present_models_dev_thread_waits_until_the_snapshot_is_absent() {
         event(&rx, "the initial thread snapshot"),
         RefreshEvent::Read
     ));
+    step(&clock, &worker, PROBE);
     assert!(matches!(
-        event(&rx, "the refresh poll pause"),
+        event(&rx, "the completed clock-backed wait"),
         RefreshEvent::Slept
     ));
-    step(&clock, &worker, PROBE);
     assert!(matches!(
         event(&rx, "the absent thread snapshot"),
         RefreshEvent::Read
@@ -144,17 +151,18 @@ fn a_present_models_dev_thread_waits_until_the_snapshot_is_absent() {
 
 #[test]
 fn a_refresh_still_present_at_the_deadline_fails_the_wait() {
+    // Snapshot/wait order follows `docs/testing.md`, "Waits and timeouts".
     let (clock, worker, rx) = refresh_wait(2 * PROBE, || Ok(false));
     for offset in [Duration::ZERO, PROBE] {
         assert!(matches!(
             event(&rx, "the thread snapshot"),
             RefreshEvent::Read
         ));
+        step(&clock, &worker, offset + PROBE);
         assert!(matches!(
-            event(&rx, "the clock-backed poll wait"),
+            event(&rx, "the completed clock-backed wait"),
             RefreshEvent::Slept
         ));
-        step(&clock, &worker, offset + PROBE);
     }
     assert!(matches!(
         event(&rx, "the deadline thread snapshot"),
