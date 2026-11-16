@@ -10,6 +10,7 @@ use super::super::{App, Effect, Target};
 use crate::keys::{Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::TargetId;
+use crate::swapped::Spot;
 use contract::SessionId;
 use contract::clock::Clock;
 use contract::{HubEventKind, events::EventKind};
@@ -1031,6 +1032,78 @@ fn type_query(app: &mut App, query: &str) {
 fn current_row(app: &App) -> Option<usize> {
     let view = app.call_view().expect("the view stays open");
     view.current.and_then(|at| view.matches.get(at).copied())
+}
+
+#[test]
+fn scoped_search_space_stays_in_query() {
+    let mut app = attached(80, 24);
+    let (id, request) = open_paged(&mut app, json!([[0, 6]]), ACTION);
+    assert!(
+        app.on_line(accepted(&request, "zebra\nother\n", vec![0, 6], None, 12))
+            .is_empty()
+    );
+    type_query(&mut app, "zebra");
+    let before = screen(&app, 80, 24);
+    assert!(before.contains("1 of 1"), "{before}");
+    let generation = match app.on_key(Key::Char(' '), now()) {
+        Effect::FindPause { generation, .. } => generation,
+        Effect::None
+        | Effect::Send(_)
+        | Effect::SendTracked(_)
+        | Effect::Quit
+        | Effect::ExitTracked(_)
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
+        | Effect::OpenFile(_) => panic!("Space edits the scoped query"),
+    };
+    assert!(app.find_due(generation).is_empty());
+    assert_eq!(
+        app.find_bar().map(|bar| bar.query.clone()),
+        Some("zebra ".to_owned())
+    );
+    let after = screen(&app, 80, 24);
+    assert!(after.contains("no matches"), "{after}");
+    assert!(app.call_view_open());
+    assert!(app.call_view().is_some());
+    assert!(app.call_open(id));
+}
+
+#[test]
+fn clicking_body_row_with_search_keeps_match_and_count() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    requested(&mut app, "shell", json!({"command": COMMAND}), ACTION);
+    completed(
+        &mut app,
+        ACTION,
+        "first-hit\nsecond-hit\n",
+        json!({"command": COMMAND, "exit_code": 0}),
+        None,
+        None,
+    );
+    let id = crate::turn::target_id(ACTION);
+    open_inline(&mut app, id);
+    assert_eq!(app.open_call_view(id), Effect::None);
+    type_query(&mut app, "hit");
+    let row = current_row(&app).expect("a current body match");
+    let before_matches = app.call_view().expect("open").matches.clone();
+    let before_current = app.call_view().and_then(|view| view.current);
+    let before = screen(&app, 80, 24);
+    assert!(before.contains("1 of 2"), "{before}");
+
+    assert_eq!(app.call_view_click(&Spot::Row(row)), Effect::None);
+    let after = screen(&app, 80, 24);
+    assert!(after.contains("1 of 2"), "{after}");
+    assert_eq!(app.call_view().expect("open").matches, before_matches);
+    assert_eq!(
+        app.call_view().and_then(|view| view.current),
+        before_current
+    );
 }
 
 #[test]

@@ -794,6 +794,68 @@ fn one_question_screens() {
 }
 
 #[test]
+fn space_on_confirm_option_replies_with_the_focused_answer() {
+    let mut app = asking_one("confirm", 60, 12);
+    let (shown, _) = screen(&app, 60, 12);
+    assert!(shown.contains("yes"), "{shown}");
+    assert_eq!(
+        sent(app.on_key(Key::Char(' '), fakes::clock::FakeClock::new().now())),
+        json!({"command": "reply", "session_id": S_A,
+            "args": {"request_id": "r_c", "confirmed": true}})
+    );
+}
+
+#[test]
+fn space_on_select_option_replies_with_the_focused_answer() {
+    let mut app = asking_one("select", 60, 12);
+    press(&mut app, &[Key::Down]);
+    let (shown, _) = screen(&app, 60, 12);
+    assert!(shown.contains("beta"), "{shown}");
+    assert_eq!(
+        sent(app.on_key(Key::Char(' '), fakes::clock::FakeClock::new().now())),
+        json!({"command": "reply", "session_id": S_A,
+            "args": {"request_id": "r_s", "labels": ["beta"]}})
+    );
+}
+
+#[test]
+fn space_on_multi_select_submit_replies_with_toggled_labels() {
+    let mut app = asking_one("multi_select", 60, 12);
+    press(
+        &mut app,
+        &[
+            Key::Char(' '),
+            Key::Down,
+            Key::Down,
+            Key::Char(' '),
+            Key::Down,
+        ],
+    );
+    let (shown, _) = screen(&app, 60, 12);
+    assert!(shown.contains("Submit"), "{shown}");
+    assert!(shown.contains("[x] alpha"), "{shown}");
+    assert!(shown.contains("[x] gamma"), "{shown}");
+    assert_eq!(
+        sent(app.on_key(Key::Char(' '), fakes::clock::FakeClock::new().now())),
+        json!({"command": "reply", "session_id": S_A,
+            "args": {"request_id": "r_m", "labels": ["alpha", "gamma"]}})
+    );
+}
+
+#[test]
+fn space_on_multi_select_chat_declines() {
+    let mut app = asking_one("multi_select", 60, 12);
+    press(&mut app, &[Key::Down, Key::Down, Key::Down, Key::Down]);
+    let (shown, _) = screen(&app, 60, 12);
+    assert!(shown.contains("Chat about this"), "{shown}");
+    assert_eq!(
+        sent(app.on_key(Key::Char(' '), fakes::clock::FakeClock::new().now())),
+        json!({"command": "reply", "session_id": S_A,
+            "args": {"request_id": "r_m", "declined": true}})
+    );
+}
+
+#[test]
 fn clicks_on_one_question_rows_send_or_change_the_answer() {
     let mut confirm = asking_one("confirm", 60, 12);
     assert_eq!(
