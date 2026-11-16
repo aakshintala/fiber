@@ -271,9 +271,6 @@ crates/main/src/keeper_child_tests.rs:730-737	fiber-4646	plan	2026-11-16T04:12:4
 crates/main/src/keeper_child_tests.rs:741-747	fiber-4646	plan	2026-11-16T04:12:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-child-fifo	
 crates/main/src/keeper_child_tests.rs:750-755	fiber-4646	plan	2026-11-16T04:12:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-child-fifo	
 crates/main/src/keeper_child_tests.rs:758-759	fiber-4646	plan	2026-11-16T04:12:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-child-fifo	
-crates/main/src/resume.rs	fiber-4946	plan	2026-11-16T05:45:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-crates/main/src/resume_tests.rs	fiber-4946	plan	2026-11-16T05:45:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-crates/main/src/delegates.rs	fiber-4946	plan	2026-11-16T05:45:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/main/tests/delegation/delegates.rs	fiber-4946	plan	2026-11-16T05:45:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/main/src/delegates_tests.rs	fiber-4946	plan	2026-11-16T06:03:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/main/src/main.rs	fiber-4946	plan	2026-11-16T06:03:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
@@ -306,3 +303,7 @@ crates/extensions/src/models_dev.rs:307-308	fiber-4963	plan	2026-11-16T12:40:50Z
 crates/extensions/tests/models.rs:919-920	fiber-4963	plan	2026-11-16T12:40:50Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4963	
 crates/extensions/tests/models.rs:923-926	fiber-4963	plan	2026-11-16T12:40:50Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4963	
 crates/extensions/tests/models.rs:927-928	fiber-4963	plan	2026-11-16T12:40:50Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4963	
+crates/main/src/delegates.rs:1168-1168	fiber-4946	plan	2026-11-16T13:26:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4946-macos-workspace	
+crates/main/src/resume.rs:360-361	fiber-4946	plan	2026-11-16T13:26:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4946-macos-workspace	
+crates/main/src/resume_tests.rs:479-479	fiber-4946	plan	2026-11-16T13:26:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4946-macos-workspace	
+crates/main/src/resume_tests.rs:483-484	fiber-4946	plan	2026-11-16T13:26:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4946-macos-workspace	
