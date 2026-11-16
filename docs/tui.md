@@ -3299,11 +3299,11 @@ the panel's scrolling. So every extension keeps what "History and paging" and
 itself is a separate client of the hub, not a TUI extension.
 
 ### The slots
-Not built yet (replaced input box; home, view, and overlay slots): see #688.
+Not built yet (replaced input box): see #688.
 
 | Slot | What it draws |
 |---|---|
-| `layout` | Where each region goes: the conversation, the panel, the working line, the steering queue, the input box, and any region an extension adds |
+| `layout` | Where each shown built-in region goes: rail, conversation, working line, steering queue, input box and panel |
 | `home` | Home |
 | `turn_card` | A turn's card and its ▣ line |
 | `prompt` | Only a person's prompt bubble: a non-driver message never calls it |
@@ -3568,14 +3568,57 @@ five-file cut does, and the replacement inherits the cap.
 | `lines` | The widget's lines |
 | `open` | Whether the person opened the widget |
 
-**Not built yet: see #688.**
+`layout` places regions and never draws them. It receives the terminal width
+and height in cells, `flat`, and `regions`: the names shown this frame, drawn
+from `rail`, `conversation`, `working_line`, `steering_queue`, `input_box` and
+`panel`. It returns exactly one `{x, y, width, height}` rectangle for each
+shown name. Rectangles are unique, at least one cell in each dimension, within
+the screen and non-overlapping. The built-in rail and panel rectangles come
+from `layout::split`; the conversation, working line, steering queue and input
+box come from shared vertical placement. Drawing and hit-testing use the same
+rectangles, and an extension replaces only this region map. The terminal keeps
+its own narrow-layout and shedding decisions: grip and narrow are not regions.
+The grip is column 0 while the rail is wanted but not drawn; narrow means the
+panel is absent. Invalid output falls back atomically to the complete built-in
+map, raises one notice and caches the failure. Numeric coordinates must be
+integers in range; rectangle ends are checked without overflow. The "Fiber
+needs 40×10" floor stays the terminal's.
 
-`layout` places regions and never draws them. It receives the screen's size
-and returns a rectangle for each region it shows. A region it leaves out is not
-shown. A layout does its own narrow layout and shedding. The "Fiber needs
-40×10" floor stays the terminal's.
+| Field | What it holds |
+|---|---|
+| `width`, `height` | The terminal's size in cells |
+| `flat` | Whether the screen reader drops every style |
+| `regions` | Only the names shown this frame, from `rail`, `conversation`, `working_line`, `steering_queue`, `input_box` and `panel` |
 
-**Not built yet: see #688.**
+**`home`** replaces Home's session-list lines. `builtin(input, width)` returns
+the built-in list lines, or the two empty-state lines. An empty result or a
+failure keeps the built-in list. The terminal keeps the logo, chips, blockers,
+input box, picker, question, footer, target positions and focus behavior. Return
+the same number of lines as `builtin(input, width)`, in the same order. The
+terminal uses the built-in scroll offset, so each replacement line stays
+aligned with its existing target.
+
+The input table includes only the source values the built-in renderer reads.
+It omits logo protocol state and the live row's `since` source field. Changes to
+`since` still refresh cached built-in lines. Those rendered lines may include
+the elapsed text. Optional keys are absent when they do not apply, never `null`.
+
+| Field | What it holds |
+|---|---|
+| `version` | Fiber's version, shown beside the four-row logo |
+| `glyph` | The glyph before the name in the one-row logo |
+| `header` | `counts` (state role and text pairs) and optional `spend` |
+| `chips` | Each chip's `text`, `dim`, `session_mark`, and optional `spot` (`workspace`, `worktree`, `model` or `thinking`) |
+| `list` | The rows drawn by Home: `head` fields `start`, `name`, `live`, `spend`, `waiting`; `live` fields `key`, `number`, `glyph`, `name`, `word`, `tone`, `stop`, `id`, `turns`, `branch`, `spend`, `context`, `wait`; `exited_head` `count`; `exited` fields `key`, `stop`, `glyph`, `name`, `id`, `turns`, `spend`, `since`; `more` fields `key`, `count`; and `archived_head` fields `key`, `count` |
+| `empty` | Whether there are no live, crashed, exited or archived sessions |
+| `blockers`, `blocker_keys` | The blocker lines and matching booleans for credential-fix targets |
+| `picker` | When open, `escapes`, `recents`, optional `focus`, and optional `typed` with `text`, `completions` and `missing` |
+| `foot` | The key hint, as text and style spans |
+| `question` | The optional question text, with `question_import` and `question_scroll` |
+| `placeholder` | Whether the input box shows its placeholder |
+| `flat` | Whether the screen reader drops every style |
+
+**Not built yet (extension-owned views and overlays): see #4833.**
 
 The three draw-only slots decide how an approval, a question form or a
 repository's offer looks, never what it sends. An extension may restyle and
@@ -3590,8 +3633,10 @@ a file that sets colours only ("Themes").
 
 ### What a renderer returns
 
-A renderer receives the slot's input and the width, and returns lines. Each
-line is a list of spans:
+A line renderer receives the slot's input and the width, and returns lines.
+Each line is a list of spans. The `layout` renderer is the exception: it
+returns a map from region names to rectangles, and its `builtin(input, width)`
+returns the built-in map.
 
 ```lua
 { text = " exit 0 ", fg = "success", bg = "surface", bold = true,

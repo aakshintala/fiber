@@ -378,7 +378,7 @@ impl App {
         }
         if self
             .chrome()
-            .layout()
+            .drawn_layout()
             .and_then(|layout| layout.panel)
             .is_some_and(|panel| panel.contains(at))
         {
@@ -395,8 +395,8 @@ impl App {
         }
         let over_rail = self
             .chrome()
-            .regions()
-            .rail
+            .drawn_layout()
+            .and_then(|layout| layout.rail)
             .is_some_and(|rail| rail.contains(Position::new(mouse.col, mouse.row)));
         if over_rail {
             self.scroll_rail(up);
@@ -495,7 +495,14 @@ impl App {
             if !self.over_conversation(at) {
                 return None;
             }
-            let content_top = self.chrome().layout().map_or(0, |layout| layout.column.y);
+            let content_top = crate::view::placement(self).map_or_else(
+                || {
+                    self.chrome()
+                        .drawn_layout()
+                        .map_or(0, |layout| layout.column.y)
+                },
+                |placement| placement.conversation.y,
+            );
             let header_rows =
                 crate::view::item::ITEM_HEADER_ROWS.min(self.conversation_area_height());
             if usize::from(at.y.saturating_sub(content_top)) < header_rows {
@@ -523,6 +530,9 @@ impl App {
     /// (`view.rs`, `render`). An attached item's header rows count: the
     /// wheel over them is the item's, never the conversation's.
     fn over_conversation(&self, at: Position) -> bool {
+        if let Some(placement) = crate::view::placement(self) {
+            return placement.conversation.contains(at);
+        }
         let height = self.conversation_area_height();
         let (left, width, top) = match self.chrome().layout() {
             Some(layout) => (layout.column.x, layout.column.width, layout.column.y),

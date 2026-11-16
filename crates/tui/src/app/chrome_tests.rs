@@ -3,6 +3,8 @@
 
 use super::super::{App, Effect, Target};
 use super::header;
+use crate::ext::tests::{SlotRenderer, SlotScript};
+use crate::ext::{RawRect, Renderer};
 use crate::home::Launch;
 use crate::keys::Key;
 use crate::link::Line;
@@ -12,6 +14,7 @@ use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -173,6 +176,64 @@ fn attached_at_160_the_column_is_the_screen_less_the_rail_and_panel() {
     assert_eq!(app.regions.panel, layout.panel);
     // The input box's row with its edges, rule and status row.
     assert_eq!(app.conversation_height(), 35);
+}
+
+#[test]
+fn relayout_records_extension_placed_rail_and_panel_regions() {
+    let mut app = attached(160, 40);
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["layout"],
+        SlotScript::Replace(Vec::new()),
+    ));
+    *renderer.layout.borrow_mut() = Some(vec![
+        (
+            "rail".into(),
+            RawRect {
+                x: 0,
+                y: 0,
+                width: 20,
+                height: 40,
+            },
+        ),
+        (
+            "conversation".into(),
+            RawRect {
+                x: 30,
+                y: 0,
+                width: 100,
+                height: 28,
+            },
+        ),
+        (
+            "input_box".into(),
+            RawRect {
+                x: 30,
+                y: 35,
+                width: 100,
+                height: 5,
+            },
+        ),
+        (
+            "panel".into(),
+            RawRect {
+                x: 140,
+                y: 0,
+                width: 20,
+                height: 40,
+            },
+        ),
+    ]);
+
+    app.use_renderer(renderer as Rc<dyn Renderer>);
+
+    assert_eq!(app.chrome().regions().rail, Some(Rect::new(0, 0, 20, 40)));
+    assert_eq!(
+        app.chrome().regions().panel,
+        Some(Rect::new(140, 0, 20, 40))
+    );
+    assert_eq!(app.regions.rail, Some(Rect::new(0, 0, 20, 40)));
+    assert_eq!(app.regions.panel, Some(Rect::new(140, 0, 20, 40)));
+    assert_eq!(app.conversation_area_height(), 28);
 }
 
 #[test]
@@ -408,7 +469,7 @@ fn up_and_down_move_through_a_draft_wrapped_at_the_column_width() {
     assert_eq!(app.input().cursor(app.draft_width()).0, 0);
     app.on_key(Key::Down, now);
     assert_eq!(app.input().cursor(app.draft_width()).0, 1);
-    assert_eq!(app.input_height(), 2);
+    assert_eq!(app.input_height_at(app.column_width()), 2);
 }
 
 #[test]
@@ -564,9 +625,9 @@ fn the_draft_wraps_at_the_inset_width() {
     for _ in 0..54 {
         app.on_key(Key::Char('d'), now);
     }
-    assert_eq!(app.input_height(), 1);
+    assert_eq!(app.input_height_at(app.column_width()), 1);
     app.on_key(Key::Char('d'), now);
-    assert_eq!(app.input_height(), 2);
+    assert_eq!(app.input_height_at(app.column_width()), 2);
 }
 
 /// Clicking the working directory or the permission mode opens the

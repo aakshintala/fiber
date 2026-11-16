@@ -5,12 +5,193 @@ use std::cell::Cell;
 use std::sync::Arc;
 
 use super::{Cache, PageKey};
-use crate::ext::{Decision, FailureKind};
+use crate::ext::{Decision, FailureKind, HomeInput, Input, LayoutDecision, LayoutInput, RawRect};
 
 fn page(index: usize) -> PageKey {
     PageKey {
         session: contract::SessionId("s".into()),
         index,
+    }
+}
+
+fn layout_input(width: u16, height: u16, regions: &[&str], flat: bool) -> LayoutInput {
+    LayoutInput::new(
+        width,
+        height,
+        regions.iter().map(|name| (*name).to_owned()).collect(),
+        flat,
+    )
+}
+
+fn raw_rect(x: i64, y: i64, width: i64, height: i64) -> RawRect {
+    RawRect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+#[test]
+fn home_cache_keys_projected_values_flat_and_width() {
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let base = Input::Home(HomeInput {
+        value: serde_json::json!({"version": "1", "flat": false}),
+        flat: false,
+        cache_fingerprint: 0,
+    });
+    let draw = |input: &Input<'_>, width| {
+        cache.lines(PageKey::home(), "home", "test", None, input, width, || {
+            decision(|| {
+                calls.set(calls.get().saturating_add(1));
+                Ok(vec![vec![raw("home")]])
+            })
+        })
+    };
+    assert!(draw(&base, 20).is_some());
+    assert!(draw(&base, 20).is_some());
+    let changed_source = Input::Home(HomeInput {
+        value: serde_json::json!({"version": "2", "flat": false}),
+        flat: false,
+        cache_fingerprint: 0,
+    });
+    assert!(draw(&changed_source, 20).is_some());
+    let changed_flat = Input::Home(HomeInput {
+        value: serde_json::json!({"version": "1", "flat": true}),
+        flat: true,
+        cache_fingerprint: 0,
+    });
+    assert!(draw(&changed_flat, 20).is_some());
+    let changed_builtin = Input::Home(HomeInput {
+        value: serde_json::json!({"version": "1", "flat": false}),
+        flat: false,
+        cache_fingerprint: 1,
+    });
+    assert!(draw(&changed_builtin, 20).is_some());
+    assert!(draw(&base, 21).is_some());
+    assert_eq!(calls.get(), 5); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+}
+
+#[test]
+fn failed_home_render_is_cached_by_its_projected_input() {
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let input = Input::Home(HomeInput {
+        value: serde_json::json!({"version": "1", "flat": false}),
+        flat: false,
+        cache_fingerprint: 0,
+    });
+    let draw = || {
+        cache.lines(PageKey::home(), "home", "test", None, &input, 20, || {
+            decision(|| {
+                calls.set(calls.get().saturating_add(1));
+                Err(failed("test", "home failed"))
+            })
+        })
+    };
+    assert!(draw().is_none());
+    assert!(draw().is_none());
+    assert_eq!(calls.get(), 1);
+}
+
+#[test]
+fn layout_cache_keys_width_height_shown_regions_and_flat() {
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let draw = |input: &LayoutInput, regions: Vec<(String, RawRect)>| {
+        cache.layout_regions(page(0), "test", None, input, || {
+            calls.set(calls.get().saturating_add(1));
+            LayoutDecision::Draw {
+                extension: "test".into(),
+                regions,
+            }
+        })
+    };
+    let conversation = vec![("conversation".into(), raw_rect(0, 0, 4, 3))];
+    let first = layout_input(10, 8, &["conversation"], false);
+    let first_map = draw(&first, conversation.clone()).expect("a valid map");
+    assert_eq!(draw(&first, conversation.clone()), Some(first_map));
+    let taller = layout_input(10, 9, &["conversation"], false);
+    assert_eq!(draw(&taller, conversation.clone()), Some(first_map));
+    let wider = layout_input(11, 8, &["conversation"], false);
+    assert_eq!(draw(&wider, conversation.clone()), Some(first_map));
+    let flat = layout_input(10, 8, &["conversation"], true);
+    assert_eq!(draw(&flat, conversation.clone()), Some(first_map));
+    let mut changed_builtin = first.clone();
+    changed_builtin.fingerprint_builtin(&[("conversation".into(), raw_rect(0, 0, 4, 4))]);
+    assert_eq!(
+        draw(&changed_builtin, conversation.clone()),
+        Some(first_map)
+    );
+    let two_regions = layout_input(10, 8, &["conversation", "panel"], false);
+    let two = vec![
+        ("conversation".into(), raw_rect(0, 0, 4, 3)),
+        ("panel".into(), raw_rect(4, 0, 6, 3)),
+    ];
+    assert!(draw(&two_regions, two).is_some());
+    assert_eq!(calls.get(), 6); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+}
+
+#[test]
+fn invalid_layout_maps_fail_atomically_and_cache_the_failure() {
+    let input = layout_input(10, 5, &["rail", "conversation", "panel"], false);
+    let invalid = [
+        // Missing a shown region.
+        vec![
+            ("rail".into(), raw_rect(0, 0, 2, 5)),
+            ("conversation".into(), raw_rect(2, 0, 6, 5)),
+        ],
+        // Unknown name rather than the required panel.
+        vec![
+            ("rail".into(), raw_rect(0, 0, 2, 5)),
+            ("conversation".into(), raw_rect(2, 0, 6, 5)),
+            ("other".into(), raw_rect(8, 0, 2, 5)),
+        ],
+        // Out of bounds, overlapping, zero-sized, negative and overflowing.
+        vec![
+            ("rail".into(), raw_rect(0, 0, 2, 5)),
+            ("conversation".into(), raw_rect(2, 0, 6, 5)),
+            ("panel".into(), raw_rect(8, 0, 3, 5)),
+        ],
+        vec![
+            ("rail".into(), raw_rect(0, 0, 2, 5)),
+            ("conversation".into(), raw_rect(1, 0, 7, 5)),
+            ("panel".into(), raw_rect(8, 0, 2, 5)),
+        ],
+        vec![
+            ("rail".into(), raw_rect(0, 0, 2, 5)),
+            ("conversation".into(), raw_rect(2, 0, 6, 5)),
+            ("panel".into(), raw_rect(8, 0, 0, 5)),
+        ],
+        vec![
+            ("rail".into(), raw_rect(-1, 0, 2, 5)),
+            ("conversation".into(), raw_rect(2, 0, 6, 5)),
+            ("panel".into(), raw_rect(8, 0, 2, 5)),
+        ],
+        vec![
+            ("rail".into(), raw_rect(0, 0, 2, 5)),
+            ("conversation".into(), raw_rect(2, 0, 6, 5)),
+            ("panel".into(), raw_rect(i64::MAX, 0, 1, 5)),
+        ],
+    ];
+    for (index, regions) in invalid.into_iter().enumerate() {
+        let cache = Cache::default();
+        let calls = Cell::new(0usize);
+        let draw = || {
+            cache.layout_regions(page(0), "test", None, &input, || {
+                calls.set(calls.get().saturating_add(1));
+                LayoutDecision::Draw {
+                    extension: "test".into(),
+                    regions: regions.clone(),
+                }
+            })
+        };
+        assert_eq!(draw(), None, "invalid map {index} must fall back whole");
+        assert_eq!(draw(), None, "a cached failure still falls back whole");
+        assert_eq!(calls.get(), 1, "a cached failure does not call Lua again");
+        assert_eq!(cache.take_failures().len(), 1);
+        assert!(cache.take_failures().is_empty());
     }
 }
 
@@ -43,8 +224,8 @@ fn decision(call: impl FnOnce() -> Result<Vec<Vec<RawSpan>>, Failure>) -> Decisi
 
 use crate::ext::{
     AnswerDisposition, BranchName, CallState, Card, CardPrompt, ChangedFile, ChangedFiles, Context,
-    Delegate, DelegatesCard, Failure, Input, InputStatus, Job, JobsCard, LedgerResult, LedgerRow,
-    Prompt, PromptImage, Quota, RawSpan, ReplyText, SessionCard, SessionContext, Spend, StatusRows,
+    Delegate, DelegatesCard, Failure, InputStatus, Job, JobsCard, LedgerResult, LedgerRow, Prompt,
+    PromptImage, Quota, RawSpan, ReplyText, SessionCard, SessionContext, Spend, StatusRows,
     SteeringMessage, SteeringQueue, ThinkingLine, TurnCard, TurnCardState, TurnEnded, WidgetCard,
     WorkingLine, WorkingRetry,
 };

@@ -1382,23 +1382,27 @@ impl App {
     /// home box is thin too, so its branch wraps at the same boxed
     /// interior width the home renderer uses.
     pub(crate) fn draft_width(&self) -> u16 {
+        self.draft_width_at(self.column_width())
+    }
+
+    /// The draft width for a particular box width.
+    fn draft_width_at(&self, width: u16) -> u16 {
         if self.on_home() {
-            let width = self.column_width();
             if crate::surface::box_fit(width) {
                 width.saturating_sub(2)
             } else {
                 width
             }
         } else {
-            crate::surface::inset(self.column_width())
+            crate::surface::inset(width)
         }
     }
 
-    /// The input box's rows: the draft's wrapped rows, at most a third of
-    /// the screen and at least one.
-    pub(crate) fn input_height(&self) -> usize {
+    /// The input box's row count at `width`: the draft's wrapped rows,
+    /// at most a third of the screen and at least one.
+    pub(crate) fn input_height_at(&self, width: u16) -> usize {
         let cap = usize::from(self.screen.height() / 3).max(1);
-        self.draft.rows(self.draft_width()).len().min(cap)
+        self.draft.rows(self.draft_width_at(width)).len().min(cap)
     }
 
     /// Whether the quit hint or the rail hint shows: armed by a first
@@ -1418,11 +1422,13 @@ impl App {
         self.screen.top()
     }
 
-    /// The conversation's rows: the screen less the input box or the panel
-    /// in its place, the steering queue, the banner, the badge and the
-    /// hint, and the narrow layout's rows under the conversation. None on
-    /// a screen too short for them.
+    /// The visible conversation rows: the shared placed area when a
+    /// session layout exists, otherwise the screen less its built-in
+    /// below-conversation rows.
     pub(crate) fn conversation_area_height(&self) -> usize {
+        if let Some(placement) = crate::view::placement(self) {
+            return usize::from(placement.conversation.height);
+        }
         let below = self.below_rows();
         usize::from(self.screen.height()).saturating_sub(below + self.narrow_rows(below))
     }
@@ -1441,17 +1447,22 @@ impl App {
     /// the input box or the panel in its place, the steering queue, the
     /// banner, the badge and the hint.
     pub(crate) fn below_rows(&self) -> usize {
+        self.below_rows_at(self.column_width())
+    }
+
+    /// The built-in below-conversation row count at `width`.
+    pub(crate) fn below_rows_at(&self, width: u16) -> usize {
         // The same room the view draws the box and the panel in: the body
         // height, so the rows counted are the rows drawn
         // (`docs/tui.md`, "Layout").
         let room = usize::from(self.screen.height());
-        let input = self.panel().map_or_else(
-            || crate::surface::edged(self.input_height(), room),
-            |panel| crate::view::request::height(&panel, self.column_width(), room),
+        let input = self.panel_at(width).map_or_else(
+            || crate::surface::edged(self.input_height_at(width), room),
+            |panel| crate::view::request::height(&panel, width, room),
         );
         let under = input
-            + crate::view::steering_queue::count(self, self.column_width())
-            + crate::view::working_line::count(self, self.column_width());
+            + crate::view::steering_queue::count(self, width)
+            + crate::view::working_line::count(self, width);
         // The notice rows draw above the working line, so their room is
         // what is left above it; the badge and hint draw above them. The
         // count runs through the same seam the draw will, so hidden
@@ -1459,9 +1470,19 @@ impl App {
         let bound = crate::view::notice_rows::frame_bound(self);
         let notices = self
             .notices
-            .visible_drawn(&bound, self.column_width())
+            .visible_drawn(&bound, width)
             .min(room.saturating_sub(under));
         under + notices + usize::from(self.badge().is_some()) + usize::from(self.hint())
+    }
+
+    /// Rows drawn over the conversation region, limited by its height.
+    pub(crate) fn conversation_overlay_rows(&self, width: u16, room: usize) -> usize {
+        let bound = crate::view::notice_rows::frame_bound(self);
+        let notices = self.notices.visible_drawn(&bound, width).min(room);
+        let after_notices = room.saturating_sub(notices);
+        let badge = usize::from(after_notices > 0 && self.badge().is_some());
+        let hint = usize::from(after_notices > badge && self.hint());
+        notices + badge + hint
     }
 
     /// The approval panel, while it is open: its form laid out at the
@@ -1469,7 +1490,12 @@ impl App {
     /// "Look"). The session asking shows its name when known, else its
     /// id (`docs/tui.md`, "An approval").
     pub(crate) fn panel(&self) -> Option<Panel> {
-        let width = crate::surface::inset(self.column_width());
+        self.panel_at(self.column_width())
+    }
+
+    /// The approval panel built at `width`, for a placement calculation.
+    pub(crate) fn panel_at(&self, width: u16) -> Option<Panel> {
+        let width = crate::surface::inset(width);
         self.queue.panel_with(width, &|id| {
             let name = self.home.sessions.row(id).map(|row| row.name.clone());
             if name.as_deref().is_some_and(|name| !name.is_empty()) {
@@ -1647,6 +1673,27 @@ impl App {
     /// Installs once, then invalidates every live displayed or folding cache.
     pub(crate) fn use_renderer(&mut self, renderer: Rc<dyn Renderer>) {
         self.set_renderer(renderer);
+        {
+            let pages = [
+                Some(self.screen.pages_mut()),
+                self.items
+                    .open
+                    .as_mut()
+                    .and_then(|open| open.stashed.as_mut())
+                    .map(|stashed| stashed.pages_mut()),
+                if let Overlay::Folding { fold, .. } = &mut self.overlay {
+                    Some(fold.as_mut())
+                } else {
+                    None
+                },
+            ];
+            // Owners can share pending/failure state. Clear every cache before
+            // any recount can enqueue notices or memoize failures for this install.
+            for pages in pages.iter().flatten() {
+                pages.ext.cache.clear();
+            }
+        }
+        self.relayout();
         let pages = [
             Some(self.screen.pages_mut()),
             self.items
@@ -1660,11 +1707,6 @@ impl App {
                 None
             },
         ];
-        // Owners can share pending/failure state. Clear every cache before
-        // any recount can enqueue notices or memoize failures for this install.
-        for pages in pages.iter().flatten() {
-            pages.ext.cache.clear();
-        }
         for pages in pages.into_iter().flatten() {
             pages.recount();
         }

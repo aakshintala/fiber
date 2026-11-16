@@ -3,6 +3,8 @@
 
 use super::super::{cursor, render, text};
 use crate::app::App;
+use crate::ext::tests::{SlotRenderer, SlotScript};
+use crate::ext::{RawRect, Renderer};
 use crate::home::Launch;
 use crate::link::Line;
 use contract::clock::Clock;
@@ -93,6 +95,248 @@ fn draw(app: &App, width: u16, height: u16) -> (Buffer, usize) {
     let mut buf = Buffer::empty(area);
     let targets = render(app, area, &mut buf, None);
     (buf, targets.len())
+}
+
+#[test]
+fn placement_shares_split_geometry_and_vertical_regions() {
+    let app = app(160, 40, false);
+    let placement = super::super::placement(&app).expect("the attached screen has a placement");
+    let regions = placement.regions;
+    assert_eq!(regions.rail, Some(Rect::new(0, 0, 24, 40)));
+    assert_eq!(regions.conversation, Some(Rect::new(24, 0, 102, 35)));
+    assert_eq!(placement.conversation, Rect::new(24, 0, 102, 35));
+    assert_eq!(regions.working_line, None);
+    assert_eq!(regions.steering_queue, None);
+    assert_eq!(regions.input_box, Some(Rect::new(24, 35, 102, 5)));
+    assert_eq!(regions.panel, Some(Rect::new(126, 0, 34, 40)));
+}
+
+#[test]
+fn extension_layout_places_the_same_regions_that_chrome_draws() {
+    use std::rc::Rc;
+
+    let mut app = app(160, 40, false);
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["layout"],
+        SlotScript::Replace(Vec::new()),
+    ));
+    *renderer.layout.borrow_mut() = Some(vec![
+        (
+            "rail".into(),
+            RawRect {
+                x: 0,
+                y: 0,
+                width: 20,
+                height: 40,
+            },
+        ),
+        (
+            "conversation".into(),
+            RawRect {
+                x: 30,
+                y: 0,
+                width: 100,
+                height: 35,
+            },
+        ),
+        (
+            "input_box".into(),
+            RawRect {
+                x: 30,
+                y: 35,
+                width: 100,
+                height: 5,
+            },
+        ),
+        (
+            "panel".into(),
+            RawRect {
+                x: 140,
+                y: 0,
+                width: 20,
+                height: 40,
+            },
+        ),
+    ]);
+    app.use_renderer(renderer.clone() as Rc<dyn Renderer>);
+
+    let placement = crate::view::placement(&app).expect("placed after install");
+    assert_eq!(placement.regions.rail, Some(Rect::new(0, 0, 20, 40)));
+    assert_eq!(
+        placement.regions.conversation,
+        Some(Rect::new(30, 0, 100, 35))
+    );
+    assert_eq!(placement.regions.panel, Some(Rect::new(140, 0, 20, 40)));
+    assert_eq!(
+        renderer.layout_inputs.borrow()[0].regions,
+        ["rail", "conversation", "input_box", "panel",]
+    );
+    // The extension replaces placement only; the split still owns the
+    // built-in grip/narrow decisions and width floor.
+    assert_eq!(
+        app.chrome().layout().unwrap().rail,
+        Some(Rect::new(0, 0, 24, 40))
+    );
+
+    let (buf, _) = draw(&app, 160, 40);
+    assert_eq!(buf.cell((19, 20)).map(|cell| cell.symbol()), Some("⋮"));
+    assert_eq!(buf.cell((140, 20)).map(|cell| cell.symbol()), Some("⋮"));
+}
+
+#[test]
+fn placement_row_counts_ignore_the_previous_extension_column_width() {
+    use std::rc::Rc;
+
+    let mut app = app(160, 40, false);
+    app.on_line(session_line(
+        "turn_started",
+        serde_json::json!({"input": [{
+            "type": "message",
+            "source": "driver",
+            "content": [{"type": "text", "text": "hi"}],
+        }]}),
+    ));
+    let long = std::iter::repeat_n('x', 300).collect::<String>();
+    app.on_line(session_line(
+        "steering_queue",
+        serde_json::json!({"messages": [{
+            "content": [{"type": "text", "text": long}],
+            "source": "driver",
+            "command_id": "c_1",
+        }]}),
+    ));
+    let area = Rect::new(0, 0, 160, 40);
+    let split = app.chrome().layout().expect("attached split");
+    assert_ne!(
+        crate::view::steering_queue::count(&app, split.column.width),
+        crate::view::steering_queue::count(&app, 30),
+    );
+    let before = super::super::placement_from_split(&app, area, split);
+    let builtin = before.regions;
+    let conversation = builtin.conversation.expect("conversation region");
+    let mut extension = builtin;
+    extension.conversation = Some(Rect::new(30, conversation.y, 30, conversation.height));
+    let layout = extension
+        .shown()
+        .map(|(region, rect)| {
+            (
+                region.name().to_owned(),
+                RawRect {
+                    x: i64::from(rect.x),
+                    y: i64::from(rect.y),
+                    width: i64::from(rect.width),
+                    height: i64::from(rect.height),
+                },
+            )
+        })
+        .collect();
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["layout"],
+        SlotScript::Replace(Vec::new()),
+    ));
+    *renderer.layout.borrow_mut() = Some(layout);
+    app.use_renderer(renderer as Rc<dyn Renderer>);
+
+    assert_eq!(app.column_width(), 30);
+    let after = super::super::placement_from_split(&app, area, split);
+    assert_eq!(after, before);
+}
+
+#[test]
+fn invalid_extension_layout_falls_back_whole_and_notices_once() {
+    use std::rc::Rc;
+
+    let mut app = app(160, 40, false);
+    let area = Rect::new(0, 0, 160, 40);
+    let builtin = crate::view::placement(&app)
+        .expect("the attached screen has a placement")
+        .regions;
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["layout"],
+        SlotScript::Replace(Vec::new()),
+    ));
+    *renderer.layout.borrow_mut() = Some(vec![
+        (
+            "rail".into(),
+            RawRect {
+                x: 0,
+                y: 0,
+                width: 20,
+                height: 40,
+            },
+        ),
+        (
+            "conversation".into(),
+            RawRect {
+                x: 30,
+                y: 0,
+                width: 100,
+                height: 35,
+            },
+        ),
+        (
+            "input_box".into(),
+            RawRect {
+                x: 30,
+                y: 35,
+                width: 100,
+                height: 5,
+            },
+        ),
+        (
+            "panel".into(),
+            RawRect {
+                x: 150,
+                y: 0,
+                width: 20,
+                height: 40,
+            },
+        ),
+    ]);
+    app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+
+    let placed = crate::view::placement(&app).expect("fallback placement");
+    assert_eq!(placed.regions, builtin);
+    assert_eq!(renderer.layout_inputs.borrow().len(), 1); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    assert!(app.drawn(&targets));
+    assert_eq!(app.notices().len(), 1); // `docs/tui.md`, "The slots": invalid output raises one notice and caches the failure.
+
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    assert!(!app.drawn(&targets));
+    assert_eq!(app.notices().len(), 1); // `docs/tui.md`, "The slots": invalid output raises one notice and caches the failure.
+    assert_eq!(renderer.layout_inputs.borrow().len(), 1); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+}
+
+#[test]
+fn builtin_layout_cache_refreshes_when_input_rows_change_placement() {
+    use std::rc::Rc;
+
+    let mut app = app(160, 40, false);
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["layout"],
+        SlotScript::Replace(Vec::new()),
+    ));
+    renderer.layout_builtin.set(true);
+    app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+    let before = crate::view::placement(&app)
+        .expect("attached screen has a placement")
+        .regions;
+    assert_eq!(renderer.layout_inputs.borrow().len(), 1); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+
+    for _ in 0..3 {
+        app.on_edit(crate::keys::Edit::ShiftEnter);
+    }
+    let after = crate::view::placement(&app)
+        .expect("attached screen has a placement")
+        .regions;
+
+    assert_ne!(after.input_box, before.input_box);
+    assert_ne!(after.conversation, before.conversation);
+    assert_eq!(renderer.layout_inputs.borrow().len(), 4); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
 }
 
 #[test]

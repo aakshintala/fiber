@@ -511,9 +511,7 @@ impl App {
                     id: row.id.0.clone(),
                     turns: row.status.as_ref().and_then(|status| status.turns),
                     spend: crate::format::money(row.spend),
-                    age: row.status.as_ref().map(|status| {
-                        format!("{} ago", crate::view::rail::elapsed(status.since, wall))
-                    }),
+                    since: row.status.as_ref().map(|status| status.since),
                 });
             }
             // `More` draws total-minus-shown when a total is held,
@@ -545,9 +543,7 @@ impl App {
                     id: row.id.0.clone(),
                     turns: row.status.as_ref().and_then(|status| status.turns),
                     spend: crate::format::money(row.spend),
-                    age: row.status.as_ref().map(|status| {
-                        format!("{} ago", crate::view::rail::elapsed(status.since, wall))
-                    }),
+                    since: row.status.as_ref().map(|status| status.since),
                 });
             }
         }

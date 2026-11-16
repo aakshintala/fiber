@@ -2,8 +2,8 @@
 //! shedding, and the floor.
 
 use super::{
-    CONVERSATION_MIN, PANEL_CEILING, PANEL_FLOOR, RAIL_CEILING, RAIL_FLOOR, Shares, Want, dragged,
-    edge_at, edge_rect, floor_line, past_gutter, share_for, share_of, split,
+    CONVERSATION_MIN, PANEL_CEILING, PANEL_FLOOR, RAIL_CEILING, RAIL_FLOOR, Region, Shares, Want,
+    dragged, edge_at, edge_rect, floor_line, past_gutter, share_for, share_of, split,
 };
 use ratatui::layout::Rect;
 
@@ -37,6 +37,21 @@ const GRIP: Want = Want {
 /// A region's columns as `(x, width)`.
 fn cols(rect: Option<Rect>) -> Option<(u16, u16)> {
     rect.map(|rect| (rect.x, rect.width))
+}
+
+#[test]
+fn region_names_are_the_six_documented_layout_inputs() {
+    assert_eq!(
+        Region::ALL.map(Region::name),
+        [
+            "rail",
+            "conversation",
+            "working_line",
+            "steering_queue",
+            "input_box",
+            "panel",
+        ]
+    );
 }
 
 #[test]
