@@ -680,8 +680,12 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
     // One job's unwritable output file never stops the keeper ending the
     // other job: each process stores its own first path-bearing failure.
     let input = fakes::TempDir::new("keeper-files-two-input");
-    let input_fifo = input.path().join("input.fifo");
-    fakes::fifo(&input_fifo);
+    let bad_input = input.path().join("bad.fifo");
+    let good_input = input.path().join("good.fifo");
+    let release = input.path().join("release.fifo");
+    fakes::fifo(&bad_input);
+    fakes::fifo(&good_input);
+    fakes::fifo(&release);
     let home = fakes::TempDir::under(std::path::Path::new("/tmp"), "keeper-files-two");
     let bad_dir = home.path().join("bad.d");
     std::fs::create_dir(&bad_dir).expect("unwritable output");
@@ -701,25 +705,12 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
         None,
     );
     let mut control = keeper.writer.try_clone().expect("control");
-    for (id, shell, output) in [
-        (
-            "bad",
-            "read gate < FIFO; echo bad-out; exit 3",
-            bad_dir.clone(),
-        ),
-        (
-            "good",
-            "read gate < FIFO; echo good-out; exit 0",
-            good_out.clone(),
-        ),
-    ] {
+
+    let start = |control: &mut UnixStream, id: &str, shell: String, output: std::path::PathBuf| {
         let spec = Spawn {
             id: id.into(),
             program: "/bin/sh".into(),
-            args: vec![
-                "-c".into(),
-                shell.replace("FIFO", &input_fifo.display().to_string()),
-            ],
+            args: vec!["-c".into(), shell],
             cwd: std::env::temp_dir(),
             env: Vec::new(),
             stdin: HostStdin::Null,
@@ -727,10 +718,19 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
             output_cap: 1_000_000,
             sandbox: None,
         };
-        serde_json::to_writer(&mut control, &ToKeeper::Start(spec)).expect("start child");
+        serde_json::to_writer(&mut *control, &ToKeeper::Start(spec)).expect("start child");
         control.write_all(b"\n").expect("start newline");
+        let deadline = Deadline::after(Duration::from_secs(10));
+        let pgid = loop {
+            match deadline.recv_or_fail(&keeper.read, "keeper child Started") {
+                FromKeeper::Started { id: started, pgid } if started == id => break pgid,
+                FromKeeper::Output { .. } | FromKeeper::Started { .. } => {}
+                _ => panic!("unexpected keeper frame while starting {id}"),
+            }
+        };
+        let watchdog = fakes::Watchdog::group(pgid);
         serde_json::to_writer(
-            &mut control,
+            &mut *control,
             &ToKeeper::Adopt {
                 id: id.into(),
                 job_id: JobId(format!("j_{id}")),
@@ -741,21 +741,93 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
         )
         .expect("adopt child");
         control.write_all(b"\n").expect("adopt newline");
-    }
-    // Both children block on the gate with silent holds, so the takeover
-    // opens the bad job's directory output (recording its failure) and
-    // the good job's file; the release lets both stream and exit.
+        watchdog
+    };
+    let bad_watchdog = start(
+        &mut control,
+        "bad",
+        format!(
+            "read gate < '{}'; echo bad-out; exit 3",
+            bad_input.display()
+        ),
+        bad_dir.clone(),
+    );
+    let good_watchdog = start(
+        &mut control,
+        "good",
+        format!(
+            "read gate < '{}'; test \"$gate\" = go || exit 9; read gate < '{}'; echo good-out; exit 0",
+            release.display(),
+            good_input.display()
+        ),
+        good_out.clone(),
+    );
+
+    // Both children are adopted before the writer closes. The second child
+    // remains held at its separate release FIFO until the first exits.
     crash(&mut keeper);
     Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "keeper files to be active");
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(&input_fifo)
-        .expect("input FIFO writer")
-        .write_all(b"go\n")
-        .expect("release children");
+
+    let (opened, opened_rx) = std::sync::mpsc::channel();
+    let bad_input = bad_input.clone();
+    std::thread::spawn(move || {
+        let result = std::fs::OpenOptions::new()
+            .write(true)
+            .open(bad_input)
+            .and_then(|mut writer| writer.write_all(b"go\n"));
+        let _sent = opened.send(result);
+    });
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&opened_rx, "bad input FIFO writer open and write")
+        .expect("bad input FIFO writer");
+    let child1_deadline = Deadline::after(Duration::from_secs(10));
+    loop {
+        match child1_deadline.recv_or_fail(&keeper.read, "bad child Exit") {
+            FromKeeper::Exit { id, .. } if id == "bad" => break,
+            FromKeeper::Output { .. } | FromKeeper::Started { .. } => {}
+            _ => panic!("unexpected keeper frame before bad child Exit"),
+        }
+    }
+
+    let (released, released_rx) = std::sync::mpsc::channel();
+    let release = release.clone();
+    std::thread::spawn(move || {
+        let result = std::fs::OpenOptions::new()
+            .write(true)
+            .open(release)
+            .and_then(|mut writer| writer.write_all(b"go\n"));
+        let _sent = released.send(result);
+    });
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&released_rx, "release FIFO writer open and write")
+        .expect("release child 2");
+    let (opened, opened_rx) = std::sync::mpsc::channel();
+    let good_input = good_input.clone();
+    std::thread::spawn(move || {
+        let result = std::fs::OpenOptions::new()
+            .write(true)
+            .open(good_input)
+            .and_then(|mut writer| writer.write_all(b"go\n"));
+        let _sent = opened.send(result);
+    });
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&opened_rx, "good input FIFO writer open and write")
+        .expect("good input FIFO writer");
+    let child2_deadline = Deadline::after(Duration::from_secs(10));
+    loop {
+        match child2_deadline.recv_or_fail(&keeper.read, "good child Exit") {
+            FromKeeper::Exit { id, .. } if id == "good" => break,
+            FromKeeper::Output { .. } | FromKeeper::Started { .. } => {}
+            _ => panic!("unexpected keeper frame before good child Exit"),
+        }
+    }
+
     Deadline::after(Duration::from_secs(10))
         .recv_or_fail(&keeper.result, "keeper to finish after both children")
         .expect("keeper exits cleanly");
+    bad_watchdog.stand_down(Deadline::after(Duration::from_secs(10)));
+    good_watchdog.stand_down(Deadline::after(Duration::from_secs(10)));
+
     let completed = job_completed_lines(&keeper);
     // `docs/tools.md`, "The keeper": a job_completed for each job that ends.
     assert_eq!(completed.len(), 2, "both jobs end");
