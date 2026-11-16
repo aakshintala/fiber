@@ -67,20 +67,6 @@ fn run_details_call(shell: Shell, arguments: Map<String, Value>) -> contract::to
 }
 
 #[test]
-fn shell_child_receives_its_explicit_session_id() {
-    let session_id = contract::SessionId("s_0123456789abcdef".into());
-    let shell =
-        Shell::new(std::env::temp_dir(), FakeClock::new()).with_session_id(session_id.clone());
-    let output = run_details_call(shell, args("printf '%s\\n' \"$FIBER_SESSION_ID\""));
-    assert!(output.error.is_none(), "{:?}", output.error);
-    assert!(
-        text(&output).starts_with(&format!("{}\n", session_id.0)),
-        "child output should begin with its explicit session id: {}",
-        text(&output)
-    );
-}
-
-#[test]
 fn shell_job_output_write_failure_is_reported() {
     let path = std::path::PathBuf::from("/tmp/job.log");
     let output = super::assemble(

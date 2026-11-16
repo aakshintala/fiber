@@ -69,7 +69,7 @@ impl Starter for SpawnStarter {
             login_shell(&environment),
         );
         apply(&mut command, &environment);
-        command.env("FIBER_SESSION_ID", id.0.as_str());
+        apply_session_id(&mut command, id);
         spawn(id, command)
     }
 
@@ -99,7 +99,7 @@ impl Starter for SpawnStarter {
         };
         let mut command = session_command_from(&self.exe, args);
         apply(&mut command, &environment);
-        command.env("FIBER_SESSION_ID", id.0.as_str());
+        apply_session_id(&mut command, id);
         spawn(id, command)
     }
 
@@ -122,7 +122,7 @@ impl Starter for SpawnStarter {
             login_shell(&environment),
         );
         apply(&mut command, &environment);
-        command.env("FIBER_SESSION_ID", id.0.as_str());
+        apply_session_id(&mut command, id);
         spawn(id, command)
     }
 }
@@ -136,6 +136,11 @@ impl Starter for SpawnStarter {
 /// absent → an in-process `fiber ask`, which queries the hub so the
 /// session agrees with `fiber models` (issue #2909).
 pub use contract::HUB_SESSION_MARKER;
+
+/// Overlay the launched session's identity after applying the inherited snapshot.
+fn apply_session_id(command: &mut Command, id: &SessionId) {
+    command.env("FIBER_SESSION_ID", id.0.as_str());
+}
 
 /// The hub's current environment onto the session command: exactly its
 /// variables (`docs/invocation.md`, "A session's environment"), with the

@@ -1135,7 +1135,7 @@ fn a_shell_child_replaces_a_stale_caller_session_id() {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let expected = run.session_id();
     assert!(expected.starts_with("s_"));
-    // Prompt-created session IDs are 18 characters (`docs/invocation.md`, “Getting a prompt in”).
+    // Session IDs are `s_` plus 16 lowercase hex digits (`docs/invocation.md`, “Commands and flags”).
     assert_eq!(expected.len(), 18);
     let completed = run.first("tool_call_completed");
     assert_eq!(completed["payload"]["status"], "completed");
