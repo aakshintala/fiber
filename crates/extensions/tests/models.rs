@@ -917,14 +917,22 @@ fn models_dev_refresh_and_spawn_run_when_due() {
     let fresh_home = setup.workspace().join("second-home");
     let recorded = std::sync::Arc::clone(&calls);
     let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_, writer| {
+        assert_eq!(std::thread::current().name(), Some("models.dev"));
         recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         std::io::Write::write_all(writer, br#"{"acme":{}}"#).map_err(|error| error.to_string())
     });
-    extensions::models_dev::spawn_if_due(fresh_home, true, None, now, fetch)
-        .expect("missing catalog is due")
-        .join()
-        .unwrap();
+    let worker = extensions::models_dev::spawn_if_due(fresh_home.clone(), true, None, now, fetch)
+        .expect("missing catalog is due");
+    fakes::within(
+        "models.dev refresh worker",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || worker.join().unwrap(),
+    );
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(
+        config::read_models_dev(&fresh_home).unwrap(),
+        Some(br#"{"acme":{}}"#.to_vec())
+    );
 }
 
 #[test]

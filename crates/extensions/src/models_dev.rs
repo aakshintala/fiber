@@ -304,8 +304,14 @@ pub fn spawn_if_due(
     now: SystemTime,
     fetcher: Fetch,
 ) -> Option<JoinHandle<()>> {
-    should_fetch(&home, enabled, max_age, now)
-        .then(|| std::thread::spawn(move || refresh_if_due(&home, enabled, max_age, now, &fetcher)))
+    if should_fetch(&home, enabled, max_age, now) {
+        std::thread::Builder::new()
+            .name("models.dev".to_owned())
+            .spawn(move || refresh_if_due(&home, enabled, max_age, now, &fetcher))
+            .ok()
+    } else {
+        None
+    }
 }
 
 /// Merge the cached catalog into rows before provider admission validates them.

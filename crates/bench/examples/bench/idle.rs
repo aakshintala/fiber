@@ -143,6 +143,12 @@ fn measure_session(
 ) -> Result<Samples, String> {
     let pid = session.proc.pid();
     session.wait_started(ctx.clock, ctx.clock.now() + READY)?;
+    wait_for_refresh(ctx.clock, READY, || {
+        linux::threads(pid).map(|threads| !linux::has_thread_named(&threads, "models.dev"))
+    })
+    .inspect_err(|error| {
+        notes.push(error.clone());
+    })?;
     let (switches, rss, split, idle_threads) = idle_window(ctx, pid, notes)?;
     let mut client = Client::connect(&ctx.home.socket(id))?;
     client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#)?;
@@ -176,6 +182,14 @@ fn measure_session(
         samples.push(("session_idle_rss_file_kib", json!(file)));
     }
     Ok(samples)
+}
+
+fn wait_for_refresh(
+    clock: &dyn Clock,
+    within: Duration,
+    read: impl FnMut() -> Result<bool, String>,
+) -> Result<(), String> {
+    run::poll(clock, within, "models.dev refresh thread to exit", read)
 }
 
 /// Reads every thread until two readings one [`run::PROBE`] apart find
