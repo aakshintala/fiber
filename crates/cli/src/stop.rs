@@ -1,6 +1,5 @@
 //! Top-level `fiber stop`: shuts down every running session through
-//! its own shutdown, then the hub exits (`docs/invocation.md`, "Stopping
-//! everything").
+//! its own shutdown, then the hub exits (`docs/invocation.md`, "Shutdown").
 //!
 //! The local path never starts a hub to learn there is nothing to stop:
 //! it probes with `doors` (no starter) and reuses the probed connection

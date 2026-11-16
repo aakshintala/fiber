@@ -33,7 +33,7 @@ fn mixed() -> Supervisor {
 fn shutdown_stops_every_process_without_holding_the_log() {
     let mut sup = mixed();
     sup.started("second".into());
-    // docs/tools.md, "The keeper": shutdown stops tool calls and jobs.
+    // `docs/tools.md`, "The keeper": shutdown stops tool calls and jobs.
     let steps = sup.shutdown_requested();
     assert_eq!(steps.len(), 3);
     assert!(steps.iter().all(|step| matches!(step, Step::Stop { .. })));
@@ -43,7 +43,7 @@ fn shutdown_stops_every_process_without_holding_the_log() {
 #[test]
 fn crash_holds_before_stopping_only_tool_calls() {
     let mut sup = mixed();
-    // docs/events.md, "Writing": one writer at a time, enforced by a lock file: acquire before writing.
+    // `docs/events.md`, "Writing": one writer at a time, enforced by a lock file: acquire before writing.
     assert_eq!(
         sup.lifeline_eof(),
         vec![Step::HoldLog, Step::Stop { id: "call".into() }]
@@ -122,7 +122,7 @@ fn unknown_calls_cannot_be_adopted_or_completed() {
 #[test]
 fn bound_stops_every_live_process_and_marks_held_jobs() {
     let mut sup = mixed();
-    // docs/tools.md, "The keeper": a crash hands the log to the keeper, and
+    // `docs/tools.md`, "The keeper": a crash hands the log to the keeper, and
     // the keeper stops each command still running as a tool call.
     let steps = sup.lifeline_eof();
     assert_eq!(steps.len(), 2);
@@ -130,14 +130,14 @@ fn bound_stops_every_live_process_and_marks_held_jobs() {
     assert!(steps.contains(&Step::Stop { id: "call".into() }));
     // Shutdown-style: every process still running gets a stop. The bound's
     // mark lands on the held job only; the tool call keeps none of it.
-    // docs/tools.md, "The keeper": the keeper stops every job and delegate
+    // `docs/tools.md`, "The keeper": the keeper stops every job and delegate
     // still running, as a shutdown does.
     let stops = sup.bound_elapsed();
     assert_eq!(stops.len(), 2);
     assert!(stops.contains(&Step::Stop { id: "call".into() }));
     assert!(stops.contains(&Step::Stop { id: "job".into() }));
     assert!(sup.exited("call", end()).is_empty());
-    // docs/tools.md, "The keeper": writes each one's job_completed as failed
+    // `docs/tools.md`, "The keeper": writes each one's job_completed as failed
     // with code keeper_timeout, and exits.
     let steps = sup.exited("job", signal_end());
     assert_eq!(steps.len(), 2);
@@ -155,9 +155,9 @@ fn reap_after_bound_writes_keeper_timeout_once_per_job() {
     sup.started("second".into());
     assert!(sup.adopt("first", JobId("j_first".into())));
     assert!(sup.adopt("second", JobId("j_second".into())));
-    // docs/tools.md, "The keeper": a crash hands the log to the keeper.
+    // `docs/tools.md`, "The keeper": a crash hands the log to the keeper.
     assert_eq!(sup.lifeline_eof(), vec![Step::HoldLog]);
-    // docs/tools.md, "The keeper": the keeper stops every job and delegate
+    // `docs/tools.md`, "The keeper": the keeper stops every job and delegate
     // still running, as a shutdown does.
     let stops = sup.bound_elapsed();
     assert_eq!(stops.len(), 2);
@@ -166,7 +166,7 @@ fn reap_after_bound_writes_keeper_timeout_once_per_job() {
         id: "second".into()
     }));
     // The first reap writes its timeout without exiting: one job remains.
-    // docs/tools.md, "The keeper": writes each one's job_completed as failed
+    // `docs/tools.md`, "The keeper": writes each one's job_completed as failed
     // with code keeper_timeout.
     assert_eq!(
         sup.exited("first", signal_end()),
@@ -175,7 +175,7 @@ fn reap_after_bound_writes_keeper_timeout_once_per_job() {
             exit: signal_end(),
         }]
     );
-    // docs/tools.md, "The keeper": writes each one's job_completed as failed
+    // `docs/tools.md`, "The keeper": writes each one's job_completed as failed
     // with code keeper_timeout, and exits once the last job ends.
     let steps = sup.exited("second", end());
     assert_eq!(steps.len(), 2);
@@ -190,7 +190,7 @@ fn reap_after_bound_writes_keeper_timeout_once_per_job() {
 fn reap_before_bound_keeps_the_normal_completion() {
     let mut sup = mixed();
     let _ = sup.lifeline_eof();
-    // docs/tools.md, "The keeper": a job_completed for each job that ends,
+    // `docs/tools.md`, "The keeper": a job_completed for each job that ends,
     // and the keeper exits once its last job ends.
     let steps = sup.exited("job", end());
     assert_eq!(steps.len(), 2);
@@ -208,7 +208,7 @@ fn reap_before_bound_keeps_the_normal_completion() {
 fn bound_twice_stops_again_but_writes_once() {
     let mut sup = mixed();
     let _ = sup.lifeline_eof();
-    // docs/tools.md, "The keeper": the keeper stops every job and delegate
+    // `docs/tools.md`, "The keeper": the keeper stops every job and delegate
     // still running, as a shutdown does.
     let first = sup.bound_elapsed();
     assert_eq!(first.len(), 2);
@@ -220,7 +220,7 @@ fn bound_twice_stops_again_but_writes_once() {
     assert_eq!(second.len(), first.len());
     assert!(second.contains(&Step::Stop { id: "call".into() }));
     assert!(second.contains(&Step::Stop { id: "job".into() }));
-    // docs/tools.md, "The keeper": writes each one's job_completed as failed
+    // `docs/tools.md`, "The keeper": writes each one's job_completed as failed
     // with code keeper_timeout, and exits.
     let steps = sup.exited("job", signal_end());
     assert_eq!(steps.len(), 2);
@@ -240,7 +240,7 @@ fn exit_before_adopt_still_writes_the_normal_completion() {
     sup.started("quick".into());
     assert!(sup.exited("quick", end()).is_empty());
     assert!(sup.adopt("quick", JobId("j_quick".into())));
-    // docs/tools.md, "The keeper": a job_completed for each job that ends,
+    // `docs/tools.md`, "The keeper": a job_completed for each job that ends,
     // and the keeper exits once its last job ends.
     assert_eq!(
         sup.lifeline_eof(),
@@ -262,7 +262,7 @@ fn bound_outside_holding_marks_nothing() {
     // Live: the session is still there, so the bound cannot fire.
     let mut live = mixed();
     assert!(live.bound_elapsed().is_empty());
-    // docs/tools.md, "The keeper": a crash hands the log to the keeper, and
+    // `docs/tools.md`, "The keeper": a crash hands the log to the keeper, and
     // the keeper stops each command still running as a tool call.
     let steps = live.lifeline_eof();
     assert_eq!(steps.len(), 2);
@@ -272,10 +272,10 @@ fn bound_outside_holding_marks_nothing() {
     let mut shutdown = mixed();
     let _ = shutdown.shutdown_requested();
     assert!(shutdown.bound_elapsed().is_empty());
-    // docs/tools.md, "The keeper": the keeper exits once its last job ends.
+    // `docs/tools.md`, "The keeper": the keeper exits once its last job ends.
     assert_eq!(shutdown.lifeline_eof(), vec![Step::Exit]);
     // Gone: nothing is tracked anymore.
-    // docs/tools.md, "The keeper": a command that is not yet a job ends with
+    // `docs/tools.md`, "The keeper": a command that is not yet a job ends with
     // the crash, and the keeper exits once its last job ends.
     let mut gone = Supervisor::new();
     gone.started("call".into());
@@ -292,7 +292,7 @@ fn live_exit_then_crash_then_bound_writes_nothing_more() {
     // is written normally at takeover and never rewritten at the bound.
     let mut sup = mixed();
     assert!(sup.exited("job", signal_end()).is_empty());
-    // docs/tools.md, "The keeper": a crash hands the log to the keeper, the
+    // `docs/tools.md`, "The keeper": a crash hands the log to the keeper, the
     // keeper stops each command still running as a tool call, a job_completed
     // for each job that ends, and the keeper exits once its last job ends.
     let steps = sup.lifeline_eof();
@@ -317,7 +317,7 @@ fn takeover_write_then_bound_write_gives_each_job_one_ending() {
     assert!(sup.adopt("early", JobId("j_early".into())));
     assert!(sup.adopt("late", JobId("j_late".into())));
     assert!(sup.exited("early", end()).is_empty());
-    // docs/tools.md, "The keeper": a crash hands the log to the keeper, and a
+    // `docs/tools.md`, "The keeper": a crash hands the log to the keeper, and a
     // job_completed for each job that ends.
     let steps = sup.lifeline_eof();
     assert_eq!(steps.len(), 2);
@@ -328,10 +328,10 @@ fn takeover_write_then_bound_write_gives_each_job_one_ending() {
         exit: end(),
         unless_logged: true,
     }));
-    // docs/tools.md, "The keeper": the keeper stops every job and delegate
+    // `docs/tools.md`, "The keeper": the keeper stops every job and delegate
     // still running, as a shutdown does.
     assert_eq!(sup.bound_elapsed(), vec![Step::Stop { id: "late".into() }]);
-    // docs/tools.md, "The keeper": writes each one's job_completed as failed
+    // `docs/tools.md`, "The keeper": writes each one's job_completed as failed
     // with code keeper_timeout, and exits.
     let steps = sup.exited("late", signal_end());
     assert_eq!(steps.len(), 2);

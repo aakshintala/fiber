@@ -491,7 +491,7 @@ impl Log {
 
     /// Writes `bytes` to the file `name` in the session's `artifacts/`,
     /// replacing any file of that name, and returns its path relative to the
-    /// session directory (`docs/events.md`, "Conventions") and its absolute
+    /// session directory (`docs/events.md`, "The session directory") and its absolute
     /// path. A name that is not one plain file name is refused.
     pub fn write_artifact(&self, name: &str, bytes: &[u8]) -> Result<(String, PathBuf), Error> {
         let dir = self.lock().dir.join(ARTIFACTS);
@@ -507,7 +507,7 @@ impl Log {
     }
 
     /// The session directory: what an `image` part's path is relative to
-    /// (`docs/events.md`, "Conventions").
+    /// (`docs/events.md`, "The session directory").
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -806,8 +806,8 @@ thread_local! {
 }
 
 /// How many full parses the open path has made on the calling thread
-/// (`docs/testing.md`, "a test of how much work something does counts the
-/// work"). The counted-work test reads it before and after `Log::open`.
+/// (`docs/testing.md`, "What a test asserts"). The counted-work test
+/// reads it before and after `Log::open`.
 #[cfg(test)]
 pub(crate) fn full_parses() -> usize {
     FULL_PARSES.with(|count| count.get())

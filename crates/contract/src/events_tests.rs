@@ -95,7 +95,7 @@ fn an_extensions_loaded_entry_omits_replaces_when_empty() {
         replaces: Vec::new(),
     };
     let written = serde_json::to_value(&empty).unwrap();
-    // docs/events.md:1121: `replaces` is absent when empty.
+    // `docs/events.md`, "`extensions_loaded`": `replaces` is absent when empty.
     assert_eq!(written, json!({"name": "e", "version": "0.1.0"}));
     let read: LoadedExtension = serde_json::from_value(written).unwrap();
     assert_eq!(read.replaces, Vec::<String>::new());
