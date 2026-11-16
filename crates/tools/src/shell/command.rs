@@ -131,6 +131,7 @@ pub(crate) enum Ran {
     clippy::too_many_arguments,
     reason = "spawn, the deadline, the move policy and the spill are one call"
 )]
+#[cfg(test)]
 pub(crate) fn execute(
     program: &Path,
     command: &str,
@@ -147,7 +148,7 @@ pub(crate) fn execute(
     sandbox_workspace: &Path,
     protection: Option<&ProtectedPaths>,
 ) -> Result<Ran, std::io::Error> {
-    execute_inner(
+    execute_with_session(
         program,
         command,
         workdir,
@@ -162,6 +163,48 @@ pub(crate) fn execute(
         sandbox_settings,
         sandbox_workspace,
         protection,
+        None,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "spawn, the deadline, the move policy and the spill are one call"
+)]
+#[cfg(test)]
+pub(crate) fn execute_with_session(
+    program: &Path,
+    command: &str,
+    workdir: &Path,
+    timeout: Option<Duration>,
+    clock: &dyn Clock,
+    cancel: &dyn Cancel,
+    emit: &dyn Emit,
+    policy: MovePolicy,
+    jobs: Option<&dyn Jobs>,
+    spill: Option<SpillConfig>,
+    matches: Option<&Path>,
+    sandbox_settings: &super::sandbox::Settings,
+    sandbox_workspace: &Path,
+    protection: Option<&ProtectedPaths>,
+    session_id: Option<&contract::SessionId>,
+) -> Result<Ran, std::io::Error> {
+    execute_inner_with_session(
+        program,
+        command,
+        workdir,
+        timeout,
+        clock,
+        cancel,
+        emit,
+        policy,
+        jobs,
+        spill,
+        matches,
+        sandbox_settings,
+        sandbox_workspace,
+        protection,
+        session_id,
         support::group::alive,
         Path::new("ps"),
         super::sandbox::install,
@@ -454,6 +497,7 @@ fn require_confined_marker(
     clippy::too_many_arguments,
     reason = "spawn, the deadline, the move policy, the spill, the sandbox and the injected probe are one call"
 )]
+#[cfg(test)]
 fn execute_inner(
     program: &Path,
     command: &str,
@@ -469,6 +513,52 @@ fn execute_inner(
     sandbox_settings: &super::sandbox::Settings,
     sandbox_workspace: &Path,
     protection: Option<&ProtectedPaths>,
+    alive: fn(u32) -> bool,
+    ps: &Path,
+    install: fn(&mut super::sandbox::Prepared) -> Result<(), i32>,
+) -> Result<Ran, std::io::Error> {
+    execute_inner_with_session(
+        program,
+        command,
+        workdir,
+        timeout,
+        clock,
+        cancel,
+        emit,
+        policy,
+        jobs,
+        spill,
+        matches,
+        sandbox_settings,
+        sandbox_workspace,
+        protection,
+        None,
+        alive,
+        ps,
+        install,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "injected spawn probes keep the execution boundary testable"
+)]
+pub(super) fn execute_inner_with_session(
+    program: &Path,
+    command: &str,
+    workdir: &Path,
+    timeout: Option<Duration>,
+    clock: &dyn Clock,
+    cancel: &dyn Cancel,
+    emit: &dyn Emit,
+    policy: MovePolicy,
+    jobs: Option<&dyn Jobs>,
+    spill: Option<SpillConfig>,
+    matches: Option<&Path>,
+    sandbox_settings: &super::sandbox::Settings,
+    sandbox_workspace: &Path,
+    protection: Option<&ProtectedPaths>,
+    session_id: Option<&contract::SessionId>,
     alive: fn(u32) -> bool,
     ps: &Path,
     install: fn(&mut super::sandbox::Prepared) -> Result<(), i32>,
@@ -496,7 +586,7 @@ fn execute_inner(
             }
             Ok(()) => match super::sandbox::prepare(sandbox_settings, sandbox_workspace, None) {
                 Ok(prepared) => {
-                    return execute_confined(
+                    return execute_confined_with_session(
                         program,
                         command,
                         workdir,
@@ -512,6 +602,7 @@ fn execute_inner(
                         ps,
                         &prepared.profile,
                         &prepared.bindings,
+                        session_id,
                     );
                 }
                 Err(cause) => {
@@ -531,14 +622,20 @@ fn execute_inner(
         program: program.to_path_buf(),
         args: vec!["-c".into(), command.into()],
         cwd: workdir.to_path_buf(),
-        env: matches
-            .map(|path| {
-                vec![(
-                    crate::search::matches::MATCHES_ENV.into(),
-                    path.to_string_lossy().into_owned(),
-                )]
-            })
-            .unwrap_or_default(),
+        env: {
+            let mut env = matches
+                .map(|path| {
+                    vec![(
+                        crate::search::matches::MATCHES_ENV.into(),
+                        path.to_string_lossy().into_owned(),
+                    )]
+                })
+                .unwrap_or_default();
+            if let Some(id) = session_id {
+                env.push(("FIBER_SESSION_ID".into(), id.0.clone()));
+            }
+            env
+        },
         stdin: spawn_stdin(policy),
         timeout_ms: None,
         output_cap: OUTPUT_CAP,
@@ -780,6 +877,7 @@ fn build_inner(
 )]
 // mutants run on Linux, where this is not compiled.
 #[cfg_attr(false, mutants::skip)]
+#[cfg(test)]
 pub(crate) fn execute_confined(
     program: &Path,
     command: &str,
@@ -796,6 +894,37 @@ pub(crate) fn execute_confined(
     ps: &Path,
     profile: &str,
     bindings: &[(String, String)],
+) -> Result<Ran, std::io::Error> {
+    execute_confined_with_session(
+        program, command, workdir, timeout, clock, cancel, emit, policy, jobs, spill, matches,
+        alive, ps, profile, bindings, None,
+    )
+}
+
+// Mutants run on Linux, where this is not compiled.
+#[cfg_attr(false, mutants::skip)]
+#[cfg(target_os = "macos")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "confined execution shares the shell spawn inputs"
+)]
+fn execute_confined_with_session(
+    program: &Path,
+    command: &str,
+    workdir: &Path,
+    timeout: Option<Duration>,
+    clock: &dyn Clock,
+    cancel: &dyn Cancel,
+    emit: &dyn Emit,
+    policy: MovePolicy,
+    jobs: Option<&dyn Jobs>,
+    spill: Option<SpillConfig>,
+    matches: Option<&Path>,
+    alive: fn(u32) -> bool,
+    ps: &Path,
+    profile: &str,
+    bindings: &[(String, String)],
+    session_id: Option<&contract::SessionId>,
 ) -> Result<Ran, std::io::Error> {
     // The token is minted per call; the wrapper prints its marker before
     // the user program runs, so the marker's bytes precede any user byte
@@ -831,6 +960,9 @@ pub(crate) fn execute_confined(
     scrub_env(&mut cmd);
     if let Some(path) = matches {
         cmd.env(crate::search::matches::MATCHES_ENV, path);
+    }
+    if let Some(id) = session_id {
+        cmd.env("FIBER_SESSION_ID", id.0.clone());
     }
     support::group::detach(&mut cmd, tty);
     if !emit.starting() {

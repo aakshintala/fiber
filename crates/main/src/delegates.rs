@@ -939,6 +939,7 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
     };
     let mut command = Command::new(fiber);
     command.args(args.to_argv());
+    command.env("FIBER_SESSION_ID", launched.session_id.0.as_str());
     command
 }
 
