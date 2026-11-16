@@ -19,6 +19,7 @@ use std::time::Duration;
 use contract::events::VariablesSource;
 use contract::{ErrorCode, SessionId};
 use fakes::Deadline;
+use serde_json::Value;
 
 use super::*;
 use crate::testkit::await_true;
@@ -64,6 +65,8 @@ fn drained(child: Child) -> Drained {
         Mutex::new(State {
             exited: false,
             failure: None,
+            pre_session_line: None,
+            pre_session_watch: None,
             reading: None,
         }),
         Condvar::new(),
@@ -102,6 +105,8 @@ fn exited_is_none_while_the_session_runs() {
             Mutex::new(State {
                 exited: false,
                 failure: None,
+                pre_session_line: None,
+                pre_session_watch: None,
                 reading: None,
             }),
             Condvar::new(),
@@ -110,6 +115,90 @@ fn exited_is_none_while_the_session_runs() {
     assert!(spawned.exited().is_none());
     // Reap the only child this test made: it printed nothing and exited.
     support::lock(&spawned.child).wait().unwrap();
+}
+
+#[test]
+fn pre_session_exit_candidate_requires_the_exact_pre_session_shape() {
+    let failure = crate::fake::failure(ErrorCode::IoFailed, "recorded");
+    let valid = serde_json::to_string(&contract::PreSessionExit::new(1, failure)).unwrap();
+    assert_eq!(strict_pre_session_line(&valid), Some(valid.clone()));
+    for marker in ["session_id", "ts", "seq"] {
+        let mut value: Value = serde_json::from_str(&valid).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert(marker.to_owned(), Value::Null);
+        assert_eq!(
+            strict_pre_session_line(&value.to_string()),
+            None,
+            "{marker}"
+        );
+    }
+    let mut value: Value = serde_json::from_str(&valid).unwrap();
+    value["payload"]["future"] = Value::Null;
+    assert_eq!(strict_pre_session_line(&value.to_string()), None);
+}
+
+#[test]
+fn pre_session_callback_runs_once_when_registered_before_reap() {
+    let failure = crate::fake::failure(ErrorCode::IoFailed, "recorded");
+    let line = serde_json::to_string(&contract::PreSessionExit::new(1, failure)).unwrap();
+    let child = Arc::new(Mutex::new(printing(std::slice::from_ref(&line))));
+    let state = Arc::new((
+        Mutex::new(State {
+            exited: false,
+            failure: None,
+            pre_session_line: None,
+            pre_session_watch: None,
+            reading: None,
+        }),
+        Condvar::new(),
+    ));
+    let spawned = Spawned {
+        id: SessionId("s_0123456789abcdef".to_owned()),
+        child: Arc::clone(&child),
+        state: Arc::clone(&state),
+    };
+    let (sent, received) = mpsc::channel();
+    spawned.watch_pre_session_exit(Box::new(move |line| {
+        sent.send(line).unwrap_or(());
+    }));
+    drain(&child, &state);
+    assert_eq!(
+        Deadline::after(DRAIN_DEADLINE) // ruling: #4897
+            .recv_or_fail(&received, "the registered pre-session verdict"),
+        format!("{line}\n")
+    );
+    assert!(support::lock(&state.0).pre_session_line.is_none());
+}
+
+#[test]
+fn pre_session_callback_runs_once_when_registered_after_reap() {
+    let failure = crate::fake::failure(ErrorCode::IoFailed, "recorded");
+    let line = serde_json::to_string(&contract::PreSessionExit::new(1, failure)).unwrap();
+    let (child, state) = drained(printing(std::slice::from_ref(&line)));
+    let spawned = Spawned {
+        id: SessionId("s_0123456789abcdef".to_owned()),
+        child,
+        state,
+    };
+    let (sent, received) = mpsc::channel();
+    spawned.watch_pre_session_exit(Box::new(move |line| {
+        sent.send(line).unwrap_or(());
+    }));
+    assert_eq!(
+        Deadline::after(DRAIN_DEADLINE) // ruling: #4897
+            .recv_or_fail(&received, "the stored pre-session verdict"),
+        format!("{line}\n")
+    );
+    let (duplicate, duplicates) = mpsc::channel();
+    spawned.watch_pre_session_exit(Box::new(move |line| {
+        duplicate.send(line).unwrap_or(());
+    }));
+    assert!(matches!(
+        duplicates.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
 }
 
 #[test]
@@ -362,6 +451,8 @@ fn wait_exited_blocks_until_the_child_exits() {
         Mutex::new(State {
             exited: false,
             failure: None,
+            pre_session_line: None,
+            pre_session_watch: None,
             reading: None,
         }),
         Condvar::new(),

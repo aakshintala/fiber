@@ -153,6 +153,14 @@ impl Client {
     /// the test thread past the wait. Panics past the deadline naming the
     /// wait.
     fn read_deadline(&mut self, what: &str) -> (std::io::Result<usize>, String) {
+        self.read_deadline_with(what, DEADLINE)
+    }
+
+    fn read_deadline_with(
+        &mut self,
+        what: &str,
+        within: Duration,
+    ) -> (std::io::Result<usize>, String) {
         let (done_tx, done_rx) = mpsc::channel();
         thread::scope(|scope| {
             scope.spawn(|| {
@@ -160,7 +168,7 @@ impl Client {
                 let outcome = self.read.read_line(&mut text);
                 done_tx.send((outcome, text)).unwrap_or(());
             });
-            Deadline::after(DEADLINE)
+            Deadline::after(within) // ruling: #4897 — bounded by each caller.
                 .recv(&done_rx)
                 .unwrap_or_else(|_| panic!("never received {what}"))
         })
@@ -189,6 +197,17 @@ impl Client {
     fn hello(&mut self) -> Value {
         self.next("hub_hello")
     }
+}
+
+fn pre_session_exit_line() -> String {
+    format!(
+        "{}\n",
+        serde_json::to_string(&contract::PreSessionExit::new(
+            1,
+            crate::fake::failure(ErrorCode::IoFailed, "recorded"),
+        ))
+        .unwrap()
+    )
 }
 
 fn command(id: &str, command: &str, args: Value) -> Value {
@@ -322,6 +341,246 @@ fn names_outside_the_hub_table_are_unknown_command() {
         assert_eq!(code, "unknown_command");
         assert_eq!(echoed.as_deref(), Some(id));
     }
+}
+
+#[test]
+fn start_forwards_pre_session_fiber_exited() {
+    let temp = Temp::new();
+    let failure = crate::fake::failure(ErrorCode::IoFailed, "recorded");
+    let line = format!(
+        "{}\n",
+        serde_json::to_string(&contract::PreSessionExit::new(1, failure)).unwrap()
+    );
+    let (starter, exit) = crate::fake::FakeStarter::bind_then_exit(&temp.dir, line.clone());
+    let hub = temp.hub(starter);
+    let mut client = Client::connect(&hub);
+    client
+        .read
+        .get_mut()
+        .set_read_timeout(Some(crate::start::START_DEADLINE))
+        .unwrap();
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command(
+        "c_start",
+        "start",
+        json!({"workspace": workspace}),
+    ));
+    let bound = Deadline::after(crate::start::START_DEADLINE); // ruling: #4897
+    assert!(
+        exit.wait_bound(&bound),
+        "the child binds before acknowledgement"
+    );
+    let (id, _) = accepted(&client.next("the start acknowledgement"));
+    assert_eq!(id, "c_start");
+    exit.release();
+    let (outcome, text) = client.read_deadline_with(
+        "the original pre-session fiber_exited line",
+        crate::start::START_DEADLINE,
+    );
+    outcome.expect("the hub returns the terminal line");
+    assert_eq!(text, line);
+}
+
+#[test]
+fn start_buffers_pre_session_exit_until_acknowledgement() {
+    let temp = Temp::new();
+    let failure = crate::fake::failure(ErrorCode::IoFailed, "recorded");
+    let line = format!(
+        "{}\n",
+        serde_json::to_string(&contract::PreSessionExit::new(1, failure)).unwrap()
+    );
+    let (starter, exit) = crate::fake::FakeStarter::bind_then_exit(&temp.dir, line.clone());
+    let hub = temp.hub(starter);
+    let mut client = Client::connect(&hub);
+    client
+        .read
+        .get_mut()
+        .set_read_timeout(Some(crate::start::START_DEADLINE))
+        .unwrap();
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command(
+        "c_start",
+        "start",
+        json!({"workspace": workspace}),
+    ));
+    let bound = Deadline::after(crate::start::START_DEADLINE); // ruling: #4897
+    assert!(exit.wait_bound(&bound), "the child bind is observed");
+    exit.release();
+    let (id, _) = accepted(&client.next("the start acknowledgement"));
+    assert_eq!(id, "c_start");
+    let (outcome, received) = client.read_deadline_with(
+        "the buffered pre-session verdict",
+        crate::start::START_DEADLINE,
+    );
+    outcome.expect("the verdict follows the acknowledgement");
+    assert_eq!(received, line);
+}
+
+#[test]
+fn start_forwards_pre_session_exit_after_content_acknowledgement() {
+    let temp = Temp::new();
+    let line = pre_session_exit_line();
+    let (starter, exit) = crate::fake::FakeStarter::bind_then_exit_with_handshake(
+        &temp.dir,
+        line.clone(),
+        crate::fake::Handshake {
+            accept: true,
+            code: String::new(),
+            message: String::new(),
+        },
+    );
+    let hub = temp.hub(starter);
+    let mut client = Client::connect(&hub);
+    client
+        .read
+        .get_mut()
+        .set_read_timeout(Some(crate::start::START_DEADLINE))
+        .unwrap();
+    client.hello();
+    client.send(&command(
+        "c_start",
+        "start",
+        json!({"workspace": temp.workspace(), "content": content()}),
+    ));
+    let bound = Deadline::after(crate::start::START_DEADLINE); // ruling: #4897
+    assert!(exit.wait_bound(&bound), "the child bind is observed");
+    let (id, result) = accepted(&client.next("the start acknowledgement"));
+    assert_eq!(id, "c_start");
+    let session = result["session_id"].as_str().unwrap();
+    exit.release();
+    let (outcome, received) = client.read_deadline_with(
+        "the content start's pre-session verdict",
+        crate::start::START_DEADLINE,
+    );
+    outcome.expect("the verdict follows the accepted start");
+    assert_eq!(received, line);
+    client.send(&relayed_subscribe("c_full", session, "full"));
+    accepted(&client.next("the full subscription"));
+}
+
+#[test]
+fn start_cancels_pre_session_exit_after_summary_rejection() {
+    let temp = Temp::new();
+    let line = pre_session_exit_line();
+    let (starter, exit) =
+        crate::fake::FakeStarter::bind_then_exit_rejecting_subscribe(&temp.dir, line);
+    let hub = temp.hub(starter);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command(
+        "c_start",
+        "start",
+        json!({"workspace": temp.workspace(), "content": content()}),
+    ));
+    let bound = Deadline::after(crate::start::START_DEADLINE); // ruling: #4897
+    assert!(exit.wait_bound(&bound), "the child bind is observed");
+    let (code, id, _) = rejected(&client.next("the summary rejection"));
+    assert_eq!(code, "closing");
+    assert_eq!(id.as_deref(), Some("c_start"));
+    exit.release();
+    client.send(&command("c_after", "status", json!({})));
+    let next = client.next("the next command answer");
+    assert_eq!(next["payload"]["command_id"], "c_after");
+}
+
+#[test]
+fn start_forwards_buffered_pre_session_exit_instead_of_summary_rejection() {
+    let temp = Temp::new();
+    let line = pre_session_exit_line();
+    let starter =
+        crate::fake::FakeStarter::exited_before_rejected_subscribe(&temp.dir, line.clone());
+    let hub = temp.hub(starter);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command(
+        "c_start",
+        "start",
+        json!({"workspace": temp.workspace(), "content": content()}),
+    ));
+    let (outcome, received) = client.read_deadline_with(
+        "the buffered verdict instead of the summary rejection",
+        crate::start::START_DEADLINE,
+    );
+    outcome.expect("the child verdict is terminal");
+    assert_eq!(received, line);
+}
+
+#[test]
+fn start_cancels_pre_session_exit_when_first_prompt_cannot_start() {
+    let temp = Temp::new();
+    let line = pre_session_exit_line();
+    let (starter, exit) = crate::fake::FakeStarter::bind_then_exit(&temp.dir, line);
+    let hub = temp.hub(starter);
+    hub.fail_first_later.store(true, Ordering::SeqCst);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command(
+        "c_start",
+        "start",
+        json!({"workspace": temp.workspace(), "content": content()}),
+    ));
+    let bound = Deadline::after(crate::start::START_DEADLINE); // ruling: #4897
+    assert!(exit.wait_bound(&bound), "the child bind is observed");
+    let (code, id, _) = rejected(&client.next("the first prompt rejection"));
+    assert_eq!(code, "io_failed");
+    assert_eq!(id.as_deref(), Some("c_start"));
+    exit.release();
+    client.send(&command("c_after", "status", json!({})));
+    let next = client.next("the next command answer");
+    assert_eq!(next["payload"]["command_id"], "c_after");
+}
+
+#[test]
+fn start_forwards_buffered_pre_session_exit_instead_of_first_prompt_rejection() {
+    let temp = Temp::new();
+    let line = pre_session_exit_line();
+    let starter =
+        crate::fake::FakeStarter::exited_before_first_later_failure(&temp.dir, line.clone());
+    let hub = temp.hub(starter);
+    hub.fail_first_later.store(true, Ordering::SeqCst);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command(
+        "c_start",
+        "start",
+        json!({"workspace": temp.workspace(), "content": content()}),
+    ));
+    let (outcome, received) = client.read_deadline_with(
+        "the buffered verdict instead of the first prompt rejection",
+        crate::start::START_DEADLINE,
+    );
+    outcome.expect("the child verdict is terminal");
+    assert_eq!(received, line);
+}
+
+#[test]
+fn start_logs_a_pre_session_exit_once_when_the_client_closes() {
+    let temp = Temp::new();
+    let line = pre_session_exit_line();
+    let (starter, exit) = crate::fake::FakeStarter::bind_then_exit(&temp.dir, line);
+    let hub = temp.hub(starter);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command(
+        "c_start",
+        "start",
+        json!({"workspace": temp.workspace()}),
+    ));
+    let bound = Deadline::after(crate::start::START_DEADLINE); // ruling: #4897
+    assert!(exit.wait_bound(&bound), "the child bind is observed");
+    accepted(&client.next("the start acknowledgement"));
+    drop(client);
+    exit.release();
+    await_true("the closed-client verdict log", {
+        let path = temp.dir.join("logs/hub.log");
+        move || {
+            fs::read_to_string(&path)
+                .unwrap_or_default()
+                .contains("Could not deliver pre-session verdict:")
+        }
+    });
 }
 
 #[test]
