@@ -94,7 +94,9 @@ if ! (cd "$example_wt" && PATH="$work/example-bin:$PATH" bash "$top/scripts/chec
 fi
 build_line=$(grep -n '^build -p log@0.0.0 --examples$' "$work/calls" | cut -d: -f1 || true)
 test_line=$(grep -n '^nextest run --all-targets -p log@0.0.0$' "$work/calls" | cut -d: -f1 || true)
-[ -n "$build_line" ] && [ -n "$test_line" ] && [ "$build_line" -lt "$test_line" ] || fail "log examples were not built before nextest"
+if ! { [ -n "$build_line" ] && [ -n "$test_line" ] && [ "$build_line" -lt "$test_line" ]; }; then
+  fail "log examples were not built before nextest"
+fi
 [ "$(grep -c '^build -p main --examples$' "$work/calls" || true)" -eq 0 ] || fail "main examples build was unexpectedly duplicated"
 grep -q '^build -q -p fakes --example process-extension$' "$work/calls" || fail "fakes process-extension build changed"
 # A selected package with no examples still passes through the examples build
@@ -107,7 +109,9 @@ if ! (cd "$example_wt" && PATH="$work/example-bin:$PATH" NO_EXAMPLES=1 bash "$to
 fi
 build_line=$(grep -n '^build -p log@0.0.0 --examples$' "$work/no-examples-calls" | cut -d: -f1 || true)
 test_line=$(grep -n '^nextest run --all-targets -p log@0.0.0$' "$work/no-examples-calls" | cut -d: -f1 || true)
-[ -n "$build_line" ] && [ -n "$test_line" ] && [ "$build_line" -lt "$test_line" ] || fail "no-example package build did not precede nextest"
+if ! { [ -n "$build_line" ] && [ -n "$test_line" ] && [ "$build_line" -lt "$test_line" ]; }; then
+  fail "no-example package build did not precede nextest"
+fi
 
 
 # A narrowed smoke run through the built xtask carries no dependent crate.
