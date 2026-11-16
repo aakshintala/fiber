@@ -4,7 +4,8 @@ use std::fs;
 use fakes::TempDir;
 use serde_json::{Value, json};
 
-use super::{check_listing, clone_sessions};
+use super::{check_listing, clone_sessions, prepare_listing_home};
+use crate::home::Home;
 
 /// A home with a seed session: its directory holding an `events.jsonl`
 /// naming `seed`, and one `recent.jsonl` row for it.
@@ -44,6 +45,18 @@ fn rows(home: &TempDir) -> Vec<Value> {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
+}
+
+#[test]
+fn listing_home_config_keeps_all_exited_sessions() {
+    let binary = std::env::current_exe().expect("the test binary path is available");
+    let home = Home::new(&binary).expect("the listing home is installed");
+    prepare_listing_home(&home).expect("the listing home is prepared");
+    let path = home.home().join("config.json");
+    let config: Value = serde_json::from_slice(&fs::read(&path).expect("the config exists"))
+        .expect("the config is JSON");
+    assert_eq!(config["session"]["keep_exited"], 0);
+    home.finish().expect("the listing home is cleaned up");
 }
 
 #[test]
