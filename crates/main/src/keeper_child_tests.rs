@@ -749,6 +749,12 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
                     bytes.push(b'\n');
                     writer.write_all(&bytes)
                 });
+            // Close this writer dup before answering: `crash()` shuts the
+            // control socket down right after the last Adopt, and a
+            // shutdown that races an open dup which wrote can lose the
+            // keeper-side EOF under load, so the takeover never starts
+            // and the activation wait expires.
+            drop(writer);
             let _sent = sent.send(result);
         });
         Deadline::after(Duration::from_secs(10))
