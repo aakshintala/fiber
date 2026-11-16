@@ -920,6 +920,11 @@ fn until_carries_the_shared_must_succeed_bound() {
         fakes::MUST_SUCCEED_WITHIN,
         "until's whole-wait bound matches the shared must-succeed bound"
     );
+    assert_eq!(
+        contract::keeper::LIFELINE_QUERY_BOUND,
+        support::UNTIL,
+        "keeper queries keep the existing bounded-check interval"
+    );
 }
 
 /// Tests for the session-socket attribution boundary: the session-process
@@ -1250,7 +1255,11 @@ mod refusal_tests {
 
     use std::collections::HashMap;
 
-    use super::super::{Attribution, attribute_peer, session_command_refusal};
+    use super::super::{
+        Attribution, attribute_peer, session_command_refusal, session_command_refusal_inner,
+    };
+    use crate::signals::LifelineQuery;
+
     use contract::RequestId;
     use contract::SessionId;
     use contract::commands::{Command, ContentArgs, Reply, ReplyAnswer, SentPart};
@@ -1366,8 +1375,35 @@ mod refusal_tests {
         }
     }
 
-    /// The target's walk with a session host above it: the target shares a
-    /// session process with a caller below that host.
+    /// A target whose direct parent is its keeper, itself a child of the
+    /// session process that owns it.
+    fn keeper_parent_target(parent: support::peer::Pid) -> Script {
+        Script {
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (TARGET_PID, parent),
+                (parent, PEER),
+                (PEER, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (parent, support::peer::EffectiveUid(1000)),
+                (PEER, support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [
+                (parent, vec![b"/path/fiber".to_vec(), b"keeper".to_vec()]),
+                (PEER, session_argv(OWNED)),
+            ]
+            .into_iter()
+            .collect(),
+        }
+    }
+
     fn host_target(argv: Vec<Vec<u8>>) -> Script {
         Script {
             current: support::peer::EffectiveUid(1000),
@@ -1492,6 +1528,76 @@ mod refusal_tests {
         read: &Script,
     ) -> Option<super::super::Refused> {
         session_command_refusal(attribution, command, target, TARGET_PID, read)
+    }
+
+    #[test]
+    fn a_caller_below_a_handed_over_keeper_is_refused_on_the_resumed_socket() {
+        let refused = session_command_refusal_inner(
+            &local(PEER, &[HOST]),
+            &steer(),
+            &owned_id(),
+            TARGET_PID,
+            &plain_target(),
+            None,
+            &[HOST],
+        )
+        .expect("the old keeper peer remains a refusal source");
+        assert_eq!(refused.code, contract::ErrorCode::FromSession);
+        assert!(refused.message.contains("steer"), "{}", refused.message);
+    }
+
+    #[test]
+    fn only_a_live_matching_keeper_query_grants_the_keeper_parent_exception() {
+        let parent = support::peer::Pid(
+            u32::try_from(rustix::process::getppid().expect("parent").as_raw_pid())
+                .expect("pid fits"),
+        );
+        let script = keeper_parent_target(parent);
+        let mut valid = [b'P', 0, 0, 0, 0];
+        valid[1..].copy_from_slice(&parent.0.to_le_bytes());
+        let query = LifelineQuery::scripted_for_test(valid, fakes::clock::FakeClock::new());
+        assert!(
+            session_command_refusal_inner(
+                &local(PEER, &[HOST]),
+                &steer(),
+                &other_id(),
+                TARGET_PID,
+                &script,
+                Some(&query),
+                &[],
+            )
+            .is_none(),
+            "the owning session process is allowed through its live keeper"
+        );
+        let shell = session_command_refusal_inner(
+            &local(HOST, &[PEER, parent]),
+            &steer(),
+            &other_id(),
+            TARGET_PID,
+            &script,
+            Some(&LifelineQuery::scripted_for_test(
+                valid,
+                fakes::clock::FakeClock::new(),
+            )),
+            &[],
+        );
+        assert!(shell.is_some(), "a shell under the keeper stays refused");
+
+        valid[1..].copy_from_slice(&parent.0.saturating_add(1).to_le_bytes());
+        let changed = LifelineQuery::scripted_for_test(valid, fakes::clock::FakeClock::new());
+        assert!(
+            session_command_refusal_inner(
+                &local(PEER, &[PEER]),
+                &steer(),
+                &other_id(),
+                TARGET_PID,
+                &script,
+                Some(&changed),
+                &[],
+            )
+            .is_some(),
+            "a reply from a different parent fails closed"
+        );
     }
 
     #[test]

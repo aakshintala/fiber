@@ -3,7 +3,7 @@
 //! root first, then the own log. A resume folds the whole chain, so a
 //! resumed rewound session keeps its history.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use contract::events::EventKind;
@@ -42,6 +42,7 @@ const FOLDED: &[EventKind] = &[
     EventKind::JobStarted,
     EventKind::JobCompleted,
     EventKind::DelegateStarted,
+    EventKind::DelegateFinished,
     EventKind::Rewound,
     EventKind::OpeningMessage,
     EventKind::SkillsResent,
@@ -93,6 +94,9 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         reviewed: Vec::new(),
         orphans: Vec::new(),
         delegate_sessions: HashMap::new(),
+        delegate_starts: Vec::new(),
+        delegate_finished: HashSet::new(),
+        completed_jobs: HashSet::new(),
         settle_finish: None,
         offers: crate::offer::Folded::default(),
         naming: crate::naming::Naming::default(),
@@ -374,6 +378,22 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
     }
     resumed.known_hosts.fold(&event);
     pass.orphans.fold(&event);
+    if pass.own_segment {
+        if let Event::JobStarted(started) = &event {
+            pass.delegate_sessions.remove(&started.job_id);
+            resumed
+                .delegate_starts
+                .retain(|(job_id, _)| job_id != &started.job_id);
+            resumed.delegate_finished.remove(&started.job_id);
+            resumed.completed_jobs.remove(&started.job_id);
+        }
+        if let Event::JobCompleted(completed) = &event {
+            resumed.completed_jobs.insert(completed.job_id.clone());
+        }
+        if let Event::DelegateFinished(finished) = &event {
+            resumed.delegate_finished.insert(finished.job_id.clone());
+        }
+    }
     resumed.offers.fold(&event);
     // The pin is the own log's alone: a rewound or forked session starts
     // unpinned, as the name every consumer shows is the own log's.
@@ -458,6 +478,9 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
         if pass.own_segment && started.harness == "fiber" {
             pass.delegate_sessions
                 .insert(started.job_id.clone(), started.delegate_session_id.clone());
+            resumed
+                .delegate_starts
+                .push((started.job_id.clone(), started.delegate_session_id.clone()));
         }
     } else if let Event::PreambleBuilt(built) = &event {
         resumed.model = Some(built.model.clone());

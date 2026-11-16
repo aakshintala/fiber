@@ -885,6 +885,7 @@ fn walk_collects_same_owner_matches() {
     let read = wanted_walk();
     let walk = super::walk_ancestors(Pid(10), &read, is_wanted).unwrap();
     assert_eq!(walk.parent_pid, Some(Pid(20)));
+    assert_eq!(walk.grandparent_pid, Some(Pid(30)));
     // Membership without order or count: no `docs/<area>.md` line promises
     // nearest-first order or an exact count.
     assert!(walk.matched_pids.contains(&Pid(20)));

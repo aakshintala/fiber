@@ -279,6 +279,7 @@ fn isolation_creates_on_the_parent_workspace() {
         )]
         move |workspace, id| {
             tx.send((workspace.to_path_buf(), id.clone())).unwrap();
+            std::fs::create_dir_all(workspace.join(&id.0)).unwrap();
             Ok((
                 super::super::EndWorktree {
                     path: workspace.join(&id.0),

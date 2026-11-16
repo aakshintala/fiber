@@ -208,6 +208,8 @@ pub(super) enum Drive {
 pub struct SpawnStreams {
     /// The command's terminal input, if any.
     pub input: Option<contract::jobs::Input>,
+    /// The keeper's peer of a socketpair attached to standard input.
+    pub lifeline: Option<std::os::unix::net::UnixStream>,
     /// Standard error, kept separate for monitor jobs.
     pub errors: Option<std::io::PipeReader>,
     /// Standard output, or a combined ordinary stream.
@@ -280,6 +282,7 @@ fn open_streams(cmd: &mut Command, policy: MovePolicy) -> std::io::Result<SpawnS
     };
     Ok(SpawnStreams {
         input,
+        lifeline: None,
         errors,
         read,
     })
@@ -607,7 +610,9 @@ pub(crate) fn build(
         .and_then(|sandbox| sandbox.baseline.as_deref());
     let policy = match spec.stdin {
         contract::keeper::HostStdin::Pty => MovePolicy::Terminal,
-        contract::keeper::HostStdin::Null => MovePolicy::Monitor,
+        contract::keeper::HostStdin::Null | contract::keeper::HostStdin::SocketPair => {
+            MovePolicy::Monitor
+        }
     };
     build_inner(
         spec,
@@ -655,7 +660,12 @@ fn build_inner(
     }
     #[cfg(not(target_os = "linux"))]
     let _ = (install, baseline, sandbox_settings, sandbox_workspace);
-    let streams = open_streams(&mut cmd, policy)?;
+    let mut streams = open_streams(&mut cmd, policy)?;
+    if spec.stdin == contract::keeper::HostStdin::SocketPair {
+        let (keeper, child) = std::os::unix::net::UnixStream::pair()?;
+        cmd.stdin(Stdio::from(std::os::fd::OwnedFd::from(child)));
+        streams.lifeline = Some(keeper);
+    }
     scrub_env(&mut cmd);
     cmd.envs(spec.env.iter().map(|(key, value)| (key, value)));
     #[cfg(target_os = "linux")]
@@ -822,6 +832,7 @@ pub(crate) fn execute_confined(
     // stays byte-identical past it.
     let streams = SpawnStreams {
         input: streams.input,
+        lifeline: streams.lifeline,
         errors: streams.errors,
         read: Box::new(super::sandbox::StripMarker::new(
             streams.read,

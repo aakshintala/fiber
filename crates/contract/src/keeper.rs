@@ -21,6 +21,13 @@ pub const HOST_EVENT_QUEUE: usize = 64;
 /// stay under the handover's 4 MiB growth budget (see #4054). // ruling: #4054
 pub const HOST_BURST_FRAMES: usize = 16;
 
+/// The fixed request a delegate writes over its stdin socketpair.
+pub const LIFELINE_QUERY: &[u8; 8] = b"FIBERQRY";
+/// The fixed keeper reply is a tag plus four little-endian pid bytes.
+pub const LIFELINE_REPLY_LEN: usize = 5;
+/// Maximum time spent acquiring, writing and receiving a lifeline query.
+pub const LIFELINE_QUERY_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Runs shell processes outside the session process.
 pub trait CommandHost: Send + Sync {
     /// Starts a process and delivers its output and ending through `events`.
@@ -93,6 +100,8 @@ pub enum HostStdin {
     Null,
     /// A pseudo-terminal owned by the keeper.
     Pty,
+    /// A Unix socketpair whose peer remains open in the keeper.
+    SocketPair,
 }
 
 /// A started process's group, for read-only liveness probes.

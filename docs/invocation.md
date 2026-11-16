@@ -872,9 +872,12 @@ rationale and the rejected layouts are
 - **No session has a pipe driver.** Every driver is a client over the
   session's socket. `fiber ask`'s stdout is a watcher.
 - **A Fiber delegate is a child process of its parent's keeper.** The parent
-  is an ordinary client over the delegate's socket. The keeper holds a pipe to
-  the delegate's stdin that it never writes to: end of file on it means the
-  keeper is gone, and the delegate shuts down ("Shutdown"). A dropped socket
+  is an ordinary client over the delegate's socket. The keeper creates a Unix
+  socketpair for the delegate's stdin lifeline. It sends no delegate input on
+  that socketpair, but answers the delegate's fixed peer query from the live
+  session-control connection; a valid reply is still checked against the
+  delegate's current parent pid. End of file or a read error means the keeper
+  is gone, and the delegate shuts down ("Shutdown"). A dropped socket
   connection is only a client leaving; the parent reconnects. Delegates on
   other harnesses are child processes of the keeper too (`docs/delegates.md`;
   `docs/tools.md`, "The keeper").

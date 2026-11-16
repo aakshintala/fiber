@@ -815,10 +815,11 @@ operating system says which process it is (`LOCAL_PEERPID` on macOS,
 parents. When the walk passes a session process, the connection is treated
 as coming from inside a session. A session process is a `fiber` process
 running a command that hosts a session in that process: the internal session
-command, `fiber ask`, or the case runner's child. Which session it is, Fiber
-reads from the process tree, never from the arguments. Every session process
-on the walk counts, including a Fiber delegate's. The kernel's process tree
-is the record; no marker file, environment variable or pid table is kept.
+command, `fiber ask`, the case runner's child, or that session's keeper. Which
+session it is, Fiber reads from the process tree, never from the arguments.
+Every session process on the walk counts, including a Fiber delegate's keeper.
+The kernel's process tree is the record; no marker file, environment variable
+or pid table is kept.
 
 A connection that comes from inside a session is refused `from_session`
 when it:
@@ -835,11 +836,19 @@ behavior; it is not refused just because the caller is session-owned.
 
 A `message` is a session message, logged with its sender, not a person's words, so none of these refusals covers it.
 
-The second refusal exempts the delegate's own client. It does not apply
-when the connecting process is the target session's parent process, as the
-kernel reports it. That is exactly a session process's own messages to the
-delegate it started, the path `delegate_message` uses. A shell the session
-started is never the delegate's parent, so its steering stays refused.
+The second refusal exempts the session process that owns a delegate's keeper,
+not a shell running below that keeper. The hub and session identify that
+process by its exact peer pid: the nearest session process above the target's
+keeper. The target's direct kernel parent keeps its existing exception. A
+Fiber delegate is a child of its parent's keeper, so its stdin socketpair
+lifeline can query that keeper's pid. The keeper answers only while its
+session-control connection is live; the delegate accepts the reply only when
+it is valid and its current `getppid()` still matches. A missing, malformed or
+timed-out reply fails closed; EOF or a read error keeps the existing SIGHUP
+shutdown path (`docs/delegates.md`, "Lifetime"). This lets the owning
+session's `delegate_message` reach its delegate without giving a shell a
+steering exception. A resumed session also checks retained handover keepers
+when refusing its own socket, using the live peer set on every check.
 
 Sessions started through the hub's `start`, including those the delegate CLI
 starts, stay allowed when they are unrelated to the caller's process tree.

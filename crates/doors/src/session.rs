@@ -112,6 +112,11 @@ pub(crate) struct Gate {
     skills: Mutex<Vec<SkillInfo>>,
     quota: OnceLock<QuotaRead>,
     credentials: OnceLock<(CredentialsRead, AdmittedRead)>,
+    /// The delegate's bounded request to its live keeper, when stdin is a
+    /// keeper-owned socketpair.
+    pub(crate) lifeline_query: OnceLock<crate::signals::LifelineQuery>,
+    /// Reads the current peers of keepers that handed work over.
+    pub(crate) handover_peers: OnceLock<Arc<dyn Fn() -> Vec<support::peer::Pid> + Send + Sync>>,
     /// The installed server-rows reader and login runner for the MCP
     /// driver commands (`docs/mcp.md`, "Servers, their state and the
     /// per-server commands"). With none installed, both commands are
@@ -542,6 +547,18 @@ impl Session {
         debug_assert!(stored.is_ok(), "personal_source_check is wired once");
     }
 
+    /// Installs the delegate lifeline query for this process.
+    pub fn lifeline_query(&self, query: crate::signals::LifelineQuery) {
+        let stored = self.gate.lifeline_query.set(query);
+        debug_assert!(stored.is_ok(), "lifeline query is wired once");
+    }
+
+    /// Installs a live reader for keeper peers retained across handover.
+    pub fn handover_peers(&self, peers: Arc<dyn Fn() -> Vec<support::peer::Pid> + Send + Sync>) {
+        let stored = self.gate.handover_peers.set(peers);
+        debug_assert!(stored.is_ok(), "handover peers are wired once");
+    }
+
     /// Wires the credential labels reader and the admitted-provider reader
     /// before the session runs. The latter is called when the loop answers.
     pub fn credentials(&self, labels: CredentialsRead, admitted: AdmittedRead) {
@@ -905,6 +922,13 @@ impl Session {
 }
 
 impl Gate {
+    /// The live keeper peers retained across handover at this check.
+    pub(crate) fn handover_peers(&self) -> Vec<support::peer::Pid> {
+        self.handover_peers
+            .get()
+            .map_or_else(Vec::new, |read| read())
+    }
+
     /// Stops a running turn and every driver shell.
     pub(crate) fn stop_running(&self) -> Stopped {
         let turn = self.cancel.get().is_some_and(|cancel| cancel());
@@ -1156,6 +1180,8 @@ fn open_in(
         skills: Mutex::new(Vec::new()),
         quota: OnceLock::new(),
         credentials: OnceLock::new(),
+        lifeline_query: OnceLock::new(),
+        handover_peers: OnceLock::new(),
         servers_refresh: OnceLock::new(),
         reconnect_flights: Arc::new(Mutex::new(std::collections::BTreeSet::new())),
         transition_delivered: AtomicBool::new(false),

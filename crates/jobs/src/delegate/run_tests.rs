@@ -1740,6 +1740,57 @@ fn the_last_stdout_verdict_wins() {
 }
 
 #[test]
+fn hosted_disconnect_before_exit_reports_indeterminate() {
+    let rig = rig(Vec::new());
+    let watch: Watch = Arc::new(
+        |_: &SessionId, _: Option<u64>, _: &mut dyn FnMut(&Envelope)| {
+            Err(io::Error::other("no delegate socket"))
+        },
+    );
+    let (runner, _stop) = Runner::new(
+        rig.job.clone(),
+        SessionId("s_child".into()),
+        rig.events.clone(),
+        Arc::clone(&rig.clock) as Arc<dyn contract::clock::Clock>,
+        BOUND,
+        1024,
+        watch,
+        None,
+        None,
+        None,
+        None,
+    );
+    let (_started, finish) = rig.registry.open_started(
+        rig.job.clone(),
+        "delegate_spawn".into(),
+        "fixture".into(),
+        rig.events.to_string_lossy().into_owned(),
+        contract::jobs::Stop(Box::new(|| {})),
+        crate::support::identity(),
+        crate::support::delegate_started("s_child"),
+    );
+    let (tx, events) = mpsc::sync_channel(1);
+    drop(tx);
+    let host = crate::delegate::test_rig::test_host(
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    );
+    runner.set_hosted(host, "c_disconnected".into(), 0);
+    runner.drive_host(events, finish);
+    let Delivery::Job(notice) = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&rig.inbox)
+        .unwrap()
+    else {
+        panic!("the disconnected host reports a job end");
+    };
+    assert_eq!(notice.completed.status, Outcome::Failed);
+    assert_eq!(
+        notice.completed.error.as_ref().unwrap().code,
+        ErrorCode::Indeterminate
+    );
+}
+
+#[test]
 fn a_malformed_stdout_line_ends_indeterminate() {
     // Garbage on stdout is no verdict at all: the job ends without a
     // result, and keeps the process's own exit code.

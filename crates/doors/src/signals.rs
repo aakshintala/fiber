@@ -28,8 +28,9 @@
 //! once started with no signal seen yet. Anywhere else it does nothing,
 //! so a later SIGTERM or SIGINT is a second signal.
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -38,7 +39,10 @@ use contract::SessionId;
 use contract::clock::{Clock, Wake};
 use log::diag::{Diag, Severity};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+
 use support::lock;
+
+use contract::keeper::{LIFELINE_QUERY, LIFELINE_QUERY_BOUND, LIFELINE_REPLY_LEN};
 
 /// From the signal to exit, per process (`docs/invocation.md`, "Shutdown").
 /// A delegate's stop waits this long too: `main` passes it into `jobs`
@@ -168,6 +172,91 @@ pub struct Signals {
     /// Ends the process: `std::process::exit`, or a test's recorder.
     exit: Box<dyn Fn(i32) + Send + Sync>,
     spawn: Spawn,
+    lifeline_query: Mutex<Option<LifelineQuery>>,
+}
+
+/// A one-shot request to learn the live keeper peer of this lifeline.
+#[derive(Clone)]
+pub struct LifelineQuery {
+    writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
+    pending: Arc<Mutex<Option<SyncSender<[u8; LIFELINE_REPLY_LEN]>>>>,
+    clock: Arc<dyn Clock>,
+    #[cfg(test)]
+    scripted_reply: Arc<Mutex<Option<[u8; LIFELINE_REPLY_LEN]>>>,
+}
+
+impl LifelineQuery {
+    #[cfg(test)]
+    pub(crate) fn scripted_for_test(
+        reply: [u8; LIFELINE_REPLY_LEN],
+        clock: Arc<dyn Clock>,
+    ) -> Self {
+        Self {
+            writer: Arc::new(Mutex::new(Some(Box::new(io::sink())))),
+            pending: Arc::new(Mutex::new(None)),
+            clock,
+            scripted_reply: Arc::new(Mutex::new(Some(reply))),
+        }
+    }
+
+    /// Queries the keeper and returns its pid only for a complete valid reply.
+    pub fn query(&self) -> Option<u32> {
+        let started = self.clock.now();
+        let until = started + LIFELINE_QUERY_BOUND;
+        let mut guard = loop {
+            match self.writer.try_lock() {
+                Ok(guard) => break guard,
+                Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    if self.clock.now() >= until {
+                        return None;
+                    }
+                    thread::yield_now();
+                }
+            }
+        };
+        let writer = guard.as_mut()?;
+        let (send, receive) = mpsc::sync_channel(1);
+        {
+            let mut pending = lock(&self.pending);
+            if pending.is_some() {
+                return None;
+            }
+            *pending = Some(send);
+        }
+        if writer.write_all(LIFELINE_QUERY).is_err() {
+            *guard = None;
+            *lock(&self.pending) = None;
+            return None;
+        }
+        #[cfg(test)]
+        if let Some(reply) = lock(&self.scripted_reply).take()
+            && let Some(sender) = lock(&self.pending).take()
+        {
+            let _sent = sender.send(reply);
+        }
+        let remaining = until.saturating_duration_since(self.clock.now());
+        if remaining.is_zero() {
+            *guard = None;
+            *lock(&self.pending) = None;
+            return None;
+        }
+        let reply = support::deadline::Deadline::after(remaining)
+            .recv(&receive)
+            .ok();
+        *lock(&self.pending) = None;
+        let Some(reply) = reply else {
+            *guard = None;
+            return None;
+        };
+        let parent_before = u32::try_from(rustix::process::getppid()?.as_raw_pid()).ok()?;
+        let result = match reply {
+            [b'P', a, b, c, d] => Some(u32::from_le_bytes([a, b, c, d])),
+            _ => None,
+        };
+        let parent_after = u32::try_from(rustix::process::getppid()?.as_raw_pid()).ok()?;
+        (parent_before == parent_after).then_some(result).flatten()
+    }
 }
 
 impl Signals {
@@ -215,6 +304,7 @@ impl Signals {
             clock,
             exit,
             spawn: Box::new(spawn_bound),
+            lifeline_query: Mutex::new(None),
         }
     }
 
@@ -355,19 +445,33 @@ impl Signals {
         self.run(action, on_record, on_signal, None);
     }
 
-    /// Starts the lifeline: a thread that reads `input` to EOF or an
-    /// error, then handles SIGHUP (`docs/delegates.md`, "Lifetime"). A
-    /// Fiber delegate's parent holds the write end open and never writes
-    /// to it, so end of file means the parent is gone, however it died:
-    /// a shutdown with exit 129, a hangup. Before [`Signals::commit`] the
-    /// armed and booting phases exit or record as for a real SIGHUP. Any
-    /// byte the parent writes is ignored.
-    pub fn lifeline(self: &Arc<Self>, input: Box<dyn Read + Send>) {
+    /// Starts the lifeline reader. EOF or a read error handles SIGHUP
+    /// (`docs/delegates.md`, "Lifetime"). With a keeper-owned socketpair,
+    /// the reader routes one fixed reply frame to the pending query; without
+    /// a query writer it drains input as the ordinary stdin lifeline.
+    pub fn lifeline(
+        self: &Arc<Self>,
+        input: Box<dyn Read + Send>,
+        writer: Option<Box<dyn Write + Send>>,
+    ) -> LifelineQuery {
+        let pending = Arc::new(Mutex::new(None));
+        let has_writer = writer.is_some();
+        let query = LifelineQuery {
+            writer: Arc::new(Mutex::new(writer)),
+            pending: Arc::clone(&pending),
+            clock: Arc::clone(&self.clock),
+            #[cfg(test)]
+            scripted_reply: Arc::new(Mutex::new(None)),
+        };
         let signals = Arc::clone(self);
         let watched = thread::Builder::new()
             .name("lifeline".to_owned())
             .spawn(move || {
-                drain(input);
+                if has_writer {
+                    read_replies(input, &pending);
+                } else {
+                    drain(input);
+                }
                 signals.handle(SIGHUP);
             });
         // No thread, no lifeline: without it a dead parent would leave
@@ -375,6 +479,13 @@ impl Signals {
         if watched.is_err() {
             self.handle(SIGHUP);
         }
+        *lock(&self.lifeline_query) = Some(query.clone());
+        query
+    }
+
+    /// The handle created by [`Signals::lifeline`], if one was installed.
+    pub fn lifeline_query(&self) -> Option<LifelineQuery> {
+        lock(&self.lifeline_query).clone()
     }
 
     /// Handles one signal. The callbacks run outside the lock. A first
@@ -656,9 +767,33 @@ fn sleep_until(clock: &dyn Clock, until: Instant) {
     park_until(clock, until, &tick, &|| false);
 }
 
-/// Reads `input` to EOF or an error, ignoring every byte: the parent
-/// never writes to the lifeline. An interrupted read is retried, as
-/// `io::copy` does; any other error ends it like EOF.
+/// Reads complete fixed-size reply frames, delivering one only to the
+/// currently pending query. EOF, a partial frame, or another read error
+/// ends the lifeline and takes the existing SIGHUP path.
+fn read_replies(
+    mut input: Box<dyn Read + Send>,
+    pending: &Mutex<Option<SyncSender<[u8; LIFELINE_REPLY_LEN]>>>,
+) {
+    loop {
+        let mut frame = [0; LIFELINE_REPLY_LEN];
+        match input.read_exact(&mut frame) {
+            Ok(()) => {
+                if let Some(sender) = lock(pending).take() {
+                    let _sent = sender.send(frame);
+                }
+            }
+            Err(_) => {
+                if let Some(sender) = lock(pending).take() {
+                    let _sent = sender.send([b'N', 0, 0, 0, 0]);
+                }
+                return;
+            }
+        }
+    }
+}
+
+/// Reads `input` to EOF or an error, ignoring every byte. An interrupted
+/// read is retried, as `io::copy` does; any other error ends it like EOF.
 fn drain(mut input: Box<dyn Read + Send>) {
     let _copied = io::copy(&mut input, &mut io::sink());
 }

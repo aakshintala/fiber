@@ -100,12 +100,27 @@ pub(crate) struct Delegates {
     /// the first `retain`.
     loaded: Mutex<Option<Vec<String>>>,
     sandbox: crate::settings::SandboxHandle,
+    host: Arc<crate::keeper::Host>,
+    command_host: Arc<dyn contract::keeper::CommandHost>,
 }
 
 impl Delegates {
     /// This session's id, which its delegates receive as their parent.
     pub(crate) fn session(&self) -> &SessionId {
         &self.parent
+    }
+
+    pub(crate) fn host(&self) -> Arc<crate::keeper::Host> {
+        Arc::clone(&self.host)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_command_host(
+        mut self,
+        host: Arc<dyn contract::keeper::CommandHost>,
+    ) -> Self {
+        self.command_host = host;
+        self
     }
 
     /// Wires one session's delegates: `fiber` is the running binary the
@@ -127,6 +142,12 @@ impl Delegates {
         sandbox: crate::settings::SandboxHandle,
     ) -> Self {
         let launch = launcher(&fiber);
+        let host = crate::keeper::Host::session(
+            fiber.clone(),
+            home.clone(),
+            parent.clone(),
+            Arc::clone(&clock),
+        );
         let watch = watcher(&home);
         let steer = steerer(&home);
         let last_seq = last_seq_reader(&home);
@@ -148,6 +169,8 @@ impl Delegates {
             quota: None,
             loaded: Mutex::new(None),
             sandbox,
+            command_host: Arc::clone(&host) as Arc<dyn contract::keeper::CommandHost>,
+            host,
         }
     }
 
@@ -209,6 +232,7 @@ impl Delegates {
     fn wiring(&self) -> jobs::DelegateWiring {
         let home = self.home.clone();
         jobs::DelegateWiring {
+            host: Arc::clone(&self.command_host),
             create: worktree_creator(&self.home),
             finish: worktree_finisher(&self.home, &self.clock),
             depth: self.depth,

@@ -5886,8 +5886,8 @@ fn exited_cost(history: &History, summary: &r#loop::Summary) -> Option<f64> {
 #[test]
 fn an_orphaned_delegate_s_records_are_backfilled_after_its_orphan_marking() {
     let mut history = History::new(Vec::new());
-    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     history.write(job_started("j_1"), None);
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     // The delegate's log holds an initial record and its correction; the
     // parent copied neither before crashing. No terminal event is written:
     // the released lock below is the completion edge, not any last line.
@@ -5928,8 +5928,8 @@ fn an_orphaned_delegate_s_records_are_backfilled_after_its_orphan_marking() {
 #[test]
 fn a_backfill_skips_the_records_the_parent_already_copied() {
     let mut history = History::new(Vec::new());
-    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     history.write(job_started("j_1"), None);
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     // The initial record reached the parent live, before the crash.
     history.write(usage_copy("g_1", Some(0.10), "s_child"), None);
     let delegate = stage_delegate(&history, "s_child");
@@ -5975,8 +5975,8 @@ fn ephemeral(session: &str, event: &Event) -> Envelope {
 #[test]
 fn a_backfill_does_not_count_an_ephemeral_copy_as_the_parents() {
     let mut history = History::new(Vec::new());
-    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     history.write(job_started("j_1"), None);
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     // The parent log holds only an ephemeral copy: it is no durable
     // record, so the delegate's line is still missing.
     append_raw(
@@ -6001,8 +6001,8 @@ fn a_backfill_does_not_count_an_ephemeral_copy_as_the_parents() {
 #[test]
 fn a_backfill_skips_an_ephemeral_line_in_the_delegates_log() {
     let mut history = History::new(Vec::new());
-    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     history.write(job_started("j_1"), None);
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     let delegate = stage_delegate(&history, "s_child");
     delegate
         .append(&History::usage("g_1", MODEL, Some(0.10)), None, None)
@@ -6025,8 +6025,8 @@ fn a_backfill_skips_an_ephemeral_line_in_the_delegates_log() {
 #[test]
 fn a_backfill_appends_nothing_the_parent_already_holds() {
     let mut history = History::new(Vec::new());
-    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     history.write(job_started("j_1"), None);
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     history.write(usage_copy("g_1", Some(0.10), "s_child"), None);
     history.write(usage_copy("g_1", Some(0.18), "s_child"), None);
     let delegate = stage_delegate(&history, "s_child");
@@ -6052,8 +6052,8 @@ fn a_backfill_appends_nothing_the_parent_already_holds() {
 #[test]
 fn a_backfill_matches_occurrences_in_order_not_the_latest_value() {
     let mut history = History::new(Vec::new());
-    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     history.write(job_started("j_1"), None);
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     // The parent holds only the first A of the delegate's A, B, A: the
     // ledger's latest value already equals the last record, yet the
     // middle correction and the repeated payload are both missing.
@@ -6088,8 +6088,8 @@ fn a_backfill_matches_occurrences_in_order_not_the_latest_value() {
 #[test]
 fn a_resume_after_a_backfill_appends_no_further_copies() {
     let mut history = History::new(Vec::new());
-    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     history.write(job_started("j_1"), None);
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     let delegate = stage_delegate(&history, "s_child");
     delegate
         .append(&History::usage("g_1", MODEL, Some(0.10)), None, None)
@@ -6112,8 +6112,8 @@ fn a_resume_after_a_backfill_appends_no_further_copies() {
 #[test]
 fn a_backfill_keeps_generations_and_grandchild_origins_distinct() {
     let mut history = History::new(Vec::new());
-    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     history.write(job_started("j_1"), None);
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     history.write(usage_copy("g_1", Some(0.25), "s_child"), None);
     // Interleaved generations, and a line whose origin a grandchild
     // already set: the parent holds none of them.
@@ -6168,8 +6168,8 @@ fn a_backfill_keeps_generations_and_grandchild_origins_distinct() {
 #[test]
 fn a_mapped_orphan_without_a_log_keeps_its_marking_and_copies_nothing() {
     let mut history = History::new(Vec::new());
-    history.write(delegate_started("j_9", "s_gone", "fiber"), None);
     history.write(job_started("j_9"), None);
+    history.write(delegate_started("j_9", "s_gone", "fiber"), None);
     // No delegate directory was staged: the log is gone with its writer.
     history.freeze();
 
@@ -6201,8 +6201,8 @@ fn an_orphan_on_another_harness_copies_nothing() {
     // Another harness names its own id: the mapping only covers Fiber
     // delegates, so this orphan resolves to skip-and-continue even though
     // a same-named directory holds usage lines.
-    history.write(delegate_started("j_7", "s_other", "other"), None);
     history.write(job_started("j_7"), None);
+    history.write(delegate_started("j_7", "s_other", "other"), None);
     let delegate = stage_delegate(&history, "s_other");
     delegate
         .append(&History::usage("g_7", MODEL, Some(0.10)), None, None)
@@ -6558,8 +6558,8 @@ fn advance_to_next_retry(history: &History, deadline: &Deadline) {
 fn a_resume_waits_out_a_live_writer_and_backfills_its_final_lines() {
     let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let mut history = History::new(Vec::new());
-    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     history.write(job_started("j_1"), None);
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     // The old writer is still active, holding its session lock with a
     // partial log: no terminal event will ever arrive, only the release.
     let delegate = stage_delegate(&history, "s_child");
@@ -6613,8 +6613,8 @@ fn a_resume_waits_out_a_live_writer_and_backfills_its_final_lines() {
 fn a_resume_backfills_a_writer_that_died_mid_stream() {
     let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let mut history = History::new(Vec::new());
-    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     history.write(job_started("j_1"), None);
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     // The writer dies with its lock held and its log partial: the lock
     // releases with the dead writer, which is the only completion edge.
     let delegate = stage_delegate(&history, "s_child");
@@ -6646,8 +6646,8 @@ fn a_resume_backfills_a_writer_that_died_mid_stream() {
 #[test]
 fn a_backfill_copies_the_good_prefix_past_a_corrupt_line() {
     let mut history = History::new(Vec::new());
-    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     history.write(job_started("j_1"), None);
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
     let delegate = stage_delegate(&history, "s_child");
     delegate
         .append(&History::usage("g_1", MODEL, Some(0.10)), None, None)

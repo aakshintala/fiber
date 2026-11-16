@@ -106,6 +106,7 @@ struct Process {
     state: Mutex<State>,
     cv: Condvar,
     input: Option<contract::jobs::Input>,
+    _lifeline: Option<UnixStream>,
 }
 impl Wake for Process {
     fn wake(&self) {
@@ -216,6 +217,9 @@ struct Runtime {
     id: SessionId,
     clock: Arc<dyn Clock>,
     out: Mutex<UnixStream>,
+    /// Whether the active session-control connection is live. Access is
+    /// serialized with `out`, including handover replacement.
+    control_active: AtomicBool,
     log: Mutex<Option<HeldLog>>,
     supervisor: Mutex<Supervisor>,
     processes: Mutex<BTreeMap<String, Arc<Process>>>,
@@ -258,6 +262,7 @@ impl Runtime {
             id,
             clock,
             out: Mutex::new(out),
+            control_active: AtomicBool::new(true),
             log: Mutex::new(None),
             supervisor: Mutex::new(Supervisor::new()),
             processes: Mutex::new(BTreeMap::new()),
@@ -271,6 +276,35 @@ impl Runtime {
             #[cfg(test)]
             hooks,
         })
+    }
+
+    fn watch_lifeline(self: &Arc<Self>, mut lifeline: UnixStream) {
+        let runtime = Arc::clone(self);
+        let _spawned = thread::Builder::new()
+            .name("keeper-lifeline".to_owned())
+            .spawn(move || {
+                loop {
+                    let mut request = [0; contract::keeper::LIFELINE_QUERY.len()];
+                    match lifeline.read_exact(&mut request) {
+                        Ok(()) => {}
+                        Err(_) => return,
+                    }
+                    let mut reply = [b'N', 0, 0, 0, 0];
+                    {
+                        let out = lock(&runtime.out);
+                        if request == *contract::keeper::LIFELINE_QUERY
+                            && runtime.control_active.load(Ordering::Acquire)
+                            && support::peer::peer_pid(&out).is_ok()
+                        {
+                            reply[0] = b'P';
+                            reply[1..].copy_from_slice(&std::process::id().to_le_bytes());
+                        }
+                        if lifeline.write_all(&reply).is_err() {
+                            return;
+                        }
+                    }
+                }
+            });
     }
 
     fn send(&self, line: FromKeeper) -> io::Result<()> {
@@ -557,6 +591,7 @@ impl Runtime {
         let process = Arc::new(Process {
             pgid: child.id(),
             input: streams.input,
+            _lifeline: streams.lifeline,
             state: Mutex::new(State {
                 sink: Sink::Control,
                 adoption: None,
@@ -575,6 +610,13 @@ impl Runtime {
         let wake: Arc<dyn Wake> = process.clone();
         self.clock.subscribe(Arc::downgrade(&wake));
         lock(&self.processes).insert(spec.id.clone(), Arc::clone(&process));
+        if let Some(lifeline) = process
+            ._lifeline
+            .as_ref()
+            .and_then(|lifeline| lifeline.try_clone().ok())
+        {
+            self.watch_lifeline(lifeline);
+        }
         self.decide(|sup| {
             sup.started(spec.id.clone());
             Vec::new()
@@ -1064,7 +1106,11 @@ impl Runtime {
             let Ok(reply) = stream.try_clone() else {
                 return;
             };
-            *lock(&self.out) = reply;
+            {
+                let mut out = lock(&self.out);
+                *out = reply;
+                self.control_active.store(false, Ordering::Release);
+            }
             match write_frame(
                 &mut writer,
                 &FromKeeper::Handover {
@@ -1089,8 +1135,12 @@ impl Runtime {
                 pause();
             }
             self.switch(&kept);
+            {
+                let _out = lock(&self.out);
+                self.control_active.store(true, Ordering::Release);
+            }
             self.send(FromKeeper::AdoptDone(true))
-                .and_then(|()| self.control_from(reader))
+                .and_then(|()| self.control_until_end(reader))
         } else {
             Ok(())
         };
@@ -1143,7 +1193,14 @@ impl Runtime {
     }
 
     fn control(self: &Arc<Self>, control: UnixStream) -> io::Result<()> {
-        self.control_from(BufReader::new(control))
+        self.control_until_end(BufReader::new(control))
+    }
+
+    fn control_until_end(self: &Arc<Self>, reader: BufReader<UnixStream>) -> io::Result<()> {
+        let outcome = self.control_from(reader);
+        let _out = lock(&self.out);
+        self.control_active.store(false, Ordering::Release);
+        outcome
     }
 
     /// Serves a session's control connection until it ends. The reader may

@@ -32,13 +32,14 @@ use std::thread;
 use std::time::Duration;
 
 use contract::events::{
-    DelegateStarted, Event, EventKind, FiberExited, FiberStarted, FinalMessage, JobStarted, Parent,
-    SessionStarted, Variables, VariablesSource,
+    DelegateStarted, Event, EventKind, FiberExited, FiberStarted, FinalMessage, JobCompleted,
+    JobStarted, Outcome, Parent, SessionStarted, Variables, VariablesSource,
 };
 use contract::shapes::{Usage, Worktree};
 use contract::{ActionId, JobId, SessionId};
 use extension_harness::{send, until_session, until_session_close};
 use fakes::{ProviderServer, Request, Response, Watchdog};
+use log::Log;
 use serde_json::{Value, json};
 use support::pty::{Grid, Run};
 use support::{Deadline, KillGroup, SessionGuard, function_call};
@@ -2665,7 +2666,7 @@ fn stall() -> Response {
 }
 
 #[test]
-fn killing_the_parent_shuts_the_stalled_child_down_with_129() {
+fn a_parent_crash_keeps_the_delegate_under_its_keeper_until_stopped() {
     let setup = support::Setup::new();
     let _guard = arm(&setup);
     let parent = ProviderServer::start([
@@ -2709,13 +2710,15 @@ fn killing_the_parent_shuts_the_stalled_child_down_with_129() {
     fakes::kill_group(running.group, "KILL").unwrap();
     let (status, _, _) = running.wait();
     assert_eq!(status.code(), None);
-    // End of file on the lifeline is a hangup: the child shuts down with
-    // 129 within the bound.
+    // The keeper owns the socketpair peer, so the parent's death does not
+    // close the delegate lifeline. The still-live delegate remains reachable
+    // and stops only on this explicit close.
+    close_now(&child_socket);
     let lines = support::until_after(&child_socket, &sub, "the child's exit", |line| {
         line["kind"] == "fiber_exited"
     });
     let exited = lines.last().unwrap();
-    assert_eq!(exited["payload"]["exit_code"], 129);
+    assert_eq!(exited["payload"]["exit_code"], 0);
 }
 
 #[test]
@@ -10647,7 +10650,7 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
 }
 
 #[test]
-fn killing_the_parent_backfills_unseen_usage() {
+fn a_parent_crash_delivers_the_keeper_completed_delegate_and_backfills_usage() {
     let setup = support::Setup::new();
     let _guard = arm(&setup);
     fs::write(setup.workspace().join("note.txt"), "the note\n").unwrap();
@@ -10676,8 +10679,11 @@ fn killing_the_parent_backfills_unseen_usage() {
     .unwrap();
     // The child reads three times, then stalls mid-turn: three generations
     // are recorded to its log, and the turn never finishes them.
+    let (finish_tx, finish_rx) = mpsc::channel();
+    let finish_rx = Arc::new(Mutex::new(finish_rx));
     let child = ProviderServer::start_responding({
         let stage = std::sync::atomic::AtomicUsize::new(0);
+        let finish_rx = Arc::clone(&finish_rx);
         move |request: &Request| {
             let text = String::from_utf8_lossy(&request.body);
             if !text.contains(r#""tools":[{"#) {
@@ -10696,7 +10702,11 @@ fn killing_the_parent_backfills_unseen_usage() {
                     ccall_id("c_3", "read", &json!({"path": "note.txt"})),
                     cusage_id("c_3", 0.02),
                 ]),
-                _ => stall(),
+                _ => {
+                    let _received = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                        .recv(&finish_rx.lock().unwrap());
+                    cstream(&[ctext_id("c_final", "delegate completed")])
+                }
             }
         }
     })
@@ -10731,11 +10741,12 @@ fn killing_the_parent_backfills_unseen_usage() {
     );
     parent.release();
     // The parent is blocked in its stall: the child now records three
-    // generations no live copy can meet, then stalls its fourth call.
+    // generations no live copy can meet, then holds its final reply until
+    // after the parent dies.
     child.release();
     assert!(
         child.await_requests(4, setup.deadline),
-        "the child recorded three reads and stalled"
+        "the child recorded three reads and held its final reply"
     );
     let started = running.wait_line("the delegate start", |line| {
         line["kind"] == "delegate_started"
@@ -10746,18 +10757,10 @@ fn killing_the_parent_backfills_unseen_usage() {
         .as_str()
         .unwrap()
         .to_owned();
-    // The kill-to-backfilled window runs under MUST_SUCCEED_WITHIN: the
-    // child's hangup shutdown fits SHUTDOWN_BOUND, and the bound below
-    // leaves shutdown plus observation slack on top of it.
-    assert!(
-        fakes::MUST_SUCCEED_WITHIN
-            >= doors::SHUTDOWN_BOUND + Duration::from_secs(2) + Duration::from_secs(2),
-        "the success bound clears the shutdown bound with slack to spare"
-    );
+    // The kill-to-backfilled window runs under the shared success bound.
     let bound = support::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     // Subscribed before the kill: the child's exit is awaited on this
-    // socket, so a shutdown that beats a later subscription cannot hide
-    // the exit line.
+    // socket, so a finish that beats a later subscription cannot hide it.
     let child_socket = support::Socket::connect(bound, &setup.session_socket(&child_id));
     let sub = support::subscribe_direct(&child_socket);
     // The parent is gone however it died: SIGKILL to its group, which the
@@ -10767,31 +10770,37 @@ fn killing_the_parent_backfills_unseen_usage() {
     fakes::kill_group(running.group, "KILL").unwrap();
     let (status, _, _) = running.wait();
     assert_eq!(status.code(), None);
-    // End of file on the lifeline is a hangup: the child shuts down with
-    // 129 within the bound, releasing its session lock.
+    // The keeper retains the delegate after the parent dies. Let its
+    // already-started final reply complete so the keeper can durably record
+    // `job_completed`, then resume the parent to deliver the missing finish.
+    finish_tx.send(()).unwrap();
     let lines = support::until_after(&child_socket, &sub, "the child's exit", |line| {
         line["kind"] == "fiber_exited"
     });
-    let exited = lines.last().unwrap();
-    assert_eq!(exited["payload"]["exit_code"], 129);
+    assert_eq!(lines.last().unwrap()["payload"]["exit_code"], 0);
+    let parent_log = sessions_in(&setup.home(), &setup.workspace())
+        .join(&id)
+        .join("events.jsonl");
+    let completion_job = job_id.clone();
+    fakes::wait_until("the keeper completion", setup.deadline, move || {
+        read_lines(&parent_log).iter().any(|line| {
+            line["kind"] == "job_completed" && line["payload"]["job_id"] == completion_job
+        })
+    });
 
-    // The resume settles the child's recorded exit, then backfills every
-    // unseen record after the settlement: the copies arrive in
-    // delegate-log order, each naming the child as the originator. The
-    // close below only answers once the resume (settlement plus backfill)
-    // is done serving, so the log then holds everything the resume wrote.
+    // Resume delivers the delegate's own result after the keeper's existing
+    // completion, then copies every unseen usage record in child-log order.
     let mut resumed = Running::start(&setup, &id, &["--resume"]);
-    resumed.wait_line("the orphan marking", |line| {
-        line["kind"] == "job_completed" && line["payload"]["job_id"] == job_id
+    resumed.wait_line("the delivered delegate finish", |line| {
+        line["kind"] == "delegate_finished" && line["payload"]["job_id"] == job_id
     });
     let backfilled = resumed.wait_line("the backfilled copies", |line| {
         line["kind"] == "usage_recorded"
             && line["payload"]["origin_session_id"] == child_id
             && line["payload"]["generation_id"] == "c_3"
     });
-    // The kill-to-backfilled window fits MUST_SUCCEED_WITHIN: the
-    // shutdown leg above ran under the success bound already, and this
-    // pins the whole window against it.
+    // The kill-to-backfilled window fits MUST_SUCCEED_WITHIN: child finish
+    // and resume catch-up both run under the one success bound.
     let consumed = killing
         .checked_sub(setup.deadline.left())
         .expect("the deadline only shrinks");
@@ -10824,7 +10833,7 @@ fn killing_the_parent_backfills_unseen_usage() {
 
     // The child's own log is the expectation: every `usage_recorded` it
     // holds, in order, is a missing source occurrence the parent never
-    // saw live. The child ends with its hangup exit.
+    // saw live. The child finished cleanly while its parent was gone.
     let child_lines = read_lines(
         &sessions_in(&setup.home(), &setup.workspace())
             .join(&child_id)
@@ -10832,7 +10841,7 @@ fn killing_the_parent_backfills_unseen_usage() {
     );
     let exited = child_lines.last().unwrap().clone();
     assert_eq!(exited["kind"], "fiber_exited");
-    assert_eq!(exited["payload"]["exit_code"], 129);
+    assert_eq!(exited["payload"]["exit_code"], 0);
     let recorded: Vec<(String, Value)> = child_lines
         .iter()
         .filter(|line| line["kind"] == "usage_recorded")
@@ -10859,9 +10868,9 @@ fn killing_the_parent_backfills_unseen_usage() {
         ]
     );
 
-    // The log pins the order the resume wrote: the settled end first,
-    // then exactly the child's records, and no copy before the end,
-    // so none arrived live while the parent was stalled.
+    // The log pins the keeper's completion before the resumed finish, and
+    // that none of the child's usage copies arrived while the parent was
+    // stalled.
     let parent_lines = read_lines(
         &sessions_in(&setup.home(), &setup.workspace())
             .join(&id)
@@ -10876,8 +10885,15 @@ fn killing_the_parent_backfills_unseen_usage() {
         .filter(|line| line["kind"] == "job_completed" && line["payload"]["job_id"] == job_id)
         .collect();
     assert_eq!(ends.len(), 1, "one end for the job: {ends:?}");
-    assert_eq!(ends[0]["payload"]["status"], "failed");
-    assert_eq!(ends[0]["payload"]["error"]["code"], "nonzero_exit");
+    assert_eq!(ends[0]["payload"]["status"], "completed");
+    let finish_at = parent_lines
+        .iter()
+        .position(|line| line["kind"] == "delegate_finished" && line["payload"]["job_id"] == job_id)
+        .expect("the resume writes the delegate finish");
+    assert!(
+        at < finish_at,
+        "keeper completion precedes resumed delivery"
+    );
     let logged: Vec<(String, Value)> = parent_lines
         .iter()
         .filter(|line| {
@@ -10900,16 +10916,22 @@ fn killing_the_parent_backfills_unseen_usage() {
             "no live copy before the marking: {line:?}"
         );
     }
-    // The resume reports exactly the appended lines: the marking, then
-    // the copies in delegate-log order.
-    let mut stream = out.into_iter().filter(|line| {
-        (line["kind"] == "job_completed" && line["payload"]["job_id"] == job_id)
-            || (line["kind"] == "usage_recorded"
-                && line["payload"]["origin_session_id"] == child_id)
-    });
-    let first = stream.next().expect("the marking is reported");
-    assert_eq!(first["kind"], "job_completed");
-    let reported: Vec<String> = stream
+    // The resume reports the missing finish and exactly the copied usage
+    // records in delegate-log order. The keeper's earlier completion is
+    // already in the log, not a new resume event.
+    assert_eq!(
+        out.iter()
+            .filter(
+                |line| line["kind"] == "delegate_finished" && line["payload"]["job_id"] == job_id
+            )
+            .count(),
+        1
+    );
+    let reported: Vec<String> = out
+        .iter()
+        .filter(|line| {
+            line["kind"] == "usage_recorded" && line["payload"]["origin_session_id"] == child_id
+        })
         .map(|line| {
             line["payload"]["generation_id"]
                 .as_str()
@@ -11487,6 +11509,85 @@ fn seed_isolated_delegate(setup: &support::Setup) -> SeededDelegate {
         worktree,
         branch,
     }
+}
+
+#[test]
+fn a_resumed_parent_delivers_a_keeper_completed_delegate_result() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let seeded = seed_isolated_delegate(&setup);
+    let parent_log = Log::open(
+        &seeded.sessions,
+        SessionId(seeded.parent.clone()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    parent_log
+        .append(
+            &Event::JobCompleted(JobCompleted {
+                job_id: JobId(seeded.job.clone()),
+                status: Outcome::Completed,
+                error: None,
+                process: None,
+                output_tail: None,
+                notice: None,
+                changed_by: None,
+                protected_paths: None,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    drop(parent_log);
+
+    let before = log::read(&seeded.sessions.join(&seeded.parent)).unwrap();
+    let completed_at = before
+        .iter()
+        .position(|line| {
+            line.kind() == EventKind::JobCompleted && line.payload["job_id"] == seeded.job
+        })
+        .unwrap();
+    assert!(
+        before.iter().all(|line| {
+            line.kind() != EventKind::DelegateFinished || line.payload["job_id"] != seeded.job
+        }),
+        "the keeper-completed parent has no finish yet"
+    );
+
+    let mut resumed = Running::start(&setup, &seeded.parent, &["--resume"]);
+    let delivered = resumed.wait_line("the resumed delegate finish", |line| {
+        line["kind"] == "delegate_finished" && line["payload"]["job_id"] == seeded.job
+    });
+    let finished = delivered.last().unwrap();
+    assert_eq!(finished["payload"]["text"], "seeded finish");
+    let after = log::read(&seeded.sessions.join(&seeded.parent)).unwrap();
+    let finished_at = after
+        .iter()
+        .position(|line| {
+            line.kind() == EventKind::DelegateFinished && line.payload["job_id"] == seeded.job
+        })
+        .unwrap();
+    assert!(
+        completed_at < finished_at,
+        "keeper completion precedes delivery"
+    );
+    assert_eq!(
+        after
+            .iter()
+            .filter(|line| {
+                line.kind() == EventKind::DelegateFinished && line.payload["job_id"] == seeded.job
+            })
+            .count(),
+        1
+    );
+
+    let client = resumed.connect(&setup);
+    support::subscribe_direct(&client);
+    close_now(&client);
+    let _tail = support::until_close(&client);
+    drop(client);
+    let (status, _, stderr) = resumed.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
 }
 
 #[test]

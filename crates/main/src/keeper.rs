@@ -14,12 +14,23 @@ use std::time::Duration;
 use base64::Engine as _;
 use contract::clock::{Clock, Wake};
 use contract::keeper::{
-    CommandHost, FromKeeper, HostError, HostEvent, KeptJob, Spawn, Started, ToKeeper,
+    CommandHost, FromKeeper, HostError, HostEvent, KeptJob, LIFELINE_QUERY_BOUND, Spawn, Started,
+    ToKeeper,
 };
 use contract::{JobId, SessionId};
 use support::peer::Pid;
 
 pub(crate) const KEEPER_START: Duration = Duration::from_millis(5000);
+
+/// Duplicates fd 0 as a query writer only when it is a local socket with a
+/// kernel-reported peer. Ordinary stdin pipes and terminals have no query.
+pub(crate) fn lifeline_writer() -> Option<Box<dyn Write + Send>> {
+    let fd = rustix::io::dup(std::io::stdin()).ok()?;
+    let stream = UnixStream::from(fd);
+    support::peer::peer_pid(&stream).ok()?;
+    stream.set_write_timeout(Some(LIFELINE_QUERY_BOUND)).ok()?;
+    Some(Box::new(stream))
+}
 type Spawner = Arc<dyn Fn() -> io::Result<Connection> + Send + Sync>;
 struct Connection {
     stream: UnixStream,
@@ -327,10 +338,6 @@ impl Host {
     /// The kernel's process ids for the keepers that handed their jobs over
     /// and still hold some, for a permission check to attribute a socket to
     /// them (#4042). The ids come from the connection, never from arguments.
-    #[allow(
-        dead_code,
-        reason = "the permission check of the session sockets reads the credential; only tests do yet"
-    )]
     pub(crate) fn handover_peers(&self) -> Vec<Pid> {
         lock(&self.retained)
             .iter()
