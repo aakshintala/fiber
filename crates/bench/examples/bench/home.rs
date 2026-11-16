@@ -224,10 +224,8 @@ fn config(debug: bool, keep_exited: Option<usize>) -> Value {
         "session": {"idle_exit_ms": SESSION_IDLE_EXIT_MS},
         "hub": {"idle_exit_ms": HUB_IDLE_EXIT_MS}
     });
-    if let Some(keep_exited) = keep_exited
-        && let Some(session) = config.get_mut("session").and_then(Value::as_object_mut)
-    {
-        session.insert("keep_exited".to_owned(), json!(keep_exited));
+    if let Some(keep_exited) = keep_exited {
+        config["session"]["keep_exited"] = json!(keep_exited);
     }
     if let Some(fields) = config.as_object_mut().filter(|_| debug) {
         fields.insert("diagnostics".to_owned(), json!({"level": "debug"}));

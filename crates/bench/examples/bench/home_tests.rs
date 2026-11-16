@@ -18,7 +18,7 @@ fn config_without_diagnostics_is_the_default_install() {
 }
 
 #[test]
-fn config_writer_serializes_keep_exited_without_starting_a_home() {
+fn listing_config_writer_keeps_all_exited_sessions_without_starting_a_home() {
     let dir = TempDir::new("config");
     let path = dir.path().join("config.json");
     write_config(&path, false, Some(0)).expect("the config is written");
