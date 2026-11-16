@@ -1165,6 +1165,13 @@ fn delegate_sessions(home: &Path, workspace: &Path, id: &SessionId) -> Result<Pa
         None => {
             if let Some((key, dir)) = log::find_logged_session(home, id) {
                 if log::started_first(&dir).is_ok_and(|started| {
+                    eprintln!(
+                        "DIAG recorded={:?} requested={:?} TMPDIR={:?} exists={}",
+                        started.workspace,
+                        workspace.to_string_lossy(),
+                        std::env::var("TMPDIR"),
+                        workspace.exists()
+                    );
                     started.workspace.as_deref() == Some(workspace.to_string_lossy().as_ref())
                 }) {
                     return dir
