@@ -322,6 +322,204 @@ fn home_slot_replaces_list_lines_and_preserves_targets_and_focus() {
 }
 
 #[test]
+fn draw_home_replacement_bounds_clip_area_rows() {
+    let app = home(80, 24);
+    let screen = app.home_screen().expect("home screen");
+    let area = Rect::new(0, 0, 80, 12);
+    let mut placed = super::layout(&app, &screen, area);
+    placed.list_top = 8;
+    placed.list_end = 16;
+    let mut buf = Buffer::filled(Rect::new(0, 0, 80, 24), ratatui::buffer::Cell::new("~"));
+    super::draw_home_replacement(&app, &screen, &placed, area, &mut buf, &[], &[], 0, 8);
+    for y in 8..12 {
+        assert_eq!(buf[(placed.x, y)].symbol(), " ", "area row {y}");
+        assert_eq!(
+            buf[(placed.x + placed.width - 1, y)].symbol(),
+            " ",
+            "area row {y}"
+        );
+    }
+    for y in 12..16 {
+        assert_eq!(buf[(placed.x, y)].symbol(), "~", "outside area row {y}");
+        assert_eq!(
+            buf[(placed.x + placed.width - 1, y)].symbol(),
+            "~",
+            "outside area row {y}"
+        );
+    }
+}
+
+#[test]
+fn draw_home_replacement_centers_empty_home() {
+    let app = home(80, 24);
+    let screen = app.home_screen().expect("home screen");
+    let area = Rect::new(0, 0, 80, 12);
+    let mut placed = super::layout(&app, &screen, area);
+    placed.list_top = 2;
+    placed.list_end = 12;
+    let lines = ["r00", "r01"].map(|label| crate::ext::spans::FittedLine {
+        line: ratatui::text::Line::raw(label),
+        links: Vec::new(),
+        pad: 0,
+        anim: None,
+        click_raw: Vec::new(),
+        clicks: Vec::new(),
+    });
+    let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+    super::draw_home_replacement(&app, &screen, &placed, area, &mut buf, &[], &lines, 0, 10);
+    assert_eq!(text(&buf).lines().nth(6).unwrap().trim(), "r00");
+    assert_eq!(text(&buf).lines().nth(7).unwrap().trim(), "r01");
+}
+
+#[test]
+fn draw_home_replacement_stops_at_both_bounds() {
+    for (list_top, list_end) in [(2, 8), (6, 20)] {
+        let app = home_with_live_rows(80, 24, 3);
+        let screen = app.home_screen().expect("home screen");
+        let area = Rect::new(0, 0, 80, 12);
+        let mut placed = super::layout(&app, &screen, area);
+        placed.list_top = list_top;
+        placed.list_end = list_end;
+        let lines: Vec<_> = (0..10)
+            .map(|index| crate::ext::spans::FittedLine {
+                line: ratatui::text::Line::raw(format!("r{index:02}")),
+                links: Vec::new(),
+                pad: 0,
+                anim: None,
+                click_raw: Vec::new(),
+                clicks: Vec::new(),
+            })
+            .collect();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        super::draw_home_replacement(&app, &screen, &placed, area, &mut buf, &[], &lines, 0, 10);
+        let drawn = text(&buf);
+        for index in 0..6 {
+            assert!(
+                drawn
+                    .lines()
+                    .nth(usize::from(list_top) + index)
+                    .unwrap()
+                    .contains(&format!("r{index:02}"))
+            );
+        }
+        for index in 6..10 {
+            assert!(
+                !drawn.contains(&format!("r{index:02}")),
+                "list_top={list_top}, list_end={list_end}: {drawn}"
+            );
+        }
+    }
+}
+
+#[test]
+fn draw_home_replacement_copy_reads_dragged_line() {
+    let mut app = home_with_live_rows(80, 24, 1);
+    let area = Rect::new(0, 0, 80, 24);
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["home"],
+        SlotScript::Replace(vec![vec![raw("alpha")]]),
+    ));
+    app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+    let mut buf = Buffer::empty(area);
+    let targets = home_only(&app, area, &mut buf);
+    let row = u16::try_from(
+        text(&buf)
+            .lines()
+            .position(|line| line.contains("alpha"))
+            .unwrap(),
+    )
+    .unwrap();
+    let x = u16::try_from(
+        text(&buf)
+            .lines()
+            .nth(usize::from(row))
+            .unwrap()
+            .find("alpha")
+            .unwrap(),
+    )
+    .unwrap();
+    let mut select = |kind, col| app.on_select(&crate::keys::Mouse { kind, col, row }, &targets);
+    assert_eq!(
+        select(crate::keys::MouseKind::Press(crate::keys::Button::Left), x),
+        Effect::None
+    );
+    assert_eq!(
+        select(
+            crate::keys::MouseKind::Drag(crate::keys::Button::Left),
+            x + 4
+        ),
+        Effect::None
+    );
+    let release = select(crate::keys::MouseKind::Release, x + 4);
+    if release == Effect::None {
+        panic!(
+            "Release returned None; app.home_screen(): {:?}; targets under (x,row): {:?}",
+            app.home_screen()
+                .map(|screen| crate::home::home_test_rows(&screen)),
+            targets
+                .iter()
+                .map(|target| (target.rect.x, target.rect.y))
+                .collect::<Vec<_>>()
+        );
+    }
+    assert_eq!(release, Effect::Copy("alpha".to_owned()));
+}
+
+#[test]
+fn draw_home_replacement_selection_styles_focused_entry_only() {
+    let mut app = home_with_live_rows(80, 24, 3);
+    let area = Rect::new(0, 0, 80, 24);
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["home"],
+        SlotScript::Replace(vec![vec![raw("replacement")]; 3]),
+    ));
+    app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+    let mut first = Buffer::empty(area);
+    let first_targets = home_only(&app, area, &mut first);
+    app.drawn(&first_targets);
+    app.on_key(Key::Up, fakes::clock::FakeClock::new().now());
+    let screen = app.home_screen().expect("home screen");
+    let k = crate::home::home_test_rows(&screen)
+        .last()
+        .expect("last entry key")
+        .0;
+    let focused = app.focused();
+    assert_eq!(focused, Some(crate::mouse::TargetId::Home(Spot::Entry(k))));
+    let mut buf = Buffer::empty(area);
+    let targets = home_only(&app, area, &mut buf);
+    let entries: Vec<_> = targets
+        .iter()
+        .filter(|target| matches!(target.id, crate::mouse::TargetId::Home(Spot::Entry(_))))
+        .collect();
+    let focused = focused.expect("last entry focused");
+    let focused_row = entries
+        .iter()
+        .find(|target| target.id == focused)
+        .expect("focused entry target")
+        .rect
+        .y;
+    assert_eq!(
+        buf[(
+            entries
+                .iter()
+                .find(|target| target.id == focused)
+                .unwrap()
+                .rect
+                .x,
+            focused_row
+        )]
+            .bg,
+        crate::theme::Role::Selection.color()
+    );
+    for entry in entries.iter().filter(|target| target.id != focused) {
+        assert_ne!(
+            buf[(entry.rect.x, entry.rect.y)].bg,
+            crate::theme::Role::Selection.color()
+        );
+    }
+}
+
+#[test]
 fn home_slot_replacement_keeps_scrolled_lines_aligned_with_targets() {
     let mut app = home_with_live_rows(80, 24, 12);
     let area = Rect::new(0, 0, 80, 24);
