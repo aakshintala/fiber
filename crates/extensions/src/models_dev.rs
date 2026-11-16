@@ -87,6 +87,11 @@ pub fn should_fetch(
 }
 
 struct ProviderVisitor<'a>(&'a BTreeSet<String>);
+
+fn empty_object() -> Value {
+    Value::Object(Default::default())
+}
+
 impl<'de> Visitor<'de> for ProviderVisitor<'_> {
     type Value = Value;
     fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -105,25 +110,25 @@ impl<'de> Visitor<'de> for ProviderVisitor<'_> {
     }
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
         while seq.next_element::<IgnoredAny>()?.is_some() {}
-        Ok(Value::Object(Default::default()))
+        Ok(empty_object())
     }
     fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Value, E> {
-        Ok(Value::Object(Default::default()))
+        Ok(empty_object())
     }
     fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Value, E> {
-        Ok(Value::Object(Default::default()))
+        Ok(empty_object())
     }
     fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Value, E> {
-        Ok(Value::Object(Default::default()))
+        Ok(empty_object())
     }
     fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Value, E> {
-        Ok(Value::Object(Default::default()))
+        Ok(empty_object())
     }
     fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Value, E> {
-        Ok(Value::Object(Default::default()))
+        Ok(empty_object())
     }
     fn visit_unit<E: serde::de::Error>(self) -> Result<Value, E> {
-        Ok(Value::Object(Default::default()))
+        Ok(empty_object())
     }
 }
 // removed: serde_json's from_reader deserializer dispatches strings to visit_str, never visit_string.
@@ -287,6 +292,7 @@ fn refresh_to_cache(home: &Path, fetcher: &Fetch) {
             ))
         }
     });
+    // The refresh is advisory; the next due refresh retries.
     drop(result);
 }
 
