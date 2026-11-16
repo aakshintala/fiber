@@ -1172,10 +1172,11 @@ fn delegate_sessions(home: &Path, workspace: &Path, id: &SessionId) -> Result<Pa
                         std::env::var("TMPDIR"),
                         workspace.exists()
                     );
-                    let _ = std::io::Write::write_all(
+                    std::io::Write::write_all(
                         &mut std::io::stderr().lock(),
                         diagnostic.as_bytes(),
-                    );
+                    )
+                    .unwrap_or(());
                     started.workspace.as_deref() == Some(workspace.to_string_lossy().as_ref())
                 }) {
                     return dir
