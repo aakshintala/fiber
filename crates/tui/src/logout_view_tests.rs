@@ -211,7 +211,7 @@ fn space_and_click_on_deletable_rows_open_the_enter_confirmation() {
     let area = Rect::new(0, 0, 80, 24);
     let mut screen = Buffer::empty(area);
     let _ = by_space.draw(area, &mut screen, &mut Vec::new());
-    let text = text_of(&screen, 80, 24).join("\n");
+    let text = crate::view::text(&screen);
     assert!(text.contains("Delete p00/l00?"), "{text}");
     assert!(matches!(by_space.key(&Key::Char(' '), &context), Act::Stay));
     assert!(matches!(by_space.mode, super::Mode::Confirm { .. }));
@@ -228,10 +228,10 @@ fn space_and_click_on_deletable_rows_open_the_enter_confirmation() {
         by_click.click(Spot::Row(selected), &context),
         Act::Stay
     ));
-    assert!(matches!(by_click.mode, super::Mode::Confirm { .. }));
+    assert!(matches!(by_click.mode, super::Mode::Confirm { target: 0 }));
     let mut screen = Buffer::empty(area);
     let _ = by_click.draw(area, &mut screen, &mut Vec::new());
-    let text = text_of(&screen, 80, 24).join("\n");
+    let text = crate::view::text(&screen);
     assert!(text.contains("Delete p00/l00?"), "{text}");
 }
 
@@ -272,19 +272,18 @@ fn space_and_click_on_a_dim_row_do_nothing() {
     assert!(matches!(logout.click(Spot::Row(dim), &context), Act::Stay));
     assert!(matches!(logout.mode, super::Mode::Rows));
     assert!(fake.deletes.lock().expect("deletes").is_empty());
-}
 
-/// `buf`'s cell text, one line per row.
-fn text_of(buf: &Buffer, width: u16, height: u16) -> Vec<String> {
-    (0..height)
-        .map(|y| {
-            (0..width)
-                .map(|x| buf[(x, y)].symbol())
-                .collect::<String>()
-                .trim_end()
-                .to_owned()
-        })
-        .collect()
+    // The row index in Item::Target(1) is not the item's displayed index.
+    // Space must still open confirmation for the focused deletable row.
+    logout.selected = logout
+        .items
+        .iter()
+        .position(|item| *item == crate::login_logout_view::Item::Target(1))
+        .expect("deletable row");
+    assert_ne!(logout.selected, 1);
+    assert!(matches!(logout.key(&Key::Char(' '), &context), Act::Stay));
+    assert!(matches!(logout.mode, super::Mode::Confirm { target: 1 }));
+    assert!(fake.deletes.lock().expect("deletes").is_empty());
 }
 
 /// Confirming a deletion redraws the list from the rows returned by the re-list.
