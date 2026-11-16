@@ -95,11 +95,6 @@ impl Logout {
         self.items = build(&provider_rows);
     }
 
-    /// The selected row.
-    fn selected(&self) -> Option<Item> {
-        self.items.get(self.selected).copied()
-    }
-
     /// Handles one key.
     pub(crate) fn key(&mut self, key: &Key, ctx: &Ctx<'_>) -> Act {
         if matches!(self.mode, Mode::Confirm { .. }) {
@@ -116,15 +111,7 @@ impl Logout {
             return Act::Close;
         }
         if key.is_enter_or_space() {
-            if let Some(Item::Target(at)) = self.selected()
-                && let Some(row) = self.rows.get(at)
-                && row.deletable()
-            {
-                // Enter on a heading, the gap, the note or a dim row
-                // does nothing: only a deletable row confirms.
-                self.said.clear();
-                self.mode = Mode::Confirm { target: at };
-            }
+            self.ask_delete(self.selected);
             return Act::Stay;
         }
         if !matches!(*key, Key::Up | Key::Down | Key::PageUp | Key::PageDown) {
@@ -277,6 +264,20 @@ impl Logout {
             .collect()
     }
 
+    /// Opens confirmation for the deletable target at `item_at`, an index
+    /// into `items`, keeping it distinct from the target's source-row index.
+    fn ask_delete(&mut self, item_at: usize) {
+        let Some(Item::Target(row_at)) = self.items.get(item_at).copied() else {
+            return;
+        };
+        if !self.rows.get(row_at).is_some_and(|row| row.deletable()) {
+            return;
+        }
+        self.selected = item_at;
+        self.said.clear();
+        self.mode = Mode::Confirm { target: row_at };
+    }
+
     /// A click: the ✕ closes, a deletable target row selects it, and a
     /// click on a heading, the gap, the note, a dim row or past the last
     /// item does nothing. A click while the confirm is open keeps it.
@@ -288,17 +289,7 @@ impl Logout {
                 if matches!(self.mode, Mode::Confirm { .. }) {
                     return Act::Stay;
                 }
-                match self.items.get(at) {
-                    Some(Item::Target(t)) => {
-                        let deletable = self.rows.get(*t).is_some_and(|row| row.deletable());
-                        if deletable {
-                            self.selected = at;
-                            self.said.clear();
-                            self.mode = Mode::Confirm { target: *t };
-                        }
-                    }
-                    Some(Item::Heading(_)) | Some(Item::Gap) | Some(Item::Note) | None => {}
-                }
+                self.ask_delete(at);
                 Act::Stay
             }
         }
