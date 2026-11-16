@@ -357,8 +357,28 @@ fn recorded_session_matches(
 }
 
 /// Whether two recorded workspace strings name the same workspace.
-fn recorded_workspace_matches(recorded: &str, expected: &str) -> bool {
-    recorded == expected
+pub(super) fn recorded_workspace_matches(recorded: &str, expected: &str) -> bool {
+    fn canonicalize_missing_tail(path: &Path) -> Option<std::path::PathBuf> {
+        for ancestor in path.ancestors() {
+            match std::fs::canonicalize(ancestor) {
+                Ok(mut canonical) => {
+                    canonical.push(path.strip_prefix(ancestor).ok()?);
+                    return Some(canonical);
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(_) => return None,
+            }
+        }
+        None
+    }
+
+    match (
+        canonicalize_missing_tail(Path::new(recorded)),
+        canonicalize_missing_tail(Path::new(expected)),
+    ) {
+        (Some(recorded), Some(expected)) => recorded == expected,
+        _ => recorded == expected,
+    }
 }
 
 /// Whether the session in `dir` runs in the launch project: its recorded

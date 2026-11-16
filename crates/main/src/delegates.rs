@@ -1165,7 +1165,12 @@ fn delegate_sessions(home: &Path, workspace: &Path, id: &SessionId) -> Result<Pa
         None => {
             if let Some((key, dir)) = log::find_logged_session(home, id) {
                 if log::started_first(&dir).is_ok_and(|started| {
-                    started.workspace.as_deref() == Some(workspace.to_string_lossy().as_ref())
+                    started.workspace.as_deref().is_some_and(|recorded| {
+                        crate::resume::recorded_workspace_matches(
+                            recorded,
+                            &workspace.to_string_lossy(),
+                        )
+                    })
                 }) {
                     return dir
                         .parent()
