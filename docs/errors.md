@@ -94,7 +94,8 @@ code and `error`, and one sentence on stderr. The line has no `session_id`, so
 filtering stdout by session still gives each session's log byte for byte, and
 `fiber ask … | tail -1` reads the verdict whatever happened. A session the
 hub started writes the same line, and the hub passes it to the client that
-asked for the session.
+asked for the session. For `start`, the hub writes `command_accepted` before
+forwarding that pre-session line (see “Before a session exists” here).
 
 | Code | When | Exit |
 |---|---|---|

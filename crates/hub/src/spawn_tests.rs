@@ -195,11 +195,10 @@ fn pre_session_callback_runs_once_when_registered_after_reap() {
     spawned.watch_pre_session_exit(Box::new(move |line| {
         duplicate.send(line).unwrap_or(());
     }));
-    assert!(
-        Deadline::after(Duration::from_millis(10))
-            .recv(&duplicates)
-            .is_err()
-    );
+    assert!(matches!(
+        duplicates.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
 }
 
 #[test]

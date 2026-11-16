@@ -480,15 +480,9 @@ fn start_cancels_pre_session_exit_after_summary_rejection() {
     assert_eq!(code, "closing");
     assert_eq!(id.as_deref(), Some("c_start"));
     exit.release();
-    client
-        .read
-        .get_mut()
-        .set_read_timeout(Some(Duration::from_millis(250)))
-        .unwrap();
-    let (outcome, text) =
-        client.read_deadline_with("no post-rejection verdict", crate::start::START_DEADLINE);
-    assert!(outcome.is_err());
-    assert!(text.is_empty());
+    client.send(&command("c_after", "status", json!({})));
+    let next = client.next("the next command answer");
+    assert_eq!(next["payload"]["command_id"], "c_after");
 }
 
 #[test]
@@ -533,15 +527,9 @@ fn start_cancels_pre_session_exit_when_first_prompt_cannot_start() {
     assert_eq!(code, "io_failed");
     assert_eq!(id.as_deref(), Some("c_start"));
     exit.release();
-    client
-        .read
-        .get_mut()
-        .set_read_timeout(Some(Duration::from_millis(250)))
-        .unwrap();
-    let (outcome, text) =
-        client.read_deadline_with("no post-rejection verdict", crate::start::START_DEADLINE);
-    assert!(outcome.is_err());
-    assert!(text.is_empty());
+    client.send(&command("c_after", "status", json!({})));
+    let next = client.next("the next command answer");
+    assert_eq!(next["payload"]["command_id"], "c_after");
 }
 
 #[test]
