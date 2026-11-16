@@ -482,7 +482,7 @@ fn recorded_workspace_matches_compares_path_identity() {
 }
 
 #[test]
-fn recorded_workspace_matches_falls_back_to_literal_equality_when_canonicalization_fails() {
+fn recorded_workspace_matches_compares_paths_when_canonicalization_fails() {
     let invalid = "/workspace/\0invalid";
     assert!(recorded_workspace_matches(invalid, invalid));
     assert!(!recorded_workspace_matches(
@@ -516,6 +516,26 @@ fn recorded_workspace_matches_normalizes_missing_path_aliases() {
     assert!(!recorded_workspace_matches(
         &recorded.to_string_lossy(),
         &distinct.to_string_lossy()
+    ));
+}
+
+#[test]
+fn recorded_workspace_matches_normalizes_enotdir_under_symlinked_ancestors() {
+    use std::os::unix::fs::symlink;
+
+    let temp = fakes::TempDir::new("main-resume-workspace-enotdir");
+    let file = temp.path().join("regular-file");
+    std::fs::write(&file, b"file").unwrap();
+    let alias = temp.path().join("alias");
+    symlink(&file, &alias).unwrap();
+
+    let expected = file.join("missing-workspace");
+    let recorded = alias.join("missing-workspace");
+    assert!(!expected.exists());
+    assert!(!recorded.exists());
+    assert!(!recorded_workspace_matches(
+        &recorded.to_string_lossy(),
+        &expected.to_string_lossy()
     ));
 }
 
