@@ -706,11 +706,60 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
     );
     let mut control = keeper.writer.try_clone().expect("control");
 
-    let start = |control: &mut UnixStream, id: &str, shell: String, output: std::path::PathBuf| {
+    struct ChildStart<'a> {
+        id: &'a str,
+        shell: String,
+        output: std::path::PathBuf,
+    }
+    let await_exit = |read: &mpsc::Receiver<FromKeeper>, id: &str, deadline: Deadline| {
+        loop {
+            match deadline.recv_or_fail(read, &format!("{id} child Exit")) {
+                FromKeeper::Exit { id: exited, .. } if exited == id => break,
+                FromKeeper::Output { .. } | FromKeeper::Started { .. } => {}
+                FromKeeper::Failed { .. }
+                | FromKeeper::Exit { .. }
+                | FromKeeper::Identity { .. }
+                | FromKeeper::Handover { .. }
+                | FromKeeper::AdoptDone(_) => {
+                    panic!("unexpected keeper frame before {id} child Exit")
+                }
+            }
+        }
+    };
+    let write_go = |path: std::path::PathBuf, what: &'static str| {
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .and_then(|mut writer| writer.write_all(b"go\n"));
+            let _sent = sent.send(result);
+        });
+        Deadline::after(Duration::from_secs(10))
+            .recv_or_fail(&received, what)
+            .expect(what);
+    };
+    let send_control = |control: &UnixStream, frame: ToKeeper, what: &'static str| {
+        let mut writer = control.try_clone().expect("control writer clone");
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = serde_json::to_vec(&frame)
+                .map_err(std::io::Error::other)
+                .and_then(|mut bytes| {
+                    bytes.push(b'\n');
+                    writer.write_all(&bytes)
+                });
+            let _sent = sent.send(result);
+        });
+        Deadline::after(Duration::from_secs(10))
+            .recv_or_fail(&received, what)
+            .expect(what);
+    };
+    let start = |control: &mut UnixStream, child: ChildStart<'_>| {
         let spec = Spawn {
-            id: id.into(),
+            id: child.id.into(),
             program: "/bin/sh".into(),
-            args: vec!["-c".into(), shell],
+            args: vec!["-c".into(), child.shell],
             cwd: std::env::temp_dir(),
             env: Vec::new(),
             stdin: HostStdin::Null,
@@ -718,55 +767,57 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
             output_cap: 1_000_000,
             sandbox: None,
         };
-        serde_json::to_writer(&mut *control, &ToKeeper::Start(spec)).expect("start child");
-        control.write_all(b"\n").expect("start newline");
+        send_control(control, ToKeeper::Start(spec), "send child Start");
         let deadline = Deadline::after(Duration::from_secs(10));
         let pgid = loop {
             match deadline.recv_or_fail(&keeper.read, "keeper child Started") {
-                FromKeeper::Started { id: started, pgid } if started == id => break pgid,
+                FromKeeper::Started { id: started, pgid } if started == child.id => break pgid,
                 FromKeeper::Output { .. } | FromKeeper::Started { .. } => {}
                 FromKeeper::Failed { .. }
                 | FromKeeper::Exit { .. }
                 | FromKeeper::Identity { .. }
                 | FromKeeper::Handover { .. }
                 | FromKeeper::AdoptDone(_) => {
-                    panic!("unexpected keeper frame while starting {id}")
+                    panic!("unexpected keeper frame while starting {}", child.id)
                 }
             }
         };
         let watchdog = fakes::Watchdog::group(pgid);
-        serde_json::to_writer(
-            &mut *control,
-            &ToKeeper::Adopt {
-                id: id.into(),
-                job_id: JobId(format!("j_{id}")),
-                output_path: output,
+        send_control(
+            control,
+            ToKeeper::Adopt {
+                id: child.id.into(),
+                job_id: JobId(format!("j_{}", child.id)),
+                output_path: child.output,
                 errors_path: None,
                 lines: false,
             },
-        )
-        .expect("adopt child");
-        control.write_all(b"\n").expect("adopt newline");
+            "send child Adopt",
+        );
         watchdog
     };
     let bad_watchdog = start(
         &mut control,
-        "bad",
-        format!(
-            "read gate < '{}'; echo bad-out; exit 3",
-            bad_input.display()
-        ),
-        bad_dir.clone(),
+        ChildStart {
+            id: "bad",
+            shell: format!(
+                "read gate < {}; echo bad-out; exit 3",
+                fakes::shell_quote(&bad_input)
+            ),
+            output: bad_dir.clone(),
+        },
     );
     let good_watchdog = start(
         &mut control,
-        "good",
-        format!(
-            "read gate < '{}'; test \"$gate\" = go || exit 9; read gate < '{}'; echo good-out; exit 0",
-            release.display(),
-            good_input.display()
-        ),
-        good_out.clone(),
+        ChildStart {
+            id: "good",
+            shell: format!(
+                "read gate < {}; test \"$gate\" = go || exit 9; read gate < {}; echo good-out; exit 0",
+                fakes::shell_quote(&release),
+                fakes::shell_quote(&good_input)
+            ),
+            output: good_out.clone(),
+        },
     );
 
     // Both children are adopted before the writer closes. The second child
@@ -774,71 +825,20 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
     crash(&mut keeper);
     Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "keeper files to be active");
 
-    let (opened, opened_rx) = std::sync::mpsc::channel();
-    let bad_input = bad_input.clone();
-    std::thread::spawn(move || {
-        let result = std::fs::OpenOptions::new()
-            .write(true)
-            .open(bad_input)
-            .and_then(|mut writer| writer.write_all(b"go\n"));
-        let _sent = opened.send(result);
-    });
-    Deadline::after(Duration::from_secs(10))
-        .recv_or_fail(&opened_rx, "bad input FIFO writer open and write")
-        .expect("bad input FIFO writer");
-    let child1_deadline = Deadline::after(Duration::from_secs(10));
-    loop {
-        match child1_deadline.recv_or_fail(&keeper.read, "bad child Exit") {
-            FromKeeper::Exit { id, .. } if id == "bad" => break,
-            FromKeeper::Output { .. } | FromKeeper::Started { .. } => {}
-            FromKeeper::Failed { .. }
-            | FromKeeper::Exit { .. }
-            | FromKeeper::Identity { .. }
-            | FromKeeper::Handover { .. }
-            | FromKeeper::AdoptDone(_) => {
-                panic!("unexpected keeper frame before bad child Exit")
-            }
-        }
-    }
+    write_go(bad_input.clone(), "bad input FIFO writer open and write");
+    await_exit(
+        &keeper.read,
+        "bad",
+        Deadline::after(Duration::from_secs(10)),
+    );
 
-    let (released, released_rx) = std::sync::mpsc::channel();
-    let release = release.clone();
-    std::thread::spawn(move || {
-        let result = std::fs::OpenOptions::new()
-            .write(true)
-            .open(release)
-            .and_then(|mut writer| writer.write_all(b"go\n"));
-        let _sent = released.send(result);
-    });
-    Deadline::after(Duration::from_secs(10))
-        .recv_or_fail(&released_rx, "release FIFO writer open and write")
-        .expect("release child 2");
-    let (opened, opened_rx) = std::sync::mpsc::channel();
-    let good_input = good_input.clone();
-    std::thread::spawn(move || {
-        let result = std::fs::OpenOptions::new()
-            .write(true)
-            .open(good_input)
-            .and_then(|mut writer| writer.write_all(b"go\n"));
-        let _sent = opened.send(result);
-    });
-    Deadline::after(Duration::from_secs(10))
-        .recv_or_fail(&opened_rx, "good input FIFO writer open and write")
-        .expect("good input FIFO writer");
-    let child2_deadline = Deadline::after(Duration::from_secs(10));
-    loop {
-        match child2_deadline.recv_or_fail(&keeper.read, "good child Exit") {
-            FromKeeper::Exit { id, .. } if id == "good" => break,
-            FromKeeper::Output { .. } | FromKeeper::Started { .. } => {}
-            FromKeeper::Failed { .. }
-            | FromKeeper::Exit { .. }
-            | FromKeeper::Identity { .. }
-            | FromKeeper::Handover { .. }
-            | FromKeeper::AdoptDone(_) => {
-                panic!("unexpected keeper frame before good child Exit")
-            }
-        }
-    }
+    write_go(release.clone(), "release FIFO writer open and write");
+    write_go(good_input.clone(), "good input FIFO writer open and write");
+    await_exit(
+        &keeper.read,
+        "good",
+        Deadline::after(Duration::from_secs(10)),
+    );
 
     Deadline::after(Duration::from_secs(10))
         .recv_or_fail(&keeper.result, "keeper to finish after both children")
