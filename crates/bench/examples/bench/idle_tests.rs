@@ -25,7 +25,9 @@ use crate::pty::{OFFER_NEEDLE, Terminal};
 use crate::run::PROBE;
 use crate::run::{Proc, System};
 
-/// Signals from a refresh wait: each controlled snapshot and the final result.
+/// Debt: keep this benchmark-local test driver below 100 lines; upgrade when
+/// keeper test helpers move into shared test support without crossing the
+/// ruling's fence.
 enum RefreshEvent {
     Read,
     Done(Result<(), String>),
@@ -118,8 +120,7 @@ fn an_absent_models_dev_thread_skips_the_clock_wait() {
 
 #[test]
 fn a_present_models_dev_thread_waits_until_the_snapshot_is_absent() {
-    // The second snapshot follows the completed wait, as required by
-    // `docs/testing.md`, "Waits and timeouts".
+    // The next snapshot follows the wait completed under the injected clock.
     let calls = std::sync::atomic::AtomicUsize::new(0);
     let (clock, worker, rx) = refresh_wait(Duration::from_secs(30), move || {
         let call = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -143,7 +144,7 @@ fn a_present_models_dev_thread_waits_until_the_snapshot_is_absent() {
 
 #[test]
 fn a_refresh_still_present_at_the_deadline_fails_the_wait() {
-    // Snapshot/wait order follows `docs/testing.md`, "Waits and timeouts".
+    // Snapshot/wait order is controlled by the injected clock.
     let (clock, worker, rx) = refresh_wait(2 * PROBE, || Ok(false));
     for offset in [Duration::ZERO, PROBE] {
         assert!(matches!(
