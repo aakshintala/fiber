@@ -683,6 +683,22 @@ pub(crate) struct Run {
     pub(crate) stderr: String,
 }
 
+/// Parses process output into a strict JSON-lines run, skipping status lines.
+#[track_caller]
+pub(crate) fn run_from(output: std::process::Output) -> Run {
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines = stdout
+        .lines()
+        .filter(|line| !is_status(line))
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    Run {
+        code: output.status.code(),
+        lines,
+        stderr: String::from_utf8(output.stderr).unwrap(),
+    }
+}
+
 impl Run {
     pub(crate) fn session_id(&self) -> &str {
         self.lines[0]["session_id"].as_str().unwrap()

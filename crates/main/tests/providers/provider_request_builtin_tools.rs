@@ -14,13 +14,13 @@
 use crate::support;
 
 use std::fs;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
-use support::{KillGroup, Run, Setup, is_status, spawn_watched};
+use support::{KillGroup, Run, Setup, run_from, spawn_watched};
 
 impl Setup {
     /// Installs a provider `fake` with a Gemini `gem` and a plain `plain`
@@ -103,21 +103,6 @@ impl Setup {
 fn write_file(file: &std::path::Path, value: &Value) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, value.to_string()).unwrap();
-}
-
-/// One finished run: its exit code and stdout's lines, parsed.
-fn run_from(output: Output) -> Run {
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let lines = stdout
-        .lines()
-        .filter(|l| !is_status(l))
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    Run {
-        code: output.status.code(),
-        lines,
-        stderr: String::from_utf8(output.stderr).unwrap(),
-    }
 }
 
 /// An `openai-completions` stream answering `Hello.` in two fragments.
