@@ -5,7 +5,7 @@
 //! reports `AlreadyExists` with the destination intact.
 
 use std::fs;
-use std::io;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -95,6 +95,40 @@ fn real_rename_failure_keeps_the_old_file() {
         "a failed rename carries no Unsynced marker: {error}"
     );
     assert_eq!(fs::read(&file).unwrap(), b"old");
+    assert!(temps(dir.path()).is_empty());
+}
+
+#[test]
+fn streaming_write_validates_before_replacing_and_cleans_up_on_error() {
+    let dir = fakes::TempDir::new("fiber-support-atomic-stream-error");
+    let file = dir.path().join("value");
+    fs::write(&file, b"old").unwrap();
+    let error = write_atomic_stream(&file, 0o600, |out| {
+        out.write_all(b"partial")?;
+        Err(io::Error::new(io::ErrorKind::InvalidData, "invalid stream"))
+    })
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(fs::read(&file).unwrap(), b"old");
+    assert!(temps(dir.path()).is_empty());
+}
+
+#[test]
+fn streaming_write_syncs_and_replaces_after_validation() {
+    let dir = fakes::TempDir::new("fiber-support-atomic-stream-success");
+    let file = dir.path().join("value");
+    fs::write(&file, b"old").unwrap();
+    write_atomic_stream(&file, 0o600, |out| {
+        out.write_all(b"new")?;
+        out.flush()?;
+        out.seek(SeekFrom::Start(0))?;
+        let mut bytes = Vec::new();
+        out.read_to_end(&mut bytes)?;
+        assert_eq!(bytes, b"new");
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(fs::read(&file).unwrap(), b"new");
     assert!(temps(dir.path()).is_empty());
 }
 

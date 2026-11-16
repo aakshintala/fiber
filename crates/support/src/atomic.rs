@@ -177,6 +177,16 @@ fn fail_nth_stage(call: usize, stage: Stage) -> bool {
 /// syncs it, and renames it over `file`, so a reader sees the old file or the
 /// new one, never half.
 pub fn write_atomic(file: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
+    write_atomic_stream(file, mode, |out| out.write_all(bytes))
+}
+
+/// Streams and validates a whole-file write before syncing and renaming it.
+/// The closure owns validation so no unvalidated content can replace `file`.
+pub fn write_atomic_stream(
+    file: &Path,
+    mode: u32,
+    write_and_validate: impl FnOnce(&mut File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     #[cfg(debug_assertions)]
     let call = call_count();
     #[cfg(debug_assertions)]
@@ -200,6 +210,7 @@ pub fn write_atomic(file: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()>
             let candidate = PathBuf::from(tmp_name);
             match OpenOptions::new()
                 .create_new(true)
+                .read(true)
                 .write(true)
                 .mode(mode)
                 .open(&candidate)
@@ -216,8 +227,7 @@ pub fn write_atomic(file: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()>
     };
     // Syncing the temporary file makes its bytes survive a crash; syncing
     // the directory afterwards makes the rename itself survive one.
-    let written = out
-        .write_all(bytes)
+    let written = write_and_validate(&mut out)
         .and_then(|()| out.sync_all())
         .and_then(|()| {
             #[cfg(debug_assertions)]
