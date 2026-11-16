@@ -306,10 +306,14 @@ pub fn spawn_if_due(
 ) -> Option<JoinHandle<()>> {
     if should_fetch(&home, enabled, max_age, now) {
         Some(
+            #[allow(
+                clippy::expect_used,
+                reason = "preserve the pre-PR contract: spawn failure aborts exactly as std::thread::spawn did"
+            )]
             std::thread::Builder::new()
                 .name("models.dev".to_owned())
                 .spawn(move || refresh_if_due(&home, enabled, max_age, now, &fetcher))
-                .expect("spawn models.dev thread"),
+                .expect("spawn models.dev refresh thread"),
         )
     } else {
         None

@@ -25,6 +25,8 @@ use crate::pty::{OFFER_NEEDLE, Terminal};
 use crate::run::PROBE;
 use crate::run::{Proc, System};
 
+// debt: keep this refresh-specific event/clock harness local; upgrade when
+// keeper_tests.rs exposes shared support without workload-specific imports.
 /// Signals from a refresh wait: each controlled snapshot, each sleep after
 /// the deadline check, and the final result.
 enum RefreshEvent {
@@ -49,8 +51,8 @@ impl Clock for RefreshClock {
     }
 
     fn sleep(&self, duration: Duration) {
-        self.inner.sleep(duration);
         self.tx.send(RefreshEvent::Slept).unwrap_or(());
+        self.inner.sleep(duration);
     }
 
     fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
