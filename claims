@@ -218,7 +218,6 @@ crates/main/tests/providers/login.rs	fiber-4755	plan	2026-11-15T22:23:23Z	Amoghs
 crates/main/tests/providers/placeholders.rs	fiber-4755	plan	2026-11-15T22:23:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/credential_signals.rs	fiber-4755	plan	2026-11-15T22:23:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/delegation/ask.rs	fiber-4755	plan	2026-11-15T22:23:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/src/keeper_child_tests.rs	fiber-4646	plan	2026-11-15T22:42:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/call_view_tests.rs:12-13	fiber-4675	plan	2026-11-16T02:06:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-enter	
 crates/tui/src/app/call_view_tests.rs:1035-1036	fiber-4675	plan	2026-11-16T02:06:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-enter	
 crates/tui/src/app/results_tests.rs:349-350	fiber-4675	plan	2026-11-16T02:06:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4675-space-enter	
@@ -326,3 +325,12 @@ docs/configuration.md	fiber-4948	plan	2026-11-16T02:42:25Z	roundhouse-7010-plus-
 docs/performance.md	fiber-4948	plan	2026-11-16T02:42:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/bench/examples/bench/main.rs	fiber-4948	plan	2026-11-16T02:42:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/doors/src/session_tests.rs	fiber-4042	plan	2026-11-16T02:47:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/keeper_child_tests.rs:683-684	fiber-4646	plan	2026-11-16T03:38:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-child-fifo	
+crates/main/src/keeper_child_tests.rs:704-715	fiber-4646	plan	2026-11-16T03:38:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-child-fifo	
+crates/main/src/keeper_child_tests.rs:719-722	fiber-4646	plan	2026-11-16T03:38:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-child-fifo	
+crates/main/src/keeper_child_tests.rs:730-730	fiber-4646	plan	2026-11-16T03:38:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-child-fifo	
+crates/main/src/keeper_child_tests.rs:731-732	fiber-4646	plan	2026-11-16T03:38:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-child-fifo	
+crates/main/src/keeper_child_tests.rs:733-733	fiber-4646	plan	2026-11-16T03:38:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-child-fifo	
+crates/main/src/keeper_child_tests.rs:744-747	fiber-4646	plan	2026-11-16T03:38:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-child-fifo	
+crates/main/src/keeper_child_tests.rs:750-755	fiber-4646	plan	2026-11-16T03:38:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-child-fifo	
+crates/main/src/keeper_child_tests.rs:758-759	fiber-4646	plan	2026-11-16T03:38:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-child-fifo	
