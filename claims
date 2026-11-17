@@ -242,3 +242,5 @@ crates/main/src/keeper_child_tests.rs:741-747	fiber-4646	plan	2026-11-16T04:12:4
 crates/main/src/keeper_child_tests.rs:750-755	fiber-4646	plan	2026-11-16T04:12:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-child-fifo	
 crates/main/src/keeper_child_tests.rs:758-759	fiber-4646	plan	2026-11-16T04:12:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-child-fifo	
 crates/main/src/keeper_child.rs	fiber-4646	plan	2026-11-16T17:48:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/support/src/deadline.rs	fiber-4646	plan	2026-11-17T03:25:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/support/src/deadline_tests.rs	fiber-4646	plan	2026-11-17T03:25:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
