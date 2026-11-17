@@ -175,12 +175,66 @@ impl Deadline {
         match self.recv(rx) {
             Ok(value) => value,
             Err(RecvTimeoutError::Timeout) => {
+                eprintln!("{}", thread_backtrace());
                 panic!("waited until the deadline for {what}")
             }
             Err(RecvTimeoutError::Disconnected) => {
                 panic!("the sender for {what} hung up before sending")
             }
         }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn require_success(output: std::process::Output) -> std::io::Result<std::process::Output> {
+    if output.status.success() {
+        Ok(output)
+    } else {
+        Err(std::io::Error::other("backtrace sampler failed"))
+    }
+}
+
+/// Best-effort diagnostic for a stalled test process. The sampler can itself
+/// hang, so only its bounded result is observed by the failing test thread.
+fn thread_backtrace() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let _sampler = std::thread::Builder::new()
+            .name("deadline-backtrace".to_owned())
+            .spawn(move || {
+                let pid = std::process::id().to_string();
+                let output = std::process::Command::new("sample")
+                    .args([pid.as_str(), "1"])
+                    .output()
+                    .and_then(require_success)
+                    .or_else(|_| {
+                        std::process::Command::new("lldb")
+                            .args(["-p", pid.as_str(), "--batch", "-o", "thread backtrace all"])
+                            .output()
+                            .and_then(require_success)
+                    });
+                let text: String = output
+                    .map(|output| {
+                        String::from_utf8_lossy(&output.stdout)
+                            .chars()
+                            .take(32_768)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let _sent = tx.send(text);
+            });
+        return Deadline::after(Duration::from_secs(10))
+            .recv(&rx)
+            .ok()
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| {
+                "thread backtrace unavailable (sampler timed out or failed)".into()
+            });
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "thread backtrace unavailable (sampler is only configured on macOS)".into()
     }
 }
 
