@@ -688,8 +688,12 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
     let good_out = home.path().join("good.out");
     std::fs::write(&good_out, b"").expect("good output");
     let (held, held_rx) = ready_signal();
+    let (adopt_hold, adopt_gate) = barrier();
+    let (hold_entered, hold_entered_rx) = ready_signal();
     let hooks = super::Hooks {
         held: Some(held),
+        adopt_hold: Some(adopt_hold),
+        hold_entered: Some(hold_entered),
         ..super::Hooks::default()
     };
     let clock = fakes::clock::FakeClock::new();
@@ -701,6 +705,8 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
         None,
     );
     let mut control = keeper.writer.try_clone().expect("control");
+    let mut reapers = Vec::new();
+    adopt_gate.armed.store(true, Ordering::Release);
     for (id, shell, output) in [
         (
             "bad",
@@ -729,6 +735,10 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
         };
         serde_json::to_writer(&mut control, &ToKeeper::Start(spec)).expect("start child");
         control.write_all(b"\n").expect("start newline");
+        match Deadline::after(Duration::from_secs(10)).recv_or_fail(&keeper.read, "child start") {
+            FromKeeper::Started { pgid, .. } => reapers.push(Reaper(pgid)),
+            other => panic!("expected child start, got {}", describe(&Some(other))),
+        }
         serde_json::to_writer(
             &mut control,
             &ToKeeper::Adopt {
@@ -742,10 +752,17 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
         .expect("adopt child");
         control.write_all(b"\n").expect("adopt newline");
     }
-    // Both children block on the gate with silent holds, so the takeover
-    // opens the bad job's directory output (recording its failure) and
-    // the good job's file; the release lets both stream and exit.
+    // The control reader acknowledges each Adopt. Release the first before
+    // crashing on the second, which remains parked until drive enters hold_output.
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&adopt_gate.arrived, "first Adopt to pause");
+    adopt_gate.go.send(()).expect("release first Adopt");
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&adopt_gate.arrived, "second Adopt to pause");
     crash(&mut keeper);
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&hold_entered_rx, "drive to enter hold_output");
+    adopt_gate.go.send(()).expect("release final Adopt");
     Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "keeper files to be active");
     std::fs::OpenOptions::new()
         .write(true)
@@ -2846,6 +2863,8 @@ fn lock_race(old_wins: bool) {
     let deadline = || Deadline::after(Duration::from_secs(10));
     let (old_held, old_held_rx) = ready_signal();
     let (old_before, old_gate) = barrier();
+    let (old_adopt_hold, _old_adopt_gate) = barrier();
+    let (old_hold_entered, _old_hold_entered_rx) = ready_signal();
     let (old_waiter_tx, old_waiter_rx) = mpsc::channel();
     let (mut old, _) = serve_keeper_with(
         "keeper-lock-race",
@@ -2853,6 +2872,8 @@ fn lock_race(old_wins: bool) {
         clock.clone(),
         super::Hooks {
             held: Some(old_held),
+            adopt_hold: Some(old_adopt_hold),
+            hold_entered: Some(old_hold_entered),
             before_open: Some(Box::new(move || {
                 let _sent = old_waiter_tx.send(std::thread::current().id());
                 old_before();
@@ -2875,6 +2896,8 @@ fn lock_race(old_wins: bool) {
     let session = log::Log::open(&old.sessions, id.clone(), clock.clone()).expect("session lock");
     let (fresh_held, fresh_held_rx) = ready_signal();
     let (fresh_before, fresh_gate) = barrier();
+    let (fresh_adopt_hold, fresh_adopt_gate) = barrier();
+    let (fresh_hold_entered, fresh_hold_entered_rx) = ready_signal();
     let (fresh_waiter_tx, fresh_waiter_rx) = mpsc::channel();
     let (mut fresh, _) = serve_keeper_with(
         "keeper-lock-race",
@@ -2882,6 +2905,8 @@ fn lock_race(old_wins: bool) {
         clock.clone(),
         super::Hooks {
             held: Some(fresh_held),
+            adopt_hold: Some(fresh_adopt_hold),
+            hold_entered: Some(fresh_hold_entered),
             before_open: Some(Box::new(move || {
                 let _sent = fresh_waiter_tx.send(std::thread::current().id());
                 fresh_before();
@@ -2892,12 +2917,17 @@ fn lock_race(old_wins: bool) {
     );
     let fresh_pgid = start_shell(&fresh, "new", "sleep 60");
     let _fresh_reaper = Reaper(fresh_pgid);
+    fresh_adopt_gate.armed.store(true, Ordering::Release);
     adopt_call(&fresh, "new", "j_new");
     old_gate.armed.store(true, Ordering::Release);
     fresh_gate.armed.store(true, Ordering::Release);
-    // The session dies: both keepers see their connection end.
+    // The session dies: both keepers see their connection end. Hold the fresh
+    // reader at its single Adopt until the drive thread reaches hold_output.
     hang_up(peer);
+    deadline().recv_or_fail(&fresh_adopt_gate.arrived, "the fresh Adopt to pause");
     crash(&mut fresh);
+    deadline().recv_or_fail(&fresh_hold_entered_rx, "fresh drive to enter hold_output");
+    fresh_adopt_gate.go.send(()).expect("release fresh Adopt");
     deadline().recv_or_fail(&old_gate.arrived, "the old keeper to reach the lock");
     deadline().recv_or_fail(&fresh_gate.arrived, "the fresh keeper to reach the lock");
     drop(session);

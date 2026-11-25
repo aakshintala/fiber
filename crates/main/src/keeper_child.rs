@@ -184,6 +184,10 @@ struct Hooks {
     /// Runs just before a recovery opens the log, so a test decides which
     /// of two recoveries reaches the lock first (the lock-loss race).
     before_open: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Pauses the control reader before it takes any guard for an Adopt.
+    adopt_hold: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Notifies that the crash path entered `hold_output`, before its locks.
+    hold_entered: Option<Box<dyn Fn() + Send + Sync>>,
     /// Injects an accept error, when set, to test the acceptor's backoff.
     accept_error: Option<Box<dyn Fn() -> Option<io::ErrorKind> + Send + Sync>>,
     /// Runs once a recovery holds the log and accepts candidates.
@@ -864,6 +868,10 @@ impl Runtime {
     /// Output of a job whose session is gone waits in memory until the log
     /// is held and its files can take it.
     fn hold_output(&self) {
+        #[cfg(test)]
+        if let Some(entered) = &self.hooks.hold_entered {
+            entered();
+        }
         for process in lock(&self.processes).values() {
             let mut state = lock(&process.state);
             if matches!(state.sink, Sink::Control) {
@@ -1192,6 +1200,10 @@ impl Runtime {
                     errors_path,
                     lines,
                 } => {
+                    #[cfg(test)]
+                    if let Some(hold) = &self.hooks.adopt_hold {
+                        hold();
+                    }
                     let _log = lock(&self.log);
                     if lock(&self.supervisor).adopt(&id, job_id.clone())
                         && let Some(process) = lock(&self.processes).get(&id)
