@@ -245,3 +245,4 @@ crates/main/src/keeper_child.rs	fiber-4646	plan	2026-11-16T17:48:37Z	Amoghs-MacB
 crates/support/src/deadline.rs	fiber-4646	plan	2026-11-17T03:25:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/support/src/deadline_tests.rs	fiber-4646	plan	2026-11-17T03:25:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 run/fiber-4646-fence-grant-1.md	fiber-4646	grant	2026-11-17T08:13:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-takeover-stall	
+crates/main/src/keeper_child_tests.rs,crates/support/src/deadline.rs	fiber-4646	grant	2026-11-25T22:59:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4646-keeper-takeover-stall	
