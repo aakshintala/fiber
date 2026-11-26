@@ -677,7 +677,7 @@ fn fail_handle_discards_only_the_failed_errors_file() {
 
 #[test]
 fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
-    use std::os::unix::fs::OpenOptionsExt as _;
+    use base64::Engine as _;
 
     // One job's unwritable output file never stops the keeper ending the
     // other job: each process stores its own first path-bearing failure.
@@ -709,13 +709,16 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
         None,
     );
     let mut control = keeper.writer.try_clone().expect("control");
-    let mut reapers = Vec::new();
     let mut watchdogs = Vec::new();
     for (id, shell, fifo) in [
-        ("bad", "read gate; echo bad-out; exit 3", bad_fifo.clone()),
+        (
+            "bad",
+            "read gate <&3; echo bad-out; exit 3",
+            bad_fifo.clone(),
+        ),
         (
             "good",
-            "read gate; echo good-out; exit 0",
+            "read gate <&3; echo good-out; exit 0",
             good_fifo.clone(),
         ),
     ] {
@@ -724,7 +727,10 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
             program: "/bin/sh".into(),
             args: vec![
                 "-c".into(),
-                format!("{{ {shell}; }} < '{}'", fifo.display()),
+                format!(
+                    "exec 3<> '{}'; printf 'fifo-ready\\n'; {shell}",
+                    fifo.display()
+                ),
             ],
             cwd: std::env::temp_dir(),
             env: Vec::new(),
@@ -736,12 +742,26 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
         serde_json::to_writer(&mut control, &ToKeeper::Start(spec)).expect("start child");
         control.write_all(b"\n").expect("start newline");
         let deadline = Deadline::after(Duration::from_secs(10));
-        loop {
-            match deadline.recv_or_fail(&keeper.read, "child start") {
-                FromKeeper::Started { id: started, pgid } if started == id => {
+        let mut started = false;
+        let mut fifo_ready = false;
+        while !started || !fifo_ready {
+            match deadline.recv_or_fail(&keeper.read, "child start and FIFO readiness") {
+                FromKeeper::Started {
+                    id: started_id,
+                    pgid,
+                } if started_id == id => {
                     watchdogs.push(fakes::Watchdog::group(pgid));
-                    reapers.push(Reaper(pgid));
-                    break;
+                    started = true;
+                }
+                FromKeeper::Output {
+                    id: output_id,
+                    bytes,
+                    ..
+                } if output_id == id => {
+                    let decoded = base64::engine::general_purpose::STANDARD
+                        .decode(bytes)
+                        .expect("FIFO readiness output is base64");
+                    fifo_ready |= String::from_utf8_lossy(&decoded).contains("fifo-ready");
                 }
                 FromKeeper::Started { .. }
                 | FromKeeper::Failed { .. }
@@ -753,38 +773,15 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
             }
         }
     }
-    let mut input_writers = Vec::new();
-    for fifo in [bad_fifo, good_fifo] {
-        let writer = std::sync::Arc::new(std::sync::Mutex::new(None));
-        let probe = std::sync::Arc::clone(&writer);
-        fakes::wait_until(
-            "each child to open its input FIFO",
-            Deadline::after(Duration::from_secs(10)),
-            move || {
-                let mut slot = super::lock(&probe);
-                if slot.is_some() {
-                    return true;
-                }
-                match std::fs::OpenOptions::new()
-                    .write(true)
-                    .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().try_into().unwrap())
-                    .open(&fifo)
-                {
-                    Ok(file) => {
-                        *slot = Some(file);
-                        true
-                    }
-                    Err(error)
-                        if error.raw_os_error() == Some(rustix::io::Errno::NXIO.raw_os_error()) =>
-                    {
-                        false
-                    }
-                    Err(error) => panic!("open child input FIFO: {error}"),
-                }
-            },
-        );
-        input_writers.push(super::lock(&writer).take().expect("input FIFO writer"));
-    }
+    let mut input_writers = [bad_fifo, good_fifo]
+        .into_iter()
+        .map(|fifo| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&fifo)
+                .expect("child input FIFO is open after its readiness frame")
+        })
+        .collect::<Vec<_>>();
     adopt_gate.armed.store(true, Ordering::Release);
     for (id, output) in [("bad", bad_dir.clone()), ("good", good_out.clone())] {
         serde_json::to_writer(
@@ -2908,8 +2905,6 @@ fn lock_race(old_wins: bool) {
     let deadline = || Deadline::after(Duration::from_secs(10));
     let (old_held, old_held_rx) = ready_signal();
     let (old_before, old_gate) = barrier();
-    let (old_adopt_hold, _old_adopt_gate) = barrier();
-    let (old_hold_entered, _old_hold_entered_rx) = ready_signal();
     let (old_waiter_tx, old_waiter_rx) = mpsc::channel();
     let (mut old, _) = serve_keeper_with(
         "keeper-lock-race",
@@ -2917,8 +2912,6 @@ fn lock_race(old_wins: bool) {
         clock.clone(),
         super::Hooks {
             held: Some(old_held),
-            adopt_hold: Some(old_adopt_hold),
-            hold_entered: Some(old_hold_entered),
             before_open: Some(Box::new(move || {
                 let _sent = old_waiter_tx.send(std::thread::current().id());
                 old_before();

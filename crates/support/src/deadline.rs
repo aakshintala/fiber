@@ -185,20 +185,6 @@ impl Deadline {
     }
 }
 
-// Exempt: macOS-only sampler helper; mutants run on Linux, where it is not
-// compiled (`docs/testing/mutants.md`, "Proving a test bites"). The macOS
-// test job still runs it; its output stays best-effort and no test pins
-// sampled output.
-#[cfg_attr(false, mutants::skip)]
-#[cfg(target_os = "macos")]
-fn require_success(output: std::process::Output) -> std::io::Result<std::process::Output> {
-    if output.status.success() {
-        Ok(output)
-    } else {
-        Err(std::io::Error::other("backtrace sampler failed"))
-    }
-}
-
 /// Best-effort diagnostic for a stalled test process. The sampler can itself
 /// hang, so only its bounded result is observed by the failing test thread.
 fn thread_backtrace() -> String {
@@ -219,36 +205,97 @@ fn thread_backtrace() -> String {
 #[cfg_attr(false, mutants::skip)]
 #[cfg(target_os = "macos")]
 fn sample_thread_backtrace() -> String {
+    use std::sync::{Arc, Mutex};
+
+    struct SamplerState {
+        cancelled: bool,
+        group: Option<u32>,
+    }
+
+    fn run(
+        state: &Arc<Mutex<SamplerState>>,
+        program: &str,
+        args: &[&str],
+    ) -> std::io::Result<std::process::Output> {
+        use std::os::unix::process::CommandExt as _;
+
+        let mut owner = crate::lock(state);
+        if owner.cancelled {
+            return Err(std::io::Error::other("backtrace sampler cancelled"));
+        }
+        let mut command = std::process::Command::new(program);
+        command.args(args).process_group(0);
+        let child = command.spawn()?;
+        owner.group = Some(child.id());
+        drop(owner);
+
+        let output = child.wait_with_output();
+        crate::lock(state).group = None;
+        output.and_then(|output| {
+            if output.status.success() {
+                Ok(output)
+            } else {
+                Err(std::io::Error::other("backtrace sampler failed"))
+            }
+        })
+    }
+
+    fn stop(state: &Arc<Mutex<SamplerState>>) {
+        let mut owner = crate::lock(state);
+        owner.cancelled = true;
+        if let Some(group) = owner.group {
+            match crate::group::signal(group, rustix::process::Signal::KILL) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    let state = Arc::new(Mutex::new(SamplerState {
+        cancelled: false,
+        group: None,
+    }));
+    let worker_state = Arc::clone(&state);
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    let _sampler = std::thread::Builder::new()
+    let sampler = match std::thread::Builder::new()
         .name("deadline-backtrace".to_owned())
         .spawn(move || {
             let pid = std::process::id().to_string();
-            let output = std::process::Command::new("sample")
-                .args([pid.as_str(), "1"])
-                .output()
-                .and_then(require_success)
-                .or_else(|_| {
-                    std::process::Command::new("lldb")
-                        .args(["-p", pid.as_str(), "--batch", "-o", "thread backtrace all"])
-                        .output()
-                        .and_then(require_success)
-                });
-            let text: String = output
+            let output = run(&worker_state, "sample", &[pid.as_str(), "1"]).or_else(|_| {
+                run(
+                    &worker_state,
+                    "lldb",
+                    &["-p", pid.as_str(), "--batch", "-o", "thread backtrace all"],
+                )
+            });
+            let _sent = tx.send(output);
+        }) {
+        Ok(sampler) => sampler,
+        Err(error) => {
+            return format!("thread backtrace unavailable (sampler spawn failed: {error})");
+        }
+    };
+    match Deadline::after(Duration::from_secs(10)).recv(&rx) {
+        Ok(output) => {
+            let _joined = sampler.join();
+            output
+                .ok()
                 .map(|output| {
                     String::from_utf8_lossy(&output.stdout)
                         .chars()
                         .take(32_768)
                         .collect()
                 })
-                .unwrap_or_default();
-            let _sent = tx.send(text);
-        });
-    Deadline::after(Duration::from_secs(10))
-        .recv(&rx)
-        .ok()
-        .filter(|text| !text.is_empty())
-        .unwrap_or_else(|| "thread backtrace unavailable (sampler timed out or failed)".into())
+                .filter(|text: &String| !text.is_empty())
+                .unwrap_or_else(|| {
+                    "thread backtrace unavailable (sampler timed out or failed)".into()
+                })
+        }
+        Err(_) => {
+            stop(&state);
+            let _joined = sampler.join();
+            "thread backtrace unavailable (sampler timed out or failed)".into()
+        }
+    }
 }
 
 #[cfg(test)]
