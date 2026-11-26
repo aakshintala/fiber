@@ -213,6 +213,8 @@ jobs:
         with:
           tool: cargo-about
       - name: Build the release binary
+        env:
+          FIBER_RELEASE_BUILD: "1"
         run: cargo build --locked --release --target "${{ matrix.target }}" --bin fiber
       - name: Generate THIRD-PARTY-NOTICES
         run: |
@@ -335,6 +337,8 @@ jobs:
           ' Cargo.lock)
           [ "$lock_version" = "$VERSION" ] || { printf 'release: %s\n' "Cargo.lock holds $lock_version for package main, not $VERSION; refusing to build 0.0.0." >&2; exit 1; }
       - name: Build the release binary
+        env:
+          FIBER_RELEASE_BUILD: "1"
         run: cargo build --locked --release --target "${{ matrix.target }}" --bin fiber
       - name: Generate THIRD-PARTY-NOTICES
         run: |

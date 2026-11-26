@@ -2,7 +2,7 @@
 //! session id or any prefix of one that is unique among the project's
 //! sessions.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use contract::SessionId;
 use contract::events::Event;
@@ -43,6 +43,64 @@ pub fn most_recent(sessions: &Path, in_project: &dyn Fn(&str) -> bool) -> Option
         })
         .max()
         .map(|(_, id)| id)
+}
+
+/// The most recent accepted session across a fixed set of derived session
+/// directories. No other project directory is enumerated.
+pub fn most_recent_in(
+    sessions: &[PathBuf],
+    in_project: &dyn Fn(&str) -> bool,
+) -> Option<SessionId> {
+    sessions
+        .iter()
+        .filter_map(|sessions| {
+            let id = most_recent(sessions, in_project)?;
+            let dir = crate::SessionDir::new(sessions, &id);
+            Some((
+                crate::last_ts(dir.path()).or_else(|| opening_ts(dir.path()))?,
+                id,
+            ))
+        })
+        .max()
+        .map(|(_, id)| id)
+}
+
+/// Resolves a selector across derived session directories. Exact ids win;
+/// otherwise all accepted prefixes contribute to one ambiguity decision.
+pub fn resolve_in(
+    sessions: &[PathBuf],
+    selector: &str,
+    in_project: &dyn Fn(&str) -> bool,
+) -> Result<SessionId, Error> {
+    if selector.is_empty() {
+        return Err(Error::NotFound(
+            sessions.first().cloned().unwrap_or_default(),
+        ));
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for directory in sessions {
+        match resolve(directory, selector, in_project) {
+            Ok(id) => {
+                names.insert(id.0);
+            }
+            Err(Error::Ambiguous { matches, .. }) => names.extend(matches),
+            Err(_) => {}
+        }
+    }
+    if names.contains(selector) {
+        return Ok(SessionId(selector.to_owned()));
+    }
+    let names: Vec<String> = names.into_iter().collect();
+    match names.as_slice() {
+        [id] => Ok(SessionId(id.clone())),
+        [] => Err(Error::NotFound(
+            sessions.first().cloned().unwrap_or_default(),
+        )),
+        _ => Err(Error::Ambiguous {
+            selector: selector.to_owned(),
+            matches: names,
+        }),
+    }
 }
 
 /// Resolves `selector` to the session it names in `sessions`: a name that
@@ -191,6 +249,52 @@ mod tests {
             "ts": ts, "schema_version": 1, "payload": {},
         });
         format!("{line}\n")
+    }
+
+    #[test]
+    fn candidate_resolution_combines_matches_and_latest_activity() {
+        let home = fakes::TempDir::new("log-resolve-candidates");
+        let candidates = crate::candidate_sessions_dirs(home.path(), Path::new("/w"));
+        for sessions in &candidates {
+            std::fs::create_dir_all(sessions).unwrap();
+        }
+        let write = |sessions: &Path, id: &str, last_ts: u64| {
+            let dir = sessions.join(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join(EVENTS),
+                format!("{}{}", started_line(1), other_line(last_ts)),
+            )
+            .unwrap();
+        };
+        write(&candidates[0], "s_legacy", 10);
+        write(&candidates[1], "s_hashed", 20);
+        let predicate = |_: &str| true;
+
+        assert!(matches!(
+            resolve_in(&candidates, "s_", &predicate),
+            Err(Error::Ambiguous { .. })
+        ));
+        assert_eq!(
+            most_recent_in(&candidates, &predicate),
+            Some(SessionId("s_hashed".into()))
+        );
+        assert_eq!(
+            resolve_in(&candidates, "s_legacy", &predicate).unwrap(),
+            SessionId("s_legacy".into())
+        );
+        assert_eq!(
+            resolve_in(&candidates[..1], "s_legacy", &predicate).unwrap(),
+            SessionId("s_legacy".into())
+        );
+        assert_eq!(
+            resolve_in(&candidates[..1], "s_", &predicate).unwrap(),
+            SessionId("s_legacy".into())
+        );
+        assert!(matches!(
+            resolve_in(&[], "s_missing", &predicate),
+            Err(Error::NotFound(_))
+        ));
     }
 
     #[test]

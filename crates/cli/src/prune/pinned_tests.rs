@@ -840,15 +840,15 @@ fn shared_copies_are_judged_by_every_owner_outside_a_repository() {
     assert!(copy_dir(&home, &hash).symlink_metadata().is_err());
 }
 
-/// Two repositories sharing one project key, with the second's hook
+/// Two repositories with colliding legacy slugs, with the second's hook
 /// approved: the first's hook differs, the second's matches.
 fn slug_setup(prefix: &str) -> (Setup, PathBuf, PathBuf, String, Arc<FakeClock>, String) {
     let setup = Setup::new(prefix);
     let home = setup.home();
     let first = setup.repo("x/a-b", "a\n");
     let second = setup.repo("x/a/b", "b\n");
-    let key = key_of(&first);
-    assert_eq!(key, key_of(&second));
+    let key = key_of(&second);
+    assert_ne!(key, key_of(&first));
     let clock = FakeClock::new();
     let kept = approve(&home, &key, &second, clock.as_ref());
     (setup, first, second, key, clock, kept)
@@ -858,9 +858,10 @@ fn slug_setup(prefix: &str) -> (Setup, PathBuf, PathBuf, String, Arc<FakeClock>,
 fn two_identities_under_one_slug_keep_a_copy_matched_by_either() {
     let (setup, first, second, key, clock, kept) = slug_setup("pinned-slug-keep");
     let home = setup.home();
+    let first_key = key_of(&first);
     session(
         &home,
-        &key,
+        &first_key,
         "s_aaaaaaaaaaaaaaaa",
         first.to_str().unwrap(),
         None,
@@ -881,9 +882,10 @@ fn two_identities_under_one_slug_keep_a_copy_matched_by_either() {
 fn two_identities_under_one_slug_remove_a_copy_matched_by_neither() {
     let (setup, first, second, key, clock, kept) = slug_setup("pinned-slug-remove");
     let home = setup.home();
+    let first_key = key_of(&first);
     session(
         &home,
-        &key,
+        &first_key,
         "s_aaaaaaaaaaaaaaaa",
         first.to_str().unwrap(),
         None,
@@ -909,9 +911,10 @@ fn two_identities_under_one_slug_remove_a_copy_matched_by_neither() {
 fn two_identities_under_one_slug_survive_a_deleted_identity() {
     let (setup, first, second, key, clock, kept) = slug_setup("pinned-slug-deleted");
     let home = setup.home();
+    let first_key = key_of(&first);
     session(
         &home,
-        &key,
+        &first_key,
         "s_aaaaaaaaaaaaaaaa",
         first.to_str().unwrap(),
         None,
@@ -929,22 +932,23 @@ fn two_identities_under_one_slug_survive_a_deleted_identity() {
     assert!(copy_dir(&home, &kept).is_dir());
 }
 
-/// Two repositories sharing one project key, with sessions recording
-/// their common directories and workspaces pointing elsewhere.
+/// Two repositories with colliding legacy slugs, with sessions recording
+/// their respective project keys and workspaces pointing elsewhere.
 fn recorded_setup(prefix: &str) -> (Setup, PathBuf, PathBuf, String, Arc<FakeClock>, String) {
     let setup = Setup::new(prefix);
     let home = setup.home();
     let first = setup.repo("r/a-b", "a\n");
     let second = setup.repo("r/a/b", "b\n");
-    let key = key_of(&first);
-    assert_eq!(key, key_of(&second));
+    let first_key = key_of(&first);
+    let key = key_of(&second);
+    assert_ne!(first_key, key);
     let clock = FakeClock::new();
     let kept = approve(&home, &key, &second, clock.as_ref());
     let elsewhere = setup.workspace();
     let common = |repo: &Path| worktree::resolve_project(repo).path;
     session(
         &home,
-        &key,
+        &first_key,
         "s_aaaaaaaaaaaaaaaa",
         elsewhere.to_str().unwrap(),
         Some(common(&first).to_str().unwrap()),

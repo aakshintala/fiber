@@ -88,11 +88,25 @@ Every `/` becomes `-`. Git shared directory `/Users/alice/work/fiber/.git`
 becomes `-Users-alice-work-fiber-.git`. Launch directory `/Users/alice/work`
 becomes `-Users-alice-work`.
 
-A slug can collide (`/a-b` and `/a/b` both become `-a-b`). That is harmless:
-the key is only a name for humans. `session_started` records the exact
-workspace, and the worktree's repository when Fiber made one, and lookup
-checks the repository when recorded and the workspace otherwise. The log stays the truth
-([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.md)).
+The persisted key is the readable slug, truncated to 238 bytes on a UTF-8
+boundary, followed by `-` and the first 16 lowercase hexadecimal digits of
+SHA-256 over the identity path's encoded bytes. The full resolved identity
+path is hashed. So `/a-b` and `/a/b`, whose slugs are both `-a-b`, have
+different keys. Fiber lazily migrates the running identity's plain
+`projects/<slug>/` directory to its key without replacing or merging a target;
+a `layout` file at Fiber home records version `2`, and a missing file means
+version 1. Migration leaves a pre-existing mixed legacy directory wholly with
+the first identity that claims it, because its files have no recorded identity.
+Distinct keys keep future project data separate. Session selectors and history
+lookup retain legacy reachability only through derived candidate directories
+and recorded workspace/repository checks; they do not scan other projects.
+Doctor and a startup that fails before its first session write never write
+`layout` or migrate a project; writing layout and migrating happen only at the
+first session write under `projects/`. `session_started` records the exact
+workspace and, when Fiber made one, the worktree's repository. The log stays the truth ([ADR
+0001](adr/0001-session-log-is-the-only-state-of-record.md)). A startup that
+fails before its first session, such as a `config_invalid` or `io_failed`
+error, creates nothing under `projects/`.
 
 ## Sessions and resume
 
@@ -664,7 +678,8 @@ future database is derived from the logs, rebuildable, never the truth.
 ## Concurrent access
 
 Every whole-file write is a temporary file renamed over the old one, so a
-reader sees the old file or the new one, never half. A file that is read,
+reader sees the old file or the new one, never half; it leaves the old file
+and removes its temporary file. A file that is read,
 changed and written back — the config default, standing rules — takes a lock
 file first. Appends (`history.jsonl`, `events.jsonl`) are one line per single
 write. Readers never lock.
@@ -677,10 +692,6 @@ One writer at a time per session, via `session.lock`, is `docs/events.md`.
 
 ## Upgrades and versioning
 
-There is no layout version marker. Coordination files that are created on demand and carry no data, such as a worktree's `.lock` file, do not change the layout, and binaries that do not know one skip it. The first change to this layout adds a
-file `layout` at the top of Fiber home containing `2`; a missing file means
-layout 1. `fiber update` changes only the Fiber binary, `extensions/` and `docs/`;
-it never touches sessions, config, rules, approvals, pinned copies, credentials
-or extension data. It replaces the binary by renaming a new file over it, so a running
+Coordination files that are created on demand and carry no data, such as a worktree's `.lock` file, do not change the layout, and binaries that do not know one skip it. The `layout` file at the top of Fiber home contains `2`; a missing file means layout 1. Each project migrates lazily when that identity starts, even when the marker is already `2`; startup never scans every project. `fiber update` changes only the Fiber binary, `extensions/` and `docs/`; it never touches sessions, config, rules, approvals, pinned copies, credentials or extension data. It replaces the binary by renaming a new file over it, so a running
 session keeps the file it launched from. How the binary is fetched and
 replaced is `docs/releasing.md`.

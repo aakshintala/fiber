@@ -46,8 +46,8 @@ use serde_json::{Map, Value};
 
 pub use cache::{
     cached_model_lists, model_cache_age, model_cache_file, model_cache_lock_file, models_dev_age,
-    models_dev_cache_file, models_dev_lock_file, read_model_cache, read_models_dev,
-    write_model_cache, write_models_dev,
+    models_dev_cache_file, models_dev_lock_file, open_models_dev, read_model_cache,
+    read_models_dev, write_model_cache, write_models_dev,
 };
 pub use contract::Secret;
 pub use contract::provider::{Cost, Tier};
@@ -72,13 +72,13 @@ pub use import::{
     ImportReport, ImportSource, Imported, LeftBehind, import_pending, import_source,
     no_personal_sources, source_home,
 };
-pub use layout::project_servers_dir;
 pub use layout::{
     crashes_dir, docs_dir, extension_data_dir, extensions_dir, global_config_file,
     images_cache_dir, logs_dir, machine_approvals_dir, mcp_cache_dir, pinned_dir,
     project_approvals_dir, project_config_file, project_data_dir, project_protected_paths_dir,
     project_worktrees_dir, projects_dir, repository_config_file, run_dir,
 };
+pub use layout::{ensure_project_layout, project_servers_dir};
 pub use mcp_tokens::McpTokenFiles;
 pub use names::{SHORT_NAMES, dir_name, full_name, short_name};
 pub use prompt_files::{append_prompt, system_prompt};

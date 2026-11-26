@@ -34,7 +34,8 @@ impl Target {
 
 /// Loads the workspace's configuration layers and resolves its selected hub.
 pub fn load_target(home: &Path, workspace: &Path, named: Option<&str>) -> Result<Target, Error> {
-    let project = config::ProjectKey::new(log::project_key(&worktree::project(workspace)))?;
+    let identity = worktree::project(workspace);
+    let project = config::ProjectKey::new(log::project_key(&identity))?;
     let config = config::Config::load(config::Sources {
         home: home.to_path_buf(),
         workspace: workspace.to_path_buf(),

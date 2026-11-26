@@ -170,9 +170,16 @@ fn world(default: bool) -> World {
             git,
         ));
     }
-    let row = json!({"session_id":"s_remote", "ts":1, "project":"remote-project", "workspace":a.workspace().display().to_string(), "name":"remote session", "how":"exited"});
+    let workspace = a.workspace();
+    let project = log::project_key(&worktree::project(&workspace));
+    let row = json!({"session_id":"s_remote", "ts":1, "project":project.clone(), "workspace":workspace.display().to_string(), "name":"remote session", "how":"exited"});
+    let session_dir = a
+        .home()
+        .join("projects")
+        .join(project)
+        .join("sessions/s_remote");
+    fs::create_dir_all(&session_dir).unwrap();
     fs::write(a.home().join("recent.jsonl"), format!("{row}\n")).unwrap();
-    fs::create_dir_all(a.home().join("projects/remote-project/sessions/s_remote")).unwrap();
     // The hub machine already imported: the first-run offer reads the
     // hub's receipts, and these cases cover the picker and resume
     // flows with the offer down, never the offer itself.

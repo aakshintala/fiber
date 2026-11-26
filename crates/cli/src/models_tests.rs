@@ -104,7 +104,7 @@ fn malformed_disabled_provider_data_fails_the_refresh_load() {
             setup.install_lua("enabled", "good", &lua_list("new"));
             setup.install_lua("disabled", "bad", &lua_list("unwanted"));
             let old = json!([{"id":"old", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}]);
-            let clock = std::sync::Arc::new(fakes::clock::SystemClock);
+            let clock = fakes::clock::FakeClock::new();
             for provider in ["good", "bad"] {
                 write_stale_cache(&setup.home(), provider, &old, clock.wall());
             }
@@ -327,17 +327,57 @@ impl Setup {
             ),
         )
         .unwrap();
-        extensions::plan(
+        let clock = fakes::clock::FakeClock::new();
+        let plan = extensions::plan(
             &self.home(),
             &extensions::Request::Path(src),
             "0.0.0",
             &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
+            &*clock,
         )
-        .unwrap()
-        .commit()
-        .unwrap();
+        .unwrap_or_else(|error| {
+            report_extension_lock_holder(&self.home());
+            panic!("install_lua_inner({extension}) plan failed: {error}");
+        });
+        plan.commit().unwrap_or_else(|error| {
+            report_extension_lock_holder(&self.home());
+            panic!("install_lua_inner({extension}) commit failed: {error}")
+        });
     }
+}
+
+// Emit lock diagnostics only on install failure; prefer the lock file's PID,
+// falling back to Linux `lsof` when its contents do not identify the holder.
+#[allow(
+    clippy::print_stderr,
+    reason = "failure-only lock diagnostics identify a future flaky test sighting"
+)]
+fn report_extension_lock_holder(home: &std::path::Path) {
+    let lock = config::extensions_dir(home).join(".lock");
+    let file_pid = fs::read_to_string(&lock).ok().and_then(|contents| {
+        contents
+            .lines()
+            .find_map(|line| line.trim().parse::<u32>().ok())
+    });
+    let pid = file_pid.or_else(|| {
+        std::process::Command::new("lsof")
+            .args(["-t", "--"])
+            .arg(&lock)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .and_then(|output| {
+                output
+                    .lines()
+                    .find_map(|line| line.trim().parse::<u32>().ok())
+            })
+    });
+    eprintln!(
+        "extension lock holder: path={} pid={}",
+        lock.display(),
+        pid.map_or_else(|| "unknown".to_owned(), |pid| pid.to_string())
+    );
 }
 
 /// The two-provider home the text and JSON tests share: `acme/big` with a
@@ -1148,11 +1188,11 @@ fn the_refresh_child_writes_the_catalogue_and_keeps_it_on_failure() {
                 .unwrap();
         }
         let response = expected.clone();
-        let fetch: extensions::models_dev::Fetch = Arc::new(move |_| {
+        let fetch: extensions::models_dev::Fetch = Arc::new(move |_, writer| {
             if fail {
                 Err("catalog offline".to_owned())
             } else {
-                Ok(response.clone())
+                std::io::Write::write_all(writer, &response).map_err(|error| error.to_string())
             }
         });
         let clock = fakes::clock::FakeClock::new();

@@ -84,7 +84,7 @@ fn assert_no_session_dir(setup: &Setup) {
 /// its directory, so the project key is the root's.
 fn sessions(setup: &Setup) -> PathBuf {
     let workspace = fs::canonicalize(setup.root.path()).unwrap();
-    let key = workspace.to_string_lossy().replace('/', "-");
+    let key = log::project_key(&workspace);
     setup.home().join("projects").join(key).join("sessions")
 }
 

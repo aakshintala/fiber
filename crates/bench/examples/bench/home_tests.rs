@@ -3,12 +3,12 @@ use std::fs;
 use fakes::TempDir;
 use serde_json::json;
 
-use super::{config, read_logs};
+use super::{config, read_logs, write_config};
 
 #[test]
 fn config_without_diagnostics_is_the_default_install() {
     assert_eq!(
-        config(false),
+        config(false, None),
         json!({
             "model": "fake/m",
             "session": {"idle_exit_ms": 3600000},
@@ -18,9 +18,30 @@ fn config_without_diagnostics_is_the_default_install() {
 }
 
 #[test]
+fn listing_config_writer_keeps_all_exited_sessions_without_starting_a_home() {
+    let dir = TempDir::new("config");
+    let path = dir.path().join("config.json");
+    write_config(&path, false, Some(0)).expect("the config is written");
+    let value: serde_json::Value =
+        serde_json::from_slice(&fs::read(path).expect("the config exists"))
+            .expect("the config is JSON");
+    assert_eq!(value["session"]["keep_exited"], 0);
+}
+
+#[test]
+fn config_writer_propagates_write_failures() {
+    let dir = TempDir::new("config");
+    let parent = dir.path().join("not-a-directory");
+    fs::write(&parent, "file").unwrap();
+    let error = write_config(&parent.join("config.json"), false, Some(0))
+        .expect_err("writing below a file fails");
+    assert!(error.contains("not-a-directory"), "{error}");
+}
+
+#[test]
 fn config_with_debug_adds_the_debug_level() {
     assert_eq!(
-        config(true),
+        config(true, None),
         json!({
             "model": "fake/m",
             "session": {"idle_exit_ms": 3600000},

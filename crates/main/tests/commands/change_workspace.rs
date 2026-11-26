@@ -103,8 +103,8 @@ fn session_log_path(setup: &Setup, id: &str) -> PathBuf {
 }
 
 /// The project key of `dir`: the git common directory when `dir` is in a
-/// repository, else `dir` itself, canonicalized with slashes replaced, as
-/// `worktree::project` plus `log::project_key` compute it.
+/// repository, else `dir` itself, canonicalized, as `worktree::project`
+/// plus `log::project_key` compute it.
 fn project_key_of(dir: &Path) -> String {
     let mut git = Command::new("git");
     git.arg("-C")
@@ -123,7 +123,7 @@ fn project_key_of(dir: &Path) -> String {
         _ => dir.to_path_buf(),
     };
     let path = fs::canonicalize(&path).unwrap_or(path);
-    path.to_string_lossy().replace('/', "-")
+    log::project_key(&path)
 }
 
 /// Two folders sharing one git project, plus two unrelated git projects:

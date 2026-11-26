@@ -9,17 +9,192 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::process::Stdio;
-use std::time::Duration;
+use std::sync::{Arc, Weak, mpsc};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime};
 
-use contract::clock::Clock;
-use fakes::clock::FakeClock;
+use contract::clock::{Clock, Wake};
+use fakes::{Deadline, clock::FakeClock};
+use support::clock::Sleep;
 
 use super::settle;
 use super::{FIRST_FRAME_READY, IDLE_READY};
+
 use crate::linux::Counts;
 use crate::pty::{OFFER_NEEDLE, Terminal};
 use crate::run::PROBE;
 use crate::run::{Proc, System};
+
+/// debt: keep this benchmark-local test driver below 100 lines; upgrade when
+/// keeper test helpers move into shared test support without crossing the
+/// ruling's fence.
+enum RefreshEvent {
+    Read,
+    Slept,
+    Done(Result<(), String>),
+}
+
+/// The wait's clock: parks the worker for each poll pause; `step` proves
+/// the named worker is parked before advancing the fake clock.
+struct RefreshClock {
+    inner: Arc<FakeClock>,
+    tx: mpsc::Sender<RefreshEvent>,
+}
+
+impl Clock for RefreshClock {
+    fn now(&self) -> Instant {
+        self.inner.now()
+    }
+
+    fn wall(&self) -> SystemTime {
+        self.inner.wall()
+    }
+
+    fn sleep(&self, duration: Duration) {
+        // This signal proves the worker passed its expiry check and is
+        // waiting on this clock before the test advances fake time.
+        self.tx.send(RefreshEvent::Slept).unwrap_or(());
+        self.inner.sleep(duration);
+    }
+
+    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
+        self.inner.wait_until(until, wait);
+    }
+
+    fn subscribe(&self, waker: Weak<dyn Wake>) {
+        self.inner.subscribe(waker);
+    }
+}
+
+fn refresh_wait(
+    within: Duration,
+    mut reader: impl FnMut() -> Result<bool, String> + Send + 'static,
+) -> (
+    Arc<FakeClock>,
+    thread::JoinHandle<()>,
+    mpsc::Receiver<RefreshEvent>,
+) {
+    let clock = FakeClock::with_sleep(Sleep::Waits);
+    let (tx, rx) = mpsc::channel();
+    let worker_clock = RefreshClock {
+        inner: Arc::clone(&clock),
+        tx: tx.clone(),
+    };
+    let worker = thread::spawn(move || {
+        let result = crate::run::poll(
+            &worker_clock,
+            within,
+            "models.dev refresh thread to exit",
+            || {
+                tx.send(RefreshEvent::Read).unwrap_or(());
+                reader()
+            },
+        );
+        tx.send(RefreshEvent::Done(result)).unwrap_or(());
+    });
+    (clock, worker, rx)
+}
+
+fn event(rx: &mpsc::Receiver<RefreshEvent>, expected: &'static str) -> RefreshEvent {
+    Deadline::after(Duration::from_secs(30)).recv_or_fail(rx, expected)
+}
+
+fn step(clock: &FakeClock, worker: &thread::JoinHandle<()>, offset: Duration) {
+    let deadline = Deadline::after(Duration::from_secs(30));
+    clock.advance_when_parked(
+        Some(clock.origin() + offset),
+        Some(worker.thread().id()),
+        PROBE,
+        &deadline,
+    );
+}
+
+#[test]
+fn an_absent_models_dev_thread_skips_the_clock_wait() {
+    let (clock, worker, rx) = refresh_wait(Duration::from_secs(30), || Ok(true));
+    assert!(matches!(
+        event(&rx, "the initial thread snapshot"),
+        RefreshEvent::Read
+    ));
+    assert!(matches!(
+        event(&rx, "the completed refresh wait"),
+        RefreshEvent::Done(Ok(()))
+    ));
+    worker.join().unwrap();
+    assert!(clock.parked().is_empty());
+}
+
+#[test]
+fn a_present_models_dev_thread_waits_until_the_snapshot_is_absent() {
+    // The next snapshot follows the wait completed under the injected clock.
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let (clock, worker, rx) = refresh_wait(Duration::from_secs(30), move || {
+        let call = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(call == 1)
+    });
+    assert!(matches!(
+        event(&rx, "the initial thread snapshot"),
+        RefreshEvent::Read
+    ));
+    assert!(matches!(event(&rx, "the poll sleep"), RefreshEvent::Slept));
+    step(&clock, &worker, PROBE);
+    assert!(matches!(
+        event(&rx, "the absent thread snapshot"),
+        RefreshEvent::Read
+    ));
+    assert!(matches!(
+        event(&rx, "the completed refresh wait"),
+        RefreshEvent::Done(Ok(()))
+    ));
+    worker.join().unwrap();
+}
+
+#[test]
+fn a_refresh_still_present_at_the_deadline_fails_the_wait() {
+    // Snapshot/wait order is controlled by the injected clock.
+    let (clock, worker, rx) = refresh_wait(2 * PROBE, || Ok(false));
+    for offset in [Duration::ZERO, PROBE] {
+        assert!(matches!(
+            event(&rx, "the thread snapshot"),
+            RefreshEvent::Read
+        ));
+        assert!(matches!(event(&rx, "the poll sleep"), RefreshEvent::Slept));
+        step(&clock, &worker, offset + PROBE);
+    }
+    assert!(matches!(
+        event(&rx, "the deadline thread snapshot"),
+        RefreshEvent::Read
+    ));
+    match event(&rx, "refresh wait deadline") {
+        RefreshEvent::Done(Err(error)) => assert!(
+            error.contains("timed out waiting for models.dev refresh thread to exit"),
+            "{error}"
+        ),
+        RefreshEvent::Read | RefreshEvent::Slept | RefreshEvent::Done(Ok(())) => {
+            panic!("the refresh did not fail at its deadline")
+        }
+    }
+    worker.join().unwrap();
+}
+
+#[test]
+fn a_thread_snapshot_read_error_fails_without_retry() {
+    let (clock, worker, rx) = refresh_wait(Duration::from_secs(30), || {
+        Err("procfs read failed".to_owned())
+    });
+    assert!(matches!(
+        event(&rx, "the initial thread snapshot"),
+        RefreshEvent::Read
+    ));
+    match event(&rx, "refresh thread snapshot error") {
+        RefreshEvent::Done(Err(error)) => assert_eq!(error, "procfs read failed"),
+        RefreshEvent::Read | RefreshEvent::Slept | RefreshEvent::Done(Ok(())) => {
+            panic!("the refresh read error was not returned")
+        }
+    }
+    worker.join().unwrap();
+    assert!(clock.parked().is_empty());
+}
 
 /// Past this many reads a reader errs, so a loop that never ends fails
 /// fast.

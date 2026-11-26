@@ -1766,7 +1766,11 @@ fn a_feed_subscriber_alone_gets_no_attention() {
 /// `last` as the final line.
 fn logged(temp: &Temp, n: u64, last: &Value) -> (String, PathBuf) {
     let session = id(n);
-    let dir = log::session_dir(&temp.dir, "-w", &SessionId(session.clone()));
+    let dir = log::session_dir(
+        &temp.dir,
+        "-w-d1bb8ca354673cd5",
+        &SessionId(session.clone()),
+    );
     fs::create_dir_all(&dir).unwrap();
     let first = json!({
         "kind": "session_started", "session_id": session, "ts": 1, "schema_version": 1,
@@ -1809,7 +1813,7 @@ fn on_rewound_fires_once_for_a_rewound_last_line() {
     );
     let next = id(9);
     let (old, dir) = logged(&temp, 1, &rewound_last(&id(1), &next));
-    feed.on_left(&old, Some(("-w".to_owned(), dir, 0)));
+    feed.on_left(&old, Some(("-w-d1bb8ca354673cd5".to_owned(), dir, 0)));
     assert_eq!(
         seen.lock().unwrap().clone(),
         vec![(old, next)],
@@ -1842,7 +1846,10 @@ fn on_rewound_ignores_anything_but_a_rewound_last_line() {
             "ts": 2, "schema_version": 1, "seq": 5, "payload": {},
         }),
     );
-    feed.on_left(&exited, Some(("-w".to_owned(), exited_dir, 0)));
+    feed.on_left(
+        &exited,
+        Some(("-w-d1bb8ca354673cd5".to_owned(), exited_dir, 0)),
+    );
     // A crash starts nothing.
     let (crashed, crashed_dir) = logged(
         &temp,
@@ -1852,7 +1859,10 @@ fn on_rewound_ignores_anything_but_a_rewound_last_line() {
             "ts": 2, "schema_version": 1, "seq": 5, "payload": {},
         }),
     );
-    feed.on_left(&crashed, Some(("-w".to_owned(), crashed_dir, 0)));
+    feed.on_left(
+        &crashed,
+        Some(("-w-d1bb8ca354673cd5".to_owned(), crashed_dir, 0)),
+    );
     // A session with no directory starts nothing.
     feed.on_left(&id(3), None);
     assert!(
@@ -1904,7 +1914,7 @@ fn on_rewound_fires_once_for_a_moved_last_line() {
     );
     let next = id(9);
     let (old, dir) = logged(&temp, 1, &moved_last(&id(1), &next));
-    feed.on_left(&old, Some(("-w".to_owned(), dir, 0)));
+    feed.on_left(&old, Some(("-w-d1bb8ca354673cd5".to_owned(), dir, 0)));
     assert_eq!(
         seen.lock().unwrap().clone(),
         vec![(old, next)],
