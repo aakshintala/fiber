@@ -157,20 +157,26 @@ if [ "$rules" = 1 ]; then
       crate=${spec%%@*}
       echo "== $crate: cargo fmt --check"
       cargo fmt --check -p "$crate"
+      case "$crate" in
+        main)
+          # `main` has no library target, so clippy and nextest take
+          # `--bins --tests` in place of `--all-targets`.
+          clippy_targets=(--bins --tests)
+          nextest_targets=(--bins --tests)
+          ;;
+        *)
+          clippy_targets=(--all-targets)
+          nextest_targets=(--all-targets)
+          # A jig test starts the plain example binary; nextest's all-targets
+          # test harness is a separate hashed artifact.
+          echo "== $crate: cargo build --examples"
+          build_step cargo build -p "$spec" --examples
+          ;;
+      esac
       echo "== $crate: cargo clippy"
-      if [ "$crate" = main ]; then
-        # `main` has no library target, so its clippy and nextest take
-        # `--bins --tests` in place of `--all-targets`.
-        build_step cargo clippy --bins --tests -p "$spec" -- -D warnings
-      else
-        build_step cargo clippy --all-targets -p "$spec" -- -D warnings
-      fi
+      build_step cargo clippy "${clippy_targets[@]}" -p "$spec" -- -D warnings
       echo "== $crate: cargo nextest run"
-      if [ "$crate" = main ]; then
-        build_step cargo nextest run --bins --tests -p "$spec"
-      else
-        build_step cargo nextest run --all-targets -p "$spec"
-      fi
+      build_step cargo nextest run "${nextest_targets[@]}" -p "$spec"
     done
     case " $packages " in
       *" main "*)

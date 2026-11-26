@@ -133,6 +133,10 @@ fn a_named_thread_carries_its_name_in_its_entry() {
             json!({"tid": 4102, "voluntary": 0, "involuntary": 0, "name": "status"}),
         ]
     );
+    assert!(!super::has_thread_named(&before, "models.dev"));
+    let with_refresh = BTreeMap::from([(4103, named(0, 0, "models.dev"))]);
+    assert!(super::has_thread_named(&with_refresh, "models.dev"));
+    assert!(!super::has_thread_named(&with_refresh, "other"));
     let after = BTreeMap::from([(4101, counts(1, 0)), (4102, counts(0, 0))]);
     assert_eq!(
         idle_switches(&before, &after, &mut notes),

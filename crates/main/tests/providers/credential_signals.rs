@@ -21,12 +21,25 @@ use fakes::MUST_SUCCEED_WITHIN;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::OnceLock;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use fakes::children::Ready;
-use fakes::{Deadline, Watchdog};
+use fakes::{Deadline, ProviderServer, Response, Watchdog};
+
+fn models_dev_url() -> String {
+    static SERVER: OnceLock<ProviderServer> = OnceLock::new();
+    format!(
+        "{}/api.json",
+        SERVER
+            .get_or_init(|| {
+                ProviderServer::start_with_fallback([], Response::status(200, "{}")).unwrap()
+            })
+            .url()
+    )
+}
 use serde_json::json;
 use support::pty::{Grid, Run};
 
@@ -131,6 +144,7 @@ impl Setup {
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", self.root.path())
             .env("FIBER_HOME", self.home())
+            .env("FIBER_MODELS_DEV_URL", models_dev_url())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

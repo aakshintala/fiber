@@ -20,11 +20,24 @@ use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::OnceLock;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use fakes::{ProviderServer, Request, Response, fingerprint};
+
+fn models_dev_url() -> String {
+    static SERVER: OnceLock<ProviderServer> = OnceLock::new();
+    format!(
+        "{}/api.json",
+        SERVER
+            .get_or_init(|| {
+                ProviderServer::start_with_fallback([], Response::status(200, "{}")).unwrap()
+            })
+            .url()
+    )
+}
 use rustix::pty;
 use serde_json::{Value, json};
 use support::{
@@ -165,6 +178,7 @@ impl Setup {
             .env("FIBER_HOME", home)
             .env("FIBER_TEST_FAKE_KEY", "sk-test")
             .envs(env.iter().copied())
+            .env("FIBER_MODELS_DEV_URL", models_dev_url())
             .stdin(stdin)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -1850,7 +1864,14 @@ fn muse_recording() -> Response {
 #[test]
 fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
     let setup = Setup::new_with_started_deadline();
-    let server = ProviderServer::start([muse_recording()]).unwrap();
+    let server = ProviderServer::start([
+        Response::status(
+            200,
+            r#"{"object":"list","data":[{"id":"muse-spark-1.3-contributor"}]}"#,
+        ),
+        muse_recording(),
+    ])
+    .unwrap();
     install(
         &setup,
         &setup.package("muse", "https://api.meta.ai", &server.url()),
@@ -1885,12 +1906,15 @@ fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
     assert_eq!(exited["usage"]["tokens"]["input"], 10);
     assert_eq!(exited["usage"]["tokens"]["output"], 16);
     let requests = server.requests();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].path, "/v1/responses");
-    assert_fingerprint(&requests[0], "authorization", "Bearer sk-test-muse");
-    assert_eq!(requests[0].header("x-opencode-session"), None);
+    // On first use, an uncached provider list is fetched before the response
+    // call: `docs/model-routing.md`, "Model discovery".
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].path, "/v1/models");
+    assert_eq!(requests[1].path, "/v1/responses");
+    assert_fingerprint(&requests[1], "authorization", "Bearer sk-test-muse");
+    assert_eq!(requests[1].header("x-opencode-session"), None);
     assert!(
-        requests[0]
+        requests[1]
             .header("user-agent")
             .unwrap()
             .starts_with("fiber/")
@@ -1938,7 +1962,13 @@ fn allow_text() -> Response {
 #[test]
 fn the_providers_reviewer_model_decides_a_reviewed_call() {
     let setup = Setup::new_with_started_deadline();
-    let server = ProviderServer::start([shell_true_call(), allow_text(), hello()]).unwrap();
+    let server = ProviderServer::start([
+        Response::status(200, r#"{"object":"list","data":[{"id":"muse-spark-1.3"}]}"#),
+        shell_true_call(),
+        allow_text(),
+        hello(),
+    ])
+    .unwrap();
     install(
         &setup,
         &setup.package("muse", "https://api.meta.ai", &server.url()),
@@ -4159,6 +4189,7 @@ fn ask_without_key(setup: &Setup, args: &[&str]) -> TextRun {
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("HOME", setup.root.path())
         .env("FIBER_HOME", setup.home())
+        .env("FIBER_MODELS_DEV_URL", models_dev_url())
         .env_remove("FIBER_TEST_FAKE_KEY")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
