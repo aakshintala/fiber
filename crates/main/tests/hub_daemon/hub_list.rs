@@ -67,8 +67,14 @@ fn listed_hubs_pair_list_authenticate_revoke_and_remove_without_a_local_hub() {
         .stderr(std::process::Stdio::piped())
         .process_group(0);
     succeeds(&run_to_exit(b.deadline, "the client's git repository", git));
-    let row = json!({"session_id":"s_remote", "ts":1, "project":"remote-project", "workspace":"/remote/workspace", "name":"remote session", "how":"exited"});
-    fs::create_dir_all(a.home().join("projects/remote-project/sessions/s_remote")).unwrap();
+    let project = log::project_key(std::path::Path::new("/remote/workspace"));
+    let row = json!({"session_id":"s_remote", "ts":1, "project":project.clone(), "workspace":"/remote/workspace", "name":"remote session", "how":"exited"});
+    let session_dir = a
+        .home()
+        .join("projects")
+        .join(project)
+        .join("sessions/s_remote");
+    fs::create_dir_all(&session_dir).unwrap();
     fs::write(a.home().join("recent.jsonl"), format!("{row}\n")).unwrap();
     let served = hub_start::serve_installed(
         &a,

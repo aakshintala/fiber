@@ -147,6 +147,13 @@ pub(crate) fn idle_switches(
     deltas
 }
 
+/// Whether a snapshot contains a thread with `name`.
+pub(crate) fn has_thread_named(threads: &BTreeMap<u32, Counts>, name: &str) -> bool {
+    threads
+        .values()
+        .any(|counts| counts.name.as_deref() == Some(name))
+}
+
 /// Whether `/proc/net/unix` text holds a connected socket (state `03`)
 /// bound to `socket`: the server side of a connection the listener at
 /// `socket` accepted carries its path.

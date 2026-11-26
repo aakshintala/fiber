@@ -99,7 +99,7 @@ fn default_models_dev_fetch() -> extensions::models_dev::Fetch {
     }
     #[cfg(test)]
     {
-        std::sync::Arc::new(|_| Err("network disabled in tests".to_owned()))
+        std::sync::Arc::new(|_, _| Err("network disabled in tests".to_owned()))
     }
 }
 

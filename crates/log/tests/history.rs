@@ -109,7 +109,7 @@ fn moved_line(child: &str, at: u64, workspace: &str) -> Event {
 fn a_moved_chain_links_projects_with_exact_ancestry() {
     let tmp = TestDir::new("history-moved-projects");
     let clock = fakes::clock::FakeClock::new();
-    let old_sessions = project_sessions(&tmp, "-work-old");
+    let old_sessions = project_sessions(&tmp, "-work-old-daeb20c477630f4a");
     let old = log::Log::create(&old_sessions, id("s_aaaaaaaaaaaaaaaa"), clock.clone()).unwrap();
     old.append(&session_started(), None, None).unwrap();
     old.append(&turn_started(), None, None).unwrap();
@@ -121,11 +121,15 @@ fn a_moved_chain_links_projects_with_exact_ancestry() {
     )
     .unwrap();
     drop(old);
-    let new_sessions = project_sessions(&tmp, "-work-new");
+    let new_sessions = project_sessions(&tmp, "-work-new-9e59204e77517c50");
     let child = log::Log::create(&new_sessions, id("s_bbbbbbbbbbbbbbbb"), clock).unwrap();
     child
         .append(
-            &moved_started("s_aaaaaaaaaaaaaaaa", 2, Some(json!("-work-old"))),
+            &moved_started(
+                "s_aaaaaaaaaaaaaaaa",
+                2,
+                Some(json!("-work-old-daeb20c477630f4a")),
+            ),
             None,
             None,
         )
@@ -140,7 +144,11 @@ fn a_moved_chain_links_projects_with_exact_ancestry() {
         .expect("the moved parent is in the history");
     assert_eq!(
         parent.dir,
-        log::session_dir(tmp.path(), "-work-old", &id("s_aaaaaaaaaaaaaaaa"))
+        log::session_dir(
+            tmp.path(),
+            "-work-old-daeb20c477630f4a",
+            &id("s_aaaaaaaaaaaaaaaa")
+        )
     );
     assert_eq!(parent.to, Some(Seq(2)));
     let child = segments
@@ -149,7 +157,11 @@ fn a_moved_chain_links_projects_with_exact_ancestry() {
         .expect("the moved child is in the history");
     assert_eq!(
         child.dir,
-        log::session_dir(tmp.path(), "-work-new", &id("s_bbbbbbbbbbbbbbbb"))
+        log::session_dir(
+            tmp.path(),
+            "-work-new-9e59204e77517c50",
+            &id("s_bbbbbbbbbbbbbbbb")
+        )
     );
     assert_eq!(child.to, None);
     // The parent's own `moved` ending stays intact: the walk reads first
@@ -165,16 +177,20 @@ fn alternating_project_hops_resolve_each_parent_where_recorded() {
     // naming B. Each segment carries its own directory and point.
     let tmp = TestDir::new("history-moved-alternating");
     let clock = fakes::clock::FakeClock::new();
-    let old_sessions = project_sessions(&tmp, "-work-old");
+    let old_sessions = project_sessions(&tmp, "-work-old-daeb20c477630f4a");
     let root = log::Log::create(&old_sessions, id("s_aaaaaaaaaaaaaaaa"), clock.clone()).unwrap();
     root.append(&session_started(), None, None).unwrap();
     root.append(&turn_started(), None, None).unwrap();
     drop(root);
-    let new_sessions = project_sessions(&tmp, "-work-new");
+    let new_sessions = project_sessions(&tmp, "-work-new-9e59204e77517c50");
     let middle = log::Log::create(&new_sessions, id("s_bbbbbbbbbbbbbbbb"), clock.clone()).unwrap();
     middle
         .append(
-            &moved_started("s_aaaaaaaaaaaaaaaa", 1, Some(json!("-work-old"))),
+            &moved_started(
+                "s_aaaaaaaaaaaaaaaa",
+                1,
+                Some(json!("-work-old-daeb20c477630f4a")),
+            ),
             None,
             None,
         )
@@ -184,7 +200,11 @@ fn alternating_project_hops_resolve_each_parent_where_recorded() {
     let grandchild = log::Log::create(&old_sessions, id("s_cccccccccccccccc"), clock).unwrap();
     grandchild
         .append(
-            &moved_started("s_bbbbbbbbbbbbbbbb", 1, Some(json!("-work-new"))),
+            &moved_started(
+                "s_bbbbbbbbbbbbbbbb",
+                1,
+                Some(json!("-work-new-9e59204e77517c50")),
+            ),
             None,
             None,
         )
@@ -197,19 +217,31 @@ fn alternating_project_hops_resolve_each_parent_where_recorded() {
     assert_eq!(segments[0].session_id, id("s_aaaaaaaaaaaaaaaa"));
     assert_eq!(
         segments[0].dir,
-        log::session_dir(tmp.path(), "-work-old", &id("s_aaaaaaaaaaaaaaaa"))
+        log::session_dir(
+            tmp.path(),
+            "-work-old-daeb20c477630f4a",
+            &id("s_aaaaaaaaaaaaaaaa")
+        )
     );
     assert_eq!(segments[0].to, Some(Seq(1)));
     assert_eq!(segments[1].session_id, id("s_bbbbbbbbbbbbbbbb"));
     assert_eq!(
         segments[1].dir,
-        log::session_dir(tmp.path(), "-work-new", &id("s_bbbbbbbbbbbbbbbb"))
+        log::session_dir(
+            tmp.path(),
+            "-work-new-9e59204e77517c50",
+            &id("s_bbbbbbbbbbbbbbbb")
+        )
     );
     assert_eq!(segments[1].to, Some(Seq(1)));
     assert_eq!(segments[2].session_id, id("s_cccccccccccccccc"));
     assert_eq!(
         segments[2].dir,
-        log::session_dir(tmp.path(), "-work-old", &id("s_cccccccccccccccc"))
+        log::session_dir(
+            tmp.path(),
+            "-work-old-daeb20c477630f4a",
+            &id("s_cccccccccccccccc")
+        )
     );
     assert_eq!(segments[2].to, None);
     // The middle segment reads its own project's log, bounded by its
@@ -248,11 +280,15 @@ fn an_invalid_moved_parent_is_a_pointer() {
 fn a_parent_in_an_unknown_project_is_not_found() {
     let tmp = TestDir::new("history-moved-unknown-project");
     let clock = fakes::clock::FakeClock::new();
-    let new_sessions = project_sessions(&tmp, "-work-new");
+    let new_sessions = project_sessions(&tmp, "-work-new-9e59204e77517c50");
     let child = log::Log::create(&new_sessions, id("s_bbbbbbbbbbbbbbbb"), clock).unwrap();
     child
         .append(
-            &moved_started("s_aaaaaaaaaaaaaaaa", 0, Some(json!("-work-gone"))),
+            &moved_started(
+                "s_aaaaaaaaaaaaaaaa",
+                0,
+                Some(json!("-work-gone-e7bb0277ca5d3be9")),
+            ),
             None,
             None,
         )
