@@ -285,3 +285,5 @@ crates/extensions/tests/lazy_commands.rs	fiber-4975	plan	2026-11-26T22:56:40Z	Am
 crates/main/tests/extension_host/extension_lazy_commands.rs	fiber-4975	plan	2026-11-26T22:56:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/net/src/socket.rs	fiber-4968	plan	2026-11-26T23:18:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/net/src/lib.rs	fiber-4968	plan	2026-11-26T23:18:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/net/src/socket_tests.rs	fiber-4968	plan	2026-11-26T23:20:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/net/src/lib_tests.rs	fiber-4968	plan	2026-11-26T23:20:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
