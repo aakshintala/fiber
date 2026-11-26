@@ -235,3 +235,4 @@ xtask/src/rules.rs:1255-1256	fiber-4897	plan	2026-11-16T02:37:32Z	roundhouse-701
 crates/doors/src/session_tests.rs	fiber-4042	plan	2026-11-16T02:47:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/ci.yml	fiber-4989	plan	2026-11-26T17:35:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/ci.md	fiber-4989	plan	2026-11-26T17:35:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/check-docs	fiber-4989	plan	2026-11-26T18:45:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
