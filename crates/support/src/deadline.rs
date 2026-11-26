@@ -175,7 +175,12 @@ impl Deadline {
         match self.recv(rx) {
             Ok(value) => value,
             Err(RecvTimeoutError::Timeout) => {
-                eprintln!("{}", thread_backtrace());
+                match std::io::Write::write_all(
+                    &mut std::io::stderr().lock(),
+                    format!("{}\n", thread_backtrace()).as_bytes(),
+                ) {
+                    Ok(()) | Err(_) => {}
+                }
                 panic!("waited until the deadline for {what}")
             }
             Err(RecvTimeoutError::Disconnected) => {
@@ -224,13 +229,11 @@ fn thread_backtrace() -> String {
                     .unwrap_or_default();
                 let _sent = tx.send(text);
             });
-        return Deadline::after(Duration::from_secs(10))
+        Deadline::after(Duration::from_secs(10))
             .recv(&rx)
             .ok()
             .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| {
-                "thread backtrace unavailable (sampler timed out or failed)".into()
-            });
+            .unwrap_or_else(|| "thread backtrace unavailable (sampler timed out or failed)".into())
     }
     #[cfg(not(target_os = "macos"))]
     {
