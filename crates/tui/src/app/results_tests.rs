@@ -387,6 +387,7 @@ fn space_with_results_open_edits_query_without_jumping() {
         drawn.contains("needle"),
         "the edited query stays in the bar: {drawn}"
     );
+    // Search results show the match count as N of M (`docs/tui.md`, "Swapped views").
     assert!(
         drawn.contains("1 of 1"),
         "the bar retains its count: {drawn}"
