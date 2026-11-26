@@ -677,8 +677,6 @@ fn fail_handle_discards_only_the_failed_errors_file() {
 
 #[test]
 fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
-    use base64::Engine as _;
-
     // One job's unwritable output file never stops the keeper ending the
     // other job: each process stores its own first path-bearing failure.
     let input = fakes::TempDir::new("keeper-files-two-input");
@@ -692,12 +690,8 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
     let good_out = home.path().join("good.out");
     std::fs::write(&good_out, b"").expect("good output");
     let (held, held_rx) = ready_signal();
-    let (adopt_hold, adopt_gate) = barrier();
-    let (hold_entered, hold_entered_rx) = ready_signal();
     let hooks = super::Hooks {
         held: Some(held),
-        adopt_hold: Some(adopt_hold),
-        hold_entered: Some(hold_entered),
         ..super::Hooks::default()
     };
     let clock = fakes::clock::FakeClock::new();
@@ -722,67 +716,16 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
             good_fifo.clone(),
         ),
     ] {
-        let spec = Spawn {
-            id: id.into(),
-            program: "/bin/sh".into(),
-            args: vec![
-                "-c".into(),
-                format!(
-                    "exec 3<> '{}'; printf 'fifo-ready\\n'; {shell}",
-                    fifo.display()
-                ),
-            ],
-            cwd: std::env::temp_dir(),
-            env: Vec::new(),
-            stdin: HostStdin::Null,
-            timeout_ms: None,
-            output_cap: 1_000_000,
-            sandbox: None,
-        };
-        serde_json::to_writer(&mut control, &ToKeeper::Start(spec)).expect("start child");
-        control.write_all(b"\n").expect("start newline");
-        let deadline = Deadline::after(Duration::from_secs(10));
-        let mut started = false;
-        let mut fifo_ready = false;
-        while !started || !fifo_ready {
-            match deadline.recv_or_fail(&keeper.read, "child start and FIFO readiness") {
-                FromKeeper::Started {
-                    id: started_id,
-                    pgid,
-                } if started_id == id => {
-                    watchdogs.push(fakes::Watchdog::group(pgid));
-                    started = true;
-                }
-                FromKeeper::Output {
-                    id: output_id,
-                    bytes,
-                    ..
-                } if output_id == id => {
-                    let decoded = base64::engine::general_purpose::STANDARD
-                        .decode(bytes)
-                        .expect("FIFO readiness output is base64");
-                    fifo_ready |= String::from_utf8_lossy(&decoded).contains("fifo-ready");
-                }
-                FromKeeper::Started { .. }
-                | FromKeeper::Failed { .. }
-                | FromKeeper::Output { .. }
-                | FromKeeper::Exit { .. }
-                | FromKeeper::Identity { .. }
-                | FromKeeper::Handover { .. }
-                | FromKeeper::AdoptDone(_) => {}
-            }
-        }
+        start_shell(&keeper, id, ShellStart::fifo(shell, &fifo, &mut watchdogs));
     }
-    let mut input_writers = [bad_fifo, good_fifo]
-        .into_iter()
-        .map(|fifo| {
-            std::fs::OpenOptions::new()
-                .write(true)
-                .open(&fifo)
-                .expect("child input FIFO is open after its readiness frame")
-        })
-        .collect::<Vec<_>>();
-    adopt_gate.armed.store(true, Ordering::Release);
+    let mut bad_writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&bad_fifo)
+        .expect("bad child input FIFO is ready");
+    let mut good_writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&good_fifo)
+        .expect("good child input FIFO is ready");
     for (id, output) in [("bad", bad_dir.clone()), ("good", good_out.clone())] {
         serde_json::to_writer(
             &mut control,
@@ -797,21 +740,23 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
         .expect("adopt child");
         control.write_all(b"\n").expect("adopt newline");
     }
-    // The control reader acknowledges each Adopt. Release the first before
-    // crashing on the second, which remains parked until drive enters hold_output.
-    Deadline::after(Duration::from_secs(10))
-        .recv_or_fail(&adopt_gate.arrived, "first Adopt to pause");
-    adopt_gate.go.send(()).expect("release first Adopt");
-    Deadline::after(Duration::from_secs(10))
-        .recv_or_fail(&adopt_gate.arrived, "second Adopt to pause");
     crash(&mut keeper);
-    Deadline::after(Duration::from_secs(10))
-        .recv_or_fail(&hold_entered_rx, "drive to enter hold_output");
-    adopt_gate.go.send(()).expect("release final Adopt");
     Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "keeper files to be active");
-    for writer in &mut input_writers {
-        writer.write_all(b"go\n").expect("release child");
+    bad_writer.write_all(b"go\n").expect("release bad child");
+    let exit_deadline = Deadline::after(Duration::from_secs(10));
+    loop {
+        match exit_deadline.recv_or_fail(&keeper.read, "bad child to exit") {
+            FromKeeper::Exit { id, .. } if id == "bad" => break,
+            FromKeeper::Started { .. }
+            | FromKeeper::Failed { .. }
+            | FromKeeper::Output { .. }
+            | FromKeeper::Exit { .. }
+            | FromKeeper::Identity { .. }
+            | FromKeeper::Handover { .. }
+            | FromKeeper::AdoptDone(_) => {}
+        }
     }
+    good_writer.write_all(b"go\n").expect("release good child");
     Deadline::after(Duration::from_secs(10))
         .recv_or_fail(&keeper.result, "keeper to finish after both children")
         .expect("keeper exits cleanly");
@@ -1094,11 +1039,56 @@ fn serve_keeper_with(
     )
 }
 
-fn start_shell(keeper: &Keeper, call: &str, shell: &str) -> u32 {
+struct ShellStart<'a> {
+    shell: &'a str,
+    fifo: Option<&'a std::path::Path>,
+    watchdogs: Option<&'a mut Vec<fakes::Watchdog>>,
+}
+
+impl<'a> From<&'a str> for ShellStart<'a> {
+    fn from(shell: &'a str) -> Self {
+        Self {
+            shell,
+            fifo: None,
+            watchdogs: None,
+        }
+    }
+}
+
+impl<'a> From<&'a String> for ShellStart<'a> {
+    fn from(shell: &'a String) -> Self {
+        shell.as_str().into()
+    }
+}
+
+impl<'a> ShellStart<'a> {
+    fn fifo(
+        shell: &'a str,
+        fifo: &'a std::path::Path,
+        watchdogs: &'a mut Vec<fakes::Watchdog>,
+    ) -> Self {
+        Self {
+            shell,
+            fifo: Some(fifo),
+            watchdogs: Some(watchdogs),
+        }
+    }
+}
+
+fn start_shell<'a>(keeper: &Keeper, call: &str, shell: impl Into<ShellStart<'a>>) -> u32 {
+    let mut shell = shell.into();
+    let command = match shell.fifo {
+        Some(fifo) => format!(
+            "exec 3<> '{}'; printf 'keeper-fifo-ready\\n'; {}",
+            fifo.display(),
+            shell.shell
+        ),
+        None => shell.shell.to_owned(),
+    };
     let spec = Spawn {
         id: call.into(),
         program: "/bin/sh".into(),
-        args: vec!["-c".into(), shell.into()],
+        args: vec!["-c".into(), command],
         cwd: std::env::temp_dir(),
         env: Vec::new(),
         stdin: HostStdin::Null,
@@ -1109,17 +1099,54 @@ fn start_shell(keeper: &Keeper, call: &str, shell: &str) -> u32 {
     let mut writer = keeper.writer.try_clone().expect("writer");
     serde_json::to_writer(&mut writer, &ToKeeper::Start(spec)).expect("start");
     writer.write_all(b"\n").expect("newline");
-    match Deadline::after(Duration::from_secs(10)).recv_or_fail(&keeper.read, "started") {
-        FromKeeper::Started { pgid, .. } => pgid,
-        FromKeeper::Failed { .. }
-        | FromKeeper::Output { .. }
-        | FromKeeper::Exit { .. }
-        | FromKeeper::Identity { .. }
-        | FromKeeper::Handover { .. }
-        | FromKeeper::AdoptDone(_) => {
-            panic!("expected started")
+    if shell.fifo.is_none() {
+        return match Deadline::after(Duration::from_secs(10)).recv_or_fail(&keeper.read, "started")
+        {
+            FromKeeper::Started { pgid, .. } => pgid,
+            FromKeeper::Failed { .. }
+            | FromKeeper::Output { .. }
+            | FromKeeper::Exit { .. }
+            | FromKeeper::Identity { .. }
+            | FromKeeper::Handover { .. }
+            | FromKeeper::AdoptDone(_) => panic!("expected started"),
+        };
+    }
+
+    use base64::Engine as _;
+    let deadline = Deadline::after(Duration::from_secs(10));
+    let mut pgid = None;
+    let mut fifo_ready = false;
+    while pgid.is_none() || !fifo_ready {
+        match deadline.recv_or_fail(&keeper.read, "child start and FIFO readiness") {
+            FromKeeper::Started {
+                id: started_id,
+                pgid: started_pgid,
+            } if started_id == call => {
+                if let Some(watchdogs) = shell.watchdogs.as_deref_mut() {
+                    watchdogs.push(fakes::Watchdog::group(started_pgid));
+                }
+                pgid = Some(started_pgid);
+            }
+            FromKeeper::Output {
+                id: output_id,
+                bytes,
+                ..
+            } if output_id == call => {
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(bytes)
+                    .expect("FIFO readiness output is base64");
+                fifo_ready |= String::from_utf8_lossy(&decoded).contains("keeper-fifo-ready");
+            }
+            FromKeeper::Started { .. }
+            | FromKeeper::Failed { .. }
+            | FromKeeper::Output { .. }
+            | FromKeeper::Exit { .. }
+            | FromKeeper::Identity { .. }
+            | FromKeeper::Handover { .. }
+            | FromKeeper::AdoptDone(_) => {}
         }
     }
+    pgid.expect("the child started before reporting FIFO readiness")
 }
 
 fn await_shell_ready(keeper: &Keeper, marker: &str) {
@@ -2934,8 +2961,6 @@ fn lock_race(old_wins: bool) {
     let session = log::Log::open(&old.sessions, id.clone(), clock.clone()).expect("session lock");
     let (fresh_held, fresh_held_rx) = ready_signal();
     let (fresh_before, fresh_gate) = barrier();
-    let (fresh_adopt_hold, fresh_adopt_gate) = barrier();
-    let (fresh_hold_entered, fresh_hold_entered_rx) = ready_signal();
     let (fresh_waiter_tx, fresh_waiter_rx) = mpsc::channel();
     let (mut fresh, _) = serve_keeper_with(
         "keeper-lock-race",
@@ -2943,8 +2968,6 @@ fn lock_race(old_wins: bool) {
         clock.clone(),
         super::Hooks {
             held: Some(fresh_held),
-            adopt_hold: Some(fresh_adopt_hold),
-            hold_entered: Some(fresh_hold_entered),
             before_open: Some(Box::new(move || {
                 let _sent = fresh_waiter_tx.send(std::thread::current().id());
                 fresh_before();
@@ -2955,17 +2978,12 @@ fn lock_race(old_wins: bool) {
     );
     let fresh_pgid = start_shell(&fresh, "new", "sleep 60");
     let _fresh_reaper = Reaper(fresh_pgid);
-    fresh_adopt_gate.armed.store(true, Ordering::Release);
     adopt_call(&fresh, "new", "j_new");
     old_gate.armed.store(true, Ordering::Release);
     fresh_gate.armed.store(true, Ordering::Release);
-    // The session dies: both keepers see their connection end. Hold the fresh
-    // reader at its single Adopt until the drive thread reaches hold_output.
+    // The session dies: both keepers see their connection end and race for the lock.
     hang_up(peer);
-    deadline().recv_or_fail(&fresh_adopt_gate.arrived, "the fresh Adopt to pause");
     crash(&mut fresh);
-    deadline().recv_or_fail(&fresh_hold_entered_rx, "fresh drive to enter hold_output");
-    fresh_adopt_gate.go.send(()).expect("release fresh Adopt");
     deadline().recv_or_fail(&old_gate.arrived, "the old keeper to reach the lock");
     deadline().recv_or_fail(&fresh_gate.arrived, "the fresh keeper to reach the lock");
     drop(session);

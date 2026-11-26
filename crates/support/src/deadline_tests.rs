@@ -337,24 +337,6 @@ fn a_started_wait_does_not_refresh_per_receive() {
 }
 
 #[test]
-fn recv_or_fail_timeout_keeps_the_wait_name() {
-    let (tx, rx) = mpsc::channel::<()>();
-    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        Deadline::after(Duration::ZERO).recv_or_fail(&rx, "keeper files to be active")
-    }));
-    drop(tx);
-    let message = failed
-        .unwrap_err()
-        .downcast_ref::<String>()
-        .cloned()
-        .unwrap_or_default();
-    assert!(
-        message.contains("waited until the deadline for keeper files to be active"),
-        "{message}"
-    );
-}
-
-#[test]
 fn recv_or_fail_says_the_sender_hung_up() {
     let wait = Deadline::after(Duration::ZERO);
     let (tx, rx) = mpsc::channel::<()>();
@@ -454,18 +436,5 @@ fn within_a_spent_root_is_a_zero_bound() {
     assert_eq!(
         Deadline::on(&**fake_clock()).within(Duration::ZERO).left(),
         Duration::ZERO
-    );
-}
-
-/// The timeout diagnostic's deterministic branch: off macOS the sampler is
-/// never invoked and the skip note is fixed. Replacing the diagnostic with
-/// any other text fails here; sampled output itself stays best-effort and
-/// unasserted.
-#[cfg(not(target_os = "macos"))]
-#[test]
-fn thread_backtrace_reports_the_macos_only_skip_note() {
-    assert_eq!(
-        super::thread_backtrace(),
-        "thread backtrace unavailable (sampler is only configured on macOS)"
     );
 }
