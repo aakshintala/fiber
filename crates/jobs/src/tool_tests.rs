@@ -1944,6 +1944,118 @@ fn a_gone_detached_job_is_not_reported_as_needing_review() {
 }
 
 #[test]
+fn detached_settle_ignores_a_reused_group_number() {
+    // Same stop sequence as the supervisor test, driven directly: the
+    // fixture traps TERM, handshakes, then takes TERM and KILL and is
+    // reaped, leaving the group empty. Deterministic under no load.
+    let mut command = Command::new("sh");
+    command
+        .args(["-c", "trap '' TERM; echo ready; sleep 60"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let (mut child, _listing) = support::group::spawn(&mut command).unwrap();
+    let pgid = child.id();
+    let watchdog = Watchdog::group(pgid);
+    let mut ready = String::new();
+    let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+    stdout.read_line(&mut ready).unwrap();
+    assert_eq!(ready, "ready\n");
+    drop(stdout);
+    support::group::signal(pgid, rustix::process::Signal::TERM).unwrap();
+    support::group::signal(pgid, rustix::process::Signal::KILL).unwrap();
+    assert!(
+        !child.wait().unwrap().success(),
+        "SIGKILL stopped the child"
+    );
+    assert!(group_empties(pgid, Deadline::after(MUST_SUCCEED_WITHIN)));
+    // Pinned cause (#4817): the kernel reuses the dead number for a new
+    // group leader, and the settle poll reads that newcomer as a surviving
+    // member of the stopped group. The poll must report the ORIGINAL group
+    // gone: a live row whose process identity differs from every recorded
+    // member is a reuse, not a survivor. The end-to-end flake needs pid
+    // churn to reuse the number inside the window (the pull request body
+    // cites the scratch capture); this test pins the row classification
+    // the poll relies on instead of the timing.
+    let own = std::process::id();
+    let own_start = support::group::start_time(own).unwrap();
+    // A new leader on a recorded number, with a different start time, is
+    // a reuse: it must not count.
+    assert!(
+        !member_counts_as_survivor(
+            own,
+            false,
+            &[(own, own_start)],
+            true,
+            Some(own_start.wrapping_add(1))
+        ),
+        "a leader with a reused group number is not a surviving member"
+    );
+    // A never-recorded pid is a reuse once the sleep is recorded: the
+    // fixture's member set is closed (leader plus sleep).
+    assert!(
+        !member_counts_as_survivor(
+            own.wrapping_add(1),
+            false,
+            &[(own, own_start)],
+            true,
+            Some(own_start)
+        ),
+        "a never-recorded pid is a reuse once the sleep is recorded"
+    );
+    // Guards: the original still counts, zombies never count, an
+    // unreadable start stays conservative, and an unrecorded sleep keeps
+    // the legacy verdict.
+    assert!(member_counts_as_survivor(
+        own,
+        false,
+        &[(own, own_start)],
+        true,
+        Some(own_start)
+    ));
+    assert!(!member_counts_as_survivor(
+        own,
+        true,
+        &[(own, own_start)],
+        true,
+        Some(own_start)
+    ));
+    assert!(member_counts_as_survivor(
+        own,
+        false,
+        &[(own, own_start)],
+        true,
+        None
+    ));
+    assert!(member_counts_as_survivor(
+        own.wrapping_add(1),
+        false,
+        &[(own, own_start)],
+        false,
+        Some(own_start)
+    ));
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
+}
+
+/// Whether one `ps` row counts as a surviving member for the settle poll.
+/// `expected` holds the recorded (pid, start-time) identities of the
+/// stopped group's original members; `sleep_recorded` says whether it
+/// covers the original sleep. `start` is the row pid's live start time, or
+/// `None` when it cannot be read. Test seam for #4817: the base behaviour
+/// counts every non-zombie row, ignoring identity; the fix tells a reused
+/// number from a surviving original.
+fn member_counts_as_survivor(
+    _pid: u32,
+    zombie: bool,
+    _expected: &[(u32, u64)],
+    _sleep_recorded: bool,
+    _start: Option<u64>,
+) -> bool {
+    !zombie
+}
+
+#[test]
 fn detached_stop_waits_for_the_supervisor_after_the_grace_period() {
     let clock = FakeClock::new();
     let as_clock: Arc<dyn Clock> = clock.clone();
