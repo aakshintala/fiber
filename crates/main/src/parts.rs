@@ -558,7 +558,7 @@ fn parts_inner(
     let catalog_fetch = extensions::models_dev::live_fetch();
     #[cfg(test)]
     let catalog_fetch: extensions::models_dev::Fetch =
-        Arc::new(|_| Err("network disabled in tests".to_owned()));
+        Arc::new(|_, _| Err("network disabled in tests".to_owned()));
     let _detached_catalog_refresh =
         start_catalog_refresh(home.clone(), &config, clock.wall(), catalog_fetch);
     scripted::prepare(&mut providers, &config, recorded);

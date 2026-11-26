@@ -322,9 +322,16 @@ fn world_with(default: bool, ports: &mut dyn FnMut() -> u16) -> World {
     .stderr(std::process::Stdio::piped())
     .process_group(0);
     succeeds(&run_to_exit(a.deadline, "the hub's tracked file", git));
-    let row = json!({"session_id":"s_remote", "ts":1, "project":"remote-project", "workspace":a.workspace().display().to_string(), "name":"remote session", "how":"exited"});
+    let workspace = a.workspace();
+    let project = log::project_key(&worktree::project(&workspace));
+    let row = json!({"session_id":"s_remote", "ts":1, "project":project.clone(), "workspace":workspace.display().to_string(), "name":"remote session", "how":"exited"});
+    let session_dir = a
+        .home()
+        .join("projects")
+        .join(project)
+        .join("sessions/s_remote");
+    fs::create_dir_all(&session_dir).unwrap();
     fs::write(a.home().join("recent.jsonl"), format!("{row}\n")).unwrap();
-    fs::create_dir_all(a.home().join("projects/remote-project/sessions/s_remote")).unwrap();
     let mut port = ports();
     let server = ProviderServer::start([support::hello()]).unwrap();
     provider_with_port(&a, &server, port);

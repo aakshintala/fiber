@@ -10,8 +10,8 @@ use std::thread;
 use std::time::Duration;
 
 use super::{
-    hub_entries, in_project, listed_latest, notice_lines, route, select_latest, target_in,
-    tty_refusal,
+    hub_entries, in_project, listed_latest, notice_lines, resolve_project_sessions, resume, route,
+    select_latest_project, target_in, tty_refusal,
 };
 use contract::SessionId;
 
@@ -25,6 +25,19 @@ fn the_terminal_refuses_unless_both_standard_input_and_output_are_ttys() {
     assert_eq!(tty_refusal(false, false), Some(SENTENCE));
     assert_eq!(tty_refusal(false, true), Some(SENTENCE));
     assert_eq!(tty_refusal(true, false), Some(SENTENCE));
+}
+
+#[test]
+fn resume_without_a_tty_returns_two_before_startup() {
+    let process = crate::startup::Process {
+        clock: fakes::clock::FakeClock::new(),
+        exe: Err(crate::failed(
+            contract::ErrorCode::IoFailed,
+            "no fiber in test",
+        )),
+    };
+
+    assert_eq!(resume(None, None, None, &process), 2);
 }
 
 /// Session `id` in `sessions` with a first line at `first` and a last
@@ -43,22 +56,76 @@ fn logged(sessions: &Path, id: &str, first: u64, last: u64) {
 
 #[test]
 fn select_latest_returns_the_session_with_the_newest_last_line() {
-    let root = fakes::TempDir::new("fiber-open");
-    let sessions = root.path().join("sessions");
+    let home = fakes::TempDir::new("fiber-open");
+    let project = Path::new("/w");
+    let sessions = log::candidate_sessions_dirs(home.path(), project)[1].clone();
     std::fs::create_dir_all(&sessions).unwrap();
     logged(&sessions, "s_old", 200, 200);
     logged(&sessions, "s_new", 100, 300);
 
-    assert_eq!(select_latest(&sessions, &|_| true).unwrap().0, "s_new");
+    assert_eq!(
+        select_latest_project(home.path(), project, &|_| true)
+            .unwrap()
+            .0,
+        "s_new"
+    );
+}
+
+#[test]
+fn latest_and_selector_search_both_derived_project_directories() {
+    let home = fakes::TempDir::new("fiber-open-candidates");
+    let project = Path::new("/w");
+    let candidates = log::candidate_sessions_dirs(home.path(), project);
+    std::fs::create_dir_all(&candidates[0]).unwrap();
+    std::fs::create_dir_all(&candidates[1]).unwrap();
+    logged(&candidates[0], "s_legacy", 100, 200);
+    logged(&candidates[1], "s_hashed", 100, 300);
+    let identity = |_: &Path| project.to_path_buf();
+    let in_project = in_project(project, &identity);
+
+    assert_eq!(
+        select_latest_project(home.path(), project, &in_project)
+            .unwrap()
+            .0,
+        "s_hashed"
+    );
+    assert_eq!(
+        resolve_project_sessions(home.path(), project, "s_legacy", &in_project)
+            .unwrap()
+            .0,
+        "s_legacy"
+    );
+
+    // Both physical candidates exist, but a session recorded for another
+    // project must not be selected by either resume or continue.
+    let wrong = Path::new("/another/project");
+    logged(&candidates[0], "s_wrong", 100, 400);
+    let path = candidates[0].join("s_wrong/events.jsonl");
+    let mut contents = std::fs::read_to_string(&path).unwrap();
+    contents = contents.replace("\"workspace\":\"/w\"", "\"workspace\":\"/another/project\"");
+    std::fs::write(path, contents).unwrap();
+    let accepts = |workspace: &str| Path::new(workspace) == project;
+    assert_eq!(
+        resolve_project_sessions(home.path(), project, "s_wrong", &accepts)
+            .unwrap_err()
+            .code,
+        contract::ErrorCode::SessionNotFound
+    );
+    assert_ne!(wrong, project);
+    assert_eq!(
+        select_latest_project(home.path(), project, &accepts)
+            .unwrap()
+            .0,
+        "s_hashed"
+    );
 }
 
 #[test]
 fn select_latest_without_a_session_is_a_usage_error_naming_fiber() {
-    let root = fakes::TempDir::new("fiber-open-empty");
-    let sessions = root.path().join("sessions");
-    std::fs::create_dir_all(&sessions).unwrap();
+    let home = fakes::TempDir::new("fiber-open-empty");
+    let project = Path::new("/w");
 
-    let Err(e) = select_latest(&sessions, &|_| true) else {
+    let Err(e) = select_latest_project(home.path(), project, &|_| true) else {
         panic!("expected no session");
     };
     assert_eq!(e.code, contract::ErrorCode::Usage);

@@ -57,12 +57,9 @@ impl Setup {
         );
     }
 
-    /// The project's key: the canonical workspace with every `/` as `-`.
+    /// The project's persisted key for its canonical workspace.
     fn key(&self) -> String {
-        fs::canonicalize(self.workspace())
-            .unwrap()
-            .to_string_lossy()
-            .replace('/', "-")
+        log::project_key(&fs::canonicalize(self.workspace()).unwrap())
     }
 
     /// Writes `content` to the memory extension's machine data directory.

@@ -191,11 +191,17 @@ curl -fsSL https://github.com/aakshintala/fiber/releases/latest/download/install
 4. extracts the binary next to its destination and renames it into place, so a
    failed install never leaves half a binary
 5. installs to the directory the person picks, offered as
-   `$FIBER_INSTALL_DIR`, or `~/.local/bin` if that is unset. When that
-   directory is not on `PATH`, it asks whether to add it, and yes appends one
-   line to the login shell's startup file (`~/.zshrc`, `~/.bashrc`, or
-   `fish_add_path` in `~/.config/fish/config.fish`) unless the line is
-   already there. No leaves `PATH` alone and prints the line to add.
+   `$FIBER_INSTALL_DIR`, or `~/.local/bin` if that is unset. A directory
+   already on `PATH` needs no change. Otherwise, for `zsh`, `bash` or
+   `fish`, `--path` appends one line to the login shell's startup file
+   (`~/.zshrc`, `~/.bashrc`, or `fish_add_path` in
+   `~/.config/fish/config.fish`) unless the line is already there, without
+   asking, while `--no-path` leaves `PATH` alone with a warning naming the
+   directory. With the option unset and a terminal, it asks whether to add
+   the directory: yes appends the line, and no prints the line to add.
+   Without a terminal and without `--path`, it asks nothing and leaves
+   `PATH` alone with a warning. For another shell, it prints the directory
+   to add instead.
 6. runs the binary it installed, once, with the internal install step,
    passing the version. That step downloads the same release's docs and
    extensions archives, checks each SHA-256, and puts `docs/` and each

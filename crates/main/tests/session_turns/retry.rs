@@ -151,7 +151,7 @@ impl Run {
     /// The session's directory, from its id.
     fn session_dir(&self, setup: &Setup) -> PathBuf {
         let workspace = fs::canonicalize(setup.root.path().join("w")).unwrap();
-        let key = workspace.to_string_lossy().replace('/', "-");
+        let key = log::project_key(&workspace);
         setup
             .home()
             .join("projects")

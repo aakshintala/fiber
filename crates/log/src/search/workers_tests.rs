@@ -104,19 +104,20 @@ fn the_worker_count_is_the_parallelism_capped_by_the_sessions() {
 /// session under the own key.
 fn rich(home: &Home) {
     let projects = home.path().join("projects");
-    let one = home.session("-a", "s_a1", "/a/one", &["needle 1", "needle 2"]);
+    let own_key = crate::project_key(Path::new("/a"));
+    let one = home.session(&own_key, "s_a1", "/a/one", &["needle 1", "needle 2"]);
     raw(&one, &named("s_a1", 10, "alpha"));
     raw(&one, &text("s_a1", 5, 11, "needle tie"));
-    let two = home.session("-a", "s_a2", "/a/two", &["needle 3"]);
+    let two = home.session(&own_key, "s_a2", "/a/two", &["needle 3"]);
     bad(&two, 9);
     raw(&two, &text("s_a2", 5, 11, "needle tie"));
-    home.session("-a", "s_a3", "/c/x", &["needle other"]);
-    let linked = home.session("-a", "s_a4", "/a/one", &[]);
+    home.session(&own_key, "s_a3", "/c/x", &["needle other"]);
+    let linked = home.session(&own_key, "s_a4", "/a/one", &[]);
     fs::remove_file(linked.join("events.jsonl")).unwrap();
     symlink(one.join("events.jsonl"), linked.join("events.jsonl")).unwrap();
-    let five = home.session("-a", "s_a5", "/a/one", &["needle 5"]);
+    let five = home.session(&own_key, "s_a5", "/a/one", &["needle 5"]);
     bad(&five, 9);
-    let six = home.session("-a", "s_a6", "/a/two", &[]);
+    let six = home.session(&own_key, "s_a6", "/a/two", &[]);
     bad(&six, 9);
     raw(&six, &text("s_a6", 5, 11, "needle tie"));
     home.session("-b", "s_b1", "/b/one", &["needle b"]);
@@ -289,8 +290,9 @@ impl Cancel for Rendezvous {
 #[test]
 fn three_workers_read_three_sessions_at_once() {
     let home = Home::new();
+    let own_key = crate::project_key(Path::new("/a"));
     for id in ["s_1", "s_2", "s_3"] {
-        home.session("-a", id, "/a/one", &["needle"]);
+        home.session(&own_key, id, "/a/one", &["needle"]);
     }
     let scan = Arc::new(home.scanner("/a/main"));
     let cancel = Arc::new(Rendezvous {
@@ -376,9 +378,10 @@ fn a_cancel_at_any_point_returns_part_of_the_answer() {
 #[test]
 fn identity_runs_once_per_workspace_whatever_the_workers() {
     let home = Home::new();
+    let own_key = crate::project_key(Path::new("/a"));
     for n in 0..8 {
         let workspace = if n % 2 == 0 { "/a/one" } else { "/a/two" };
-        home.session("-a", &format!("s_{n}"), workspace, &["needle"]);
+        home.session(&own_key, &format!("s_{n}"), workspace, &["needle"]);
     }
     let scan = home.scanner("/a/main");
     let found = scan.search(&query("needle", false, 10), &CancelToken::new(), threads(4));

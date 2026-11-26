@@ -979,6 +979,7 @@ dependencies = [
  "net",
  "ring",
  "rustix",
+ "serde",
  "serde_json",
  "similar",
  "support",

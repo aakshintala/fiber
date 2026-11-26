@@ -18,6 +18,7 @@ use crate::support;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
@@ -101,7 +102,7 @@ fn start_old(client: &Socket, workspace: &str, tag: &str) -> (String, String) {
 /// session that never runs a turn deletes its own directory on close
 /// (`docs/invocation.md`, "Lifecycle"), and the keep needs the exited
 /// new session's `session_started` row.
-fn start_new(client: &Socket, path: &str, old: &str, tag: &str) -> String {
+fn start_new(client: &mut Socket, setup: &Setup, path: &str, old: &str, tag: &str) -> String {
     send(
         client,
         &format!("c_new_{tag}"),
@@ -135,10 +136,22 @@ fn start_new(client: &Socket, path: &str, old: &str, tag: &str) -> String {
         "the new subscribe acknowledgement",
         &format!("s_new_{tag}"),
     );
+    client.set_deadline(Deadline::after(Duration::from_secs(30)));
     until(client, "the new session_started", |line| {
+        assert!(
+            line["kind"] != "command_rejected"
+                || line["payload"]["command_id"] != format!("c_new_{tag}"),
+            "the new start was rejected: {line}"
+        );
         line["kind"] == "session_started" && line["session_id"] == id
     });
+    client.set_deadline(setup.deadline);
     until(client, "the new turn_completed", |line| {
+        assert!(
+            line["kind"] != "command_rejected"
+                || line["payload"]["command_id"] != format!("c_new_{tag}"),
+            "the new start was rejected: {line}"
+        );
         line["kind"] == "turn_completed" && line["session_id"] == id
     });
     id
@@ -190,12 +203,12 @@ fn continues_keeps_the_worktree_in_both_exit_orders() {
     let workspace = setup.workspace().to_string_lossy().into_owned();
 
     let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
-    let (client, _) = connect_hub(&setup, &hub);
+    let (mut client, _) = connect_hub(&setup, &hub);
     let guard_ws = SessionGuard::arm(setup.deadline, &workspace);
 
     // The old session exits first while the new one runs.
     let (old1, path1) = start_old(&client, &workspace, "one");
-    let new1 = start_new(&client, &path1, &old1, "one");
+    let new1 = start_new(&mut client, &setup, &path1, &old1, "one");
     assert_eq!(
         logged_worktree(&setup, &new1),
         path1,
@@ -209,7 +222,7 @@ fn continues_keeps_the_worktree_in_both_exit_orders() {
 
     // The new session exits first while the old still runs.
     let (old2, path2) = start_old(&client, &workspace, "two");
-    let new2 = start_new(&client, &path2, &old2, "two");
+    let new2 = start_new(&mut client, &setup, &path2, &old2, "two");
     assert_eq!(
         logged_worktree(&setup, &new2),
         path2,
@@ -256,7 +269,8 @@ fn logged_supervised(setup: &Setup, id: &str) -> Option<bool> {
 /// request's own argument (absent when `None`), runs its one turn, and
 /// returns its id.
 fn start_continuing(
-    client: &Socket,
+    client: &mut Socket,
+    setup: &Setup,
     path: &str,
     old: &str,
     supervised: Option<bool>,
@@ -293,9 +307,16 @@ fn start_continuing(
         "the new subscribe acknowledgement",
         &format!("s_new_{tag}"),
     );
+    client.set_deadline(Deadline::after(Duration::from_secs(30)));
     until(client, "the new turn_completed", |line| {
+        assert!(
+            line["kind"] != "command_rejected"
+                || line["payload"]["command_id"] != format!("c_new_{tag}"),
+            "the new start was rejected: {line}"
+        );
         line["kind"] == "turn_completed" && line["session_id"] == id
     });
+    client.set_deadline(setup.deadline);
     id
 }
 
@@ -308,7 +329,7 @@ fn continues_takes_supervised_from_the_new_request_only() {
     let workspace = setup.workspace().to_string_lossy().into_owned();
 
     let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
-    let (client, _) = connect_hub(&setup, &hub);
+    let (mut client, _) = connect_hub(&setup, &hub);
     let guard_ws = SessionGuard::arm(setup.deadline, &workspace);
 
     let (old, path) = start_old(&client, &workspace, "sup");
@@ -318,7 +339,7 @@ fn continues_takes_supervised_from_the_new_request_only() {
         "the old session is not supervised"
     );
     let guard_w = SessionGuard::arm(setup.deadline, &path);
-    let supervised = start_continuing(&client, &path, &old, Some(true), "true");
+    let supervised = start_continuing(&mut client, &setup, &path, &old, Some(true), "true");
     assert_eq!(
         logged_supervised(&setup, &supervised),
         Some(true),
@@ -326,13 +347,20 @@ fn continues_takes_supervised_from_the_new_request_only() {
     );
     // A continuation of the supervised session that does not ask for
     // supervised is not supervised: the flag is never inherited.
-    let plain = start_continuing(&client, &path, &supervised, None, "absent");
+    let plain = start_continuing(&mut client, &setup, &path, &supervised, None, "absent");
     assert_eq!(
         logged_supervised(&setup, &plain),
         None,
         "an unsupervised continuation records no supervised"
     );
-    let explicit = start_continuing(&client, &path, &supervised, Some(false), "false");
+    let explicit = start_continuing(
+        &mut client,
+        &setup,
+        &path,
+        &supervised,
+        Some(false),
+        "false",
+    );
     assert_eq!(
         logged_supervised(&setup, &explicit),
         None,

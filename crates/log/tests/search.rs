@@ -154,16 +154,21 @@ fn a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project() {
         scan.scope(false),
         PathBuf::from(format!("{}/projects/{key}/", home.path().display()))
     );
-    // The project key makes every slash a dash, and sessions live under
-    // it in Fiber home.
+    // The project key keeps the readable slug and appends a stable hash.
     assert_eq!(
         project_key(Path::new("/Users/alice/work/fiber/.git")),
-        "-Users-alice-work-fiber-.git"
+        support::project_key::project_key(Path::new("/Users/alice/work/fiber/.git"))
     );
-    assert_eq!(project_key(Path::new("a/b//c/")), "a-b--c-");
+    assert_eq!(
+        project_key(Path::new("a/b//c/")),
+        support::project_key::project_key(Path::new("a/b//c/"))
+    );
     assert_eq!(
         sessions_dir(home.path(), Path::new("/proj")),
-        home.path().join("projects/-proj/sessions")
+        home.path().join(format!(
+            "projects/{}/sessions",
+            project_key(Path::new("/proj"))
+        ))
     );
 }
 
@@ -412,12 +417,13 @@ fn a_search_over_many_projects_gives_the_one_pass_answer() {
         "/proj/x",
         &[text("s_g4", 1500, 1, "nothing here")],
     );
-    // `-proj`, the own key: a named session with two hits, one with eight
+    // The `/proj` key: a named session with two hits, one with eight
     // bad lines, a linked log, another project's session, and an input with
     // its output.
+    let project = project_key(Path::new("/proj"));
     let p1 = session(
         home,
-        "-proj",
+        &project,
         "s_p1",
         "/proj/main",
         &[
@@ -428,24 +434,24 @@ fn a_search_over_many_projects_gives_the_one_pass_answer() {
     );
     let p2 = session(
         home,
-        "-proj",
+        &project,
         "s_p2",
         "/proj/w",
         &with_bads(text("s_p2", 500, 1, "needle p2")),
     );
-    let p3 = session(home, "-proj", "s_p3", "/proj/main", &[]);
+    let p3 = session(home, &project, "s_p3", "/proj/main", &[]);
     fs::remove_file(p3.join("events.jsonl")).unwrap();
     symlink(p1.join("events.jsonl"), p3.join("events.jsonl")).unwrap();
     let p4 = session(
         home,
-        "-proj",
+        &project,
         "s_p4",
         "/other/z",
         &[text("s_p4", 4000, 1, "needle other")],
     );
     let p5 = session(
         home,
-        "-proj",
+        &project,
         "s_p5",
         "/proj/main",
         &[

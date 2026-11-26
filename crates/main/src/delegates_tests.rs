@@ -1708,6 +1708,71 @@ fn missing_git_subworkspace_readers_find_the_logged_project_and_fail_closed() {
 }
 
 #[test]
+fn removed_workspace_selection_truth_table_matches_and_rejects_other_workspace() {
+    let root = fakes::TempDir::new("dm-removed-workspace-selection");
+    let home = root.path().join("home");
+    let repository = root.path().join("repository");
+    let other_repository = root.path().join("other-repository");
+    let workspace = repository.join("removed");
+    let other_workspace = other_repository.join("removed");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&other_workspace).unwrap();
+    fakes::git::git(&repository, &["init", "--quiet"]);
+    fakes::git::git(&other_repository, &["init", "--quiet"]);
+    let id = SessionId("s_removed_workspace".into());
+    let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
+    let other_sessions = log::sessions_dir(&home, &worktree::project(&other_workspace));
+    write_log(
+        &sessions,
+        &id.0,
+        &[json!({"kind":"session_started", "payload":{"workspace":workspace}, "seq":1})],
+    );
+    write_log(
+        &other_sessions,
+        &id.0,
+        &[json!({"kind":"session_started", "payload":{"workspace":other_workspace}, "seq":1})],
+    );
+    // Keep both workspaces present so the existing-workspace branch reaches
+    // `same_project` for each logged row.
+
+    // Each requested project scans its own logged session: the recorded path
+    // matches once and rejects once at the same_project predicate.
+    assert_eq!(
+        super::delegate_sessions(&home, &workspace, &id).unwrap(),
+        sessions
+    );
+    assert_eq!(
+        super::delegate_sessions(&home, &other_workspace, &id).unwrap(),
+        other_sessions
+    );
+}
+
+#[test]
+fn delegate_sessions_rejects_a_legacy_row_from_another_project() {
+    let root = fakes::TempDir::new("dm-legacy-other-project");
+    let home = root.path().join("home");
+    let workspace = root.path().join("workspace");
+    let other_workspace = root.path().join("other-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&other_workspace).unwrap();
+    let id = SessionId("s_i2f_false_row".into());
+    let legacy_sessions = home
+        .join("projects")
+        .join(support::project_key::legacy_project_slug(&workspace))
+        .join("sessions");
+    write_log(
+        &legacy_sessions,
+        &id.0,
+        &[json!({"kind":"session_started", "payload":{"workspace":other_workspace}, "seq":1})],
+    );
+
+    assert_eq!(
+        super::delegate_sessions(&home, &workspace, &id).unwrap(),
+        log::sessions_dir(&home, &worktree::project(&workspace))
+    );
+}
+
+#[test]
 fn removed_worktree_readers_name_a_worktree_with_no_usable_project_key() {
     let root = fakes::TempDir::new("dm-bad-key");
     let home = root.path().join("home");

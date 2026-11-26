@@ -3,7 +3,7 @@
 //! `docs/state.md`, "What each part holds"). The cache is always safe to delete, so a copy
 //! that is missing or no longer reads as a model list is no copy at all.
 
-use std::fs;
+use std::fs::{self, File};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -148,6 +148,15 @@ pub fn read_models_dev(home: &Path) -> Result<Option<Vec<u8>>, ConfigError> {
     match fs::read(file) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(_) => Ok(None),
+    }
+}
+
+/// Open the catalog for streaming reads; a non-file or unreadable copy is absent.
+pub fn open_models_dev(home: &Path) -> Result<Option<File>, ConfigError> {
+    let path = models_dev_cache_file(home)?;
+    match File::open(&path) {
+        Ok(file) if file.metadata().is_ok_and(|metadata| metadata.is_file()) => Ok(Some(file)),
+        _ => Ok(None),
     }
 }
 

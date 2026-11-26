@@ -68,7 +68,7 @@ fn terminal(setup: &support::Setup, cols: u16, rows: u16, args: &[&str]) -> supp
 /// as the project key names it.
 fn sessions(setup: &support::Setup) -> std::path::PathBuf {
     let workspace = fs::canonicalize(setup.workspace()).unwrap();
-    let key = workspace.to_string_lossy().replace('/', "-");
+    let key = log::project_key(&workspace);
     setup.home().join("projects").join(key).join("sessions")
 }
 

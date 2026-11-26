@@ -26,8 +26,9 @@ use log::Log;
 use serde_json::{Value, json};
 
 use super::{
-    chain_seed, enter, enter_worktree, finish, fork_seed, in_launch_project, recorded_worktree,
-    recreatable, resume_refused,
+    chain_seed, enter, enter_worktree, finish, fork_seed, in_launch_project,
+    recorded_session_matches, recorded_workspace_matches, recorded_worktree, recreatable,
+    resume_refused,
 };
 use crate::failed;
 use crate::session_command::ResumeStart;
@@ -459,6 +460,86 @@ fn resume_start_rejects_a_log_from_another_session_directory() {
 }
 
 #[test]
+fn recorded_session_matches_requires_an_existing_accepted_session() {
+    let home = fakes::TempDir::new("main-resume-session-match");
+    let sessions = home.path().join("sessions");
+    let id = SessionId("s_0123456789abcdef".into());
+
+    assert!(!recorded_session_matches(&sessions, &id, &|_| true));
+
+    let dir = sessions.join(&id.0);
+    drop(session_with(&dir, None));
+    assert!(!recorded_session_matches(&sessions, &id, &|_| false));
+    assert!(recorded_session_matches(&sessions, &id, &|workspace| {
+        workspace == "/nowhere"
+    }));
+}
+
+#[test]
+fn recorded_workspace_matches_compares_path_identity() {
+    assert!(recorded_workspace_matches("/workspace", "/workspace"));
+    assert!(!recorded_workspace_matches("/workspace", "/other"));
+}
+
+#[test]
+fn recorded_workspace_matches_compares_paths_when_canonicalization_fails() {
+    let invalid = "/workspace/\0invalid";
+    assert!(recorded_workspace_matches(invalid, invalid));
+    assert!(!recorded_workspace_matches(
+        invalid,
+        "/workspace/\0different"
+    ));
+}
+
+#[test]
+fn recorded_workspace_matches_normalizes_missing_path_aliases() {
+    use std::os::unix::fs::symlink;
+
+    let temp = fakes::TempDir::new("main-resume-workspace-alias");
+    let actual = temp.path().join("actual");
+    std::fs::create_dir(&actual).unwrap();
+    let alias = temp.path().join("alias");
+    symlink(&actual, &alias).unwrap();
+    let tail = Path::new("gone").join("workspace");
+    let recorded = actual.join(&tail);
+    let expected = alias.join(&tail);
+    assert!(!recorded.exists());
+    assert!(!expected.exists());
+    assert!(recorded_workspace_matches(
+        &recorded.to_string_lossy(),
+        &expected.to_string_lossy()
+    ));
+
+    let other = temp.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    let distinct = other.join(tail);
+    assert!(!recorded_workspace_matches(
+        &recorded.to_string_lossy(),
+        &distinct.to_string_lossy()
+    ));
+}
+
+#[test]
+fn recorded_workspace_matches_normalizes_enotdir_under_symlinked_ancestors() {
+    use std::os::unix::fs::symlink;
+
+    let temp = fakes::TempDir::new("main-resume-workspace-enotdir");
+    let file = temp.path().join("regular-file");
+    std::fs::write(&file, b"file").unwrap();
+    let alias = temp.path().join("alias");
+    symlink(&file, &alias).unwrap();
+
+    let expected = file.join("missing-workspace");
+    let recorded = alias.join("missing-workspace");
+    assert!(!expected.exists());
+    assert!(!recorded.exists());
+    assert!(!recorded_workspace_matches(
+        &recorded.to_string_lossy(),
+        &expected.to_string_lossy()
+    ));
+}
+
+#[test]
 fn in_launch_project_passes_the_recorded_workspace_once() {
     let home = fakes::TempDir::new("main-resume-in-launch-project");
     let sessions = home.path().join("sessions");
@@ -481,6 +562,38 @@ fn in_launch_project_passes_the_recorded_workspace_once() {
         }
     ));
     assert!(seen.borrow().is_empty());
+    // An existing session with a valid header reaches the predicate, and
+    // its false result refuses it. Missing/corrupt launch identity must not
+    // be treated as an implicit match.
+    let seen = RefCell::new(Vec::new());
+    assert!(!in_launch_project(&dir, &|workspace| {
+        seen.borrow_mut().push(workspace.to_owned());
+        false
+    }));
+    assert_eq!(*seen.borrow(), vec!["/nowhere"]);
+    let absent = sessions.join("s_absent");
+    assert!(!in_launch_project(&absent, &|_| true));
+
+    // A file at an ancestor makes symlink_metadata fail with ENOTDIR, not
+    // NotFound. It must refuse rather than treating every error as absence.
+    let blocker = home.path().join("blocker");
+    std::fs::write(&blocker, "not a directory").unwrap();
+    let blocked_path = blocker.join("worktree");
+    let blocked = sessions.join("s_blocked");
+    let _log = session_with(
+        &blocked,
+        Some(Worktree {
+            path: blocked_path.to_string_lossy().into_owned(),
+            branch: "fiber/x".to_owned(),
+            repository: None,
+        }),
+    );
+    let predicate_called = RefCell::new(false);
+    assert!(!in_launch_project(&blocked, &|_| {
+        *predicate_called.borrow_mut() = true;
+        true
+    }));
+    assert!(!predicate_called.into_inner());
 }
 
 #[test]

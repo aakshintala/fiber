@@ -203,7 +203,7 @@ pub(crate) fn prepare_listing(
     ctx: &Ctx<'_>,
     notes: &mut Vec<String>,
 ) -> Result<ListingPrepared, String> {
-    let home = ctx.home.child(SEED.script())?;
+    let home = ctx.home.listing_with_keep_exited(SEED.script(), Some(0))?;
     let prepared = (|| {
         init_git(ctx, &home)?;
         let seed = doors::mint("s_");
