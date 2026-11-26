@@ -88,13 +88,16 @@ the docs check, below.
 
 A branch does not have to be up to date with `main` to merge, and there is no
 merge queue. The backstop on `main` catches two pull requests that each
-passed alone but break together. A pull request runs `main`'s workflow
-against its own head, so when a `main` commit changes `ci.yml` together with
-the code it calls, a branch from before that commit fails on what the
-workflow now passes, such as an unknown argument, until it merges `main`.
-GitHub reads the workflow from `refs/pull/N/merge`, so a pull request that
-edits `ci.yml` runs its own edit, and the pull request's own run proves that
-edit.
+passed alone but break together. Each push queues a backstop run. Lint,
+`test_linux`, `test` and `release` use the diff since the last `main` commit
+whose backstop passed; `stress` instead uses the pushed commit's first parent,
+so it can finish even while `main` is red. A pull request runs `main`'s
+workflow against its own head, so when a `main` commit changes `ci.yml`
+together with the code it calls, a branch from before that commit fails on
+what the workflow now passes, such as an unknown argument, until it merges
+`main`. GitHub reads the workflow from `refs/pull/N/merge`, so a pull request
+that edits `ci.yml` runs its own edit, and the pull request's own run proves
+that edit.
 
 A newer push to a pull request cancels that pull request's older run. A
 label, a change from draft to ready or a reopen at the same head cancels
@@ -319,7 +322,9 @@ that compiles it. One failure fails the run. The retry above applies only
 to tests the pull request did not touch.
 
 The `stress` job runs on the backstop on Linux x86_64 beside the
-test jobs and builds from the same restored cache. The tests it runs are
+test jobs and builds from the same restored cache. On a push, its plan reads
+the diff from the pushed commit's first parent; on a pull request it continues
+to read the pull request diff. The tests it runs are
 the test functions the diff adds or changes, found by
 `cargo xtask stress-plan`. An empty plan skips the run unless a changed
 source contains a test function, at least one indexed test binary compiles
@@ -636,9 +641,9 @@ gate.
 ## The backstop on `main`
 
 Each push to `main` queues a backstop run. It runs the lint, test_linux, test,
-stress and release jobs the selection chooses from the diff
-since the last `main` commit whose backstop passed. The tests run on all
-three platforms, and it compiles
+and release jobs the selection chooses from the diff since the last `main`
+commit whose backstop passed. The stress job instead reads the diff from the
+push's first parent. The tests run on all three platforms, and it compiles
 the whole workspace. That is the parent
 commit unless a run was cancelled or failed. A conflict between two merged
 pull requests shows in a crate that depends on what the later one changed,

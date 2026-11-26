@@ -847,9 +847,13 @@ jobs:
       - name: Find the touched tests
         id: plan
         env:
+          BASE: ${{ needs.select.outputs.base }}
           GH_TOKEN: ${{ github.token }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            BASE=$(git rev-parse HEAD^1)
+          fi
           number=$(cargo xtask ticket <<<"$PR_BODY")
           labels=""
           issue_text="$RUNNER_TEMP/stress-issue.txt"
