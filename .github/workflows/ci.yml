@@ -830,15 +830,6 @@ jobs:
       BASE: ${{ needs.select.outputs.base }}
     steps:
       - *checkout-full
-      - name: Select the stress diff base
-        id: stress-base
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = push ]; then
-            base=$(git rev-parse HEAD^1)
-          else
-            base="$BASE"
-          fi
-          echo "base=$base" >> "$GITHUB_OUTPUT"
       # The clock starts here so the wall time covers the toolchain
       # install and the build.
       - name: Record the start time
@@ -856,10 +847,13 @@ jobs:
       - name: Find the touched tests
         id: plan
         env:
-          BASE: ${{ steps.stress-base.outputs.base }}
+          BASE: ${{ needs.select.outputs.base }}
           GH_TOKEN: ${{ github.token }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            BASE=$(git rev-parse HEAD^1)
+          fi
           number=$(cargo xtask ticket <<<"$PR_BODY")
           labels=""
           issue_text="$RUNNER_TEMP/stress-issue.txt"

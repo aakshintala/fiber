@@ -641,9 +641,9 @@ gate.
 ## The backstop on `main`
 
 Each push to `main` queues a backstop run. It runs the lint, test_linux, test,
-stress and release jobs the selection chooses from the diff
-since the last `main` commit whose backstop passed. The tests run on all
-three platforms, and it compiles
+and release jobs the selection chooses from the diff since the last `main`
+commit whose backstop passed. The stress job instead reads the diff from the
+push's first parent. The tests run on all three platforms, and it compiles
 the whole workspace. That is the parent
 commit unless a run was cancelled or failed. A conflict between two merged
 pull requests shows in a crate that depends on what the later one changed,
