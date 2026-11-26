@@ -239,3 +239,4 @@ crates/support/src/group_tests.rs	fiber-4817	plan	2026-11-26T13:07:50Z	Amoghs-Ma
 crates/jobs/src/delegate/group.rs	fiber-4817	plan	2026-11-26T13:07:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/jobs/src/registry.rs	fiber-4817	plan	2026-11-26T13:07:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/jobs/src/tool.rs	fiber-4817	plan	2026-11-26T13:07:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/jobs/src/delegate.rs	fiber-4817	plan	2026-11-26T13:49:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
