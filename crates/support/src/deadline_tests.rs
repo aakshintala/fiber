@@ -456,3 +456,16 @@ fn within_a_spent_root_is_a_zero_bound() {
         Duration::ZERO
     );
 }
+
+/// The timeout diagnostic's deterministic branch: off macOS the sampler is
+/// never invoked and the skip note is fixed. Replacing the diagnostic with
+/// any other text fails here; sampled output itself stays best-effort and
+/// unasserted.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn thread_backtrace_reports_the_macos_only_skip_note() {
+    assert_eq!(
+        super::thread_backtrace(),
+        "thread backtrace unavailable (sampler is only configured on macOS)"
+    );
+}

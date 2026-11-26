@@ -190,6 +190,11 @@ impl Deadline {
     }
 }
 
+// Exempt: macOS-only sampler helper; mutants run on Linux, where it is not
+// compiled (`docs/testing/mutants.md`, "Proving a test bites"). The macOS
+// test job still runs it; its output stays best-effort and no test pins
+// sampled output.
+#[cfg_attr(false, mutants::skip)]
 #[cfg(target_os = "macos")]
 fn require_success(output: std::process::Output) -> std::io::Result<std::process::Output> {
     if output.status.success() {
@@ -204,41 +209,51 @@ fn require_success(output: std::process::Output) -> std::io::Result<std::process
 fn thread_backtrace() -> String {
     #[cfg(target_os = "macos")]
     {
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let _sampler = std::thread::Builder::new()
-            .name("deadline-backtrace".to_owned())
-            .spawn(move || {
-                let pid = std::process::id().to_string();
-                let output = std::process::Command::new("sample")
-                    .args([pid.as_str(), "1"])
-                    .output()
-                    .and_then(require_success)
-                    .or_else(|_| {
-                        std::process::Command::new("lldb")
-                            .args(["-p", pid.as_str(), "--batch", "-o", "thread backtrace all"])
-                            .output()
-                            .and_then(require_success)
-                    });
-                let text: String = output
-                    .map(|output| {
-                        String::from_utf8_lossy(&output.stdout)
-                            .chars()
-                            .take(32_768)
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let _sent = tx.send(text);
-            });
-        Deadline::after(Duration::from_secs(10))
-            .recv(&rx)
-            .ok()
-            .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| "thread backtrace unavailable (sampler timed out or failed)".into())
+        sample_thread_backtrace()
     }
     #[cfg(not(target_os = "macos"))]
     {
         "thread backtrace unavailable (sampler is only configured on macOS)".into()
     }
+}
+
+// Exempt: macOS-only sampler; mutants run on Linux, where it is not
+// compiled (`docs/testing/mutants.md`, "Proving a test bites"). Output is
+// best-effort: every sampler error becomes the skip note, and no test pins
+// sampled output. The ten-second bound is unchanged.
+#[cfg_attr(false, mutants::skip)]
+#[cfg(target_os = "macos")]
+fn sample_thread_backtrace() -> String {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let _sampler = std::thread::Builder::new()
+        .name("deadline-backtrace".to_owned())
+        .spawn(move || {
+            let pid = std::process::id().to_string();
+            let output = std::process::Command::new("sample")
+                .args([pid.as_str(), "1"])
+                .output()
+                .and_then(require_success)
+                .or_else(|_| {
+                    std::process::Command::new("lldb")
+                        .args(["-p", pid.as_str(), "--batch", "-o", "thread backtrace all"])
+                        .output()
+                        .and_then(require_success)
+                });
+            let text: String = output
+                .map(|output| {
+                    String::from_utf8_lossy(&output.stdout)
+                        .chars()
+                        .take(32_768)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let _sent = tx.send(text);
+        });
+    Deadline::after(Duration::from_secs(10))
+        .recv(&rx)
+        .ok()
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| "thread backtrace unavailable (sampler timed out or failed)".into())
 }
 
 #[cfg(test)]
