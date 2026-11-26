@@ -279,3 +279,7 @@ crates/main/src/builtin_tests.rs:1900-1902	fiber-4420	plan	2026-11-26T22:56:16Z	
 crates/main/src/builtin_tests.rs:1904-1904	fiber-4420	plan	2026-11-26T22:56:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
 crates/main/src/builtin_tests.rs:1906-1907	fiber-4420	plan	2026-11-26T22:56:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
 crates/main/src/builtin_tests.rs:1922-1923	fiber-4420	plan	2026-11-26T22:56:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
+crates/extensions/src/host.rs	fiber-4975	plan	2026-11-26T22:56:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/lua/tool.rs	fiber-4975	plan	2026-11-26T22:56:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/tests/lazy_commands.rs	fiber-4975	plan	2026-11-26T22:56:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/extension_host/extension_lazy_commands.rs	fiber-4975	plan	2026-11-26T22:56:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
