@@ -1044,6 +1044,7 @@ fn scoped_search_space_stays_in_query() {
     );
     type_query(&mut app, "zebra");
     let before = screen(&app, 80, 24);
+    // Search results show the match count as N of M (`docs/tui.md`, "Swapped views").
     assert!(before.contains("1 of 1"), "{before}");
     let generation = match app.on_key(Key::Char(' '), now()) {
         Effect::FindPause { generation, .. } => generation,
@@ -1094,6 +1095,7 @@ fn clicking_body_row_with_search_keeps_match_and_count() {
     let before_matches = app.call_view().expect("open").matches.clone();
     let before_current = app.call_view().and_then(|view| view.current);
     let before = screen(&app, 80, 24);
+    // Search results show the match count as N of M (`docs/tui.md`, "Swapped views").
     assert!(before.contains("1 of 2"), "{before}");
 
     assert_eq!(app.call_view_click(&Spot::Row(row)), Effect::None);
