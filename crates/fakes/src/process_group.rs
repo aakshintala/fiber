@@ -535,6 +535,42 @@ fn read_lookup(child: Child, what: &str, deadline: Duration) -> String {
     }
 }
 
+/// One process-table row: parent, process group and command line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProcessRow {
+    /// Parent process id.
+    pub ppid: u32,
+    /// Process group id.
+    pub pgid: u32,
+    /// Command line printed by `ps`.
+    pub args: String,
+}
+
+/// Reads `ps -o ppid=,pgid=,args= -p <pid>` under the diagnostic bound.
+/// A missing or invalid row is `Ok(None)`; spawn, wait and timeout failures
+/// remain errors so callers can distinguish unavailable diagnostics.
+pub fn process_row(pid: u32) -> io::Result<Option<ProcessRow>> {
+    let pid_text = pid.to_string();
+    let child = spawn_lookup("ps", &["-o", "ppid=,pgid=,args=", "-p", &pid_text])?;
+    let (status, out) = bounded(child, "ps process row", COMMAND_LINE_DIAGNOSTIC_TIMEOUT)?;
+    if !status.success() {
+        return Ok(None);
+    }
+    Ok(parse_process_row(&String::from_utf8_lossy(&out)))
+}
+
+fn parse_process_row(text: &str) -> Option<ProcessRow> {
+    let mut parts = text.split_whitespace();
+    let (Some(ppid), Some(pgid)) = (parts.next(), parts.next()) else {
+        return None;
+    };
+    let (Ok(ppid), Ok(pgid)) = (ppid.parse(), pgid.parse()) else {
+        return None;
+    };
+    let args = parts.collect::<Vec<_>>().join(" ");
+    (!args.is_empty()).then_some(ProcessRow { ppid, pgid, args })
+}
+
 /// `pid`'s command line through `ps -o args= -p <pid>`, bounded like
 /// [`matching`]'s `pgrep`: a hung `ps` is killed, never waited out.
 fn command_line(pid: u32) -> String {
