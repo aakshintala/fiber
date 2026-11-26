@@ -420,6 +420,183 @@ fn find_logged_session_skips_a_directory_without_a_log() {
     }
 }
 
+#[test]
+fn project_lookup_resolves_hashed_and_legacy_directories_without_crossing_projects() {
+    let home = fakes::TempDir::new("log-project-lookup-identities");
+    let identity = std::path::Path::new("/a-b");
+    let hashed = crate::project_key(identity);
+    let id = SessionId("s_0123456789abcdef".into());
+    let hashed_dir = home
+        .path()
+        .join("projects")
+        .join(&hashed)
+        .join("sessions")
+        .join(&id.0);
+    let legacy_dir = home.path().join("projects/-a-b/sessions").join(&id.0);
+    std::fs::create_dir_all(&hashed_dir).unwrap();
+    std::fs::create_dir_all(&legacy_dir).unwrap();
+    std::fs::write(
+        hashed_dir.join("events.jsonl"),
+        b"{\"kind\":\"session_started\",\"payload\":{\"workspace\":\"/a-b\"}}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path()
+            .join("projects")
+            .join(&hashed)
+            .join("legacy-key"),
+        b"-a-b",
+    )
+    .unwrap();
+    std::fs::write(
+        legacy_dir.join("events.jsonl"),
+        b"{\"kind\":\"session_started\",\"payload\":{\"workspace\":\"/a-b\"}}\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        find_session(home.path(), &id),
+        Some(("-a-b".to_owned(), legacy_dir.clone()))
+    );
+    std::fs::remove_dir_all(&legacy_dir).unwrap();
+    assert_eq!(
+        find_session_in_project(home.path(), "-a-b", &id),
+        Some((hashed.clone(), hashed_dir.clone()))
+    );
+    assert_eq!(
+        find_logged_session_in(home.path(), identity, &id, &|workspace| workspace == "/a-b"),
+        Some((hashed, hashed_dir))
+    );
+    assert!(
+        find_logged_session_in(home.path(), identity, &id, &|workspace| workspace
+            == "/wrong")
+        .is_none()
+    );
+}
+
+#[test]
+fn find_logged_session_matching_reads_the_session_first_line_in_each_project() {
+    let home = fakes::TempDir::new("log-find-matching");
+    let id = SessionId("s_aaaaaaaaaaaaaaaa".into());
+    let key = "project-key";
+    let workspace = "/workspace";
+    let dir = home
+        .path()
+        .join("projects")
+        .join(key)
+        .join("sessions")
+        .join(&id.0);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("events.jsonl"),
+        format!("{{\"kind\":\"session_started\",\"payload\":{{\"workspace\":\"{workspace}\"}}}}\n"),
+    )
+    .unwrap();
+    assert_eq!(
+        find_logged_session_matching(home.path(), &id, &|started| started.workspace.as_deref()
+            == Some(workspace)),
+        Some((key.to_owned(), dir.clone()))
+    );
+    assert_eq!(
+        find_logged_session_matching(home.path(), &id, &|started| started.workspace.as_deref()
+            == Some("/other")),
+        None
+    );
+}
+
+#[test]
+fn find_session_in_project_resolves_slugged_hashed_key_and_absent_id() {
+    let home = fakes::TempDir::new("log-find-project-key");
+    let id = SessionId("s_aaaaaaaaaaaaaaaa".into());
+    let legacy = "a";
+    let key = "a-0123456789abcdef";
+    let dir = home
+        .path()
+        .join("projects")
+        .join(legacy)
+        .join("sessions")
+        .join(&id.0);
+    std::fs::create_dir_all(&dir).unwrap();
+    assert_eq!(
+        find_session_in_project(home.path(), key, &id),
+        Some((key.to_owned(), dir))
+    );
+    assert_eq!(
+        find_session_in_project(home.path(), key, &SessionId("s_missing".into())),
+        None
+    );
+}
+
+#[test]
+fn find_session_in_project_tests_marker_and_legacy_disjuncts() {
+    let home = fakes::TempDir::new("log-find-project-key-marker");
+    let id = SessionId("s_aaaaaaaaaaaaaaaa".into());
+    let key = "a-0123456789abcdef";
+    let legacy_dir = home
+        .path()
+        .join("projects")
+        .join("a")
+        .join("sessions")
+        .join(&id.0);
+    project(home.path(), "a", &id.0, false);
+    let hashed_dir = home.path().join("projects").join(key);
+    std::fs::create_dir_all(hashed_dir.join("sessions").join(&id.0)).unwrap();
+    std::fs::write(hashed_dir.join("legacy-key"), b"a").unwrap();
+    assert_eq!(
+        find_session_in_project(home.path(), key, &id),
+        Some((key.to_owned(), legacy_dir.clone()))
+    );
+    let marker_id = SessionId("s_bbbbbbbbbbbbbbbb".into());
+    let marker_dir = hashed_dir.join("sessions").join(&marker_id.0);
+    std::fs::create_dir_all(&marker_dir).unwrap();
+    assert_eq!(
+        find_session_in_project(home.path(), "a", &marker_id),
+        Some((key.to_owned(), marker_dir))
+    );
+    assert_eq!(
+        find_session_in_project(home.path(), "a", &SessionId("s_missing".into())),
+        None
+    );
+
+    let adversarial = fakes::TempDir::new("log-find-project-key-wrong-marker");
+    let physical = "a-0123456789abcdef";
+    let adversarial_id = SessionId("s_cccccccccccccccc".into());
+    let project_dir = adversarial.path().join("projects").join(physical);
+    let session_dir = project_dir.join("sessions").join(&adversarial_id.0);
+    std::fs::create_dir_all(&session_dir).unwrap();
+    let other_suffixed_key = "b-0123456789abcdef";
+    std::fs::write(
+        project_dir.join("legacy-key"),
+        other_suffixed_key.as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(
+        find_session_in_project(adversarial.path(), other_suffixed_key, &adversarial_id),
+        None
+    );
+}
+
+#[test]
+fn malformed_project_key_suffix_does_not_select_a_legacy_slug() {
+    let home = fakes::TempDir::new("log-project-key-invalid-suffix");
+    let id = SessionId("s_0123456789abcdef".into());
+    for key in [
+        "-a-b-short",
+        "-a-b-0123456789abcdeg",
+        "-a-b-0123456789ABCDE",
+    ] {
+        project(home.path(), key, &id.0, false);
+        assert!(find_session_in_project(home.path(), "-a-b-0123456789abcdef", &id).is_none());
+    }
+}
+
+#[test]
+fn legacy_slug_accepts_only_a_hash_suffixed_key() {
+    assert_eq!(legacy_slug("a-0123456789abcdef"), Some("a"));
+    assert_eq!(legacy_slug("a-b"), None);
+    assert_eq!(legacy_slug("a"), None);
+}
+
 fn line() -> Envelope {
     Envelope {
         kind: EventKind::Unknown("x".into()),
@@ -492,6 +669,28 @@ fn pending_is_true_when_lagged() {
         ..Default::default()
     };
     assert!(pending(&state));
+}
+
+#[test]
+fn find_logged_session_in_uses_derived_directories_and_workspace_filter() {
+    let home = fakes::TempDir::new("log-find-logged-in");
+    let identity = std::path::Path::new("/a-b");
+    let id = SessionId("s_1".into());
+    let candidates = crate::candidate_sessions_dirs(home.path(), identity);
+    let legacy = candidates[0].join(&id.0);
+    std::fs::create_dir_all(&legacy).unwrap();
+    let hashed = candidates[1].join(&id.0);
+    std::fs::create_dir_all(&hashed).unwrap();
+    std::fs::write(
+        hashed.join("events.jsonl"),
+        b"{\"kind\":\"session_started\",\"payload\":{\"workspace\":\"/workspace\"}}\n",
+    )
+    .unwrap();
+    let found = find_logged_session_in(home.path(), identity, &id, &|workspace| {
+        workspace == "/workspace"
+    });
+    assert_eq!(found, Some((crate::project_key(identity), hashed,)));
+    assert!(find_logged_session_in(home.path(), identity, &id, &|_| false).is_none());
 }
 
 #[test]

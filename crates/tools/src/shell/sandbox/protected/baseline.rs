@@ -113,7 +113,7 @@ pub(crate) struct StatePaths {
 pub(crate) fn state_paths(home: &Path, workspace: &Path) -> Result<StatePaths, String> {
     let identity = identity(workspace)?;
     // Match `log::project_key` without adding a dependency from tools to log.
-    let key = config::ProjectKey::new(identity.path.to_string_lossy().replace('/', "-"))
+    let key = config::ProjectKey::new(support::project_key::project_key(&identity.path))
         .map_err(|source| source.to_string())?;
     let identity_marker = if identity.in_repository {
         identity.path.join("config")

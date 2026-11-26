@@ -83,7 +83,8 @@ fn debug_diag(home: &Home, clock: Arc<FakeClock>) -> Diag {
 #[test]
 fn an_own_project_hit_writes_one_scan_line() {
     let home = Home::new();
-    home.session("-a", "s_1", "/a/main", &["needle own"]);
+    let own_key = crate::project_key(Path::new("/a"));
+    home.session(&own_key, "s_1", "/a/main", &["needle own"]);
     let clock = FakeClock::new();
     let diag = debug_diag(&home, Arc::clone(&clock));
     let calls = Arc::new(AtomicUsize::new(0));
@@ -180,8 +181,9 @@ fn a_problem_only_scan_writes_one_scan_line() {
 #[test]
 fn elapsed_spans_the_whole_request() {
     let home = Home::new();
-    home.session("-a", "s_1", "/a/one", &["needle"]);
-    home.session("-a", "s_2", "/a/two", &["needle"]);
+    let own_key = crate::project_key(Path::new("/a"));
+    home.session(&own_key, "s_1", "/a/one", &["needle"]);
+    home.session(&own_key, "s_2", "/a/two", &["needle"]);
     let clock = FakeClock::new();
     let diag = debug_diag(&home, Arc::clone(&clock));
     let calls = Arc::new(AtomicUsize::new(0));
@@ -209,7 +211,8 @@ fn hit_caps_match_an_untimed_scanner_with_one_line_each() {
         ),
     ] {
         let home = Home::new();
-        home.session("-a", "s_1", "/a/one", &texts);
+        let own_key = crate::project_key(Path::new("/a"));
+        home.session(&own_key, "s_1", "/a/one", &texts);
         let clock = FakeClock::new();
         let diag = debug_diag(&home, Arc::clone(&clock));
         let calls = Arc::new(AtomicUsize::new(0));
@@ -229,7 +232,8 @@ fn problem_caps_match_an_untimed_scanner_with_one_line_each() {
     use super::tests::raw;
     for (corrupt, problems, more) in [(19, 19, 0), (20, 20, 0), (21, 20, 1)] {
         let home = Home::new();
-        let dir = home.session("-a", "s_1", "/a/one", &[]);
+        let own_key = crate::project_key(Path::new("/a"));
+        let dir = home.session(&own_key, "s_1", "/a/one", &[]);
         for _ in 0..corrupt {
             raw(&dir, b"{\"kind\": needle\n");
         }
@@ -251,7 +255,8 @@ fn problem_caps_match_an_untimed_scanner_with_one_line_each() {
 #[test]
 fn an_untimed_scanner_writes_nothing() {
     let home = Home::new();
-    home.session("-a", "s_1", "/a/main", &["needle"]);
+    let own_key = crate::project_key(Path::new("/a"));
+    home.session(&own_key, "s_1", "/a/main", &["needle"]);
     let found = home
         .scanner("/a/main")
         .scan(&query("needle", false, 100), &CancelToken::new());
@@ -265,7 +270,8 @@ fn an_untimed_scanner_writes_nothing() {
 #[test]
 fn a_scanner_timed_by_an_info_diag_writes_nothing() {
     let home = Home::new();
-    home.session("-a", "s_1", "/a/main", &["needle"]);
+    let own_key = crate::project_key(Path::new("/a"));
+    home.session(&own_key, "s_1", "/a/main", &["needle"]);
     let clock: Arc<dyn Clock> = FakeClock::new();
     let diag = Diag::new(home.path(), Process::Hub, Level::Info, clock);
     let scan = SessionScan::new(
@@ -293,8 +299,9 @@ fn a_scanner_timed_by_an_info_diag_writes_nothing() {
 fn a_scan_line_carries_no_query_snippet_path_or_content() {
     let home = Home::new();
     let sentinel = "sentinel-q-8f3a-needle";
-    home.session("-a", "s_1", "/a/main", &[sentinel]);
-    let dir = home.sessions("-a").join("s_1");
+    let own_key = crate::project_key(Path::new("/a"));
+    home.session(&own_key, "s_1", "/a/main", &[sentinel]);
+    let dir = home.sessions(&own_key).join("s_1");
     std::fs::create_dir_all(dir.join("artifacts")).unwrap();
     std::fs::write(dir.join("artifacts").join("a.txt"), sentinel).unwrap();
     let clock = FakeClock::new();
@@ -315,8 +322,9 @@ fn a_scan_line_carries_no_query_snippet_path_or_content() {
 fn a_non_utf8_session_name_still_writes_only_op_and_ms() {
     use std::os::unix::ffi::OsStrExt as _;
     let home = Home::new();
-    home.session("-a", "s_1", "/a/main", &["needle"]);
-    let sessions = home.sessions("-a");
+    let own_key = crate::project_key(std::path::Path::new("/a"));
+    home.session(&own_key, "s_1", "/a/main", &["needle"]);
+    let sessions = home.sessions(&own_key);
     let odd = sessions.join(std::ffi::OsStr::from_bytes(b"s_\xff"));
     std::fs::create_dir_all(&odd).unwrap();
     std::fs::write(

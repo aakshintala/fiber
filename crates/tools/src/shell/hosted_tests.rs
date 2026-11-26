@@ -70,6 +70,7 @@ fn end() -> Exit {
         signal: None,
         timed_out: false,
         output_cap: false,
+        output_write_failure: None,
     }
 }
 
@@ -480,6 +481,7 @@ fn an_adopted_end_reads_the_output_tail_a_kept_end_leaves_out() {
         signal: None,
         timed_out: false,
         output_cap: false,
+        output_write_failure: None,
     };
     let adopted = super::adopted_end(JobId("j_one".into()), &output, &exit);
     assert_eq!(adopted.status, Outcome::Completed);
@@ -502,6 +504,7 @@ fn a_flooded_adopted_end_fails_with_the_flooded_code_and_keeps_the_tail() {
         signal: Some(15),
         timed_out: false,
         output_cap: false,
+        output_write_failure: None,
     };
     let flooded = super::adopted_flooded_end(JobId("j_one".into()), &output, &exit);
     assert_eq!(flooded.status, Outcome::Failed);
@@ -510,6 +513,48 @@ fn a_flooded_adopted_end_fails_with_the_flooded_code_and_keeps_the_tail() {
         Some(&ErrorCode::Flooded)
     );
     assert_eq!(flooded.output_tail.as_deref(), Some("noise\n"));
+}
+
+#[test]
+fn kept_end_write_failure_overrides_normal_and_flooded_completions() {
+    let dir = fakes::TempDir::new("fiber-kept-end-write-failure");
+    let output = dir.path().join("job.log");
+    std::fs::write(&output, "kept\n").unwrap();
+    let path = std::path::PathBuf::from("/keeper/job.log");
+    let exit = Exit {
+        code: Some(3),
+        signal: None,
+        timed_out: false,
+        output_cap: false,
+        output_write_failure: Some(path.clone()),
+    };
+    // A stored failure replaces the selected end through one override:
+    // the message names the path once.
+    let kept = kept_end(JobId("j_one".into()), &exit);
+    assert_eq!(kept.status, Outcome::Failed);
+    let failure = kept.error.expect("kept write failure");
+    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert!(failure.message.contains(path.to_str().unwrap()));
+    assert!(failure.message.contains("replaced end: nonzero_exit"));
+    assert_eq!(failure.message.matches("replaced end:").count(), 1);
+    assert!(kept.output_tail.is_none());
+    let adopted = super::adopted_end(JobId("j_one".into()), &output, &exit);
+    assert_eq!(adopted.status, Outcome::Failed);
+    let failure = adopted.error.expect("adopted write failure");
+    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert!(failure.message.contains(path.to_str().unwrap()));
+    assert!(failure.message.contains("replaced end: nonzero_exit"));
+    assert_eq!(failure.message.matches("replaced end:").count(), 1);
+    assert_eq!(adopted.output_tail.as_deref(), Some("kept\n"));
+    let flooded = super::adopted_flooded_end(JobId("j_one".into()), &output, &exit);
+    assert_eq!(flooded.status, Outcome::Failed);
+    let failure = flooded.error.expect("flooded write failure");
+    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert!(failure.message.contains(path.to_str().unwrap()));
+    assert!(failure.message.contains("replaced end: flooded"));
+    assert!(failure.message.contains("monitor was also flooded"));
+    assert_eq!(failure.message.matches("replaced end:").count(), 1);
+    assert_eq!(flooded.output_tail.as_deref(), Some("kept\n"));
 }
 
 #[test]

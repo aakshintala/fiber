@@ -72,9 +72,11 @@ impl RecentRow {
         self.status.as_ref().is_some_and(is_delegate)
     }
 
-    /// Whether the session's directory is still there.
-    pub(crate) fn dir_exists(&self, home: &Path) -> bool {
-        log::dir_exists(&log::session_dir(home, &self.project, &self.session_id))
+    /// The session directory named by this row's project key. Listing uses
+    /// the persisted key and its legacy path, not the opening event: the
+    /// workspace is not a prerequisite for listing an exited row.
+    fn located_dir(&self, home: &Path) -> Option<(String, PathBuf)> {
+        log::find_session_in_project(home, &self.project, &self.session_id)
     }
 }
 
@@ -167,9 +169,13 @@ pub(crate) fn listed_from_rows(
 ) -> Vec<RecentRow> {
     newest_first(rows)
         .into_iter()
-        .filter(|row| project.is_none_or(|key| row.project == key))
         .filter(|row| !row.delegate())
-        .filter(|row| row.dir_exists(home))
+        .filter_map(|mut row| {
+            let (physical_key, _) = row.located_dir(home)?;
+            row.project = physical_key;
+            Some(row)
+        })
+        .filter(|row| project.is_none_or(|key| row.project == key))
         .collect()
 }
 
@@ -286,7 +292,11 @@ pub(crate) fn seeds(home: &Path) -> Vec<RecentRow> {
         .filter(|row| !row.delegate())
         .filter(|row| !row.archived)
         .filter(|row| row.how == Left::Crashed || row.waiting())
-        .filter(|row| row.dir_exists(home))
+        .filter_map(|mut row| {
+            let (physical_key, _) = row.located_dir(home)?;
+            row.project = physical_key;
+            Some(row)
+        })
         .collect()
 }
 

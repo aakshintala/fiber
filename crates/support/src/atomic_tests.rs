@@ -5,12 +5,18 @@
 //! reports `AlreadyExists` with the destination intact.
 
 use std::fs;
-use std::io;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 
 use super::*;
+
+#[test]
+fn rename_unsupported_classifies_unsupported_and_other_errors() {
+    assert!(rename_unsupported(rustix::io::Errno::INVAL));
+    assert!(!rename_unsupported(rustix::io::Errno::PERM));
+}
 
 fn temps(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(dir)
@@ -89,6 +95,40 @@ fn real_rename_failure_keeps_the_old_file() {
         "a failed rename carries no Unsynced marker: {error}"
     );
     assert_eq!(fs::read(&file).unwrap(), b"old");
+    assert!(temps(dir.path()).is_empty());
+}
+
+#[test]
+fn streaming_write_validates_before_replacing_and_cleans_up_on_error() {
+    let dir = fakes::TempDir::new("fiber-support-atomic-stream-error");
+    let file = dir.path().join("value");
+    fs::write(&file, b"old").unwrap();
+    let error = write_atomic_stream(&file, 0o600, |out| {
+        out.write_all(b"partial")?;
+        Err(io::Error::new(io::ErrorKind::InvalidData, "invalid stream"))
+    })
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(fs::read(&file).unwrap(), b"old");
+    assert!(temps(dir.path()).is_empty());
+}
+
+#[test]
+fn streaming_write_syncs_and_replaces_after_validation() {
+    let dir = fakes::TempDir::new("fiber-support-atomic-stream-success");
+    let file = dir.path().join("value");
+    fs::write(&file, b"old").unwrap();
+    write_atomic_stream(&file, 0o600, |out| {
+        out.write_all(b"new")?;
+        out.flush()?;
+        out.seek(SeekFrom::Start(0))?;
+        let mut bytes = Vec::new();
+        out.read_to_end(&mut bytes)?;
+        assert_eq!(bytes, b"new");
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(fs::read(&file).unwrap(), b"new");
     assert!(temps(dir.path()).is_empty());
 }
 
@@ -268,4 +308,72 @@ fn reset_write_count_zeroes_after_writes() {
     assert_ne!(write_count(), 0);
     reset_write_count();
     assert_eq!(write_count(), 0);
+}
+
+#[test]
+fn rename_unsupported_classifier_matches_only_supported_fallback_errors() {
+    for error in [
+        rustix::io::Errno::INVAL,
+        rustix::io::Errno::NOSYS,
+        rustix::io::Errno::NOTSUP,
+    ] {
+        assert!(super::rename_unsupported(error), "{error}");
+    }
+    for error in [rustix::io::Errno::EXIST, rustix::io::Errno::NOENT] {
+        assert!(!super::rename_unsupported(error), "{error}");
+    }
+}
+
+#[test]
+fn rename_noreplace_maps_unsupported_and_propagates_other_errors() {
+    let dir = fakes::TempDir::new("fiber-support-rename-noreplace-errors");
+    let source = dir.path().join("source");
+    fs::create_dir(&source).unwrap();
+    let descendant = source.join("child");
+    assert_eq!(
+        rename_noreplace(&source, &descendant).unwrap_err().kind(),
+        io::ErrorKind::Unsupported
+    );
+
+    let missing = dir.path().join("missing");
+    let target = dir.path().join("target");
+    assert_eq!(
+        rename_noreplace(&missing, &target).unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
+}
+
+#[test]
+fn rename_noreplace_success() {
+    let dir = fakes::TempDir::new("fiber-support-rename-noreplace");
+    let source = dir.path().join("source");
+    let target = dir.path().join("target");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("data"), b"kept").unwrap();
+    rename_noreplace(&source, &target).unwrap();
+    assert!(!source.exists());
+    assert_eq!(fs::read(target.join("data")).unwrap(), b"kept");
+}
+
+#[test]
+fn rename_noreplace_existing_target_keeps_source() {
+    let dir = fakes::TempDir::new("fiber-support-rename-existing");
+    let source = dir.path().join("source");
+    let target = dir.path().join("target");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("data"), b"source").unwrap();
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("data"), b"target").unwrap();
+    let error = rename_noreplace(&source, &target).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read(source.join("data")).unwrap(), b"source");
+    assert_eq!(fs::read(target.join("data")).unwrap(), b"target");
+}
+
+#[test]
+fn rename_noreplace_idempotent() {
+    let dir = fakes::TempDir::new("fiber-support-rename-idempotent");
+    let error =
+        rename_noreplace(&dir.path().join("missing"), &dir.path().join("target")).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::NotFound);
 }

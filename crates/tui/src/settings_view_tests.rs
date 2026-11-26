@@ -4012,8 +4012,9 @@ fn numeric_controls_match_the_documented_values_and_include_defaults() {
     for (key, want, default) in sliders {
         assert_eq!(number_slider(key), Some(want), "{key}");
         assert!((want.0..=want.1).contains(&default), "{key}");
+        assert!(number_list(key).is_none(), "{key}");
     }
-    let lists: [(&str, &[f64], f64); 7] = [
+    let lists: [(&str, &[f64], f64); 9] = [
         (
             "compaction.tokens",
             &[
@@ -4052,17 +4053,46 @@ fn numeric_controls_match_the_documented_values_and_include_defaults() {
             &[300_000.0, 900_000.0, 1_800_000.0, 3_600_000.0, 7_200_000.0],
             1_800_000.0,
         ),
+        (
+            "hub.idle_exit_ms",
+            &[300_000.0, 900_000.0, 1_800_000.0, 3_600_000.0, 7_200_000.0],
+            1_800_000.0,
+        ),
+        ("session.keep_exited", &[0.0, 5.0, 10.0, 20.0, 50.0], 10.0),
     ];
     for (key, want, default) in lists {
         assert_eq!(number_list(key), Some(want), "{key}");
         assert!(want.contains(&default), "{key}");
+        assert!(number_slider(key).is_none(), "{key}");
     }
-    assert_eq!(number_list("hub.idle_exit_ms"), None);
-    assert_eq!(
-        number_list("session.keep_exited"),
-        Some(&[0.0, 5.0, 10.0, 20.0, 50.0][..])
-    );
-    assert_eq!(number_list("tui.rail.width"), None);
+    for key in [
+        "compaction.tokens",
+        "budget.usd",
+        "reviewer.block_limits.consecutive",
+        "reviewer.block_limits.session",
+        "retry.initial_delay_ms",
+        "retry.max_delay_ms",
+        "hub.idle_exit_ms",
+        "session.idle_exit_ms",
+        "session.keep_exited",
+    ] {
+        assert!(number_list(key).is_some(), "documented number list: {key}");
+        assert!(
+            number_slider(key).is_none(),
+            "documented number list: {key}"
+        );
+    }
+    for key in [
+        "tui.rail.width",
+        "tui.panel.width",
+        "quota.notice_at",
+        "compaction.window_fraction",
+        "cache.warm_cap",
+        "retry.attempts",
+    ] {
+        assert!(number_slider(key).is_some(), "documented slider: {key}");
+        assert!(number_list(key).is_none(), "documented slider: {key}");
+    }
     assert_eq!(
         text_list("model_lists.refresh_after"),
         Some(&["1h", "6h", "12h", "24h", "3d", "7d"][..])
@@ -4493,6 +4523,29 @@ fn slider_custom_values_step_to_nearest_tick_and_off_range_values_clamp() {
     assert!((stepped - 0.9).abs() < 1e-12);
 }
 
+/// Enter follows the documented list order (`docs/tui.md`, `/settings`, "Controls").
+#[test]
+fn hub_idle_exit_steps_and_persists() {
+    let row = on(
+        SettingsTab::Sessions,
+        "Hub idle exit",
+        "hub.idle_exit_ms",
+        value("1800000"),
+        "default",
+        ANY,
+        SettingControl::Number,
+    );
+    let fake = Fake::new(vec![row]);
+    let mut settings = at(&fake, "hub.idle_exit_ms");
+    assert_eq!(shown_value(settings.selected().unwrap()).0, "30 min");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "hub.idle_exit_ms", "3600000")]
+    );
+}
+
+/// Enter follows the documented list order (`docs/tui.md`, `/settings`, "Controls").
 #[test]
 fn keep_exited_lists_and_persists_the_documented_session_counts() {
     let row = |shown| {
@@ -4528,6 +4581,14 @@ fn keep_exited_lists_and_persists_the_documented_session_counts() {
     assert_eq!(
         next_number_value(number_list("session.keep_exited").unwrap(), 20.0, true),
         Some(50.0)
+    );
+
+    let fake = Fake::new(vec![row(value("50"))]);
+    let mut settings = at(&fake, "session.keep_exited");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Project, "session.keep_exited", "0")]
     );
 
     let fake = Fake::new(vec![row(value("10"))]);

@@ -74,9 +74,8 @@ pub(crate) fn resume(
     let mut local = || {
         let workspace = crate::startup::startup_workspace()?;
         let project = worktree::project(&workspace);
-        let sessions = log::sessions_dir(&home, &project);
         let in_project = in_project(&project, &worktree::project);
-        log::resolve(&sessions, &selector, &in_project).map_err(|e| crate::failed(e.code(), e))
+        resolve_project_sessions(&home, &project, &selector, &in_project)
     };
     let mut listed = |name: &str| {
         let mut connect = || crate::connect_hub(&home, &target, &process.exe, clock);
@@ -120,9 +119,8 @@ pub(crate) fn continue_latest(process: &crate::startup::Process, hub: Option<Str
     let mut local = || {
         let workspace = crate::startup::startup_workspace()?;
         let project = worktree::project(&workspace);
-        let sessions = log::sessions_dir(&home, &project);
         let in_project = in_project(&project, &worktree::project);
-        select_latest(&sessions, &in_project)
+        select_latest_project(&home, &project, &in_project)
     };
     let mut listed = |name: &str| {
         let mut connect = || crate::connect_hub(&home, &target, &process.exe, clock);
@@ -264,14 +262,35 @@ pub(crate) fn notice_lines(notices: &[contract::events::Notice]) -> Vec<String> 
 
 /// The session `continue` opens in `sessions`: the most recent one, or a
 /// usage error naming `fiber` when there is none.
-fn select_latest(sessions: &Path, in_project: &dyn Fn(&str) -> bool) -> Result<SessionId, Failure> {
-    match log::most_recent(sessions, in_project) {
+fn select_latest_project(
+    home: &Path,
+    project: &Path,
+    in_project: &dyn Fn(&str) -> bool,
+) -> Result<SessionId, Failure> {
+    let latest = log::most_recent_in(&log::candidate_sessions_dirs(home, project), in_project);
+    match latest {
         Some(id) => Ok(id),
         None => Err(doors::failure(
             contract::ErrorCode::Usage,
             "No session in this project to continue; run `fiber` to start one. Run `fiber --help` for usage.",
         )),
     }
+}
+
+/// Resolves a selector in the running identity's legacy and hashed
+/// directories, in that order, without scanning unrelated projects.
+fn resolve_project_sessions(
+    home: &Path,
+    project: &Path,
+    selector: &str,
+    in_project: &dyn Fn(&str) -> bool,
+) -> Result<SessionId, Failure> {
+    log::resolve_in(
+        &log::candidate_sessions_dirs(home, project),
+        selector,
+        in_project,
+    )
+    .map_err(|error| crate::failed(error.code(), error))
 }
 
 /// The project test `resolve` and `most_recent` take for `project`, and

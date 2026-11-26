@@ -176,10 +176,11 @@ impl Cancel for After {
 #[test]
 fn only_the_own_projects_sessions_are_searched_unless_all_projects() {
     let home = Home::new();
-    home.session("-a", "s_own", "/a/main", &["needle own"]);
-    home.session("-a", "s_tree", "/a2/worktree", &["needle worktree"]);
+    let own_key = crate::project_key(std::path::Path::new("/a"));
+    home.session(&own_key, "s_own", "/a/main", &["needle own"]);
+    home.session(&own_key, "s_tree", "/a2/worktree", &["needle worktree"]);
     // Another project whose key collides with this one's.
-    home.session("-a", "s_collide", "/c/x", &["needle collide"]);
+    home.session(&own_key, "s_collide", "/c/x", &["needle collide"]);
     home.session("-b", "s_far", "/b/far", &["needle far"]);
     let scan = home.scanner("/a/main");
     let found = find(&scan, "needle", false);
@@ -194,10 +195,11 @@ fn only_the_own_projects_sessions_are_searched_unless_all_projects() {
 #[test]
 fn identity_runs_once_per_workspace_per_call_and_once_for_the_own() {
     let home = Home::new();
-    home.session("-a", "s_1", "/a/one", &["needle"]);
-    home.session("-a", "s_2", "/a/one", &["needle"]);
-    home.session("-a", "s_3", "/a/two", &["needle"]);
-    home.session("-a", "s_4", "/c/x", &["needle"]);
+    let own_key = crate::project_key(std::path::Path::new("/a"));
+    home.session(&own_key, "s_1", "/a/one", &["needle"]);
+    home.session(&own_key, "s_2", "/a/one", &["needle"]);
+    home.session(&own_key, "s_3", "/a/two", &["needle"]);
+    home.session(&own_key, "s_4", "/c/x", &["needle"]);
     let scan = home.scanner("/a/main");
     assert_eq!(home.calls(), 0, "nothing runs at construction");
     find(&scan, "needle", false);
@@ -231,7 +233,9 @@ fn scope_names_the_own_project_or_every_project() {
     let projects = home.path().join("projects");
     assert_eq!(
         scan.scope(false),
-        PathBuf::from(format!("{}/-a/", projects.display()))
+        projects
+            .join(crate::project_key(std::path::Path::new("/a")))
+            .join("")
     );
     assert_eq!(
         scan.scope(true),
@@ -290,7 +294,13 @@ fn hits_tied_on_rank_order_by_log_then_snippet_then_artifact() {
 #[test]
 fn the_limit_keeps_the_best_and_counts_every_hit() {
     let home = Home::new();
-    home.session("-a", "s_1", "/a/one", &["needle 1", "needle 2", "needle 3"]);
+    let own_key = crate::project_key(std::path::Path::new("/a"));
+    home.session(
+        &own_key,
+        "s_1",
+        "/a/one",
+        &["needle 1", "needle 2", "needle 3"],
+    );
     let scan = home.scanner("/a/one");
     let found = scan.scan(&query("needle", false, 2), &CancelToken::new());
     let seqs: Vec<u64> = found.hits.iter().map(|h| h.seq.0).collect();
@@ -382,8 +392,9 @@ fn an_unreadable_project_parent_is_a_problem_but_a_missing_project_is_silent() {
         "this test must run as a non-root user: root bypasses file modes"
     );
     let home = Home::new();
-    home.session("-a", "s_1", "/a/one", &["needle"]);
-    let project = home.path().join("projects").join("-a");
+    let own_key = crate::project_key(std::path::Path::new("/a"));
+    home.session(&own_key, "s_1", "/a/one", &["needle"]);
+    let project = home.path().join("projects").join(&own_key);
     let sessions = project.join("sessions");
     let scan = home.scanner("/a/one");
 
@@ -411,8 +422,9 @@ fn an_unreadable_session_log_metadata_is_a_problem_and_a_missing_log_is_silent()
         "this test must run as a non-root user: root bypasses file modes"
     );
     let home = Home::new();
-    let locked = home.session("-a", "s_locked", "/a/one", &["needle"]);
-    let missing = home.sessions("-a").join("s_missing");
+    let own_key = crate::project_key(std::path::Path::new("/a"));
+    let locked = home.session(&own_key, "s_locked", "/a/one", &["needle"]);
+    let missing = home.sessions(&own_key).join("s_missing");
     fs::create_dir_all(&missing).unwrap();
 
     set_mode(&locked, 0o000);
@@ -434,8 +446,12 @@ fn an_already_cancelled_call_finds_nothing() {
     let home = Home::new();
     home.session("-b", "s_1", "/b/one", &["needle"]);
     // The own project's `sessions/` is a link: reading it would list it.
-    fs::create_dir_all(home.path().join("projects").join("-a")).unwrap();
-    symlink(home.sessions("-b"), home.sessions("-a")).unwrap();
+    let own_project = home
+        .path()
+        .join("projects")
+        .join(crate::project_key(std::path::Path::new("/a")));
+    fs::create_dir_all(&own_project).unwrap();
+    symlink(home.sessions("-b"), own_project.join("sessions")).unwrap();
     let scan = home.scanner("/a/one");
     let cancel = CancelToken::new();
     cancel.cancel();
@@ -590,10 +606,11 @@ fn linked_projects_sessions_and_logs_are_skipped_as_problems() {
     )
     .unwrap();
     // A session directory and a log that are links.
-    let sessions = home.sessions("-a");
+    let own_key = crate::project_key(std::path::Path::new("/a"));
+    let sessions = home.sessions(&own_key);
     fs::create_dir_all(&sessions).unwrap();
     symlink(&real, sessions.join("s_dir")).unwrap();
-    let mine = home.session("-a", "s_log", "/a/one", &[]);
+    let mine = home.session(&own_key, "s_log", "/a/one", &[]);
     fs::remove_file(mine.join("events.jsonl")).unwrap();
     symlink(real.join("events.jsonl"), mine.join("events.jsonl")).unwrap();
     let found = find(&home.scanner("/a/one"), "needle", true);
@@ -617,7 +634,8 @@ fn linked_projects_sessions_and_logs_are_skipped_as_problems() {
 #[test]
 fn problems_past_twenty_are_counted() {
     let home = Home::new();
-    let dir = home.session("-a", "s_1", "/a/one", &[]);
+    let own_key = crate::project_key(std::path::Path::new("/a"));
+    let dir = home.session(&own_key, "s_1", "/a/one", &[]);
     for _ in 0..25 {
         raw(&dir, b"{\"kind\": needle\n");
     }

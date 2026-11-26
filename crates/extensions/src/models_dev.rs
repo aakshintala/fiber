@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -11,14 +11,26 @@ use std::time::{Duration, SystemTime};
 use config::ModelData;
 use contract::ErrorCode;
 use contract::events::Notice;
+use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde_json::Value;
 
 use crate::Providers;
 
+#[cfg(test)]
+#[path = "models_dev_tests.rs"]
+mod tests;
+
 /// The public models.dev catalog endpoint.
 pub const URL: &str = "https://models.dev/api.json";
-/// A fetch operation returning the response body or a transport error.
-pub type Fetch = Arc<dyn Fn(&str) -> Result<Vec<u8>, String> + Send + Sync>;
+/// Environment variable that overrides the models.dev catalog endpoint.
+/// Unset uses [`URL`].
+pub const URL_ENV: &str = "FIBER_MODELS_DEV_URL";
+
+fn url_from_env(read: impl FnOnce(&str) -> Option<String>, fallback: &str) -> String {
+    read(URL_ENV).unwrap_or_else(|| fallback.to_owned())
+}
+/// A fetch operation that streams the response into a caller-owned writer.
+pub type Fetch = Arc<dyn Fn(&str, &mut dyn Write) -> Result<(), String> + Send + Sync>;
 
 /// Advisory mapping from served provider ids to models.dev catalog entries.
 #[derive(Debug, Clone, Default)]
@@ -39,25 +51,23 @@ pub struct CatalogMeta {
 
 /// Build the production fetch using environment proxy settings and net limits.
 pub fn live_fetch() -> Fetch {
-    Arc::new(|url| {
+    Arc::new(|url, writer| {
+        let url = url_from_env(|name| std::env::var(name).ok(), url);
         fetch(
             &crate::prepare::agent(ureq::Proxy::try_from_env(), net::LIMITS),
-            url,
+            &url,
+            writer,
         )
         .map_err(|error| error.to_string())
     })
 }
 
 /// Fetch response bytes from one URL using the provided HTTP agent.
-pub fn fetch(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, ureq::Error> {
+pub fn fetch(agent: &ureq::Agent, url: &str, writer: &mut dyn Write) -> Result<(), ureq::Error> {
     let mut response = agent.get(url).call()?;
-    let mut bytes = Vec::new();
-    response
-        .body_mut()
-        .as_reader()
-        .read_to_end(&mut bytes)
-        .map_err(ureq::Error::Io)?;
-    Ok(bytes)
+    let mut reader = response.body_mut().as_reader();
+    std::io::copy(&mut reader, writer).map_err(ureq::Error::Io)?;
+    Ok(())
 }
 
 /// Whether the catalog is enabled and missing, unreadable or older than its age bound.
@@ -76,8 +86,132 @@ pub fn should_fetch(
     }
 }
 
-fn valid_catalog(bytes: &[u8]) -> bool {
-    serde_json::from_slice::<Value>(bytes).is_ok_and(|value| value.as_object().is_some())
+struct ProviderVisitor<'a>(&'a BTreeSet<String>);
+
+fn empty_object() -> Value {
+    Value::Object(Default::default())
+}
+
+impl<'de> Visitor<'de> for ProviderVisitor<'_> {
+    type Value = Value;
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a provider object")
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
+        let mut rows = serde_json::Map::new();
+        while let Some(id) = map.next_key::<String>()? {
+            if self.0.contains(&id) {
+                rows.insert(id, map.next_value::<Value>()?);
+            } else {
+                map.next_value::<IgnoredAny>()?;
+            }
+        }
+        Ok(Value::Object(rows))
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(empty_object())
+    }
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Value, E> {
+        Ok(empty_object())
+    }
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Value, E> {
+        Ok(empty_object())
+    }
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Value, E> {
+        Ok(empty_object())
+    }
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Value, E> {
+        Ok(empty_object())
+    }
+    fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Value, E> {
+        Ok(empty_object())
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Value, E> {
+        Ok(empty_object())
+    }
+}
+// removed: serde_json's from_reader deserializer dispatches strings to visit_str, never visit_string.
+// removed: serde_json deserializes JSON null through visit_unit, never visit_none for deserialize_any.
+
+fn retained_rows(
+    reader: impl Read,
+    models: &[ModelData],
+    meta: &CatalogMeta,
+) -> Result<Value, serde_json::Error> {
+    struct CatalogSeed<'a>(&'a CatalogMeta, &'a [ModelData]);
+    impl<'de> DeserializeSeed<'de> for CatalogSeed<'_> {
+        type Value = Value;
+        fn deserialize<D: serde::Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<Value, D::Error> {
+            deserializer.deserialize_map(CatalogVisitor(self.0, self.1))
+        }
+    }
+    struct CatalogVisitor<'a>(&'a CatalogMeta, &'a [ModelData]);
+    impl<'de> Visitor<'de> for CatalogVisitor<'_> {
+        type Value = Value;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a JSON object")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
+            let requested: BTreeMap<String, BTreeSet<String>> =
+                self.1.iter().fold(BTreeMap::new(), |mut requested, model| {
+                    let (source, id) = resolve(&model.id, self.0);
+                    requested.entry(source).or_default().insert(id);
+                    requested
+                });
+            let mut rows = serde_json::Map::new();
+            while let Some(source) = map.next_key::<String>()? {
+                if let Some(ids) = requested.get(&source) {
+                    let value = map.next_value_seed(ProviderSeed(ids))?;
+                    rows.insert(source, value);
+                } else {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+            Ok(Value::Object(rows))
+        }
+    }
+    struct ProviderSeed<'a>(&'a BTreeSet<String>);
+    impl<'de> DeserializeSeed<'de> for ProviderSeed<'_> {
+        type Value = Value;
+        fn deserialize<D: serde::Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<Value, D::Error> {
+            deserializer.deserialize_any(ProviderVisitor(self.0))
+        }
+    }
+    let mut deserializer = serde_json::Deserializer::from_reader(reader);
+    let catalog = CatalogSeed(meta, models).deserialize(&mut deserializer)?;
+    deserializer.end()?;
+    Ok(catalog)
+}
+
+fn valid_catalog(reader: impl Read) -> bool {
+    validate_catalog(reader).is_ok()
+}
+
+fn validate_catalog(reader: impl Read) -> Result<(), serde_json::Error> {
+    struct ObjectOnly;
+    impl<'de> serde::de::Visitor<'de> for ObjectOnly {
+        type Value = bool;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a JSON object")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<bool, A::Error> {
+            while map
+                .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                .is_some()
+            {}
+            Ok(true)
+        }
+    }
+    let mut deserializer = serde_json::Deserializer::from_reader(reader);
+    serde::de::Deserializer::deserialize_map(&mut deserializer, ObjectOnly)?;
+    deserializer.end()
 }
 
 fn with_lock(home: &Path, blocking: bool, action: impl FnOnce()) {
@@ -121,11 +255,7 @@ pub fn refresh_if_due(
         if !should_fetch(home, enabled, max_age, now) {
             return;
         }
-        if let Ok(bytes) = fetcher(URL)
-            && valid_catalog(&bytes)
-        {
-            drop(config::write_models_dev(home, &bytes));
-        }
+        refresh_to_cache(home, fetcher);
     });
 }
 
@@ -135,13 +265,35 @@ pub fn refresh_forced(home: &Path, enabled: bool, now: SystemTime, fetcher: &Fet
         return;
     }
     with_lock(home, false, || {
-        if should_fetch(home, enabled, None, now)
-            && let Ok(bytes) = fetcher(URL)
-            && valid_catalog(&bytes)
-        {
-            drop(config::write_models_dev(home, &bytes));
+        if should_fetch(home, enabled, None, now) {
+            refresh_to_cache(home, fetcher);
         }
     });
+}
+
+fn refresh_to_cache(home: &Path, fetcher: &Fetch) {
+    let Ok(cache) = config::models_dev_cache_file(home) else {
+        return;
+    };
+    let Some(parent) = cache.parent() else { return };
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let result = support::atomic::write_atomic_stream(&cache, 0o600, |file| {
+        fetcher(URL, file).map_err(std::io::Error::other)?;
+        file.flush()?;
+        file.seek(SeekFrom::Start(0))?;
+        if valid_catalog(file) {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid models.dev catalog",
+            ))
+        }
+    });
+    // The refresh is advisory; the next due refresh retries.
+    drop(result);
 }
 
 /// Start a detached refresh thread only when the catalog is due.
@@ -152,8 +304,20 @@ pub fn spawn_if_due(
     now: SystemTime,
     fetcher: Fetch,
 ) -> Option<JoinHandle<()>> {
-    should_fetch(&home, enabled, max_age, now)
-        .then(|| std::thread::spawn(move || refresh_if_due(&home, enabled, max_age, now, &fetcher)))
+    if should_fetch(&home, enabled, max_age, now) {
+        Some(
+            #[allow(
+                clippy::expect_used,
+                reason = "preserve the pre-PR contract: spawn failure aborts exactly as std::thread::spawn did"
+            )]
+            std::thread::Builder::new()
+                .name("models.dev".to_owned())
+                .spawn(move || refresh_if_due(&home, enabled, max_age, now, &fetcher))
+                .expect("spawn models.dev refresh thread"),
+        )
+    } else {
+        None
+    }
 }
 
 /// Merge the cached catalog into rows before provider admission validates them.
@@ -164,7 +328,6 @@ pub fn merge_admission(
     models: Vec<ModelData>,
     enabled: bool,
 ) -> Vec<ModelData> {
-    let catalog = load_catalog(home, enabled);
     let path = extension_dir
         .join("providers")
         .join(format!("{provider}.json"));
@@ -176,6 +339,7 @@ pub fn merge_admission(
     };
     let meta = meta_of(&file).unwrap_or_default();
     let generated = generated_models(&file);
+    let catalog = load_catalog(home, enabled, &models, &meta);
     retain_capable_models(enrich(models, &generated, &meta, &catalog), &meta, &catalog)
 }
 
@@ -209,14 +373,14 @@ fn generated_models(file: &Value) -> Vec<ModelData> {
         .unwrap_or_default()
 }
 
-fn load_catalog(home: &Path, enabled: bool) -> Value {
+fn load_catalog(home: &Path, enabled: bool, models: &[ModelData], meta: &CatalogMeta) -> Value {
     if !enabled {
         return Value::Object(Default::default());
     }
-    config::read_models_dev(home)
+    config::open_models_dev(home)
         .ok()
         .flatten()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|file| retained_rows(file, models, meta).ok())
         .unwrap_or_else(|| Value::Object(Default::default()))
 }
 
@@ -349,12 +513,6 @@ pub fn apply(
     if !enabled {
         return Applied::default();
     }
-    let Some(bytes) = config::read_models_dev(home).ok().flatten() else {
-        return Applied::default();
-    };
-    let Ok(catalog) = serde_json::from_slice::<Value>(&bytes) else {
-        return Applied::default();
-    };
     let fresh = matches!(config::models_dev_age(home, now), Ok(Some(age)) if max_age.is_none_or(|max| age <= max));
     let names: Vec<String> = providers.names().map(str::to_owned).collect();
     let mut applied = Applied::default();
@@ -374,10 +532,16 @@ pub fn apply(
         };
         let generated = generated_models(&file);
         let mut data = providers.data(&name);
+        let Ok(Some(catalog_reader)) = config::open_models_dev(home) else {
+            continue;
+        };
+        let Ok(projected) = retained_rows(catalog_reader, &data.models, &meta) else {
+            continue;
+        };
         if fresh {
             for model in &data.models {
                 let (source, id) = resolve(&model.id, &meta);
-                if catalog
+                if projected
                     .get(&source)
                     .and_then(|provider| provider.get(&id))
                     .and_then(|entry| entry.get("status"))
@@ -388,7 +552,7 @@ pub fn apply(
                 }
             }
         }
-        data.models = enrich(data.models, &generated, &meta, &catalog);
+        data.models = enrich(data.models, &generated, &meta, &projected);
         applied
             .notices
             .extend(providers.set_models(&name, data.models));

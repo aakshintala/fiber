@@ -183,7 +183,7 @@ fn nth(lines: &[Value], kind: &str, n: usize) -> Value {
 /// directory, the test root.
 fn ask_sessions(setup: &support::Setup) -> PathBuf {
     let workspace = fs::canonicalize(setup.root.path()).unwrap();
-    let key = workspace.to_string_lossy().replace('/', "-");
+    let key = log::project_key(&workspace);
     setup.home().join("projects").join(key).join("sessions")
 }
 

@@ -99,7 +99,7 @@ const EXEC: &str = r#"
 local host, tag, in_entry, failure = ...
 function host.exec(program, args, opts)
   if in_entry() then
-    error("host.exec: not available while init.lua runs", 2)
+    error(failure("not_available", "host.exec: not available while init.lua runs"), 2)
   end
   if type(program) ~= "string" then
     error("host.exec: `program` must be a string", 2)
@@ -273,9 +273,9 @@ pub(crate) fn install(
     )?;
     model::install(lua, &host, &tag, Rc::clone(&entry), failure.clone())?;
     let delegate_handles = delegate::install(lua, &host, &tag, Rc::clone(&entry), failure.clone())?;
-    drive::install(lua, &host, &tag, Rc::clone(&entry), failure)?;
-    tool::install(lua, &host, &tag, Rc::clone(&entry))?;
-    ask::install(lua, &host, &tag, entry)?;
+    drive::install(lua, &host, &tag, Rc::clone(&entry), failure.clone())?;
+    tool::install(lua, &host, &tag, Rc::clone(&entry), failure.clone())?;
+    ask::install(lua, &host, &tag, entry, failure)?;
     let timer_funcs = timers::install(lua, &host, hub)?;
     log::install(lua, &host, hub, &extension)?;
     ui::install(lua, &host, hub, &extension)?;
@@ -478,6 +478,15 @@ pub(crate) enum LockError {
     Arg(String),
 }
 
+/// A `host.tool` failure: a coded refusal of where the call came from,
+/// raised as the `{ code, message }` table, or an error in the calling
+/// code, raised as the string. Written next to [`LockError`], whose arms
+/// resume the same way.
+pub(crate) enum ToolError {
+    Coded((contract::ErrorCode, String)),
+    Arg(String),
+}
+
 /// The answer to a [`Request`]. A failure is its code and the message Lua raises.
 pub(crate) enum Reply {
     Http(Result<(u16, Vec<u8>), (contract::ErrorCode, String)>),
@@ -489,9 +498,9 @@ pub(crate) enum Reply {
     /// How a `host.exec` run ended, or the code and message `host.exec` raises.
     Exec(Result<exec::Ran, (contract::ErrorCode, String)>),
     /// How a `host.tool` call ended: its outcome as the model would see
-    /// it, or the string the Lua half raises for an error in the calling
-    /// code.
-    Tool(Result<Value, String>),
+    /// it, or the [`ToolError`] the Lua half raises: a coded refusal as
+    /// the table, an error in the calling code as the string.
+    Tool(Result<Value, ToolError>),
     /// How a `host.model` call ended: its text, tokens and cost, or the
     /// code and message the callback raises as `{ code, message }`.
     Model(Result<contract::model::HostModelReply, (contract::ErrorCode, String)>),
@@ -939,13 +948,17 @@ pub(crate) fn resume_values(
         | Reply::Model(Err(failed_with))
         | Reply::Delegate(Err(failed_with))
         | Reply::Query(Err(failed_with)) => failed(failed_with),
-        Reply::Lock(Err(LockError::Coded(failed_with))) => failed(failed_with),
-        Reply::Lock(Err(LockError::Arg(message))) => Ok(MultiValue::from_vec(vec![
-            LuaValue::Nil,
-            LuaValue::String(lua.create_string(message)?),
-        ])),
-        // A `host.tool` outcome is one table; an error in the calling
-        // code is nil with the string the Lua half raises.
+        Reply::Lock(Err(LockError::Coded(failed_with)))
+        | Reply::Tool(Err(ToolError::Coded(failed_with))) => failed(failed_with),
+        Reply::Lock(Err(LockError::Arg(message))) | Reply::Tool(Err(ToolError::Arg(message))) => {
+            Ok(MultiValue::from_vec(vec![
+                LuaValue::Nil,
+                LuaValue::String(lua.create_string(message)?),
+            ]))
+        }
+        // A `host.tool` outcome is one table; a coded refusal resumes as
+        // nil, the code and the message, while an error in the calling
+        // code resumes as nil with the string the Lua half raises.
         Reply::Tool(Ok(outcome)) => match to_lua(lua, &outcome) {
             Ok(value) => Ok(MultiValue::from_vec(vec![value])),
             // The oversized result may leave too little Lua memory to construct this error.
@@ -958,10 +971,6 @@ pub(crate) fn resume_values(
             }
             Err(error) => Err(error),
         },
-        Reply::Tool(Err(message)) => Ok(MultiValue::from_vec(vec![
-            LuaValue::Nil,
-            LuaValue::String(lua.create_string(message)?),
-        ])),
         // A `host.model` answer is one table: its text and its usage,
         // whose `cost` is nil when the provider reported none and no price
         // applied.

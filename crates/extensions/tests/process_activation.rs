@@ -467,6 +467,55 @@ fn registered_session(
     (session, captured)
 }
 
+/// A session process callback receives the real result of package-relative
+/// `host.exec`, running the executable copied into the installed package.
+#[test]
+fn session_process_exec_resolves_package_relative_program() {
+    let env = Env::new("fiber-process-host-exec");
+    let source = env.root.path().join("src").join("exec");
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/session-host-exec/bin/probe");
+    std::fs::create_dir_all(source.join("bin")).unwrap();
+    std::fs::copy(fixture, source.join("bin/probe")).unwrap();
+    // The process executable is the standard peer jig; its plan handles the
+    // command callback by calling host.exec and records the actual answer.
+    let exec_plan = exec_plan(&env.marker("exec-result.json"));
+    env.install_process(
+        "exec",
+        &json!({"commands": {"probe": {"description": "Run the package probe"}}}),
+        &exec_plan,
+    );
+
+    let session = env.load(ExtensionReason::New, 0);
+    let release = session
+        .command(&contract::CommandId("exec-command".into()), "probe", "")
+        .unwrap();
+    release();
+    let result = read_json_file(&env.marker("exec-result.json"), "host.exec result");
+    assert_eq!(result["payload"]["result"]["value"]["exit_code"], 0);
+    assert_eq!(
+        result["payload"]["result"]["value"]["stdout"],
+        "c2Vzc2lvbi1ob3N0LWV4ZWMtcHJvYmU="
+    );
+    session.finish_processes(&CancelToken::new());
+}
+
+fn exec_plan(result: &Path) -> Value {
+    json!([
+        {"read": {}},
+        {"send": {"id": "reg", "command": "call", "args": {"call": "fiber.command", "args": ["probe", {"description": "Run", "timeout": 5000, "run": true}]}}},
+        {"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "reg"}}}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready"}}}},
+        {"read_until": {"path": "kind", "equals": "extension_request", "as": "request"}},
+        {"send": {"id": "host-exec", "command": "call", "args": {"call": "host.exec", "args": ["bin/probe", [], {}], "request_id": {"$ref": "request.payload.request_id"}}}},
+        {"read_until": {"path": "payload.command_id", "equals": "host-exec", "as": "exec_answer"}},
+        {"write_file": {"path": result.to_str().unwrap(), "value": {"$ref": "exec_answer"}}},
+        {"send": {"id": "callback-answer", "command": "reply", "args": {"request_id": {"$ref": "request.payload.request_id"}, "result": "done"}}},
+        {"loop": [{"read": {}}]}
+    ])
+}
+
 /// A session refuses to start a process whose program escapes its package.
 #[test]
 fn session_process_start_refuses_package_escape() {
@@ -844,7 +893,7 @@ fn services_plan(markers: &Path) -> Value {
 /// Installed session services answer the process host calls, and calls
 /// without a session fail with the existing sentences: the model, the
 /// delegate and the driver reply through fakes, while `host.tool` with no
-/// runner fails `invalid_arguments`.
+/// runner fails `not_available`.
 #[test]
 fn process_host_calls_reach_session_services_and_unset_ones_fail_closed() {
     let env = Env::new("fiber-process-host-services");
@@ -924,7 +973,7 @@ fn process_host_calls_reach_session_services_and_unset_ones_fail_closed() {
     assert_eq!(ack("tool-ack.json")["kind"], json!("command_rejected"));
     assert_eq!(
         ack("tool-ack.json")["payload"]["code"],
-        json!("invalid_arguments")
+        json!("not_available")
     );
     let cancel = CancelToken::new();
     session.finish_processes(&cancel);
@@ -1068,7 +1117,7 @@ fn process_host_tool_model_delegate_live_and_sealed() {
     );
     let watcher_tool = read_marker(&markers.join("watch-tool.json"));
     assert_eq!(watcher_tool["kind"], "command_rejected");
-    assert_eq!(watcher_tool["payload"]["code"], "invalid_arguments");
+    assert_eq!(watcher_tool["payload"]["code"], "not_available");
     assert_eq!(
         watcher_tool["payload"]["message"],
         "host.tool: called outside a running tool call"

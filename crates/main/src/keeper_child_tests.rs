@@ -218,6 +218,661 @@ fn keeper_disconnected_started_reply_does_not_abort_control_drain() {
 }
 
 #[test]
+fn a_keeper_child_output_write_failure_drains_and_reports_io_failed() {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let input = fakes::TempDir::new("keeper-child-write-input");
+    let input_fifo = input.path().join("input.fifo");
+    fakes::fifo(&input_fifo);
+    let output = fakes::TempDir::new("keeper-child-write-output");
+    let output_fifo = output.path().join("job.out");
+    fakes::fifo(&output_fifo);
+    let reader = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().try_into().unwrap())
+        .open(&output_fifo)
+        .expect("output FIFO reader");
+
+    let (held, held_rx) = ready_signal();
+    let hooks = super::Hooks {
+        held: Some(held),
+        ..super::Hooks::default()
+    };
+    let clock = fakes::clock::FakeClock::new();
+    let (mut keeper, _runtime) = serve_keeper_with(
+        "keeper-child-write-failure",
+        SessionId("s_0123456789abcdef".into()),
+        clock,
+        hooks,
+        None,
+    );
+    let spec = Spawn {
+        id: "writer".into(),
+        program: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            format!(
+                "read gate < '{}'; head -c 200000 /dev/zero",
+                input_fifo.display()
+            ),
+        ],
+        cwd: std::env::temp_dir(),
+        env: Vec::new(),
+        stdin: HostStdin::Null,
+        timeout_ms: None,
+        output_cap: 1_000_000,
+        sandbox: None,
+    };
+    let mut control = keeper.writer.try_clone().expect("control");
+    serde_json::to_writer(&mut control, &ToKeeper::Start(spec)).expect("start child");
+    control.write_all(b"\n").expect("start newline");
+    assert!(matches!(
+        Deadline::after(Duration::from_secs(10)).recv_or_fail(&keeper.read, "child started"),
+        FromKeeper::Started { .. }
+    ));
+    // Opening the input writer blocks until the shell has reached its FIFO
+    // read, which is the signal that it will produce output only after adopt.
+    let mut input_writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&input_fifo)
+        .expect("input FIFO writer");
+    serde_json::to_writer(
+        &mut control,
+        &ToKeeper::Adopt {
+            id: "writer".into(),
+            job_id: JobId("j_writer".into()),
+            output_path: output_fifo.clone(),
+            errors_path: None,
+            lines: false,
+        },
+    )
+    .expect("adopt child");
+    control.write_all(b"\n").expect("adopt newline");
+    crash(&mut keeper);
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "keeper files to be active");
+
+    input_writer.write_all(b"go\n").expect("release child");
+    let (first, first_rx) = mpsc::channel();
+    // Detached: `thread::scope` would join this reader even when
+    // the assert below panics, hanging the test on the open file.
+    // The thread owns the file, so `Deadline` stays the only wait.
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty()).expect("output FIFO blocks");
+        let mut bytes = [0_u8; 256];
+        let _sent = first.send(reader.read(&mut bytes).expect("read output FIFO"));
+    });
+    assert!(
+        Deadline::after(Duration::from_secs(10))
+            .recv_or_fail(&first_rx, "child did not write to the output FIFO")
+            > 0,
+        "the child closed the output FIFO without writing"
+    );
+
+    let exit = loop {
+        match Deadline::after(Duration::from_secs(10))
+            .recv_or_fail(&keeper.read, "normal exit after draining output")
+        {
+            FromKeeper::Exit { id, exit } if id == "writer" => break exit,
+            FromKeeper::Output { .. } | FromKeeper::Started { .. } => {}
+            FromKeeper::Failed { .. }
+            | FromKeeper::Identity { .. }
+            | FromKeeper::Exit { .. }
+            | FromKeeper::Handover { .. }
+            | FromKeeper::AdoptDone(_) => panic!("unexpected keeper frame"),
+        }
+    };
+    assert_eq!(exit.code, Some(0));
+    assert_eq!(
+        exit.output_write_failure.as_deref(),
+        Some(output_fifo.as_path())
+    );
+    let completed = tools::kept_end(JobId("j_writer".into()), &exit);
+    assert_eq!(completed.status, contract::events::Outcome::Failed);
+    let failure = completed.error.expect("write failure completion");
+    assert_eq!(failure.code, contract::ErrorCode::IoFailed);
+    assert!(failure.message.contains(output_fifo.to_str().unwrap()));
+    assert!(failure.message.contains("replaced end: completed"));
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&keeper.result, "keeper to finish after child drain")
+        .expect("keeper exits cleanly");
+}
+
+#[test]
+fn a_keeper_child_stderr_write_failure_keeps_stdout() {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    // A dead errors stream never takes the healthy output file with it:
+    // stdout lands after the stderr failure is recorded.
+    let input = fakes::TempDir::new("keeper-child-stderr-first-input");
+    let gate = input.path().join("gate.fifo");
+    fakes::fifo(&gate);
+    let again = input.path().join("again.fifo");
+    fakes::fifo(&again);
+    let home = fakes::TempDir::new("keeper-child-stderr-first");
+    let errors_fifo = home.path().join("job.err");
+    fakes::fifo(&errors_fifo);
+    let output = home.path().join("job.out");
+    std::fs::write(&output, b"").expect("output file");
+    let reader = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().try_into().unwrap())
+        .open(&errors_fifo)
+        .expect("errors FIFO reader");
+    let (held, held_rx) = ready_signal();
+    let (failed, failed_rx) = ready_signal();
+    let hooks = super::Hooks {
+        held: Some(held),
+        write_failed: Some(failed),
+        ..super::Hooks::default()
+    };
+    let clock = fakes::clock::FakeClock::new();
+    let (mut keeper, _runtime) = serve_keeper_with(
+        "keeper-child-stderr-first",
+        SessionId("s_0123456789abcdef".into()),
+        clock,
+        hooks,
+        None,
+    );
+    let mut control = keeper.writer.try_clone().expect("control");
+    let spec = Spawn {
+        id: "writer".into(),
+        program: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            format!(
+                "read gate < '{}'; head -c 200000 /dev/zero >&2; read again < '{}'; echo out",
+                gate.display(),
+                again.display(),
+            ),
+        ],
+        cwd: std::env::temp_dir(),
+        env: Vec::new(),
+        stdin: HostStdin::Null,
+        timeout_ms: None,
+        output_cap: 1_000_000,
+        sandbox: None,
+    };
+    serde_json::to_writer(&mut control, &ToKeeper::Start(spec)).expect("start child");
+    control.write_all(b"\n").expect("start newline");
+    serde_json::to_writer(
+        &mut control,
+        &ToKeeper::Adopt {
+            id: "writer".into(),
+            job_id: JobId("j_writer".into()),
+            output_path: output.clone(),
+            errors_path: Some(errors_fifo.clone()),
+            lines: false,
+        },
+    )
+    .expect("adopt child");
+    control.write_all(b"\n").expect("adopt newline");
+    crash(&mut keeper);
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "keeper files to be active");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&gate)
+        .expect("gate FIFO writer")
+        .write_all(b"go\n")
+        .expect("release flood");
+    // The child floods stderr until the test sees its bytes flowing.
+    let (first, first_rx) = mpsc::channel();
+    // Detached: `thread::scope` would join this reader even when
+    // the assert below panics, hanging the test on the open file.
+    // The thread owns the file, so `Deadline` stays the only wait.
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty()).expect("errors FIFO blocks");
+        let mut bytes = [0_u8; 256];
+        let _sent = first.send(reader.read(&mut bytes).expect("read errors FIFO"));
+    });
+    assert!(
+        Deadline::after(Duration::from_secs(10))
+            .recv_or_fail(&first_rx, "child did not flood stderr")
+            > 0,
+        "the child closed stderr without writing"
+    );
+    // Every later stderr append fails with no reader: the runner records
+    // its failure before the child prints its stdout line.
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&failed_rx, "stderr failure recorded");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&again)
+        .expect("again FIFO writer")
+        .write_all(b"go\n")
+        .expect("release stdout");
+    let exit = loop {
+        match Deadline::after(Duration::from_secs(10))
+            .recv_or_fail(&keeper.read, "exit after stdout lands")
+        {
+            FromKeeper::Exit { id, exit } if id == "writer" => break exit,
+            FromKeeper::Output { .. } | FromKeeper::Started { .. } => {}
+            FromKeeper::Failed { .. }
+            | FromKeeper::Identity { .. }
+            | FromKeeper::Exit { .. }
+            | FromKeeper::Handover { .. }
+            | FromKeeper::AdoptDone(_) => panic!("unexpected keeper frame"),
+        }
+    };
+    assert_eq!(exit.code, Some(0));
+    assert_eq!(
+        exit.output_write_failure.as_deref(),
+        Some(errors_fifo.as_path())
+    );
+    // The exit frame precedes the completion append, so the log is read
+    // only after the keeper is done and its log released.
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&keeper.result, "keeper to finish after child")
+        .expect("keeper exits cleanly");
+    let completed = job_completed_lines(&keeper);
+    // `docs/tools.md`, "The keeper": a job_completed for each job that ends.
+    assert_eq!(completed.len(), 1, "one ending for the one job");
+    assert_eq!(completed[0].payload["status"], "failed");
+    assert_eq!(completed[0].payload["error"]["code"], "io_failed");
+    assert!(
+        completed[0].payload["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(errors_fifo.to_str().unwrap())
+    );
+    // Stdout still lands after the stderr failure is recorded.
+    assert_eq!(std::fs::read(&output).unwrap(), b"out\n");
+}
+
+#[test]
+fn a_keeper_child_stdout_write_failure_keeps_stderr() {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    // A dead output stream never takes the healthy errors file with it:
+    // stderr lands after the stdout failure is recorded.
+    let input = fakes::TempDir::new("keeper-child-stdout-first-input");
+    let gate = input.path().join("gate.fifo");
+    fakes::fifo(&gate);
+    let again = input.path().join("again.fifo");
+    fakes::fifo(&again);
+    let home = fakes::TempDir::new("keeper-child-stdout-first");
+    let output_fifo = home.path().join("job.out");
+    fakes::fifo(&output_fifo);
+    let errors = home.path().join("job.err");
+    std::fs::write(&errors, b"").expect("errors file");
+    let reader = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().try_into().unwrap())
+        .open(&output_fifo)
+        .expect("output FIFO reader");
+    let (held, held_rx) = ready_signal();
+    let (failed, failed_rx) = ready_signal();
+    let hooks = super::Hooks {
+        held: Some(held),
+        write_failed: Some(failed),
+        ..super::Hooks::default()
+    };
+    let clock = fakes::clock::FakeClock::new();
+    let (mut keeper, _runtime) = serve_keeper_with(
+        "keeper-child-stdout-first",
+        SessionId("s_0123456789abcdef".into()),
+        clock,
+        hooks,
+        None,
+    );
+    let mut control = keeper.writer.try_clone().expect("control");
+    let spec = Spawn {
+        id: "writer".into(),
+        program: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            format!(
+                "read gate < '{}'; head -c 200000 /dev/zero; read again < '{}'; echo err >&2",
+                gate.display(),
+                again.display(),
+            ),
+        ],
+        cwd: std::env::temp_dir(),
+        env: Vec::new(),
+        stdin: HostStdin::Null,
+        timeout_ms: None,
+        output_cap: 1_000_000,
+        sandbox: None,
+    };
+    serde_json::to_writer(&mut control, &ToKeeper::Start(spec)).expect("start child");
+    control.write_all(b"\n").expect("start newline");
+    serde_json::to_writer(
+        &mut control,
+        &ToKeeper::Adopt {
+            id: "writer".into(),
+            job_id: JobId("j_writer".into()),
+            output_path: output_fifo.clone(),
+            errors_path: Some(errors.clone()),
+            lines: false,
+        },
+    )
+    .expect("adopt child");
+    control.write_all(b"\n").expect("adopt newline");
+    crash(&mut keeper);
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "keeper files to be active");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&gate)
+        .expect("gate FIFO writer")
+        .write_all(b"go\n")
+        .expect("release flood");
+    // The child floods stdout until the test sees its bytes flowing.
+    let (first, first_rx) = mpsc::channel();
+    // Detached: `thread::scope` would join this reader even when
+    // the assert below panics, hanging the test on the open file.
+    // The thread owns the file, so `Deadline` stays the only wait.
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty()).expect("output FIFO blocks");
+        let mut bytes = [0_u8; 256];
+        let _sent = first.send(reader.read(&mut bytes).expect("read output FIFO"));
+    });
+    assert!(
+        Deadline::after(Duration::from_secs(10))
+            .recv_or_fail(&first_rx, "child did not flood stdout")
+            > 0,
+        "the child closed stdout without writing"
+    );
+    // Every later stdout append fails with no reader: the runner records
+    // its failure before the child prints its stderr line.
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&failed_rx, "stdout failure recorded");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&again)
+        .expect("again FIFO writer")
+        .write_all(b"go\n")
+        .expect("release stderr");
+    let exit = loop {
+        match Deadline::after(Duration::from_secs(10))
+            .recv_or_fail(&keeper.read, "exit after stderr lands")
+        {
+            FromKeeper::Exit { id, exit } if id == "writer" => break exit,
+            FromKeeper::Output { .. } | FromKeeper::Started { .. } => {}
+            FromKeeper::Failed { .. }
+            | FromKeeper::Identity { .. }
+            | FromKeeper::Exit { .. }
+            | FromKeeper::Handover { .. }
+            | FromKeeper::AdoptDone(_) => panic!("unexpected keeper frame"),
+        }
+    };
+    assert_eq!(exit.code, Some(0));
+    assert_eq!(
+        exit.output_write_failure.as_deref(),
+        Some(output_fifo.as_path())
+    );
+    // The exit frame precedes the completion append, so the log is read
+    // only after the keeper is done and its log released.
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&keeper.result, "keeper to finish after child")
+        .expect("keeper exits cleanly");
+    let completed = job_completed_lines(&keeper);
+    // `docs/tools.md`, "The keeper": a job_completed for each job that ends.
+    assert_eq!(completed.len(), 1, "one ending for the one job");
+    assert_eq!(completed[0].payload["status"], "failed");
+    assert_eq!(completed[0].payload["error"]["code"], "io_failed");
+    assert!(
+        completed[0].payload["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(output_fifo.to_str().unwrap())
+    );
+    // Stderr still lands after the stdout failure is recorded.
+    assert_eq!(std::fs::read(&errors).unwrap(), b"err\n");
+}
+
+#[test]
+fn fail_handle_discards_only_the_failed_output_file() {
+    use std::fs::OpenOptions;
+
+    // A transient output failure discards every later stdout byte, even
+    // though the file would accept them again, while the healthy errors
+    // file keeps receiving stderr.
+    let dir = fakes::TempDir::new("keeper-fail-handle-output");
+    let output_path = dir.path().join("out.log");
+    let errors_path = dir.path().join("err.log");
+    std::fs::write(&output_path, b"first").unwrap();
+    std::fs::write(&errors_path, b"").unwrap();
+    let mut sink = super::Sink::Files {
+        output: Some(OpenOptions::new().append(true).open(&output_path).unwrap()),
+        errors: Some(OpenOptions::new().append(true).open(&errors_path).unwrap()),
+        errors_declared: true,
+    };
+    let destinations = Some((output_path.clone(), Some(errors_path.clone())));
+    super::fail_handle(&mut sink, destinations, Some(output_path.clone()));
+    // Later stdout is discarded: the file keeps only its earlier bytes.
+    super::write_sink(&mut sink, Stream::Out, b"second").unwrap();
+    assert_eq!(std::fs::read(&output_path).unwrap(), b"first");
+    // The healthy errors file keeps its stream.
+    super::write_sink(&mut sink, Stream::Err, b"e").unwrap();
+    assert_eq!(std::fs::read(&errors_path).unwrap(), b"e");
+}
+
+#[test]
+fn fail_handle_discards_only_the_failed_errors_file() {
+    use std::fs::OpenOptions;
+
+    // A transient errors failure discards every later stderr byte, even
+    // though the file would accept it again, while the healthy output
+    // file keeps receiving stdout. No fallback redirects stderr into
+    // the output file.
+    let dir = fakes::TempDir::new("keeper-fail-handle-errors");
+    let output_path = dir.path().join("out.log");
+    let errors_path = dir.path().join("err.log");
+    std::fs::write(&output_path, b"").unwrap();
+    std::fs::write(&errors_path, b"first").unwrap();
+    let mut sink = super::Sink::Files {
+        output: Some(OpenOptions::new().append(true).open(&output_path).unwrap()),
+        errors: Some(OpenOptions::new().append(true).open(&errors_path).unwrap()),
+        errors_declared: true,
+    };
+    let destinations = Some((output_path.clone(), Some(errors_path.clone())));
+    super::fail_handle(&mut sink, destinations, Some(errors_path.clone()));
+    // Later stderr is discarded: the file keeps only its earlier bytes.
+    super::write_sink(&mut sink, Stream::Err, b"second").unwrap();
+    assert_eq!(std::fs::read(&errors_path).unwrap(), b"first");
+    // The healthy output file keeps its stream.
+    super::write_sink(&mut sink, Stream::Out, b"o").unwrap();
+    assert_eq!(std::fs::read(&output_path).unwrap(), b"o");
+}
+
+#[test]
+fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
+    // One job's unwritable output file never stops the keeper ending the
+    // other job: each process stores its own first path-bearing failure.
+    let input = fakes::TempDir::new("keeper-files-two-input");
+    let bad_fifo = input.path().join("bad.fifo");
+    let good_fifo = input.path().join("good.fifo");
+    fakes::fifo(&bad_fifo);
+    fakes::fifo(&good_fifo);
+    let home = fakes::TempDir::under(std::path::Path::new("/tmp"), "keeper-files-two");
+    let bad_dir = home.path().join("bad.d");
+    std::fs::create_dir(&bad_dir).expect("unwritable output");
+    let good_out = home.path().join("good.out");
+    std::fs::write(&good_out, b"").expect("good output");
+    let (held, held_rx) = ready_signal();
+    let hooks = super::Hooks {
+        held: Some(held),
+        ..super::Hooks::default()
+    };
+    let clock = fakes::clock::FakeClock::new();
+    let (mut keeper, _runtime) = serve_keeper_with(
+        "keeper-files-two",
+        SessionId("s_0123456789abcdef".into()),
+        clock,
+        hooks,
+        None,
+    );
+    let mut control = keeper.writer.try_clone().expect("control");
+    let mut watchdogs = Vec::new();
+    for (id, shell, fifo) in [
+        (
+            "bad",
+            "read gate <&3; echo bad-out; exit 3",
+            bad_fifo.clone(),
+        ),
+        (
+            "good",
+            "read gate <&3; echo good-out; exit 0",
+            good_fifo.clone(),
+        ),
+    ] {
+        start_shell(&keeper, id, ShellStart::fifo(shell, &fifo, &mut watchdogs));
+    }
+    let mut bad_writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&bad_fifo)
+        .expect("bad child input FIFO is ready");
+    let mut good_writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&good_fifo)
+        .expect("good child input FIFO is ready");
+    for (id, output) in [("bad", bad_dir.clone()), ("good", good_out.clone())] {
+        serde_json::to_writer(
+            &mut control,
+            &ToKeeper::Adopt {
+                id: id.into(),
+                job_id: JobId(format!("j_{id}")),
+                output_path: output,
+                errors_path: None,
+                lines: false,
+            },
+        )
+        .expect("adopt child");
+        control.write_all(b"\n").expect("adopt newline");
+    }
+    crash(&mut keeper);
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "keeper files to be active");
+    bad_writer.write_all(b"go\n").expect("release bad child");
+    let exit_deadline = Deadline::after(Duration::from_secs(10));
+    loop {
+        match exit_deadline.recv_or_fail(&keeper.read, "bad child to exit") {
+            FromKeeper::Exit { id, .. } if id == "bad" => break,
+            FromKeeper::Started { .. }
+            | FromKeeper::Failed { .. }
+            | FromKeeper::Output { .. }
+            | FromKeeper::Exit { .. }
+            | FromKeeper::Identity { .. }
+            | FromKeeper::Handover { .. }
+            | FromKeeper::AdoptDone(_) => {}
+        }
+    }
+    good_writer.write_all(b"go\n").expect("release good child");
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&keeper.result, "keeper to finish after both children")
+        .expect("keeper exits cleanly");
+    let completed = job_completed_lines(&keeper);
+    // `docs/tools.md`, "The keeper": a job_completed for each job that ends.
+    assert_eq!(completed.len(), 2, "both jobs end");
+    let bad = completed
+        .iter()
+        .find(|line| line.payload["job_id"] == "j_bad")
+        .expect("bad ending");
+    assert_eq!(bad.payload["status"], "failed");
+    assert_eq!(bad.payload["error"]["code"], "io_failed");
+    assert!(
+        bad.payload["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(bad_dir.to_str().unwrap())
+    );
+    assert!(
+        bad.payload["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("replaced end: nonzero_exit")
+    );
+    let good = completed
+        .iter()
+        .find(|line| line.payload["job_id"] == "j_good")
+        .expect("good ending");
+    assert_eq!(good.payload["status"], "completed");
+    assert!(good.payload.get("error").is_none());
+    assert_eq!(std::fs::read(&good_out).unwrap(), b"good-out\n");
+}
+
+#[test]
+fn a_keeper_child_files_errors_open_failure_discards_stderr_and_reports_io_failed() {
+    let input = fakes::TempDir::new("keeper-files-errors-input");
+    let input_fifo = input.path().join("input.fifo");
+    fakes::fifo(&input_fifo);
+    let home = fakes::TempDir::under(std::path::Path::new("/tmp"), "keeper-files-errors");
+    let errors_dir = home.path().join("errors.d");
+    std::fs::create_dir(&errors_dir).expect("unwritable errors");
+    let output = home.path().join("job.out");
+    std::fs::write(&output, b"").expect("output file");
+    let (held, held_rx) = ready_signal();
+    let hooks = super::Hooks {
+        held: Some(held),
+        ..super::Hooks::default()
+    };
+    let clock = fakes::clock::FakeClock::new();
+    let (mut keeper, _runtime) = serve_keeper_with(
+        "keeper-files-errors",
+        SessionId("s_0123456789abcdef".into()),
+        clock,
+        hooks,
+        None,
+    );
+    let mut control = keeper.writer.try_clone().expect("control");
+    let spec = Spawn {
+        id: "loud".into(),
+        program: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            format!(
+                "read gate < '{}'; echo out; echo err >&2",
+                input_fifo.display()
+            ),
+        ],
+        cwd: std::env::temp_dir(),
+        env: Vec::new(),
+        stdin: HostStdin::Null,
+        timeout_ms: None,
+        output_cap: 1_000_000,
+        sandbox: None,
+    };
+    serde_json::to_writer(&mut control, &ToKeeper::Start(spec)).expect("start child");
+    control.write_all(b"\n").expect("start newline");
+    serde_json::to_writer(
+        &mut control,
+        &ToKeeper::Adopt {
+            id: "loud".into(),
+            job_id: JobId("j_loud".into()),
+            output_path: output.clone(),
+            errors_path: Some(errors_dir.clone()),
+            lines: false,
+        },
+    )
+    .expect("adopt child");
+    control.write_all(b"\n").expect("adopt newline");
+    crash(&mut keeper);
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "keeper files to be active");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&input_fifo)
+        .expect("input FIFO writer")
+        .write_all(b"go\n")
+        .expect("release child");
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&keeper.result, "keeper to finish after child")
+        .expect("keeper exits cleanly");
+    let completed = job_completed_lines(&keeper);
+    // `docs/tools.md`, "The keeper": a job_completed for each job that ends.
+    assert_eq!(completed.len(), 1, "one ending for the one job");
+    let payload = &completed[0].payload;
+    assert_eq!(payload["status"], "failed");
+    assert_eq!(payload["error"]["code"], "io_failed");
+    assert!(
+        payload["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(errors_dir.to_str().unwrap())
+    );
+    // Stdout still lands; stderr is discarded, never redirected.
+    assert_eq!(std::fs::read(&output).unwrap(), b"out\n");
+}
+
+#[test]
 fn keeper_start_output_and_exit_are_ordered_and_shutdown_does_not_take_a_log() {
     let home = fakes::TempDir::new("fiber-keeper-child");
     let (life, mut lifeline) = std::io::pipe().expect("lifeline");
@@ -384,11 +1039,56 @@ fn serve_keeper_with(
     )
 }
 
-fn start_shell(keeper: &Keeper, call: &str, shell: &str) -> u32 {
+struct ShellStart<'a> {
+    shell: &'a str,
+    fifo: Option<&'a std::path::Path>,
+    watchdogs: Option<&'a mut Vec<fakes::Watchdog>>,
+}
+
+impl<'a> From<&'a str> for ShellStart<'a> {
+    fn from(shell: &'a str) -> Self {
+        Self {
+            shell,
+            fifo: None,
+            watchdogs: None,
+        }
+    }
+}
+
+impl<'a> From<&'a String> for ShellStart<'a> {
+    fn from(shell: &'a String) -> Self {
+        shell.as_str().into()
+    }
+}
+
+impl<'a> ShellStart<'a> {
+    fn fifo(
+        shell: &'a str,
+        fifo: &'a std::path::Path,
+        watchdogs: &'a mut Vec<fakes::Watchdog>,
+    ) -> Self {
+        Self {
+            shell,
+            fifo: Some(fifo),
+            watchdogs: Some(watchdogs),
+        }
+    }
+}
+
+fn start_shell<'a>(keeper: &Keeper, call: &str, shell: impl Into<ShellStart<'a>>) -> u32 {
+    let mut shell = shell.into();
+    let command = match shell.fifo {
+        Some(fifo) => format!(
+            "exec 3<> '{}'; printf 'keeper-fifo-ready\\n'; {}",
+            fifo.display(),
+            shell.shell
+        ),
+        None => shell.shell.to_owned(),
+    };
     let spec = Spawn {
         id: call.into(),
         program: "/bin/sh".into(),
-        args: vec!["-c".into(), shell.into()],
+        args: vec!["-c".into(), command],
         cwd: std::env::temp_dir(),
         env: Vec::new(),
         stdin: HostStdin::Null,
@@ -399,17 +1099,54 @@ fn start_shell(keeper: &Keeper, call: &str, shell: &str) -> u32 {
     let mut writer = keeper.writer.try_clone().expect("writer");
     serde_json::to_writer(&mut writer, &ToKeeper::Start(spec)).expect("start");
     writer.write_all(b"\n").expect("newline");
-    match Deadline::after(Duration::from_secs(10)).recv_or_fail(&keeper.read, "started") {
-        FromKeeper::Started { pgid, .. } => pgid,
-        FromKeeper::Failed { .. }
-        | FromKeeper::Output { .. }
-        | FromKeeper::Exit { .. }
-        | FromKeeper::Identity { .. }
-        | FromKeeper::Handover { .. }
-        | FromKeeper::AdoptDone(_) => {
-            panic!("expected started")
+    if shell.fifo.is_none() {
+        return match Deadline::after(Duration::from_secs(10)).recv_or_fail(&keeper.read, "started")
+        {
+            FromKeeper::Started { pgid, .. } => pgid,
+            FromKeeper::Failed { .. }
+            | FromKeeper::Output { .. }
+            | FromKeeper::Exit { .. }
+            | FromKeeper::Identity { .. }
+            | FromKeeper::Handover { .. }
+            | FromKeeper::AdoptDone(_) => panic!("expected started"),
+        };
+    }
+
+    use base64::Engine as _;
+    let deadline = Deadline::after(Duration::from_secs(10));
+    let mut pgid = None;
+    let mut fifo_ready = false;
+    while pgid.is_none() || !fifo_ready {
+        match deadline.recv_or_fail(&keeper.read, "child start and FIFO readiness") {
+            FromKeeper::Started {
+                id: started_id,
+                pgid: started_pgid,
+            } if started_id == call => {
+                if let Some(watchdogs) = shell.watchdogs.as_deref_mut() {
+                    watchdogs.push(fakes::Watchdog::group(started_pgid));
+                }
+                pgid = Some(started_pgid);
+            }
+            FromKeeper::Output {
+                id: output_id,
+                bytes,
+                ..
+            } if output_id == call => {
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(bytes)
+                    .expect("FIFO readiness output is base64");
+                fifo_ready |= String::from_utf8_lossy(&decoded).contains("keeper-fifo-ready");
+            }
+            FromKeeper::Started { .. }
+            | FromKeeper::Failed { .. }
+            | FromKeeper::Output { .. }
+            | FromKeeper::Exit { .. }
+            | FromKeeper::Identity { .. }
+            | FromKeeper::Handover { .. }
+            | FromKeeper::AdoptDone(_) => {}
         }
     }
+    pgid.expect("the child started before reporting FIFO readiness")
 }
 
 fn await_shell_ready(keeper: &Keeper, marker: &str) {
@@ -670,6 +1407,191 @@ fn job_completed_lines(keeper: &Keeper) -> Vec<contract::Envelope> {
         .collect()
 }
 
+fn fire_keeper_bound(clock: &fakes::clock::FakeClock) {
+    assert_eq!(
+        super::KEEPER_BOUND,
+        Duration::from_secs(7_200),
+        "production bound is 2 hours"
+    );
+    let bound_at = clock.origin() + super::KEEPER_BOUND;
+    let parked = clock
+        .mark_parked(bound_at, Deadline::after(Duration::from_secs(10)))
+        .expect("the watcher parks at the bound");
+    let watcher = parked.threads().into_iter().next().expect("watcher thread");
+    clock.advance_when_parked(
+        Some(bound_at),
+        Some(watcher),
+        super::KEEPER_BOUND,
+        &Deadline::after(Duration::from_secs(10)),
+    );
+}
+
+#[test]
+fn keeper_written_write_failure_wins_over_keeper_timeout() {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    // The keeper runner records its own streaming failure, then the crash
+    // bound fires: the timeout end is replaced, not reported.
+    let input = fakes::TempDir::new("keeper-timeout-write-input");
+    let input_fifo = input.path().join("input.fifo");
+    fakes::fifo(&input_fifo);
+    let output = fakes::TempDir::new("keeper-timeout-write-output");
+    let output_fifo = output.path().join("job.out");
+    fakes::fifo(&output_fifo);
+    let reader = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().try_into().unwrap())
+        .open(&output_fifo)
+        .expect("output FIFO reader");
+    let (held, held_rx) = ready_signal();
+    let (failed, failed_rx) = ready_signal();
+    let hooks = super::Hooks {
+        held: Some(held),
+        write_failed: Some(failed),
+        ..super::Hooks::default()
+    };
+    let clock = fakes::clock::FakeClock::new();
+    let (mut keeper, _runtime) = serve_keeper_with(
+        "keeper-timeout-write",
+        SessionId("s_0123456789abcdef".into()),
+        clock.clone(),
+        hooks,
+        None,
+    );
+    let mut control = keeper.writer.try_clone().expect("control");
+    let spec = Spawn {
+        id: "flooder".into(),
+        program: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            format!(
+                "read gate < '{}'; while true; do head -c 100000 /dev/zero; done",
+                input_fifo.display()
+            ),
+        ],
+        cwd: std::env::temp_dir(),
+        env: Vec::new(),
+        stdin: HostStdin::Null,
+        timeout_ms: None,
+        output_cap: 1_000_000_000,
+        sandbox: None,
+    };
+    serde_json::to_writer(&mut control, &ToKeeper::Start(spec)).expect("start child");
+    control.write_all(b"\n").expect("start newline");
+    serde_json::to_writer(
+        &mut control,
+        &ToKeeper::Adopt {
+            id: "flooder".into(),
+            job_id: JobId("j_flooder".into()),
+            output_path: output_fifo.clone(),
+            errors_path: None,
+            lines: false,
+        },
+    )
+    .expect("adopt child");
+    control.write_all(b"\n").expect("adopt newline");
+    crash(&mut keeper);
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "keeper files to be active");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&input_fifo)
+        .expect("input FIFO writer")
+        .write_all(b"go\n")
+        .expect("release child");
+    // The child floods until the test sees its bytes flowing.
+    let (first, first_rx) = mpsc::channel();
+    // Detached: `thread::scope` would join this reader even when
+    // the assert below panics, hanging the test on the open file.
+    // The thread owns the file, so `Deadline` stays the only wait.
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty()).expect("output FIFO blocks");
+        let mut bytes = [0_u8; 256];
+        let _sent = first.send(reader.read(&mut bytes).expect("read output FIFO"));
+    });
+    assert!(
+        Deadline::after(Duration::from_secs(10))
+            .recv_or_fail(&first_rx, "child did not flood the output")
+            > 0,
+        "the child closed the output FIFO without writing"
+    );
+    // Every later append fails with no reader: the runner records its
+    // first path-bearing failure on its next write. The hook fires at
+    // that store, so no real-clock timing leaks into the verdict.
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&failed_rx, "runner to record its write failure");
+    fire_keeper_bound(&clock);
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&keeper.result, "keeper exit")
+        .expect("keeper exits cleanly");
+    let completed = job_completed_lines(&keeper);
+    // `docs/tools.md`, "The keeper": a job_completed for each job that ends.
+    assert_eq!(completed.len(), 1, "one ending for the one held job");
+    let payload = &completed[0].payload;
+    assert_eq!(payload["job_id"], "j_flooder");
+    assert_eq!(payload["status"], "failed");
+    assert_eq!(payload["error"]["code"], "io_failed");
+    let message = payload["error"]["message"].as_str().unwrap();
+    assert!(message.contains(output_fifo.to_str().unwrap()));
+    assert!(message.contains("replaced end: keeper_timeout"));
+}
+
+#[test]
+fn keeper_timeout_write_failure_reports_io_failed() {
+    // The session's output file cannot even be opened at the takeover, so
+    // the later timeout reports the stored failure instead of its own end.
+    let home = fakes::TempDir::under(std::path::Path::new("/tmp"), "keeper-timeout-open");
+    let bad_dir = home.path().join("bad.d");
+    std::fs::create_dir(&bad_dir).expect("unwritable output");
+    let (held, held_rx) = ready_signal();
+    let hooks = super::Hooks {
+        held: Some(held),
+        ..super::Hooks::default()
+    };
+    let clock = fakes::clock::FakeClock::new();
+    let (mut keeper, _runtime) = serve_keeper_with(
+        "keeper-timeout-open",
+        SessionId("s_0123456789abcdef".into()),
+        clock.clone(),
+        hooks,
+        None,
+    );
+    start_shell(&keeper, "sleepy", "sleep 60");
+    let mut writer = keeper.writer.try_clone().expect("writer");
+    serde_json::to_writer(
+        &mut writer,
+        &ToKeeper::Adopt {
+            id: "sleepy".into(),
+            job_id: JobId("j_sleepy".into()),
+            output_path: bad_dir.clone(),
+            errors_path: None,
+            lines: false,
+        },
+    )
+    .expect("adopt");
+    writer.write_all(b"\n").expect("newline");
+    crash(&mut keeper);
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&held_rx, "keeper files to be active");
+    fire_keeper_bound(&clock);
+    Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&keeper.result, "keeper exit")
+        .expect("keeper exits cleanly");
+    let completed = job_completed_lines(&keeper);
+    // `docs/tools.md`, "The keeper": a job_completed for each job that ends.
+    assert_eq!(completed.len(), 1, "one ending for the one held job");
+    let payload = &completed[0].payload;
+    assert_eq!(payload["job_id"], "j_sleepy");
+    assert_eq!(payload["status"], "failed");
+    assert_eq!(payload["error"]["code"], "io_failed");
+    let message = payload["error"]["message"].as_str().unwrap();
+    assert!(message.contains(bad_dir.to_str().unwrap()));
+    assert!(message.contains("replaced end: keeper_timeout"));
+    assert!(
+        !message.contains("The session stayed gone"),
+        "the timeout end is replaced, not reported"
+    );
+}
+
 #[test]
 fn keeper_bound_fires_two_hours_after_the_crash_and_writes_keeper_timeout() {
     let id = SessionId("s_0123456789abcdef".into());
@@ -862,6 +1784,7 @@ fn keeper_prewound_reap_keeps_the_normal_completion() {
             signal: None,
             timed_out: false,
             output_cap: false,
+            output_write_failure: None,
         },
     );
     assert_eq!(
@@ -2058,7 +2981,7 @@ fn lock_race(old_wins: bool) {
     adopt_call(&fresh, "new", "j_new");
     old_gate.armed.store(true, Ordering::Release);
     fresh_gate.armed.store(true, Ordering::Release);
-    // The session dies: both keepers see their connection end.
+    // The session dies: both keepers see their connection end and race for the lock.
     hang_up(peer);
     crash(&mut fresh);
     deadline().recv_or_fail(&old_gate.arrived, "the old keeper to reach the lock");

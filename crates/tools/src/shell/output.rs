@@ -3,7 +3,8 @@
 //! (`docs/tools.md`, "Result and output", "Background jobs").
 
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
+use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
@@ -62,6 +63,11 @@ impl Pending {
     }
 }
 
+pub(super) struct WriteFailure {
+    pub(super) path: PathBuf,
+    pub(super) source: io::Error,
+}
+
 pub(super) struct Inner {
     pub(super) reaped: bool,
     pub(super) hosted_exit: Option<contract::keeper::Exit>,
@@ -84,6 +90,8 @@ pub(super) struct Inner {
     pub(super) stream: Pending,
     /// The job's output file, after a move.
     pub(super) file: Option<File>,
+    pub(super) output_path: Option<PathBuf>,
+    pub(super) write_failure: Option<WriteFailure>,
     pub(super) discard: bool,
     /// `file` is the artifact `background::finish_inline` installed for a
     /// shell that exited with leftovers: `finish` keeps the reader writing to
@@ -121,6 +129,7 @@ pub(super) struct Errors {
     moved: bool,
     /// The stderr file, after the move.
     file: Option<File>,
+    path: Option<PathBuf>,
     /// Bytes in the file.
     written: u64,
     /// The file stops at this many bytes.
@@ -132,28 +141,35 @@ pub(super) struct Errors {
 impl Errors {
     /// Writes what was held to `file` and makes it the sink. Bytes past
     /// `cap` are dropped, and every byte is dropped when `file` is `None`.
-    pub(super) fn attach(&mut self, file: Option<File>, cap: u64) {
+    pub(super) fn attach(
+        &mut self,
+        file: Option<File>,
+        path: Option<PathBuf>,
+        cap: u64,
+    ) -> io::Result<()> {
         self.moved = true;
         self.file = file;
+        self.path = path;
         self.cap = cap;
         let held = std::mem::take(&mut self.held);
-        self.sink(&held);
+        self.sink(&held)
     }
 
-    fn sink(&mut self, bytes: &[u8]) {
+    fn sink(&mut self, bytes: &[u8]) -> io::Result<()> {
         if !self.moved {
             self.held.extend_from_slice(bytes);
-            return;
+            return Ok(());
         }
         let Some(file) = self.file.as_mut() else {
-            return;
+            return Ok(());
         };
         let room = usize::try_from(self.cap.saturating_sub(self.written)).unwrap_or(usize::MAX);
         let kept = bytes.get(..room.min(bytes.len())).unwrap_or(&[]);
-        write_or_drop(file, kept);
+        let result = write_or_drop(file, kept);
         self.written = self
             .written
             .saturating_add(u64::try_from(kept.len()).unwrap_or(u64::MAX));
+        result
     }
 }
 
@@ -170,6 +186,8 @@ impl Default for Inner {
             spill_config: None,
             stream: Pending::default(),
             file: None,
+            output_path: None,
+            write_failure: None,
             discard: false,
             artifact_sink: false,
             seq: 0,
@@ -185,6 +203,14 @@ impl Default for Inner {
 }
 
 impl Inner {
+    /// Keeps the first output write failure, naming its file: a later
+    /// failure never overwrites it. `None` records nothing.
+    pub(super) fn keep_write_failure(&mut self, failure: Option<WriteFailure>) {
+        if self.write_failure.is_none() {
+            self.write_failure = failure;
+        }
+    }
+
     /// Hands the command to `file`: a spill in progress goes to the job's
     /// output file at `path`, and the foreground bytes are copied whole.
     /// A copy past the cap is kept whole and fires the cap at once. The
@@ -196,7 +222,12 @@ impl Inner {
         cap: u64,
     ) -> Option<String> {
         if let Some(spill) = self.spill.take() {
-            let (sink, line) = spill.into_job(path, file);
+            let (sink, line, write_error) = spill.into_job(path, file);
+            self.keep_write_failure(write_error.map(|source| WriteFailure {
+                path: path.to_path_buf(),
+                source,
+            }));
+            self.output_path = Some(path.to_path_buf());
             self.cap = cap;
             self.written = sink.metadata().map(|file| file.len()).unwrap_or(0);
             self.cap_fired = self.written > cap;
@@ -204,7 +235,13 @@ impl Inner {
             return line;
         }
         let bytes = std::mem::take(&mut self.output);
-        write_or_drop(&mut file, &bytes);
+        if let Err(source) = write_or_drop(&mut file, &bytes) {
+            self.keep_write_failure(Some(WriteFailure {
+                path: path.to_path_buf(),
+                source,
+            }));
+        }
+        self.output_path = Some(path.to_path_buf());
         if let Some(lines) = self.lines.as_mut() {
             lines.extend_from_slice(&bytes);
         }
@@ -223,8 +260,11 @@ impl Inner {
         }
         let room = usize::try_from(self.cap.saturating_sub(self.written)).unwrap_or(usize::MAX);
         let kept = bytes.get(..room.min(bytes.len())).unwrap_or(&[]);
-        if let Some(file) = self.file.as_mut() {
-            write_or_drop(file, kept);
+        if let Some(file) = self.file.as_mut()
+            && let Err(source) = write_or_drop(file, kept)
+            && let Some(path) = self.output_path.clone()
+        {
+            self.keep_write_failure(Some(WriteFailure { path, source }));
         }
         self.written = self
             .written
@@ -299,9 +339,15 @@ pub(super) fn check_start(inner: &mut Inner, extra: usize) {
 /// Reads a monitor's standard error into [`Errors`], then marks it closed.
 pub(super) fn read_errors(read: impl Read, shared: &Shared) {
     read_into(read, shared, |inner, bytes| {
-        if let Some(errors) = inner.errors.as_mut() {
-            errors.sink(bytes);
-        }
+        let failure = inner.errors.as_mut().and_then(|errors| {
+            errors.sink(bytes).err().and_then(|source| {
+                errors
+                    .path
+                    .clone()
+                    .map(|path| WriteFailure { path, source })
+            })
+        });
+        inner.keep_write_failure(failure);
     });
     let mut inner = lock(&shared.inner);
     if let Some(errors) = inner.errors.as_mut() {
@@ -343,9 +389,15 @@ pub(super) fn hosted_bytes(shared: &Shared, stream: contract::keeper::Stream, by
     let mut inner = lock(&shared.inner);
     if !inner.discard {
         if stream == contract::keeper::Stream::Err && inner.errors.is_some() {
-            if let Some(errors) = inner.errors.as_mut() {
-                errors.sink(bytes);
-            }
+            let failure = inner.errors.as_mut().and_then(|errors| {
+                errors.sink(bytes).err().and_then(|source| {
+                    errors
+                        .path
+                        .clone()
+                        .map(|path| WriteFailure { path, source })
+                })
+            });
+            inner.keep_write_failure(failure);
         } else if inner.file.is_some() {
             inner.sink(bytes);
         } else {
@@ -434,11 +486,8 @@ pub(super) fn stream_rest(shared: &Shared, emit: &dyn Emit, carry: &mut Vec<u8>)
     carry.clear();
 }
 
-pub(super) fn write_or_drop(file: &mut File, bytes: &[u8]) {
-    // debt: output lost to a failed write is not reported to the model, until docs/errors.md has a code for it
-    if let Err(err) = file.write_all(bytes) {
-        let _lost = err;
-    }
+pub(super) fn write_or_drop(file: &mut File, bytes: &[u8]) -> io::Result<()> {
+    file.write_all(bytes)
 }
 
 /// Where a paced stream's text comes from and where it goes.
