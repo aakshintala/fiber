@@ -304,3 +304,4 @@ crates/extensions/src/tui_vm.rs	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7
 crates/tui/src/ext_tests.rs::SlotRenderer	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/chrome.rs	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/check	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/invocation.md	fiber-4974	plan	2026-11-26T23:50:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
