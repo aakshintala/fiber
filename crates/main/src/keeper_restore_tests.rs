@@ -485,8 +485,9 @@ fn a_keeper_that_vanishes_after_an_adopted_write_failure_reports_io_failed_once_
     let mut active = restored.activate();
 
     // The first frame proves the append writer is live before its reader is
-    // closed. The next frame therefore forces the adopted stderr append to
-    // fail, and the keeper connection then closes without an Exit.
+    // closed. The readiness signal follows the FIFO read-end close, so the
+    // second frame cannot reach an open FIFO. The keeper connection then
+    // closes without an Exit.
     world.send(output_frame("call_0", "err", "first\\n"));
     let (first, first_rx) = mpsc::channel();
     // Detached: `thread::scope` would join this reader even when
@@ -496,7 +497,9 @@ fn a_keeper_that_vanishes_after_an_adopted_write_failure_reports_io_failed_once_
         let mut reader = reader;
         rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty()).expect("output FIFO blocks");
         let mut bytes = [0_u8; 32];
-        let _sent = first.send(reader.read(&mut bytes).expect("read from output FIFO"));
+        let read = reader.read(&mut bytes).expect("read from output FIFO");
+        drop(reader);
+        let _sent = first.send(read);
     });
     assert!(
         deadline().recv_or_fail(&first_rx, "the adopted writer did not write") > 0,

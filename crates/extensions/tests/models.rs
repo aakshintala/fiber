@@ -318,6 +318,76 @@ fn admission_capability_filter_keeps_unknown_models_new() {
 }
 
 #[test]
+fn admission_muse_rows_follow_catalog_capabilities() {
+    let setup = Setup::new();
+    let package = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../providers/muse");
+    let ids = [
+        "muse-ember-1.0",
+        "muse-wonder-1.0",
+        "muse-spark-1.1",
+        "muse-spark-1.2",
+        "muse-spark-1.2-contributor",
+        "muse-spark-1.3",
+        "muse-spark-1.3-contributor",
+        "muse-voice-transcribe-1.0",
+        "muse-image-1.0",
+        "sam-3.1",
+    ];
+    let models = ids.map(|id| {
+        serde_json::from_value(json!({
+            "id": id,
+            "protocol": "openai-responses",
+            "base_url": "https://api.meta.ai/v1"
+        }))
+        .unwrap()
+    });
+    let catalog = json!({
+        "meta": {
+            "muse-ember-1.0": {"limit":{"context":1048576,"output":524288},"modalities":{"output":["text"]},"tool_call":true},
+            "muse-wonder-1.0": {"limit":{"context":1048576,"output":131072},"modalities":{"output":["text"]},"tool_call":true},
+            "muse-spark-1.1": {"limit":{"context":1048576,"output":131072},"modalities":{"output":["text"]},"tool_call":true},
+            "muse-spark-1.2": {"limit":{"context":1048576,"output":131072},"modalities":{"output":["text"]},"tool_call":true},
+            "muse-spark-1.2-contributor": {"limit":{"context":1048576,"output":131072},"modalities":{"output":["text"]},"tool_call":true},
+            "muse-spark-1.3": {"limit":{"context":1048576,"output":131072},"modalities":{"output":["text"]},"tool_call":true},
+            "muse-spark-1.3-contributor": {"limit":{"context":1048576,"output":131072},"modalities":{"output":["text"]},"tool_call":true},
+            "sam-3.1": {"modalities":{"output":["text"]},"tool_call":false}
+        }
+    });
+    config::write_models_dev(&setup.home(), &serde_json::to_vec(&catalog).unwrap()).unwrap();
+
+    let admitted = extensions::models_dev::merge_admission(
+        &setup.home(),
+        &package,
+        "muse",
+        models.into(),
+        true,
+    );
+
+    // The vendor list is the source of offered models; catalog admission and
+    // metadata follow `docs/model-routing.md`, "Which models exist, and what Fiber knows about them".
+    assert_eq!(admitted.len(), 9);
+    for (index, id) in ids[..7].iter().enumerate() {
+        let model = admitted.iter().find(|model| model.id == *id).unwrap();
+        assert!(!model.is_new, "{id}");
+        assert_eq!(model.context_window, Some(1_048_576), "{id}");
+        assert_eq!(
+            model.max_output_tokens,
+            Some(if index == 0 { 524_288 } else { 131_072 }),
+            "{id}"
+        );
+        assert_eq!(model.input, ["text", "image"], "{id}");
+    }
+    for id in ["muse-voice-transcribe-1.0", "muse-image-1.0"] {
+        let model = admitted.iter().find(|model| model.id == id).unwrap();
+        assert!(model.is_new, "{id}");
+        assert_eq!(model.input, ["text"], "{id}");
+        assert_eq!(model.context_window, Some(128_000), "{id}");
+        assert_eq!(model.max_output_tokens, Some(8_192), "{id}");
+    }
+    assert!(admitted.iter().all(|model| model.id != "sam-3.1"));
+}
+
+#[test]
 fn admission_capability_filter_keeps_models_with_text_and_tool_call() {
     let setup = Setup::new();
     let package = setup.source(
@@ -722,9 +792,9 @@ fn models_dev_forced_refresh_skips_a_held_lock() {
     held.try_lock().unwrap();
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let recorded = std::sync::Arc::clone(&calls);
-    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_| {
+    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_, writer| {
         recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(br#"{"acme":{}}"#.to_vec())
+        std::io::Write::write_all(writer, br#"{"acme":{}}"#).map_err(|error| error.to_string())
     });
 
     fakes::within(
@@ -745,13 +815,84 @@ fn models_dev_forced_refresh_skips_a_held_lock() {
 }
 
 #[test]
+fn models_dev_refresh_keeps_cache_and_cleans_temp_for_failed_or_invalid_fetches() {
+    for (label, body, fail) in [
+        ("partial", b"{\"acme\":".as_slice(), true),
+        ("invalid", b"[]".as_slice(), false),
+        ("trailing", b"{} trailing".as_slice(), false),
+    ] {
+        let setup = Setup::new();
+        let home = setup.workspace().join(label);
+        let original = br#"{"old":{}}"#;
+        config::write_models_dev(&home, original).unwrap();
+        let response = body.to_vec();
+        let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_, writer| {
+            std::io::Write::write_all(writer, &response).map_err(|error| error.to_string())?;
+            if fail {
+                Err("injected partial response".to_owned())
+            } else {
+                Ok(())
+            }
+        });
+        extensions::models_dev::refresh_forced(
+            &home,
+            true,
+            fakes::clock::FakeClock::new().wall(),
+            &fetch,
+        );
+        assert_eq!(
+            config::read_models_dev(&home).unwrap(),
+            Some(original.to_vec()),
+            "{label}"
+        );
+        let cache = config::models_dev_cache_file(&home).unwrap();
+        let leftovers: Vec<_> = std::fs::read_dir(cache.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".models-dev-")
+            })
+            .collect();
+        // `docs/state.md`, "Concurrent access": failed whole-file writes remove the temporary file.
+        assert!(leftovers.is_empty(), "{label}: temporary files remain");
+    }
+}
+
+#[test]
+fn models_dev_forced_refresh_fetches_when_cache_is_missing() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let recorded = std::sync::Arc::clone(&calls);
+    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_, writer| {
+        recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        std::io::Write::write_all(writer, br#"{"acme":{}}"#).map_err(|error| error.to_string())
+    });
+    extensions::models_dev::refresh_forced(
+        &home,
+        true,
+        fakes::clock::FakeClock::new().wall(),
+        &fetch,
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        config::read_models_dev(&home).unwrap(),
+        Some(br#"{"acme":{}}"#.to_vec())
+    );
+}
+
+#[test]
 fn models_dev_fetch_reads_a_loopback_http_response() {
     use fakes::{ProviderServer, Response};
 
     let server = ProviderServer::start([Response::status(200, "{}")]).unwrap();
     let agent = ureq::Agent::new_with_defaults();
-    let bytes =
-        extensions::models_dev::fetch(&agent, &format!("{}/api.json", server.url())).unwrap();
+    let mut bytes = Vec::new();
+    extensions::models_dev::fetch(&agent, &format!("{}/api.json", server.url()), &mut bytes)
+        .unwrap();
     assert_eq!(bytes, b"{}");
 }
 
@@ -762,9 +903,9 @@ fn models_dev_refresh_and_spawn_run_when_due() {
     let now = fakes::clock::FakeClock::new().wall();
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let recorded = std::sync::Arc::clone(&calls);
-    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_| {
+    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_, writer| {
         recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(br#"{"acme":{}}"#.to_vec())
+        std::io::Write::write_all(writer, br#"{"acme":{}}"#).map_err(|error| error.to_string())
     });
     extensions::models_dev::refresh_if_due(&home, true, None, now, &fetch);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -775,15 +916,23 @@ fn models_dev_refresh_and_spawn_run_when_due() {
 
     let fresh_home = setup.workspace().join("second-home");
     let recorded = std::sync::Arc::clone(&calls);
-    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_| {
+    let fetch: extensions::models_dev::Fetch = std::sync::Arc::new(move |_, writer| {
+        assert_eq!(std::thread::current().name(), Some("models.dev"));
         recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(br#"{"acme":{}}"#.to_vec())
+        std::io::Write::write_all(writer, br#"{"acme":{}}"#).map_err(|error| error.to_string())
     });
-    extensions::models_dev::spawn_if_due(fresh_home, true, None, now, fetch)
-        .expect("missing catalog is due")
-        .join()
-        .unwrap();
+    let worker = extensions::models_dev::spawn_if_due(fresh_home.clone(), true, None, now, fetch)
+        .expect("missing catalog is due");
+    fakes::within(
+        "models.dev refresh worker",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || worker.join().unwrap(),
+    );
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(
+        config::read_models_dev(&fresh_home).unwrap(),
+        Some(br#"{"acme":{}}"#.to_vec())
+    );
 }
 
 #[test]

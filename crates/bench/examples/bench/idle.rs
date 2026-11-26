@@ -143,6 +143,15 @@ fn measure_session(
 ) -> Result<Samples, String> {
     let pid = session.proc.pid();
     session.wait_started(ctx.clock, ctx.clock.now() + READY)?;
+    run::poll(
+        ctx.clock,
+        READY,
+        "models.dev refresh thread to exit",
+        || linux::threads(pid).map(|threads| !linux::has_thread_named(&threads, "models.dev")),
+    )
+    .inspect_err(|error| {
+        notes.push(error.clone());
+    })?;
     let (switches, rss, split, idle_threads) = idle_window(ctx, pid, notes)?;
     let mut client = Client::connect(&ctx.home.socket(id))?;
     client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#)?;
