@@ -276,8 +276,8 @@ it is a watcher, and `ask` spends its stdin on the prompt.
 
 A session process runs one session. Its keeper, when it has one, runs in a
 session of its own and is the parent of that session's shell jobs' process
-groups. The session holds the keeper's stdin as its lifeline. Delegates stay
-children of the session. A Fiber delegate's stdin is a lifeline the session
+groups and of its delegates (`docs/tools.md`, "The keeper"). The session
+holds the keeper's stdin as its lifeline. A Fiber delegate's stdin is a lifeline the session
 holds and never writes to; end of file on it starts a shutdown
 (`docs/delegates.md`).
 
