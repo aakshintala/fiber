@@ -5,7 +5,7 @@
 use fakes::MUST_SUCCEED_WITHIN;
 use std::io::{BufRead, Write as _};
 use std::os::unix::process::CommandExt as _;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, Weak};
@@ -1946,11 +1946,14 @@ fn a_gone_detached_job_is_not_reported_as_needing_review() {
 #[test]
 fn detached_settle_ignores_a_reused_group_number() {
     // Same stop sequence as the supervisor test, driven directly: the
-    // fixture traps TERM, handshakes, then takes TERM and KILL and is
-    // reaped, leaving the group empty. Deterministic under no load.
+    // fixture forks its sleep before handshaking (fork-before-ready), so
+    // no member can be born after the signals start; it then takes TERM
+    // and KILL and is reaped. No emptiness assert here: observing the
+    // group is the settle poll's job, exercised by the supervisor test.
+    // Deterministic under no load.
     let mut command = Command::new("sh");
     command
-        .args(["-c", "trap '' TERM; echo ready; sleep 60"])
+        .args(["-c", "trap '' TERM; sleep 60 & echo ready; wait"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -1969,7 +1972,6 @@ fn detached_settle_ignores_a_reused_group_number() {
         !child.wait().unwrap().success(),
         "SIGKILL stopped the child"
     );
-    assert!(group_empties(pgid, Deadline::after(MUST_SUCCEED_WITHIN)));
     // Pinned cause (#4817): the kernel reuses the dead number for a new
     // group leader, and the settle poll reads that newcomer as a surviving
     // member of the stopped group. The poll must report the ORIGINAL group
@@ -2046,13 +2048,33 @@ fn detached_settle_ignores_a_reused_group_number() {
 /// counts every non-zombie row, ignoring identity; the fix tells a reused
 /// number from a surviving original.
 fn member_counts_as_survivor(
-    _pid: u32,
+    pid: u32,
     zombie: bool,
-    _expected: &[(u32, u64)],
-    _sleep_recorded: bool,
-    _start: Option<u64>,
+    expected: &[(u32, u64)],
+    sleep_recorded: bool,
+    start: Option<u64>,
 ) -> bool {
-    !zombie
+    if zombie {
+        return false;
+    }
+    let Some(start) = start else {
+        // Unreadable: the row is dying, or was never ours to read. Stay
+        // conservative (the legacy verdict); the next poll decides.
+        return true;
+    };
+    if expected.contains(&(pid, start)) {
+        // A recorded original member still runs.
+        return true;
+    }
+    if expected.iter().any(|(recorded, _)| *recorded == pid) {
+        // This number is recorded with a different start time: the
+        // original is gone and the kernel reused its number.
+        return false;
+    }
+    // A pid never recorded with the leader: only exonerated once the
+    // sleep is recorded, when the fixture's member set is closed to the
+    // leader plus the sleep. Otherwise keep the legacy verdict.
+    !sleep_recorded
 }
 
 #[test]
@@ -2062,7 +2084,7 @@ fn detached_stop_waits_for_the_supervisor_after_the_grace_period() {
     let (_dir, registry, tool) = setup(as_clock);
     let mut command = Command::new("sh");
     command
-        .args(["-c", "trap '' TERM; echo ready; sleep 60"])
+        .args(["-c", "trap '' TERM; sleep 60 & echo ready; wait"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -2076,6 +2098,14 @@ fn detached_stop_waits_for_the_supervisor_after_the_grace_period() {
     stdout.read_line(&mut ready).unwrap();
     assert_eq!(ready, "ready\n");
     drop(stdout);
+    // One synchronous snapshot right after the ready handshake: records
+    // the fixture sleep's identity while the group still runs, so the
+    // settle poll can tell a reused group number from a surviving
+    // original. The fixture forks its sleep before handshaking, so the
+    // snapshot cannot miss it: no member is born after this point. A
+    // single `ps` here does not shrink the TERM-to-KILL window the race
+    // would need.
+    let sleep_identity = find_sleep_identity(pgid);
     let (reaped_tx, reaped_rx) = mpsc::channel();
     thread::spawn(move || {
         let _sent = reaped_tx.send(child.wait());
@@ -2176,16 +2206,33 @@ fn detached_stop_waits_for_the_supervisor_after_the_grace_period() {
         "SIGKILL stopped the child after the grace period"
     );
     assert!(
-        detached_group_settled(pgid, Deadline::after(MUST_SUCCEED_WITHIN)),
-        "no non-zombie member of the stopped group still runs"
+        detached_group_settled(
+            pgid,
+            start_time,
+            sleep_identity,
+            Deadline::after(MUST_SUCCEED_WITHIN)
+        ),
+        "no original member of the stopped group still runs"
     );
     watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
-/// Waits up to `deadline` for the named fact that no non-zombie member of the stopped group still runs; it does not wait for quiet.
-/// Settles on the `ps` member listing (see RULING-4817-S1): no listed members, or only zombies.
-fn detached_group_settled(pgid: u32, deadline: Deadline) -> bool {
+/// Waits up to `deadline` for the named fact that no original member of the stopped group still runs; it does not wait for quiet.
+/// Settles on the `ps` member listing (see RULING-4817-S1): no listed members, only zombies, or only rows whose process
+/// identity differs from every recorded original (`expected`, which always holds the leader; `sleep` holds the original
+/// sleep when it was seen). A reused group number never settles the wait on its own.
+fn detached_group_settled(
+    pgid: u32,
+    leader_start: u64,
+    sleep: Option<(u32, u64)>,
+    deadline: Deadline,
+) -> bool {
     let want = pgid.to_string();
+    let mut expected = vec![(pgid, leader_start)];
+    if let Some(sleep) = sleep {
+        expected.push(sleep);
+    }
+    let sleep_recorded = sleep.is_some();
     let (_hold, hold) = mpsc::channel::<()>();
     loop {
         let (listed, listing) = mpsc::channel();
@@ -2200,6 +2247,13 @@ fn detached_group_settled(pgid: u32, deadline: Deadline) -> bool {
         if let Some(true) = listing_settled(deadline.recv(&listing), &want) {
             return true;
         }
+        // A live row may be a reuse, not a survivor: re-list with pids and
+        // tell them apart by process identity before waiting on.
+        if group_holds_original(&want, &expected, sleep_recorded, &deadline) {
+            // An original member still runs: keep waiting.
+        } else {
+            return true;
+        }
         if deadline.left().is_zero() {
             return false;
         }
@@ -2209,6 +2263,90 @@ fn detached_group_settled(pgid: u32, deadline: Deadline) -> bool {
             Ok(()) | Err(_) => {}
         }
     }
+}
+
+/// One identity-aware pass over the group: re-lists with pids and reports
+/// whether any live row is a recorded original member. Rows the records
+/// exonerate (a reused number, a never-recorded pid once the sleep is
+/// recorded) do not count. A hung or failed `ps` counts, so it never
+/// settles the wait early: the next pass decides.
+fn group_holds_original(
+    want: &str,
+    expected: &[(u32, u64)],
+    sleep_recorded: bool,
+    deadline: &Deadline,
+) -> bool {
+    let (listed, listing) = mpsc::channel();
+    thread::spawn(move || {
+        let output = Command::new("ps")
+            .args(["-e", "-o", "pid=,pgid=,stat="])
+            .output();
+        match listed.send(output) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    // A hung or failed `ps` counts, so it never settles the wait early:
+    // the next pass decides. The receive reuses the loop's one deadline.
+    let output = match deadline.recv(&listing) {
+        Ok(Ok(output)) if output.status.success() => output,
+        Ok(_) | Err(_) => return true,
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines().any(|line| {
+        let mut columns = line.split_whitespace();
+        let pid: u32 = match columns.next().and_then(|pid| pid.parse().ok()) {
+            Some(pid) => pid,
+            None => return true,
+        };
+        if columns.next() != Some(want) {
+            return false;
+        }
+        let zombie = columns.next().is_some_and(|state| state.starts_with('Z'));
+        member_counts_as_survivor(
+            pid,
+            zombie,
+            expected,
+            sleep_recorded,
+            support::group::start_time(pid),
+        )
+    })
+}
+
+/// The fixture sleep's (pid, start-time) identity, read from one `ps`
+/// snapshot while the group still runs. `None` when the snapshot misses
+/// it: the caller then keeps the legacy verdict instead of exonerating.
+fn find_sleep_identity(pgid: u32) -> Option<(u32, u64)> {
+    let want = pgid.to_string();
+    let (listed, listing) = mpsc::channel();
+    thread::spawn(move || {
+        let output = Command::new("ps")
+            .args(["-e", "-o", "pid=,ppid=,pgid=,comm="])
+            .output();
+        match listed.send(output) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    // A hung or failed snapshot reads as missed: the caller keeps the
+    // legacy verdict instead of exonerating.
+    let output = match Deadline::after(MUST_SUCCEED_WITHIN).recv(&listing) {
+        Ok(Ok(output)) if output.status.success() => output,
+        Ok(_) | Err(_) => return None,
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    let sleep_pid: u32 = text
+        .lines()
+        .filter_map(|line| {
+            let mut columns = line.split_whitespace();
+            let pid: u32 = columns.next()?.parse().ok()?;
+            let ppid: u32 = columns.next()?.parse().ok()?;
+            if columns.next()? != want || ppid.to_string() != want {
+                return None;
+            }
+            columns.next().filter(|comm| comm.contains("sleep"))?;
+            Some(pid)
+        })
+        .next()?;
+    support::group::start_time(sleep_pid).map(|start| (sleep_pid, start))
 }
 
 /// Reads one `ps` answer for `want`: `Some` settled on an answer, `None` when the
@@ -2291,6 +2429,81 @@ fn listing_settled_reads_only_running_members_as_unsettled() {
         Some(true)
     );
     assert_eq!(listing_settled(answered(b""), "1234"), Some(true));
+}
+
+#[test]
+fn group_holds_original_counts_a_recorded_original() {
+    // A controlled two-member group: the recorded leader still runs, so
+    // it counts, while the unrecorded sleep is exonerated as a reuse.
+    let (mut child, watchdog, pgid, leader) = fixture_group();
+    assert!(group_holds_original(
+        &pgid.to_string(),
+        &[leader],
+        true,
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+    ));
+    kill_group(pgid, "KILL").unwrap();
+    match child.wait() {
+        Ok(_) | Err(_) => {}
+    }
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn group_holds_original_ignores_a_reused_number() {
+    // Same live leader pid, different start time: the original is gone
+    // and the kernel reused its number, so nothing counts.
+    let (mut child, watchdog, pgid, leader) = fixture_group();
+    let reused = (leader.0, leader.1.wrapping_add(1));
+    assert!(!group_holds_original(
+        &pgid.to_string(),
+        &[reused],
+        true,
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+    ));
+    kill_group(pgid, "KILL").unwrap();
+    match child.wait() {
+        Ok(_) | Err(_) => {}
+    }
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn group_holds_original_keeps_the_legacy_verdict_without_the_sleep() {
+    // A never-recorded pid with the sleep unrecorded keeps the legacy
+    // verdict: the live leader counts.
+    let (mut child, watchdog, pgid, leader) = fixture_group();
+    let other = (leader.0.wrapping_add(1), leader.1);
+    assert!(group_holds_original(
+        &pgid.to_string(),
+        &[other],
+        false,
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+    ));
+    kill_group(pgid, "KILL").unwrap();
+    match child.wait() {
+        Ok(_) | Err(_) => {}
+    }
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
+}
+
+/// A controlled two-member group (`sh` plus its `sleep`), still running:
+/// the child, its watchdog, its number, and the leader's recorded
+/// identity. No handshake: the leader alone decides every verdict here,
+/// so a not-yet-forked sleep cannot change the outcome.
+fn fixture_group() -> (Child, Watchdog, u32, (u32, u64)) {
+    let mut command = Command::new("sh");
+    command
+        .args(["-c", "sleep 60"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let (child, _listing) = support::group::spawn(&mut command).unwrap();
+    let pgid = child.id();
+    let watchdog = Watchdog::group(pgid);
+    let leader = (pgid, support::group::start_time(pgid).unwrap());
+    (child, watchdog, pgid, leader)
 }
 
 #[test]
