@@ -1400,7 +1400,7 @@ fn space_matches_enter_on_the_selected_row() {
     assert!(!rows(&app).contains(&CHECKED.to_owned()));
 
     // Space on the checkbox row also performs its Enter action.
-    let check = rows(&app).len() - 2;
+    let check = app.rewind.row_count() - 2;
     goto(&mut app, &clock, check);
     app.on_key(crate::keys::Key::Char(' '), clock.now());
     assert!(rows(&app).contains(&CHECKED.to_owned()));
@@ -1488,14 +1488,22 @@ fn clicking_a_turn_opens_it_while_control_cells_keep_their_actions() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = attached();
     let lines = open(&mut app, &clock);
-    accept(&mut app, &lines[0]["id"], segment_a());
-    // A click on the first turn performs its Enter action and opens it.
-    app.session_view_click(crate::swapped::Spot::Row(0));
+    let next = accept(&mut app, &lines[0]["id"], segment_a());
+    let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
+    let ready = accept(&mut app, &asked["id"], segment_b());
+    assert!(
+        ready.is_empty(),
+        "the history walk is complete before clicking"
+    );
+    // The first turn follows the older ancestor row.
+    // A click on a row does what Enter does on it (`docs/tui.md`, "Swapped views").
+    app.session_view_click(crate::swapped::Spot::Row(1));
     let frame = app.session_view_screen(80).expect("the view is open");
-    assert_eq!(frame.list.selected(), 0);
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
+    assert_eq!(frame.list.selected(), 1);
     assert!(rows(&app).iter().any(|row| row.contains("start of turn")));
     // The checkbox's explicit cell remains a direct toggle control.
-    let at = frame.rows.len() - 2;
+    let at = app.rewind.row_count() - 2;
     app.session_view_click(crate::swapped::Spot::Cell(at, 0));
     assert!(rows(&app).contains(&CHECKED.to_owned()));
     // The close target closes the view.
@@ -2003,7 +2011,7 @@ fn the_action_row_stays_selected_across_a_second_page() {
     let mut app = attached();
     let lines = open(&mut app, &clock);
     let next = accept(&mut app, &lines[0]["id"], segment_a());
-    let action = rows(&app).len() - 1;
+    let action = app.rewind.row_count() - 1;
     goto(&mut app, &clock, action);
 
     let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
@@ -2156,8 +2164,10 @@ fn clicking_a_boundary_keeps_its_row_selected() {
     app.on_key(crate::keys::Key::Enter, clock.now());
     let at = 3;
     let out = sent(app.session_view_click(crate::swapped::Spot::Row(at)));
+    // A click on a row does what Enter does on it (`docs/tui.md`, "Swapped views").
     assert_eq!(out.len(), 1, "a boundary click sends immediately");
     let frame = app.session_view_screen(80).expect("the send is pending");
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     assert_eq!(frame.list.selected(), at);
     assert_eq!(out[0]["command"], "rewind");
 }
@@ -2609,8 +2619,14 @@ fn clicking_the_action_row_sends() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = attached();
     let lines = open(&mut app, &clock);
-    accept(&mut app, &lines[0]["id"], segment_a());
-    let at = rows(&app).len() - 1;
+    let next = accept(&mut app, &lines[0]["id"], segment_a());
+    let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
+    let ready = accept(&mut app, &asked["id"], segment_b());
+    assert!(
+        ready.is_empty(),
+        "the history walk is complete before clicking"
+    );
+    let at = app.rewind.row_count() - 1;
     // The click lands on the Rewind row's own cell.
     // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     let out = sent(app.session_view_click(crate::swapped::Spot::Cell(at, 0)));
@@ -2623,10 +2639,17 @@ fn clicking_the_action_row_runs_its_enter_action() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = attached();
     let lines = open(&mut app, &clock);
-    accept(&mut app, &lines[0]["id"], segment_a());
-    let at = rows(&app).len() - 1;
+    let next = accept(&mut app, &lines[0]["id"], segment_a());
+    let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
+    let ready = accept(&mut app, &asked["id"], segment_b());
+    assert!(
+        ready.is_empty(),
+        "the history walk is complete before clicking"
+    );
+    let at = app.rewind.row_count() - 1;
     let before = shot(&app);
     let out = sent(app.session_view_click(crate::swapped::Spot::Row(at)));
+    // A click on a row does what Enter does on it (`docs/tui.md`, "Swapped views").
     assert_eq!(out.len(), 1);
     assert_eq!(out[0]["command"], "rewind");
     assert_ne!(shot(&app), before);
@@ -2692,13 +2715,19 @@ fn clicking_turn_and_checkbox_rows_runs_enter() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = attached();
     let lines = open(&mut app, &clock);
-    accept(&mut app, &lines[0]["id"], segment_a());
+    let next = accept(&mut app, &lines[0]["id"], segment_a());
+    let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
+    let ready = accept(&mut app, &asked["id"], segment_b());
+    assert!(
+        ready.is_empty(),
+        "the history walk is complete before clicking"
+    );
     let before = shot(&app);
     app.session_view_click(crate::swapped::Spot::Row(0));
     assert!(rows(&app).iter().any(|row| row.contains("start of turn")));
     assert_ne!(shot(&app), before);
     // The checkbox is a row action as well as a direct cell control.
-    let check = rows(&app).len() - 2;
+    let check = app.rewind.row_count() - 2;
     app.session_view_click(crate::swapped::Spot::Row(check));
     assert!(rows(&app).contains(&CHECKED.to_owned()));
 }
