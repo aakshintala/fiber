@@ -290,3 +290,17 @@ crates/hub/src/feed.rs	fiber-4974	plan	2026-11-26T23:27:41Z	Amoghs-MacBook-Pro:/
 docs/delegates.md	fiber-4977	plan	2026-11-26T23:29:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/fakes/src/process_group.rs	fiber-4420	plan	2026-11-26T23:43:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4908
 crates/fakes/src/process_group_tests.rs	fiber-4420	plan	2026-11-26T23:43:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4908
+docs/tui.md	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/layout.rs::split	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/chrome.rs::layout_for	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/view.rs::render	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/view/home.rs::render	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/home_view_tests.rs	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/ext/input.rs::Input	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/ext/cache.rs::key_of	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/ext.rs::Renderer	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/src/tui_extensions.rs::input_value	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/src/tui_vm.rs	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/ext_tests.rs::SlotRenderer	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/chrome.rs	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+scripts/check	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
