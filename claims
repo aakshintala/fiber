@@ -234,3 +234,8 @@ docs/errors.md:97-97	fiber-4897	plan	2026-11-16T02:37:32Z	roundhouse-7010-plus-1
 xtask/src/rules.rs:1255-1256	fiber-4897	plan	2026-11-16T02:37:32Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4897-hub-silent-child-exit	
 crates/doors/src/session_tests.rs	fiber-4042	plan	2026-11-16T02:47:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 crates/jobs/src/tool_tests.rs	fiber-4817	plan	2026-11-26T11:14:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/support/src/group.rs	fiber-4817	plan	2026-11-26T13:07:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/support/src/group_tests.rs	fiber-4817	plan	2026-11-26T13:07:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/jobs/src/delegate/group.rs	fiber-4817	plan	2026-11-26T13:07:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/jobs/src/registry.rs	fiber-4817	plan	2026-11-26T13:07:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/jobs/src/tool.rs	fiber-4817	plan	2026-11-26T13:07:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
