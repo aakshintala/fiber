@@ -265,3 +265,6 @@ crates/provider/src/http.rs	fiber-4968	plan	2026-11-26T22:52:28Z	Amoghs-MacBook-
 crates/provider/src/http_tests.rs	fiber-4968	plan	2026-11-26T22:52:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/provider/src/event_stream.rs	fiber-4968	plan	2026-11-26T22:52:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/provider/src/event_stream_tests.rs	fiber-4968	plan	2026-11-26T22:52:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/deliveries.rs	fiber-4977	plan	2026-11-26T22:54:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/jobs.rs	fiber-4977	plan	2026-11-26T22:54:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/resume.rs	fiber-4977	plan	2026-11-26T22:54:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
