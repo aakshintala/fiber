@@ -710,6 +710,7 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
     );
     let mut control = keeper.writer.try_clone().expect("control");
     let mut reapers = Vec::new();
+    let mut watchdogs = Vec::new();
     for (id, shell, fifo) in [
         ("bad", "read gate; echo bad-out; exit 3", bad_fifo.clone()),
         (
@@ -734,15 +735,21 @@ fn a_keeper_child_files_replay_failure_does_not_block_other_job() {
         };
         serde_json::to_writer(&mut control, &ToKeeper::Start(spec)).expect("start child");
         control.write_all(b"\n").expect("start newline");
-        match Deadline::after(Duration::from_secs(10)).recv_or_fail(&keeper.read, "child start") {
-            FromKeeper::Started { pgid, .. } => reapers.push(Reaper(pgid)),
-            other @ (FromKeeper::Failed { .. }
-            | FromKeeper::Output { .. }
-            | FromKeeper::Exit { .. }
-            | FromKeeper::Identity { .. }
-            | FromKeeper::Handover { .. }
-            | FromKeeper::AdoptDone(_)) => {
-                panic!("expected child start, got {}", describe(&Some(other)))
+        let deadline = Deadline::after(Duration::from_secs(10));
+        loop {
+            match deadline.recv_or_fail(&keeper.read, "child start") {
+                FromKeeper::Started { id: started, pgid } if started == id => {
+                    watchdogs.push(fakes::Watchdog::group(pgid));
+                    reapers.push(Reaper(pgid));
+                    break;
+                }
+                FromKeeper::Started { .. }
+                | FromKeeper::Failed { .. }
+                | FromKeeper::Output { .. }
+                | FromKeeper::Exit { .. }
+                | FromKeeper::Identity { .. }
+                | FromKeeper::Handover { .. }
+                | FromKeeper::AdoptDone(_) => {}
             }
         }
     }

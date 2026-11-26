@@ -175,13 +175,8 @@ impl Deadline {
         match self.recv(rx) {
             Ok(value) => value,
             Err(RecvTimeoutError::Timeout) => {
-                match std::io::Write::write_all(
-                    &mut std::io::stderr().lock(),
-                    format!("{}\n", thread_backtrace()).as_bytes(),
-                ) {
-                    Ok(()) | Err(_) => {}
-                }
-                panic!("waited until the deadline for {what}")
+                let backtrace = thread_backtrace();
+                panic!("waited until the deadline for {what}\n{backtrace}")
             }
             Err(RecvTimeoutError::Disconnected) => {
                 panic!("the sender for {what} hung up before sending")

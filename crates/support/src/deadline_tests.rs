@@ -340,7 +340,7 @@ fn a_started_wait_does_not_refresh_per_receive() {
 fn recv_or_fail_timeout_keeps_the_wait_name() {
     let (tx, rx) = mpsc::channel::<()>();
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        Deadline::after(Duration::from_millis(1)).recv_or_fail(&rx, "keeper files to be active")
+        Deadline::after(Duration::ZERO).recv_or_fail(&rx, "keeper files to be active")
     }));
     drop(tx);
     let message = failed
