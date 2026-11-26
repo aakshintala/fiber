@@ -1,0 +1,42 @@
+[
+ {
+  "pr": 4308,
+  "finding": "P1 crates/loop/src/reload.rs:299 \u2014 after `/sandbox on` then `/reload` (the documented way to drop the toggle), the rebui",
+  "severity": "P1",
+  "real_at_merge": "yes",
+  "on_main_now": "fixed",
+  "tracked": "fixed by PR #4462 (no issue found)",
+  "value": "real-bug-worth-fixing",
+  "evidence": "Merge: install() runs calls::register (caches Shell::definition) at reload.rs:299 before installed() runs refresh_sandbox (main/reload.rs:872); build_preamble uses cached defs. Main: apply_reload calls invalidate_sandbox (reload.rs:389) recomputing definitions."
+ },
+ {
+  "pr": 4308,
+  "finding": "P2 crates/hub/src/relay.rs:288-291 \u2014 the hub's refusal 2 still lets `sandbox` through. Any session-descendant process wi",
+  "severity": "P2",
+  "real_at_merge": "yes",
+  "on_main_now": "fixed",
+  "tracked": "fixed by PR #4349",
+  "value": "real-bug-worth-fixing",
+  "evidence": "Merge relay.rs:288-291 filters only prompt/steer/reply, so a relayed sandbox off passes; doors client.rs:1219 refuses it directly. Main uses contract::is_from_session_command, which includes sandbox."
+ },
+ {
+  "pr": 4308,
+  "finding": "P2 docs/tools.md:581 \u2014 the claim \"when the session sandbox is on and available, the shell definition carries one more se",
+  "severity": "P2",
+  "real_at_merge": "yes",
+  "on_main_now": "fixed",
+  "tracked": "fixed by PR #4462",
+  "value": "real-but-minor",
+  "evidence": "Merge take_sandbox only appends a notice and accepts; no preamble rebuild, so the stale sentence contradicts docs/tools.md:581. Main sandbox.rs calls invalidate_sandbox(PreambleReason::Sandbox) when the setting changes."
+ },
+ {
+  "pr": 4308,
+  "finding": "UNDECIDED crates/loop/src/sandbox.rs:76-80 \u2014 a second `/sandbox on` while unavailable, after the latch fired, accepts wi",
+  "severity": "UNDECIDED",
+  "real_at_merge": "yes",
+  "on_main_now": "present",
+  "tracked": "none found",
+  "value": "spec-question",
+  "evidence": "Unavailable branch appends a notice only if apply returns one (latch unset), otherwise accepts silently. docs/sandbox.md says 'says so once', so the silence looks intended. Same on main."
+ }
+]

@@ -1,0 +1,2591 @@
+{
+ "findings": [
+  {
+   "pr": 4964,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 crates/bench/examples/bench/idle_tests.rs:52 \u2014 `RefreshClock::sleep` sends `RefreshEvent::Slept` before `self.inner.sleep` parks the worker, so the signal precedes the state it announces (docs/test"
+  },
+  {
+   "pr": 4964,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "P3 crates/extensions/src/models_dev.rs:311 \u2014 `.ok()` turns a `thread::Builder::spawn` failure into `None`. Before this PR, `std::thread::spawn` panicked, which aborts under `panic = \"abort\"`. The call"
+  },
+  {
+   "pr": 4964,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 crates/bench/examples/bench/idle.rs:187 \u2014 `wait_for_refresh` only forwards to `run::poll` with a label (Middle Man). Fix: call `run::poll` directly in `measure_session`, or keep the wrapper only if"
+  },
+  {
+   "pr": 4964,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 .review-context/pr-body.md:16, :19 \u2014 the body says full `scripts/check` does not pass, then \"Local gate: pass\". RULING-4963-1 says \"CI never replaces the local gate\". Fix: state the local gate resu"
+  },
+  {
+   "pr": 4964,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 `crates/bench/examples/bench/idle_tests.rs:54` (`RefreshClock::sleep`) \u2014 the fake sends `RefreshEvent::Slept` before `self.inner.sleep` parks. This matches test rule (3). `step()`'s `advance_when_p"
+  },
+  {
+   "pr": 4964,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 `crates/bench/examples/bench/idle_tests.rs`, `a_present_models_dev_thread_waits_until_the_snapshot_is_absent` and `a_refresh_still_present_at_the_deadline_fails_the_wait` \u2014 both assert an event ord"
+  },
+  {
+   "pr": 4964,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P2 ticket step 1 (issue #4963, \"Confirm the thread\") \u2014 no evidence that the note names `models.dev`. The base run shows only `thread 7801 (fiber)`. All five head runs show no note, so the note-naming "
+  },
+  {
+   "pr": 4964,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "P3 `crates/extensions/src/models_dev.rs:311` \u2014 `std::thread::spawn` panicked on spawn failure; `.ok()` now turns it into a silent `None`. Plan and ticket ask only for naming. Fix: `.expect(\"spawn mode"
+  },
+  {
+   "pr": 4964,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 `.review-context/pr-body.md`, \"Local gate\" \u2014 says `scripts/check` passed, while the same body says the full run does not pass and only `--rules-by-path` ran. Fix: correct the field."
+  },
+  {
+   "pr": 4964,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "debt-marker",
+   "text": "P3 crates/bench/examples/bench/idle_tests.rs:12 \u2014 shrink \u2014 cut `RefreshEvent`, `RefreshClock`, `refresh_wait`, `event`, `step` (~70 lines), a second copy of keeper_tests.rs `Event`/`SleepClock`/`Drive"
+  },
+  {
+   "pr": 4964,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/bench/examples/bench/idle.rs:146 \u2014 shrink \u2014 cut `wait_for_refresh` forwarder (4 lines, pure `run::poll` wrapper) \u2014 replace with inline `run::poll(ctx.clock, READY, \"models.dev refresh thread"
+  },
+  {
+   "pr": 4956,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "deferred-to-issue",
+   "text": "P3 crates/main/src/resume.rs:360 \u2014 `resume.rs` is 887 lines (861 at origin/main), over the 800-line smell line, and this PR adds 26 lines to it, including the path-normalising matcher (`recorded_works"
+  },
+  {
+   "pr": 4956,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "missing-or-weak-test",
+   "outcome": "fixed",
+   "text": "P3 resume_tests.rs:476 (no test reaches the fallback branch): `recorded_workspace_matches` returns the literal comparison when either side fails to canonicalize (`_ => recorded == expected`, resume.rs"
+  },
+  {
+   "pr": 4956,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/main/src/resume.rs:360 \u2014 shrink \u2014 cut the hand-rolled `canonicalize_missing_tail` loop (`tail` Vec, reverse-push loop, ~22 lines) \u2014 replace with `for ancestor in path.ancestors()`, `Ok(c) =>"
+  },
+  {
+   "pr": 4887,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "P2 crates/extensions/src/models_dev.rs:263 \u2014 `refresh_to_cache` hand-rolls the atomic write that `support::write_atomic` (crates/support/src/atomic.rs:158) already provides, and drops its `sync_all` o"
+  },
+  {
+   "pr": 4887,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 crates/extensions/tests/models.rs:789 \u2014 asserts `leftovers.is_empty()`, a count of temp files, with no docs line promising cleanup. docs/state.md:666\u2013672 promises only that the old file survives. d"
+  },
+  {
+   "pr": 4887,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "comment-or-wording",
+   "outcome": "fixed",
+   "text": "P3 crates/extensions/src/models_dev.rs:301 \u2014 `drop(fs::remove_file(temp_path))` discards a failure with no reason; support/src/atomic.rs:183\u2013186 comments the same discard. Class: `rg -n 'drop\\(fs::|un"
+  },
+  {
+   "pr": 4887,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 crates/extensions/src/models_dev.rs:153\u2013177 \u2014 nine identical `Ok(Value::Object(Default::default()))` arms (Duplicated Code). Fix: one non-map path. No gate catches it."
+  },
+  {
+   "pr": 4887,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "P3, `crates/extensions/src/models_dev.rs:531` (`apply`): `retained_rows` errors on a top-level array or number, and `continue` skips `set_models`. Unknown models then lose `cautious_model` and the gen"
+  },
+  {
+   "pr": 4887,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "P3, `models_dev.rs:293-297` (`refresh_to_cache`): no `sync_all` on the temp file or the directory before `rename`. `support::write_atomic` syncs both. RULING-4755-36 item 3: \"keeps 0600 mode, fsync an"
+  },
+  {
+   "pr": 4887,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "other",
+   "outcome": "fixed",
+   "text": "P3, `models_dev.rs:180, 201, 376, 531`: `from_reader` runs over a bare `File` and reads one byte per syscall. RULING-4755-36 item 4: \"require `BufReader` or equivalent.\" Fix: wrap the file in `BufRead"
+  },
+  {
+   "pr": 4887,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "other",
+   "outcome": "fixed",
+   "text": "P3, `models_dev.rs:528`: `apply` reopens and reparses the catalog once per provider. RULING-4755-29 C11 names one reorder, not N parses. Fix: hoist the open above the loop."
+  },
+  {
+   "pr": 4953,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "debt-marker",
+   "text": "P3 crates/bench/examples/bench/home.rs:70 \u2014 `listing_with_keep_exited` has one caller (listing.rs:206) and its body only forwards arguments to `start`. That breaks docs/code-quality.md, \"What a review"
+  },
+  {
+   "pr": 4953,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "missing-or-weak-test",
+   "outcome": "debt-marker",
+   "text": "P3 crates/bench/examples/bench/listing.rs:206 \u2014 no test now proves that listing setup passes `Some(0)`. The removed `listing_home_config_keeps_all_exited_sessions` was the only check on that path. The"
+  },
+  {
+   "pr": 4953,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "missing-or-weak-test",
+   "outcome": "debt-marker",
+   "text": "P3 crates/bench/examples/bench/listing.rs:206 \u2014 the listing's `Some(0)` override has no test. The deleted `listing_home_config_keeps_all_exited_sessions` was the only check that listing wrote `keep_ex"
+  },
+  {
+   "pr": 4953,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "refuted",
+   "text": "P3 crates/bench/examples/bench/home.rs:226 \u2014 shrink \u2014 cut the `let`-chain and the `get_mut(\"session\").and_then(Value::as_object_mut)` lookup, which cannot miss because `session` is a literal in the sa"
+  },
+  {
+   "pr": 4906,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 scripts/test-check-rules-by-path:93-96 \u2014 the new self-test asserts build-before-nextest order and that the `main` examples build is not duplicated, but its comment (:58) cites no docs line. `docs/w"
+  },
+  {
+   "pr": 4906,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "doc-mismatch",
+   "outcome": "fixed",
+   "text": "P3 docs/workflow.md:118-119 \u2014 says \"Each selected package with examples\" builds its examples. `scripts/check:168-171` builds for every non-`main` selected package, and that is the approach RULING-4889"
+  },
+  {
+   "pr": 4906,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "doc-mismatch",
+   "outcome": "fixed",
+   "text": "P3 docs/workflow.md:121-122 \u2014 lists clippy and nextest as the commands that take `-p log@0.0.0`. The new build at `scripts/check:170` also uses `\"$spec\"`, and the doc leaves it out. A reader who copie"
+  },
+  {
+   "pr": 4906,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 scripts/check:161, 168, 175 \u2014 three `crate = main` branches in one loop; the diff adds the third (possible Repeated Switches). Fix: one case per crate that sets the clippy, build and nextest varian"
+  },
+  {
+   "pr": 4906,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "missing-or-weak-test",
+   "outcome": "fixed",
+   "text": "**P2, plan Task 2 not met (`scripts/test-check-rules-by-path`):** The plan's Files list and Task 2 require regression coverage that a selected package with no examples succeeds and keeps its selected "
+  },
+  {
+   "pr": 4906,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "**P3, PR body evidence (`.review-context/pr-body.md`):** It states \"Local gate: pass at 27abbf2bf\u2026 (scripts/check)\". The lane's own report says `scripts/check` was not run locally. Plan Task 5 also re"
+  },
+  {
+   "pr": 4906,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 scripts/test-check-rules-by-path:58 \u2014 shrink \u2014 cut the 44-line example block with its own worktree, stub cargo and trap edits; it repeats the prototype block at :141 \u2014 replace with one untracked `c"
+  },
+  {
+   "pr": 4906,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 scripts/check:144-151 and :168-171 \u2014 shrink \u2014 cut the `main`-only examples block and the `!= main` guard; build `cargo build -p \"$spec\" --examples` for every spec in the loop, since `main`'s spec i"
+  },
+  {
+   "pr": 4906,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 scripts/test-check-rules-by-path:99-100 \u2014 delete \u2014 cut the explicit `git worktree remove` and `rm -rf` after the example block \u2014 replace with nothing; the EXIT trap (line 12) already removes `examp"
+  },
+  {
+   "pr": 4906,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 scripts/test-check-rules-by-path:98 \u2014 delete \u2014 cut the `grep -q` for `selected log tests were omitted` \u2014 replace with nothing; line 95 already fails when `test_line` is empty. Gate: self-test."
+  },
+  {
+   "pr": 4906,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 scripts/test-check-rules-by-path:74-75 \u2014 delete \u2014 cut the no-op `fakes` and `main` stub branches \u2014 replace with nothing; the fallthrough `exit 0` on line 85 gives the same result. Gate: self-test."
+  },
+  {
+   "pr": 4906,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 scripts/check:168-173 \u2014 shrink \u2014 cut the separate `!= main` block (six added lines) \u2014 replace with one `build_step cargo build -p \"$spec\" --examples` in the existing non-main `else` of the nextest "
+  },
+  {
+   "pr": 4939,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "missing-or-weak-test",
+   "outcome": "fixed",
+   "text": "P2 `crates/bench/examples/bench/listing.rs:229`: the only new test, `listing_home_config_keeps_all_exited_sessions`, calls `set_keep_exited` on a fresh `Home::new`. Nothing calls `prepare_listing` in "
+  },
+  {
+   "pr": 4939,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "deferred-to-issue",
+   "text": "P3 `crates/bench/examples/bench/listing.rs:200`: the listing home's `config.json` is built twice. `home.rs` `install` writes `config(...)`, then `set_keep_exited` reads, parses and rewrites it. The ti"
+  },
+  {
+   "pr": 4939,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "missing-or-weak-test",
+   "outcome": "fixed",
+   "text": "P2 `crates/bench/examples/bench/listing_tests.rs:50` \u2014 The acceptance test calls `set_keep_exited` on a fresh `Home`, not on the home `prepare_listing` builds, so it never exercises the wiring. Deleti"
+  },
+  {
+   "pr": 4939,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 PR body \u2014 RULING-4935-1 also requires that the bench harness \"reports no `sessions list` self-check note, with 1,000 listing lines\" (the `Run the benchmarks` step, `ci.yml:1562`). The PR cites only"
+  },
+  {
+   "pr": 4939,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "deferred-to-issue",
+   "text": "P3 crates/bench/examples/bench/listing.rs:200 \u2014 yagni \u2014 cut `set_keep_exited`: reads back, parses and rewrites the config `Home::start` just wrote, with three error branches, one unreachable because `"
+  },
+  {
+   "pr": 4939,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/bench/examples/bench/listing_tests.rs:50 \u2014 shrink \u2014 cut `Home::new(&exe)` in the new test: it copies the test binary and starts a provider server and watchdog to check one file write \u2014 repla"
+  },
+  {
+   "pr": 4944,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "comment-or-wording",
+   "outcome": "fixed",
+   "text": "P3 crates/main/src/keeper_restore_tests.rs:487-493 \u2014 the ruling's comment update is missing. The test comments still never say the FIFO read end closes before the readiness signal, which is the mechan"
+  },
+  {
+   "pr": 4944,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "comment-or-wording",
+   "outcome": "fixed",
+   "text": "P3 crates/main/src/keeper_restore_tests.rs:490 - RULING-4936-3 says \"Update the comment above line 490 so it says the signal fires after the read end is closed.\" The comment still reads \"The first fra"
+  },
+  {
+   "pr": 4944,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 PR body, \"Checks\" paragraph - \"failed at the status assertion with `Indeterminate` instead of `IoFailed`\". The `Indeterminate`/`IoFailed` mismatch comes from `assert_eq!(failure.code, ErrorCode::Io"
+  },
+  {
+   "pr": 4932,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "comment-or-wording",
+   "outcome": "fixed",
+   "text": "P3 crates/tui/src/files_tests.rs:650: The `Ok` diagnostic labels `git root (status N): {stdout}{stderr}`, but stdout holds two lines (`--show-toplevel`, `--absolute-git-dir`), and stderr is concatenat"
+  },
+  {
+   "pr": 4932,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 .review-context/pr-body.md (no list present): RULING-4894-5, plan Task 3, says \"list each one in the PR body\" for each `git init` or `.git` write outside the test's own `TempDir`. The body gives on"
+  },
+  {
+   "pr": 4932,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P2 .review-context/pr-body.md:5 \u2014 the PR body names no `git init` or `.git` hit and gives no classification for any of them. It says only that the search \"found no writer into a shared temp root.\" RUL"
+  },
+  {
+   "pr": 4933,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 crates/extensions/tests/process_activation.rs:473 \u2014 `session_process_exec_resolves_package_relative_program` runs a probe that its own `copy_tree` wrote this run (line 486 calls it, line 538 define"
+  },
+  {
+   "pr": 4933,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 crates/extensions/tests/process_activation.rs:538 \u2014 `copy_tree` has the same recursive body as `crates/extensions/tests/host_script.rs:97`. Duplicated Code, judged against `docs/testing/fakes.md`, "
+  },
+  {
+   "pr": 4933,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 crates/extensions/tests/process_activation.rs:470 \u2014 the 30 loaded runs were recorded at 8a35fc60d, but merge 600a8541a changed three refusal assertions in the same binary (`not_available` at :928, "
+  },
+  {
+   "pr": 4933,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/extensions/tests/process_activation.rs:480 \u2014 yagni \u2014 cut hand-built peer, manifest, `plan(...).commit()` (~25 lines) \u2014 replace with `env.install_process(\"exec\", &json!({\"commands\": {\"probe\":"
+  },
+  {
+   "pr": 4933,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/extensions/tests/process_activation.rs:538 \u2014 shrink \u2014 cut recursive `copy_tree` (12 lines) for a tree holding one file \u2014 replace with `create_dir_all(source.join(\"bin\"))` and `fs::copy(fixtu"
+  },
+  {
+   "pr": 4891,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 crates/extensions/tests/models.rs:366 - asserts `admitted.len() == 9` and the seven-id slice with no `docs/<area>.md` citation, and the PR diff and body cite none. The promise is `docs/model-routin"
+  },
+  {
+   "pr": 4891,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 crates/main/tests/delegation/ask.rs:1899 - changes the count to `requests.len() == 2` and asserts order (`/v1/models` before `/v1/responses`) with no `docs/<area>.md` citation. The promise is `docs"
+  },
+  {
+   "pr": 4891,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "deferred-to-issue",
+   "text": "P3 providers/muse/providers/muse.lua:12 \u2014 delete \u2014 cut the `pcall(json.decode, \u2026)` wrapper and its \"not JSON\" error (4 lines, a branch no fixture reaches) \u2014 replace with `local body = json.decode(repl"
+  },
+  {
+   "pr": 4909,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 `crates/main/tests/commands/completion.rs` (PR #4909, not a code line): the PR carries only the `mutants` label. RULING-4902-2 says \"The PR is labelled `test-only`\". Fix: `gh pr edit 4909 --add-lab"
+  },
+  {
+   "pr": 4909,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "comment-or-wording",
+   "outcome": "fixed",
+   "text": "P3 (non-blocking): `completion.rs:357-360` reflows the `run_bounded` doc comment. The line break after \"every process\" is now ragged, a side effect of the longer name. It is cosmetic and inside a comm"
+  },
+  {
+   "pr": 4847,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "P2 crates/doors/src/hub/listed.rs:38: `load_target` calls `config::ensure_project_layout`. `fiber sessions` reaches it through `hub_target` (crates/main/src/main.rs:1399\u20131414), so a read-only listing "
+  },
+  {
+   "pr": 4847,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "comment-or-wording",
+   "outcome": "fixed",
+   "text": "P2 crates/main/tests/session_turns/session_search.rs:126: \"used to collide with the root's key\" narrates history. `docs/code-quality.md` \"Comments\" says \"No comment narrates history.\" `narrating-comme"
+  },
+  {
+   "pr": 4847,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "P3 crates/config/src/layout.rs:79\u201382: a matching `legacy-key` marker returns `Ok(())` without the rename. RULING-4685-2, point 2: \"skip the marker write and go straight to the rename, so a rerun compl"
+  },
+  {
+   "pr": 4847,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 xtask/src/rules.rs:1259\u20131260: two HOME allowances are added. The PR body says \"one R6 allowance.\" Fix the body. No gate."
+  },
+  {
+   "pr": 4847,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "P3 crates/config/src/layout.rs:79 \u2014 a `legacy-key` marker matching this identity's slug returns `Ok(())`, so the rename never runs. An interrupted migration never finishes, and per-project config and "
+  },
+  {
+   "pr": 4847,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "P3 crates/doors/src/hub/listed.rs:38 \u2014 `load_target` now calls `ensure_project_layout`. `fiber stop` and `fiber sessions list|archive|delete|prune` reach it (main.rs:369, 1414\u20131470), so non-session co"
+  },
+  {
+   "pr": 4847,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 crates/log/src/lib.rs:183 \u2014 RULING-4685-32 approves `type SessionDirs = [PathBuf; 2];`. The head still has `-> [PathBuf; 2]`, and the PR body lacks the ruled line. The body also says \"one R6 allowa"
+  },
+  {
+   "pr": 4847,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "scope-creep",
+   "outcome": "fixed",
+   "text": "P3 crates/tools/src/shell/sandbox/sandbox_tests.rs:2320 \u2014 `colliding_project_slugs_do_not_share_protected_baselines` flips `is_err()` to `is_ok()`, and protected.rs and baseline.rs get key-routing edi"
+  },
+  {
+   "pr": 4847,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/config/src/layout.rs:13 \u2014 shrink \u2014 cut ~40 lines: inline `ConfigError::Io` literals, `create_dir_all` on a path just confirmed to exist, marker arm returning Ok both ways \u2014 replace with `io_"
+  },
+  {
+   "pr": 4847,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/cli/src/feedback.rs:345 \u2014 shrink \u2014 cut 13-line loop copying `log::most_recent_in` \u2014 replace with that call; gate: feedback tests."
+  },
+  {
+   "pr": 4847,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/hub/src/recent.rs:83 \u2014 delete \u2014 cut test-only `dir_exists` and its test \u2014 replace with nothing; gate: hub tests. R26 forbids the workspace check it encodes for listing."
+  },
+  {
+   "pr": 4847,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/support/src/atomic.rs:18 \u2014 stdlib \u2014 cut 14-line error type \u2014 replace with `io::Error::from(ErrorKind::Unsupported)`; gate: atomic tests. \"Typed\" in R2 is met by ErrorKind."
+  },
+  {
+   "pr": 4847,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/main/src/parts.rs:375 \u2014 shrink \u2014 cut 3 lines \u2014 replace with original `::cli::project_of(&home, &workspace)?`; gate: main tests."
+  },
+  {
+   "pr": 4847,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "deferred-to-issue",
+   "text": "P3 crates/log/src/history.rs:118 \u2014 shrink \u2014 cut lowercase-only hex check \u2014 replace with `read.rs:208` `legacy_slug`; gate: log tests."
+  },
+  {
+   "pr": 4907,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "debt-marker",
+   "text": "P3 crates/cli/src/models_tests.rs:358 and :371 \u2014 Duplicated Code (baseline smell): `.lines().find_map(|line| line.trim().parse::<u32>().ok())` appears twice in `report_extension_lock_holder`, once for"
+  },
+  {
+   "pr": 4907,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "debt-marker",
+   "text": "P3 crates/cli/src/models_tests.rs:338-344 \u2014 Duplicated Code (baseline smell): both `unwrap_or_else` closures call `report_extension_lock_holder(&self.home())` then `panic!` with a different stage labe"
+  },
+  {
+   "pr": 4907,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "comment-or-wording",
+   "outcome": "fixed",
+   "text": "P3 crates/cli/src/models_tests.rs:353-377 \u2014 no comment on `report_extension_lock_holder`. The lock-file PID read, the `lsof -t` fallback and the print-only-on-failure rule all surprise a reader. docs/"
+  },
+  {
+   "pr": 4907,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "unknown",
+   "text": "- **P3, PR body:** The link `run/fiber-4888-loaded-runs.md` is relative and resolves to nothing from GitHub, because the file sits outside the checkout. Link it by URL or attach it."
+  },
+  {
+   "pr": 4907,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "debt-marker",
+   "text": "P3 crates/cli/src/models_tests.rs:353 \u2014 delete \u2014 cut the lock-file read branch (`read_to_string` plus parse, about 6 lines) \u2014 replace with nothing. Nothing writes `extensions/.lock`: `installed.rs:53-"
+  },
+  {
+   "pr": 4907,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "debt-marker",
+   "text": "P3 crates/cli/src/models_tests.rs:349 \u2014 shrink \u2014 cut the `#[allow(clippy::print_stderr)]`, the `eprintln!`, the duplicated `find_map` parse, and the `.filter(success)` (empty stdout already yields `No"
+  },
+  {
+   "pr": 4896,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "debt-marker",
+   "text": "P3 crates/cli/build.rs:1 \u2014 yagni \u2014 cut whole 18-line file, including the clippy::print_stdout allow \u2014 replace with nothing; `option_env!(\"FIBER_RELEASE_BUILD\")` in feedback.rs already rebuilds on env "
+  },
+  {
+   "pr": 4896,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "refuted",
+   "text": "P3 docs/releasing.md:194 \u2014 shrink \u2014 cut the 13-line four-branch PATH matrix \u2014 replace with: \"For zsh, bash or fish it asks whether to append the line to the startup file, unless `--path` or `--no-path"
+  },
+  {
+   "pr": 4895,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 crates/tui/src/event_loop_tests.rs:2197 \u2014 `assert!(first.starts_with(START))` asserts an order (terminal start bytes before the first frame). The PR adds it, and no doc cites it. The workflow doc n"
+  },
+  {
+   "pr": 4895,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 `.review-context/pr-body.md`, \"Checks run and passed\" \u2014 `docs/workflow.md` (\"The pull request\") says a `test-only` PR states \"the evidence that the fix holds, such as repeated runs under load.\" The"
+  },
+  {
+   "pr": 4900,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 crates/tui/src/settings_view_tests.rs:4475 \u2014 `hub_idle_exit_steps_and_persists` asserts that Enter steps 30 min to 1 h (list order) with no doc citation. The same gap is at :4500, where `keep_exite"
+  },
+  {
+   "pr": 4900,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 .review-context/pr-body.md \u2014 the body omits the cite that RULING-4770-1 requires (\"cite this ruling in the PR body\"). The body runs `-p tui`, which differs from the plan's `-p fiber-tui`, and only "
+  },
+  {
+   "pr": 4900,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "missing-or-weak-test",
+   "outcome": "unknown",
+   "text": "P3 (non-blocking) `crates/tui/src/settings_view_tests.rs:4016` \u2014 the \"no number key in the doc's tables is typed text\" check uses hand-copied literal key arrays, not the doc. The current doc's nine li"
+  },
+  {
+   "pr": 4900,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "deferred-to-issue",
+   "text": "P3 crates/tui/src/settings_view_tests.rs:4015 \u2014 shrink \u2014 cut the two completeness loops, 4015\u20134042 (28 lines) \u2014 replace with `assert!(number_list(key).is_none(), \"{key}\")` in the sliders loop and `ass"
+  },
+  {
+   "pr": 4900,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/tui/src/settings_view_tests.rs:4488 \u2014 delete \u2014 cut the 4-line \"59 min (custom)\" assert, repeated at line 3885 \u2014 replace with nothing. Gate: nextest, trips nothing."
+  },
+  {
+   "pr": 4900,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/tui/src/settings_view_tests.rs:4011 \u2014 shrink \u2014 cut the `keep_exited` local and its three asserts \u2014 replace with one `lists` row `(\"session.keep_exited\", &[0.0, 5.0, 10.0, 20.0, 50.0], 10.0)`"
+  },
+  {
+   "pr": 4900,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/tui/src/settings_view_tests.rs:4543 \u2014 delete \u2014 cut the \"Keep all\" assert, repeated at 4512 \u2014 replace with nothing. Gate: nextest, trips nothing."
+  },
+  {
+   "pr": 4900,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/tui/src/settings_view_tests.rs:4043 \u2014 delete \u2014 cut `number_list(\"tui.rail.width\")`, covered by the sliders loop \u2014 replace with nothing. Gate: nextest, trips nothing."
+  },
+  {
+   "pr": 4848,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P2 `crates/tools/src/shell/hosted.rs:331` \u2014 `override_write_failure(pre_end: &'static str)` and `pre_end_of` (`shell.rs:1367`) pass a closed set of eight end labels as `&str` across the crate boundary"
+  },
+  {
+   "pr": 4848,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "P2 `crates/tools/src/shell/output.rs:257-262` \u2014 a write error on the artifact sink is dropped. The guard requires `output_path`, which only `Inner::attach` sets. `finish_inline` installs the artifact "
+  },
+  {
+   "pr": 4848,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 `crates/main/src/keeper_child_tests.rs:308` and `:1103`, `crates/main/src/keeper_restore_tests.rs:501` \u2014 new tests spin on `yield_now` to wait real time for a child's write or a stored failure. `do"
+  },
+  {
+   "pr": 4848,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 `crates/main/src/keeper_child_tests.rs:423, 518, 1110, 1161, 1237, 1326, 1359` \u2014 new `completed.len()` count asserts on `job_completed` lines with no `docs/<area>.md` line cited. `docs/testing.md`,"
+  },
+  {
+   "pr": 4848,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 Duplicated Code (baseline smell):"
+  },
+  {
+   "pr": 4848,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P2 `bb3017143:crates/tools/src/shell/hosted.rs:321` \u2014 The red commit is not stubs-only. It carries the fix: the restored close and Exit overrides, `assemble_output`, the background status override, th"
+  },
+  {
+   "pr": 4848,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "missing-or-weak-test",
+   "outcome": "fixed",
+   "text": "P2 `crates/tools/src/shell_tests.rs`, `crates/tools/src/shell/restored_tests.rs`, `crates/doors/src/session_tests.rs` \u2014 Done-when tests are missing. Task 2 requires wins over cap, timeout and NotReape"
+  },
+  {
+   "pr": 4848,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 `crates/main/src/keeper_child_tests.rs:1095` \u2014 The `stored` loop spin-polls `runtime.processes` with `yield_now` until the reader records `write_failure`. It waits real time for an event the code u"
+  },
+  {
+   "pr": 4848,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "missing-or-weak-test",
+   "outcome": "fixed",
+   "text": "P3 `crates/tools/src/shell/spill_tests.rs` (`a_failed_rename_fallback_copy_is_reported`) \u2014 Drops the old check that `s_test.txt` still holds the 16 spilled bytes, which is what makes the `still_there`"
+  },
+  {
+   "pr": 4848,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 `crates/tools/src/shell/restored.rs:231` \u2014 Re-derives `{stem}.stderr.log`. The plan's Files list asked for `background.rs`'s path helper to be made visible to restored jobs. It stays private, leavi"
+  },
+  {
+   "pr": 4848,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/main/src/keeper_child.rs:80 \u2014 shrink \u2014 cut `discard_output`/`discard_errors` and `discard_failed` (~55 lines) \u2014 replace with `None` on the failed handle plus one `errors_declared: bool`. Gat"
+  },
+  {
+   "pr": 4848,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/tools/src/shell/output.rs:347 \u2014 shrink \u2014 cut five \"keep first failure\" copies (output.rs:347, :399; moved.rs:95; attach; sink) \u2014 replace with one `Inner::keep_write_failure`. Gate: tools nex"
+  },
+  {
+   "pr": 4848,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/tools/src/shell/restored.rs:226 \u2014 shrink \u2014 cut inline `{stem}.stderr.log` rebuild \u2014 replace with `background::errors_path`, made `pub(super)`. Gate: `adopted_stderr_write_failure_is_reported"
+  },
+  {
+   "pr": 4848,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/main/src/keeper_restore.rs:59 \u2014 shrink \u2014 cut the delivery block duplicated in `lost` and `settle` \u2014 replace with `deliver(end, completed)`. Gate: keeper_restore tests."
+  },
+  {
+   "pr": 4848,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/main/src/keeper_child_tests.rs:452 \u2014 delete \u2014 cut `a_keeper_child_files_errors_open_failure\u2026` (66 lines, not in plan Files) \u2014 replace with nothing. Gate: mutants win; the open-failure branch"
+  },
+  {
+   "pr": 4880,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 `crates/loop/src/history_tests.rs:3361` (fold tests from `restored_block_consecutive_denials_fold_run` through `restored_block_parent_hook_settlement_increments_run`), `crates/loop/tests/resume.rs:"
+  },
+  {
+   "pr": 4880,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "comment-or-wording",
+   "outcome": "fixed",
+   "text": "P3 `crates/loop/src/history_tests.rs:467-487`: `reviewer_allowed()` lands between `denied_by`'s doc comment (467-468) and `denied_by` (487), so the comment now describes the wrong function. Fix: move "
+  },
+  {
+   "pr": 4880,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "unknown",
+   "text": "P3 `crates/loop/src/resume.rs:1057` and `:1063`: the same `if matches!(&request.step, AskStep::Review { .. }) { self.consecutive = 0; }` appears in both arms. Baseline Duplicated Code, a judgement cal"
+  },
+  {
+   "pr": 4880,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 `crates/loop/src/history_tests.rs:3361` (and the new fold tests through `:3454`) \u2014 the eight new `restored_block_*` tests assert `consecutive` counts (2, 1, 0, 3, 1) with no comment citing the prom"
+  },
+  {
+   "pr": 4880,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "missing-or-weak-test",
+   "outcome": "unknown",
+   "text": "P3 `crates/loop/src/history_tests.rs` \u2014 plan Task 1 requires a `Gone` settlement leaving the run standing. No test covers it. Ruling-2's acceptance list does not name it, so this is partial plan cover"
+  },
+  {
+   "pr": 4880,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "missing-or-weak-test",
+   "outcome": "unknown",
+   "text": "P3 `crates/loop/tests/resume.rs:2792` (`a_resumed_credential_refusal_prefers_the_block_budget_over_later_questions`) \u2014 plan Task 4 says pin `consecutive_blocks` in the `twenty_prior_denials` callers. "
+  },
+  {
+   "pr": 4880,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "unknown",
+   "text": "P3 crates/loop/tests/resume.rs:569 \u2014 shrink \u2014 cut NoReviewer interleave branch (~54 lines) \u2014 replace with `BlockLimits { consecutive: 21, ..Default::default() }` at :682; session count stays isolated."
+  },
+  {
+   "pr": 4880,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "unknown",
+   "text": "P3 crates/loop/src/resume.rs:1057 \u2014 shrink \u2014 cut duplicated Review reset in Allow and Deny arms (8 lines) \u2014 replace with one guard before the match. Gate: scripts/check; no trip."
+  },
+  {
+   "pr": 4880,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "unknown",
+   "text": "P3 crates/loop/src/history_tests.rs:3426 \u2014 shrink \u2014 cut cancel and hook \"keeps_run\" tests, identical bodies (26 lines) \u2014 replace with one loop over `[Cancel, Hook]`. Gate: restored_block_ selector; no"
+  },
+  {
+   "pr": 4880,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "unknown",
+   "text": "P3 crates/loop/src/history.rs:529 \u2014 delete \u2014 cut `matches!(resolved.decision, Allow | Deny)`, always true \u2014 replace with nothing. Gate: none trips."
+  },
+  {
+   "pr": 4880,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "unknown",
+   "text": "P3 crates/loop/tests/resume.rs:782 \u2014 shrink \u2014 cut three 14-line Reviewer literals \u2014 replace with one helper. Gate: none trips; nine existing inline literals, owner's call."
+  },
+  {
+   "pr": 4880,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "unknown",
+   "text": "P3 crates/loop/src/history.rs:518 \u2014 shrink \u2014 cut two reset `if` blocks \u2014 replace with one `match resolved.decided_by`. Gate: mutants; the existing fold tests kill each arm."
+  },
+  {
+   "pr": 4880,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/loop/src/history_tests.rs:469 \u2014 shrink \u2014 cut `reviewer_allowed`, a 17-line copy of `denied_by` \u2014 replace with a sibling `allowed_by(decided_by)`; the fold never reads `reviewer`. Gate: none."
+  },
+  {
+   "pr": 4867,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P2 crates/extensions/src/process_tests.rs:3947 (nine more identical hunks follow: 4030, 4118, 4177, 4234, 4284, 4382, 4491, 7155, 7419) \u2014 `package: std::path::PathBuf::from(\"/\"),` is inserted ten time"
+  },
+  {
+   "pr": 4867,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "comment-or-wording",
+   "outcome": "fixed",
+   "text": "P3 crates/extensions/src/process/context/native.rs:129 \u2014 the code resolves the program on every call and keeps the result only when `host_script` is `None`, and nothing says why. docs/code-quality.md,"
+  },
+  {
+   "pr": 4867,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "refuted",
+   "text": "P3 crates/extensions/src/hooks.rs:1435 \u2014 delete \u2014 cut the 13-line `dir.canonicalize()` block and its IoFailed branch; package.rs:311 already reports the same `\"<path>: <source>\"` for the same dir \u2014 re"
+  },
+  {
+   "pr": 4867,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "refuted",
+   "text": "P3 crates/extensions/src/package.rs:311 \u2014 shrink \u2014 cut `canonical_dir` (7 lines) and its three substitutions \u2014 replace with `options.dir`; those callees took non-canonical input before this PR. Gate: "
+  },
+  {
+   "pr": 4867,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "unknown",
+   "text": "P3 crates/extensions/src/package_tests.rs:251 (also process_tests.rs:1894 and :7066) \u2014 shrink \u2014 cut three 4-line `.canonicalize().expect(...)` blocks \u2014 replace with `dir.path().to_path_buf()`. Gate: n"
+  },
+  {
+   "pr": 4890,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 xtask/src/budget_bounds.rs:322 \u2014 baseline Duplicated Code: the short-bound name list is hand-copied at five sites: the `known_ms` arm (budget_bounds.rs:322), the readable diagnostic (budget_bounds."
+  },
+  {
+   "pr": 4890,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 xtask/src/budget_bounds_tests.rs:243 \u2014 shrink \u2014 cut the 10-line `the_documented_subsystem_bound_passes_on_a_changed_line`, which copies `a_short_named_bound_passes` \u2014 replace with one entry `\"fakes"
+  },
+  {
+   "pr": 4826,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P2 `crates/tui/src/skills_view.rs:153` - `row_focused: bool` beside `focus: ScopeSwitches` holds one mutually exclusive state in two fields. `Edit::Right` from Everywhere reaches `row_focused = true` "
+  },
+  {
+   "pr": 4826,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "scope-creep",
+   "outcome": "fixed",
+   "text": "P3 `docs/tui.md:1295-1313` - The ticket plan says \"Add exactly one sentence ... with no other doc edits.\" The diff rewrites the bullet, drops \"after every skill it shadows with its source and path\", a"
+  },
+  {
+   "pr": 4826,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "missing-or-weak-test",
+   "outcome": "fixed",
+   "text": "P3 `crates/tui/src/skills_view_tests.rs:1252-1255` - The post-click `frame_has_row` and `selected == rows - 1` checks are gone; only the title remains. Plan Review Focus: \"no existing click assertion "
+  },
+  {
+   "pr": 4826,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 (class: Repeated Switches, baseline) - `Key::Enter || Key::Char(' ')` is hand-written at `settings_view.rs:965`, `:1010`, `:1756`, `skills_view.rs:624`, `credential.rs:187`, `session_views.rs:371` "
+  },
+  {
+   "pr": 4826,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "P2 crates/tui/src/settings_view.rs:1288 \u2014 a click on a heading or gap line in `Mode::Rows` runs `change` on the focused row. `focus_line` (:726) keeps the old focus for non-`Line::Item` lines, and `fo"
+  },
+  {
+   "pr": 4826,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "P2 crates/tui/src/settings_view.rs:1764-1776 \u2014 on an objects page (`repository_extensions`, :1440), Space on the \"+ Add\" row does nothing, while Enter opens the entry field. S6 exempts only the `requi"
+  },
+  {
+   "pr": 4826,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "scope-creep",
+   "outcome": "fixed",
+   "text": "P2 docs/tui.md:1295 \u2014 unrequested doc edit. RULING-4675-3 item 1 grants one sentence; RULING-4675-14 says \"Make no other doc edits.\" The diff deletes \"after every skill it shadows with its source and "
+  },
+  {
+   "pr": 4826,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "missing-or-weak-test",
+   "outcome": "fixed",
+   "text": "P3 skills_view_tests.rs (`selection_clamps_two_past_the_end`, `navigation_keeps_the_selected_row_visible_at_small_heights`, wheel tests) \u2014 removes click assertions (clamp to 3; visible-row check repla"
+  },
+  {
+   "pr": 4826,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 PR body, Summary \u2014 names \"default model picker\" in Part 1. No `model_picker*` file changed, and S4 item 3 and S9 exclude it. Drop the claim."
+  },
+  {
+   "pr": 4826,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/tui/src/skills_view.rs:155 \u2014 yagni \u2014 cut `row_focused` beside `ScopeSwitches.focus`, and the sync logic in `edit_key` (:274) \u2014 replace with one `enum SkillsFocus { Row, Switch(SwitchScope) }"
+  },
+  {
+   "pr": 4826,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/tui/src/offer.rs:643 \u2014 shrink \u2014 cut the 8-line span-width sum \u2014 replace with `clipped(header, vec![(0, u16::MAX, Spot::Item(at))], width)`; `clipped` already applies `.min(width)`, so rects "
+  },
+  {
+   "pr": 4826,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "deferred-to-issue",
+   "text": "P3 crates/tui/src/app/offer_tests.rs:695 \u2014 delete \u2014 cut `clicking_an_item_opens_its_source`, which repeats the unit test in offer_tests.rs. Gate: mutants (`cargo-mutants --in-diff`, docs/testing/mutan"
+  },
+  {
+   "pr": 4892,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P2 crates/main/tests/tool_calls/tools.rs:3518 \u2014 second flake fix to one file with no fix-history block. The PR body names none of the prior fixes (e0bbb741f, 45150cbaa and 0750bea4e on this branch; #3"
+  },
+  {
+   "pr": 4892,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 .review-context/pr-body.md:1 \u2014 body says `Fixes #4829`; docs/workflow.md, \"The pull request\": \"The body says `Resolves #<ticket>` for an unsplit ticket.\" RULING-4829-6 says \"The PR says `Fixes #482"
+  },
+  {
+   "pr": 4892,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "comment-or-wording",
+   "outcome": "fixed",
+   "text": "P3 crates/main/tests/tool_calls/tools.rs:3517 \u2014 comment does not name the kernel path. RULING-4829-6: \"Add a one-line comment naming the kernel path.\" The PR body's path is `get_mm_rss` (include/linux"
+  },
+  {
+   "pr": 4892,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "comment-or-wording",
+   "outcome": "fixed",
+   "text": "P3 tools.rs:3517 \u2014 the comment names the wrong path (class: none; find: n/a). The comment says \"approximate per-CPU RSS counters\", and PR body says `task_mem()` reads approximate `get_mm_counter`. In "
+  },
+  {
+   "pr": 4892,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 PR body \u2014 missing \"When fixes keep failing\" content (`docs/workflow.md`). This is the third flake fix to `tools.rs` on the branch, after `e0bbb741f` and `0750bea4e`. The body states the assumption "
+  },
+  {
+   "pr": 4874,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 crates/main/tests/screen_looks/swapped_panels_look.rs:521 \u2014 The first Down (loop at :523) follows `wait_screen(\"the focused Permissions row\", focused_label(grid).is_some())`, a grid match alone. Th"
+  },
+  {
+   "pr": 4874,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "unknown",
+   "text": "P3 crates/main/tests/screen_looks/swapped_panels_look.rs:523 \u2014 The new focus-step loop repeats the Sessions walk at :541\u2013548: `let on = focused_label(&grid)`, `run.write(b\"\\x1b[B\")`, `wait_screen(\u2026, f"
+  },
+  {
+   "pr": 4874,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "pr-process",
+   "outcome": "unknown",
+   "text": "P2 PR body (.review-context/pr-body.md) \u2014 no root cause and no repeated-run evidence. The body is a failure dump from the #4351 check, and it names no cause. It shows no loaded whole-binary runs. The "
+  },
+  {
+   "pr": 4874,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 crates/main/tests/screen_looks/swapped_panels_look.rs:527 \u2014 the wait named \"the focused Permissions row\" checks `focused_label(grid).is_some()`, so any focused row passes. The first Down, sent at l"
+  },
+  {
+   "pr": 4885,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 crates/main/tests/commands/completion.rs:638 \u2014 Duplicated Code: the `case_names` derivation (`expected.iter().map(|(case, _)| case.clone()).collect::<Vec<_>>()`) is repeated verbatim at :638-641 (b"
+  },
+  {
+   "pr": 4885,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "other",
+   "outcome": "unknown",
+   "text": "P3, non-blocking: timestamps are taken when `capture_stdout` reads a chunk, not when the driver writes a marker. If a driver writes several cases in one burst, they share a timestamp and their interva"
+  },
+  {
+   "pr": 4885,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/main/tests/commands/completion.rs:304 \u2014 stdlib \u2014 cut `observe_byte`, the `line` buffer, the CRLF strip, the Interrupted arm and the byte loop (~25 lines) \u2014 replace with `BufRead::read_until("
+  },
+  {
+   "pr": 4885,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "unknown",
+   "text": "P3 crates/main/tests/commands/completion.rs:341 \u2014 shrink \u2014 cut the `CapturedStdout` struct (~6 lines) \u2014 replace with a `(Vec<u8>, CaseTimings)` tuple. Gate: `scripts/check` clippy; no trip."
+  },
+  {
+   "pr": 4885,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "unknown",
+   "text": "P3 crates/main/tests/commands/completion.rs:371 \u2014 shrink \u2014 cut the nested `Ok(Ok(Ok(..)))` match (~4 lines) \u2014 replace with `map_err` and `?`. Gate: `scripts/check`; rustfmt wins on layout."
+  },
+  {
+   "pr": 4885,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "unknown",
+   "text": "P3 crates/main/tests/commands/completion.rs:442 \u2014 delete \u2014 cut `drop(stdin)` on the timeout path \u2014 stdout EOF never depends on stdin, and unwinding drops it anyway. Gate: `completion::` nextest; behav"
+  },
+  {
+   "pr": 4885,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/main/tests/commands/completion.rs:320 \u2014 yagni \u2014 cut the `Option` return and `cases.first()?` guard in `format_case_progress`, plus its `None` assertion \u2014 replace with an `if cases.is_empty()"
+  },
+  {
+   "pr": 4884,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 xtask/src/rules.rs:1974-1987 \u2014 `function_context` repeats one depth-counter shape in its `(`/`)` and `[`/`]` arms; they differ only in the counter name (class: duplicated depth-tracking arms; find:"
+  },
+  {
+   "pr": 4884,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "comment-or-wording",
+   "outcome": "fixed",
+   "text": "P3 xtask/src/rules.rs:1958 \u2014 the loop that skips a `;` inside `[ ]` or `( )` has no comment. docs/code-quality.md, \"What a reviewer checks\": \"comments explain why, where the code would surprise a care"
+  },
+  {
+   "pr": 4884,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 xtask/src/rules.rs:1969 \u2014 shrink \u2014 cut the two-counter loop (1969\u20131998) \u2014 replace with one `depth` counter in the original `find` predicate: `(`/`[` +1, `)`/`]` saturating \u22121, accept `{`/`;` only a"
+  },
+  {
+   "pr": 4868,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 xtask/src/select_tests.rs:437 \u2014 `rules_selection_*` tests assert crate lists (`Crates([\"contract\"])`, `Crates([\"contract\",\"tui\"])`, `Crates([])`) and cite no line. `docs/workflow.md`, \"Rules by pat"
+  },
+  {
+   "pr": 4868,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 scripts/test-check-rules-by-path:167 \u2014 the self-test's \"seven-name coupling against the doc\" assertion cites no docs line in its header. Fix: cite `docs/workflow.md`, \"Rules by path\", in the header"
+  },
+  {
+   "pr": 4868,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 scripts/check:77 and :84 \u2014 the same `{ git diff --name-only \"$(git merge-base \"$base\" HEAD)\"; git ls-files --others --exclude-standard; }` pipeline appears twice. Class: duplicated pipeline; find: "
+  },
+  {
+   "pr": 4868,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "debt-marker",
+   "text": "P3 xtask/src/select.rs:265-270 and :349-353 \u2014 `has_package`, `has_prototype`, `is_listed` and the docs-only early return are copied between `rules_selection` and `classify_with`. The Ruling quoted wor"
+  },
+  {
+   "pr": 4868,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "P2 scripts/check:116 \u2014 the prototype trigger never matches, so a `research/tui-prototype/` diff skips the three commands. `prototype` is `research/tui-prototype/` (line 115), so `grep -q \"^$prototype/"
+  },
+  {
+   "pr": 4868,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "debt-marker",
+   "text": "P3 scripts/check:127 \u2014 shrink \u2014 cut the per-run nonce block and fakes example pre-build, copied verbatim from :516 \u2014 replace with one helper both branches call. Gate: `scripts/test-script-selftests` a"
+  },
+  {
+   "pr": 4868,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 xtask/src/main.rs:206 \u2014 delete \u2014 cut the 9-line `args` filter; `optional` finds `--base` by position \u2014 replace with `changed_files(&flag(rest, \"--base\")?)?`. Gate: `cargo nextest run -p xtask -E 't"
+  },
+  {
+   "pr": 4868,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "debt-marker",
+   "text": "P3 xtask/src/select.rs:265 \u2014 yagni \u2014 cut the docs-only and prototype preamble copied from `classify_with` (:347\u2013352) \u2014 replace with one shared `docs_only(files)` helper. Gate: same nextest filter. No "
+  },
+  {
+   "pr": 4868,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 xtask/src/select_tests.rs:1076 \u2014 shrink \u2014 cut the empty-diff test \u2014 replace with `&[]` in the docs-only loop at :1064. Gate: `rules_` filter. The PR body's \"10 new tests\" becomes 9."
+  },
+  {
+   "pr": 4844,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "P3 crates/tui/src/settings_view.rs:2213: the \"(current)\" mark takes only the first word of the saved value. The highlight at :1854 also applies `file_name()`, so `/usr/local/bin/code --wait` highlight"
+  },
+  {
+   "pr": 4844,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 crates/tui/src/settings_view.rs:3095: `shown_value` repeats the VISUAL-then-EDITOR non-empty fallback in `editor::command` (crates/tui/src/editor.rs), and reads the environment directly. `command`'"
+  },
+  {
+   "pr": 4844,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 crates/tui/src/notices.rs:545: `App::notice_text` has one caller (app_mouse.rs:231) and only forwards to `self.notices.text(id)`. That matches docs/code-quality.md's rule on single-caller pass-thro"
+  },
+  {
+   "pr": 4844,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "comment-or-wording",
+   "outcome": "fixed",
+   "text": "P3 crates/tui/src/event_loop_tests.rs:2129: the panic text changed to \"the client settings read\", but the line read is the `write_workspace_file` asserted at :2131. The edit is unexplained and mislead"
+  },
+  {
+   "pr": 4844,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "scope-creep",
+   "outcome": "fixed",
+   "text": "P2 `crates/tui/src/snapshots/tui__settings_view__tests__settings_editing.snap:17` \u2014 scope creep. The ticket records this file as outside-plan, and no ruling grants it. The snapshot's real Editor row b"
+  },
+  {
+   "pr": 4844,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "P2 `crates/tui/src/settings_view_tests.rs:2962` \u2014 plan Review Focus: \"Enter on it preserves the value.\" With saved `/usr/local/bin/code --wait`, Enter on `code` writes `\"code --wait\"` (asserted at `:2"
+  },
+  {
+   "pr": 4844,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "missing-or-weak-test",
+   "outcome": "fixed",
+   "text": "P2 `crates/tui/src/settings_view_tests.rs:2912` \u2014 acceptance: \"A screen test for the Editor pick list with a fake PATH holding nvim and code.\" The test hand-builds the choices, so `change` never reads"
+  },
+  {
+   "pr": 4844,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "missing-or-weak-test",
+   "outcome": "fixed",
+   "text": "P2 `crates/tui/src/event_loop.rs:343` \u2014 rule: \"a `tui.editor` write applies at the terminal's next start, so Ctrl+G resolves a launch-time snapshot, never a live read.\" `ctrl_g_uses_the_editor_setting"
+  },
+  {
+   "pr": 4844,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "scope-creep",
+   "outcome": "fixed",
+   "text": "P3 `crates/tui/src/event_loop_tests.rs:2129` \u2014 unrequested edit. The panic label now reads \"the client settings read\" on the read that expects `write_workspace_file`. Revert."
+  },
+  {
+   "pr": 4844,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/tui/src/settings_view.rs:1794 \u2014 shrink \u2014 cut 12 lines: empty Other\u2026 reset repeats the Default reset at :1903 \u2014 replace with one `reset_key` both call. Gate: settings_view tests (`resets()` a"
+  },
+  {
+   "pr": 4844,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/tui/src/settings_view.rs:2213 \u2014 shrink \u2014 cut 9 lines: EDITOR highlight rule duplicated at :1855 \u2014 replace with one `highlighted` helper. Also fixes a live bug: the render mark skips `file_na"
+  },
+  {
+   "pr": 4844,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/tui/src/app/config_views_tests.rs:92 \u2014 shrink \u2014 cut 15 lines: `fake_with_text` copies `fake_with_editor` \u2014 replace with one fixture taking the key. Gate: nextest; no conflict."
+  },
+  {
+   "pr": 4844,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/tui/src/bindings_tests.rs:106 \u2014 delete \u2014 cut 6 lines: `NOT_BUILT` is `[&str; 0]`, so both filters skip nothing \u2014 replace with the unfiltered comparison. Gate: bindings tests; stays green bec"
+  },
+  {
+   "pr": 4844,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/tui/src/app/config_views.rs:246 \u2014 reuse \u2014 cut 8 lines: `editor_setting` re-implements `settings_view.rs:1941 current_text` \u2014 replace with `current_text`, made pub(crate). Gate: clippy `-D wa"
+  },
+  {
+   "pr": 4872,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "missing-or-weak-test",
+   "outcome": "fixed",
+   "text": "P2 `crates/extensions/tests/models.rs:241`, `:270`, `:365`, `:399` \u2014 the four `admission_capability_filter_drops_*` tests assert only absence (`all(|m| m.id != \"m\")`, `is_empty()`). `docs/testing.md:1"
+  },
+  {
+   "pr": 4872,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 `providers/anthropic/providers/anthropic.lua:5` and `providers/gemini/providers/gemini.lua:5` \u2014 identical `encode` percent-encoder (Duplicated Code). No doc endorses the copy. Fix: one shared helpe"
+  },
+  {
+   "pr": 4872,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 `crates/main/tests/delegation/ask.rs:2031`, `:2101`, `:2168`, `:2227` and `crates/main/tests/providers/models.rs:187`, `:555` \u2014 the same read-then-`write_model_cache` block, six times (Duplicated C"
+  },
+  {
+   "pr": 4872,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 `.review-context/pr-body.md`, \"Decisions and overlap\" \u2014 RULING-4638-7 item 1 requires the line \"anthropic-version: 2023-06-01, matching the turn path's ANTHROPIC_VERSION. Not probed live (no creden"
+  },
+  {
+   "pr": 4872,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "P3 providers/gemini/providers/gemini.lua:15 \u2014 Lua keeps any row with `generateContent`, while admission drops catalog-known rows with `tool_call: false`. `gemini-3-pro-image` (`google` section of `xta"
+  },
+  {
+   "pr": 4872,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 .review-context/pr-body.md, \"Decisions and overlap\" \u2014 Task 2's Done-when asks for a recorded `anthropic-version` probe outcome. No probe ran, because RULING-4638-1 bars live calls. The PR keeps `20"
+  },
+  {
+   "pr": 4872,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "missing-or-weak-test",
+   "outcome": "fixed",
+   "text": "P3 providers/openai/tests/models-listed.json \u2014 the acceptance asks each package's fake-vendor test to show \"non-chat models filtered\". The openai fixture has no non-chat row. The anthropic fixture fil"
+  },
+  {
+   "pr": 4872,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/extensions/tests/models.rs:46 \u2014 shrink \u2014 cut six copies of the Setup/source/write_models_dev/model-json block (~120 lines) \u2014 replace with one `admit(catalog, provider, id)` helper, keeping a"
+  },
+  {
+   "pr": 4872,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/main/tests/delegation/ask.rs:2023 \u2014 shrink \u2014 cut four read-parse-seed blocks (~12 lines), plus the two in tests/providers/models.rs:180 and :544 \u2014 replace with one seed helper. Gate: RULING-"
+  },
+  {
+   "pr": 4872,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 providers/gemini/providers/gemini.lua:577 \u2014 shrink \u2014 cut the `supports_content` loop and `sub(1,7)` check (~12 lines) \u2014 replace with `item.name:match(\"^models/(.+)$\")` and an inline `ipairs` check."
+  },
+  {
+   "pr": 4558,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "spec-criterion-missed",
+   "outcome": "fixed",
+   "text": "P3 crates/loop/tests/fixtures/reviewer_eval/calls.jsonl:9,68 \u2014 sampled workspace fields retain the project names `QuotaBar` and `pi-extensions`, contrary to RULING-477-4: \u201cno host names, profile names"
+  },
+  {
+   "pr": 4558,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "spec-criterion-missed",
+   "outcome": "refuted",
+   "text": "P2 `crates/loop/tests/fixtures/reviewer_eval/calls.jsonl:1,9,69` \u2014 the set still exposes project names such as `fiber`, `QuotaBar` and `pi-extensions`, contrary to RULING-477-4: \u201cno host names, profil"
+  },
+  {
+   "pr": 4558,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/loop/tests/reviewer_eval.rs:677 \u2014 shrink \u2014 cut 33-line has_session_id start/at loop \u2014 replace with windows(36) dash-at-8/13/18/23 plus hex check, fuzz-verified equivalent on 20k cases; gate "
+  },
+  {
+   "pr": 4558,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/loop/tests/reviewer_eval.rs:753 \u2014 shrink \u2014 cut tripled hosts/profiles/projects any-blocks \u2014 replace with one loop over [(hosts,\"host\"),(profiles,\"profile\"),(projects,\"project\")]; gate nextes"
+  },
+  {
+   "pr": 4859,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 crates/extensions/src/process_tests.rs:6565 \u2014 `sessionless_host_calls_answer_only_the_call_case_set` is changed by this PR and asserts reply order (c1 through c5, via sequential `read` expects), bu"
+  },
+  {
+   "pr": 4859,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "doc-mismatch",
+   "outcome": "fixed",
+   "text": "P3 crates/contract/src/codes.rs:91 \u2014 `NotAvailable` sits between `DepthExceeded` and `DuplicateCommand`. The same drift appears at crates/jobs/src/delegate/message/mod.rs:542 (before `ExtensionFailed`"
+  },
+  {
+   "pr": 4859,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "missing-or-weak-test",
+   "outcome": "fixed",
+   "text": "P3 `crates/extensions/src/process_tests.rs:6498` (`sessionless_allowed_names_only_the_call_case_set`) and `:6565` (`sessionless_host_calls_answer_only_the_call_case_set`), red-first gap. Both assertio"
+  },
+  {
+   "pr": 4859,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/extensions/src/process/context/native.rs:306,376 \u2014 shrink \u2014 cut two hand-built `(NotAvailable, \"host.model|host.delegate: not available here\")` tuples, 8 lines \u2014 replace with `return Err(cra"
+  },
+  {
+   "pr": 4851,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P2 crates/loop/src/history.rs:245-254 \u2014 `review_escalation_id` matches `escalation.cause` and `step` against string literals. `contract::events::Escalation` is already the closed set and derives `Dese"
+  },
+  {
+   "pr": 4851,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 crates/loop/tests/resume.rs:760 \u2014 asserts an ordered kinds list (`history_kinds() == expected`, plus the `new_kinds()` assert below it) with no `docs/<area>.md` cite. The 15 `restored_block_` tests"
+  },
+  {
+   "pr": 4851,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 crates/loop/src/history_tests.rs:387 `requested_review` and crates/loop/tests/resume.rs:1345 `review_request_with` build the same `PermissionRequested`. history_tests.rs:431 `settled` and resume.rs"
+  },
+  {
+   "pr": 4851,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 crates/loop/tests/resume.rs:700 and crates/loop/src/history_tests.rs:3329. The new `restored_block_*` tests and `restored_block_mix_matches_live_limit` assert counts and event order (`session_block"
+  },
+  {
+   "pr": 4851,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "scope-creep",
+   "outcome": "fixed",
+   "text": "P3 crates/loop/src/history.rs, `PermissionResolved` arm, `&& resolved.request_id.is_none()`. Plan Task 3 says keep the `Reviewer | NoReviewer` count and `budget` exclusion \"untouched\", and this guard "
+  },
+  {
+   "pr": 4851,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "missing-or-weak-test",
+   "outcome": "fixed",
+   "text": "P3 crates/loop/src/history_tests.rs. Plan Task 1 rows with no test: own-segment raise plus own hook or credential_deny settlement (folds 1), `review_cancelled` (folds 0), unjoined hook/credential_deny"
+  },
+  {
+   "pr": 4851,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "spec-criterion-missed",
+   "outcome": "fixed",
+   "text": "P3 crates/loop/src/lib.rs:800. `consecutive: 0` still restores on resume, so the quoted rule \"3 consecutive blocks, or 20 in a session\" holds for the session count only. The plan defers consecutive to"
+  },
+  {
+   "pr": 4851,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/loop/tests/resume.rs:700 \u2014 yagni \u2014 cut `restored_block_mix_matches_live_limit` and the `review_request_with` helper (~125 lines) \u2014 replace with nothing; the 15 fold rows plus `reviewer_denie"
+  },
+  {
+   "pr": 4851,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/loop/src/history_tests.rs:387 \u2014 shrink \u2014 cut ~60 lines of near-copy builders (`requested_review`, `settled`, `allowed_with_grant`, `denied_by`, single-use `session_blocks_escalation`, `revie"
+  },
+  {
+   "pr": 4851,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/loop/src/history.rs:243 \u2014 shrink \u2014 cut the 17-line raw string match on `escalation.cause` \u2014 replace with `Event::from_envelope` matching `Escalation::{ConsecutiveBlocks, SessionBlocks, Revie"
+  },
+  {
+   "pr": 4851,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/loop/src/history.rs:278 \u2014 shrink \u2014 cut the get-then-insert guard (3 lines) \u2014 replace with `if pass.staged.insert(id, true) != Some(true) { resumed.session_blocks += 1; }`. Gate: none; counts"
+  },
+  {
+   "pr": 4857,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "debt-marker",
+   "text": "P3 crates/doors/src/attach.rs:143-144 \u2014 `match stdout_write_outcome(source) { Ok(()) => Ok(0), Err(error) => Err(error) }` is `Result::map` (`.map(|()| 0)`). docs/code-quality.md, \"What a reviewer che"
+  },
+  {
+   "pr": 4857,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "debt-marker",
+   "text": "P3 crates/cli/src/lib.rs:251-264 \u2014 the `StandardOutput` and `DoctorReport` arms are the same five lines, differing only in the variant rebuilt on `StdoutFailed`. Smell: Duplicated Code (Fowler baselin"
+  },
+  {
+   "pr": 4857,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "debt-marker",
+   "text": "P3 crates/doors/src/attach.rs:527-540 and crates/doors/src/session_tests.rs:71-83 \u2014 the same table-driven `(BrokenPipe, quiet) / (StorageFull, !quiet)` loop in two files, both edited here. Smell: Dupl"
+  },
+  {
+   "pr": 4857,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 `.review-context/pr-body.md` \"Local note\": RULING-4827-2 step 1 required the lane to run `login::reviewer::tests::a_would_block_flush_waits_and_retries_instead_of_surfacing` alone three times befor"
+  },
+  {
+   "pr": 4857,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "debt-marker",
+   "text": "P3 crates/doors/src/attach.rs:142 \u2014 shrink \u2014 cut 5-line `match` that maps `Ok(())` to `Ok(0)` and re-wraps `Err` \u2014 replace with `return crate::stdout_write_outcome(source).map(|()| 0);`, the same idio"
+  },
+  {
+   "pr": 4857,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "debt-marker",
+   "text": "P3 crates/cli/src/lib.rs:251 \u2014 dedupe \u2014 cut two copy-pasted `StandardOutput`/`DoctorReport` arms \u2014 replace with one `fn stdout_exit(source: io::Error, wrap: fn(io::Error) -> CliError) -> i32` and two "
+  },
+  {
+   "pr": 4857,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "comment-or-wording",
+   "outcome": "debt-marker",
+   "text": "P3 crates/main/src/resume.rs:358 \u2014 the new `resume_refused` comment says refusal needs the \"recorded workspace\" to be outside the launch project. The code (`!recreatable(recorded) && !in_launch_projec"
+  },
+  {
+   "pr": 4857,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "unknown",
+   "text": "P3 crates/doors/src/lib.rs:159 \u2014 test \u2014 cut the second test `stdout_write_outcome_retains_other_error` (about 4 lines) \u2014 replace with one test asserting both cases, as the old one did. Gate: Task 1 se"
+  },
+  {
+   "pr": 4860,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "missing-or-weak-test",
+   "outcome": "fixed",
+   "text": "P3 crates/tools/src/shell/keeper_lock_tests.rs:157 \u2014 `acknowledgement_follows_the_release_open` pins the text order of generated shell scripts. It does not reproduce the race. The PR body shows the te"
+  },
+  {
+   "pr": 4860,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 .review-context/pr-body.md (evidence, \"Acceptance evidence\") \u2014 `docs/testing/running.md` \"Flaky tests\" says each run \"first prints its `cargo xtask threads` line\" and counts only when the load it r"
+  },
+  {
+   "pr": 4860,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 crates/tools/src/shell/keeper_lock_tests.rs:157 \u2014 `acknowledgement_follows_the_release_open` asserts an order (`open < ack`) but cites no docs line. AGENTS.md names `docs/testing.md` for test chang"
+  },
+  {
+   "pr": 4860,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "refuted",
+   "text": "P3 PR body, \"Diagnosis evidence\" \u2014 Plan Task 1 asked for ten probe runs that expect no `release.fifo` fd on failing runs. The PR reports 3 probe runs showing the window, plus 24 runs that never reprod"
+  },
+  {
+   "pr": 4860,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "refuted",
+   "text": "P3 crates/tools/src/shell/keeper_lock_tests.rs:151 \u2014 delete \u2014 cut `acknowledgement_follows_the_release_open` and its doc (lines 151-177, 27 lines) \u2014 replace with nothing. It string-matches offsets in "
+  },
+  {
+   "pr": 4860,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/tools/src/shell/keeper_lock_tests.rs:135 \u2014 shrink \u2014 cut the \"proves the release read is open\" sentence repeated at 135-139 and 285-287 \u2014 replace with one line: \"Opens the release FIFO before"
+  },
+  {
+   "pr": 4858,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "doc-mismatch",
+   "outcome": "fixed",
+   "text": "P3 `docs/ci.md:28-35` (Runners): the edit deleted \"CI checks only that the section and both lines are present; reviewers judge the measurements.\" No other doc says it (`grep` for \"judge\" and \"measurem"
+  },
+  {
+   "pr": 4858,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "doc-mismatch",
+   "outcome": "fixed",
+   "text": "P3 `docs/ci.md:31-33` (Runners): \"A pull request that fixes a break or budget breach may exempt its bug-red legs\" has a broader subject than \"The merge gate\" (\"A budget-breach pull request ... by incl"
+  },
+  {
+   "pr": 4858,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 `.review-context/pr-body.md`, break-and-restore bullet: it says \"temporarily changed the expected summary message\" (a test-side edit), then restores `xtask/src/main.rs` only. Ticket #4830 requires "
+  },
+  {
+   "pr": 4858,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "doc-mismatch",
+   "outcome": "fixed",
+   "text": "P2 docs/ci.md:31-33 \u2014 deletes \"CI checks only that the section and both lines are present; reviewers judge the measurements.\" Ticket bullet 5 allows removal only \"if the user-facing contract remains c"
+  },
+  {
+   "pr": 4858,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P2 PR body, \"Summary-write break-and-restore\" \u2014 says it \"temporarily changed the expected summary message,\" which is a test-side edit. It then says it restored `xtask/src/main.rs`. Ticket bullet 3 req"
+  },
+  {
+   "pr": 4858,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "scope-creep",
+   "outcome": "unknown",
+   "text": "P3 xtask/src/select/plan_tests.rs:318 \u2014 adds the case \"second heading ends incomplete section.\" Neither ticket bullet 2 nor plan Task 1 lists it; bullet 2 permits only consolidation. Non-blocking. Fix"
+  },
+  {
+   "pr": 4858,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "unknown",
+   "text": "P3 xtask/src/select/plan_tests.rs:338 \u2014 shrink \u2014 cut 13-line `non_bug` block \u2014 replace with `assert!(plan_with_budget_breach_body(bug_pr_plan(0), false, complete).jobs[\"bug_red\"]);`. The old block ass"
+  },
+  {
+   "pr": 4858,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "debt-marker",
+   "text": "P3 xtask/src/select/plan_tests.rs:326 \u2014 shrink \u2014 cut 5-line \"fenced heading\" row \u2014 replace with nothing. \"short closing fence\" already pins a heading inside a backtick fence. Gate: mutation check. A b"
+  },
+  {
+   "pr": 4845,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "1. **P2, uncited order.** `crates/loop/tests/compaction.rs`, `a_resumed_session_above_the_trigger_compacts_before_its_first_request`, asserts `compaction < request` with a bare `assert!`. `docs/testin"
+  },
+  {
+   "pr": 4845,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "2. **P2, uncited counts.** The code-quality checklist (`docs/code-quality.md`, \"What a reviewer checks\") requires each asserted count to cite its doc sentence by heading. Uncited examples: `an_artifac"
+  },
+  {
+   "pr": 4845,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "scope-creep",
+   "outcome": "fixed",
+   "text": "3. **P3, ruling contradicted.** `crates/main/tests/screens/attach_first_frame.rs:218` now sets `compaction` to 900_000. RULING-4684-2, item 4, says edit it only if it fails deterministically, otherwis"
+  },
+  {
+   "pr": 4845,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "comment-or-wording",
+   "outcome": "fixed",
+   "text": "4. **P3, stale comments.** `hooks.rs:2202` now attaches the `compaction_run` doc to `above_fresh_estimate_stream` and still says \"five-token trigger\". `tools.rs:1725` (`COMPACTION_TURN`) says the same"
+  },
+  {
+   "pr": 4845,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "5. **P3, silent drop.** `crates/loop/src/compaction/note.rs`, `artifact_of`, `Err(_) => return (None, None)`: `log::Error` variants other than `Io` (`Held`, `Poisoned`, `Ended`, `Ambiguous`, `Exists`)"
+  },
+  {
+   "pr": 4845,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "scope-creep",
+   "outcome": "fixed",
+   "text": "P2 crates/main/tests/screens/attach_first_frame.rs:215 (`seed`): outside-plan edit with no recorded need. RULING-4684-2 item 4 says \"Edit it only if it fails deterministically against the new timing. "
+  },
+  {
+   "pr": 4845,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 crates/loop/tests/compaction.rs (`a_resumed_session_above_the_trigger_compacts_before_its_first_request`, `a_fresh_context_is_estimated_until_a_reply_measures_it`, `a_result_whose_artifact_cannot_b"
+  },
+  {
+   "pr": 4845,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "scope-creep",
+   "outcome": "fixed",
+   "text": "P3 crates/loop/tests/reviewer_compaction.rs (`kept_messages_are_carried_whole_when_measured_context_crosses_the_trigger`): the rewrite changes the scenario, not only its expectations. RULING-4684-2 it"
+  },
+  {
+   "pr": 4845,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P3 PR body: \"Outside-plan files: none\" is wrong. Six files outside the plan's Files list are in the diff (reviewer_compaction.rs, hooks.rs, skill.rs, scripted.rs, tools.rs, attach_first_frame.rs). RUL"
+  },
+  {
+   "pr": 4845,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "behaviour-defect",
+   "outcome": "fixed",
+   "text": "P3 crates/loop/src/compaction/note.rs (`artifact_of`, `Err(_) => return (None, None)`): non-Io `log::Error` variants (`Poisoned`, `Ended`) drop silently. The ticket says \"A failed artifact write is lo"
+  },
+  {
+   "pr": 4845,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/main/tests/screens/attach_first_frame.rs:218 \u2014 delete \u2014 cut 2-line config hunk \u2014 replace with nothing. Gate: `attach_first_frame` run alone (RULING-4684-2 point 4). The ruling allows this ed"
+  },
+  {
+   "pr": 4845,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/main/tests/tool_calls/tools.rs:1721 \u2014 shrink \u2014 cut `above_trigger_stream` and the duplicate `hooks.rs:2205` `above_fresh_estimate_stream` wrapper \u2014 replace with one `fakes::wire` helper. Gat"
+  },
+  {
+   "pr": 4845,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/loop/src/compaction/note.rs:544 \u2014 shrink \u2014 cut `relative`, which rebuilds `name` \u2014 replace with `artifacts/{name}`. Gate: `cargo clippy -p loop --all-targets -- -D warnings`; `an_artifact_wr"
+  },
+  {
+   "pr": 4845,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/loop/tests/compaction.rs:817 \u2014 shrink \u2014 cut the `kinds=\u2026, request_count=\u2026` message args and the panic closure at :851 \u2014 replace with `.expect`. Gate: `scripts/bug-red`; keep until the red ru"
+  },
+  {
+   "pr": 4846,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 `crates/main/src/keeper_child.rs:785-802` \u2014 baseline smell: possible Duplicated Code. The `incoming.next().unwrap_or_else(|| Err(io::Error::other(\"listener ended\")))` expression appears under `#[cf"
+  },
+  {
+   "pr": 4846,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "doc-mismatch",
+   "outcome": "deferred-to-issue",
+   "text": "P3 `docs/tools.md:1225` \u2014 the doc says \"the keeper takes the session's `session.lock`\". The PR makes the takeover wait up to 5 s for the dying session's lock and exit through `lock_lost` if the wait t"
+  },
+  {
+   "pr": 4846,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "comment-or-wording",
+   "outcome": "fixed",
+   "text": "P3 `crates/log/src/write.rs:157-158` \u2014 the doc comment \"This is the only caller's blocking open\" is garbled. Rewrite it to say that `open_as_takeover` is the only blocking open, and that ordinary open"
+  },
+  {
+   "pr": 4846,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "comment-or-wording",
+   "outcome": "fixed",
+   "text": "P3 `crates/main/src/keeper_child.rs:133`: the `TAKEOVER_LOCK_WAIT` doc comment omits \"this is not a measured value\", which RULING-4351-19 asks it to say. Add the sentence."
+  },
+  {
+   "pr": 4846,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "comment-or-wording",
+   "outcome": "fixed",
+   "text": "P3 `crates/log/src/write.rs:156`: the `open_as_takeover` doc says \"This is the only caller's blocking open\". RULING-4351-19 asks for takeover-only intent with `Runtime::apply` named as the only caller"
+  },
+  {
+   "pr": 4846,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "refuted",
+   "text": "P3 crates/log/src/scan.rs:82 \u2014 shrink \u2014 cut the inner `if clock.now() >= until { return Ok(None); }` inside the `try_recv` arm \u2014 replace with one deadline check before `try_recv`. If both are ready, t"
+  },
+  {
+   "pr": 4846,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/main/src/keeper_child.rs:385 \u2014 shrink \u2014 cut the duplicated `#[cfg(test)]` and `#[cfg(not(test))]` `incoming.next().unwrap_or_else(...)` arms \u2014 replace with a `cfg`-gated `injected: Option<Er"
+  },
+  {
+   "pr": 4846,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/main/src/keeper_child.rs:136 \u2014 yagni \u2014 cut the `takeover_waiter_thread` field, its `cfg(test)` call, and the three test closures \u2014 replace with the existing `before_open` closure sending `th"
+  },
+  {
+   "pr": 4836,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "pr-process",
+   "outcome": "fixed",
+   "text": "P2 `.review-context/pr-body.md`, `## Budget breach` \u2014 the section lacks the lines the exemption parser reads, so the `bug` ticket's `Bug red` check still runs and fails. `budget_breach_section` (`xtas"
+  },
+  {
+   "pr": 4836,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "debt-marker",
+   "text": "P3 `crates/tools/src/shell/detached.rs:358-359` and `:395-400` \u2014 Duplicated Code (baseline). Both sites repeat a debug/release cfg pair whose release arm is `support::group::alive(pgid)`. One release "
+  },
+  {
+   "pr": 4841,
+   "axis": "standards",
+   "severity": "P2",
+   "kind": "doc-mismatch",
+   "outcome": "fixed",
+   "text": "P2 `docs/dependencies.md:110-120`: the PR adds `is_executable` to `Cargo.lock` and enables `unstable-dynamic`, but the `clap_complete` row keeps the default-feature figures. The doc says a new `Cargo."
+  },
+  {
+   "pr": 4841,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "other",
+   "outcome": "fixed",
+   "text": "P3 `crates/main/src/dynamic_complete_tests.rs:96`: imports `clap_complete::CompletionCandidate`, which is `#[cfg(feature = \"unstable-dynamic\")]` (clap_complete 4.6.11 `src/lib.rs:76`). Owner ruling 20"
+  },
+  {
+   "pr": 4841,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "duplication-or-smell",
+   "outcome": "fixed",
+   "text": "P3 `crates/main/src/completion.rs:147`: `visible_for_dynamic` has one caller (`dynamic_complete.rs:27,31`) and only forwards to `visible_inner(cmd, true)`. `docs/code-quality.md`, \"What a reviewer che"
+  },
+  {
+   "pr": 4841,
+   "axis": "standards",
+   "severity": "P3",
+   "kind": "doc-mismatch",
+   "outcome": "fixed",
+   "text": "P3 `docs/invocation.md`, `completion` row (about line 170): says \"credentialed providers\". The defined term is \"switched on\" (`docs/model-routing.md:1249`), and the code keeps switched-on providers vi"
+  },
+  {
+   "pr": 4841,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "doc-mismatch",
+   "outcome": "fixed",
+   "text": "P2 docs/dependencies.md:146: the `clap_complete` row keeps the pre-`unstable-dynamic` figures (796 | 1,020 | 1,136 | 18 | 967) and names no `dependency-probe.yml` run. Plan Task 5 \"Done when\" requires"
+  },
+  {
+   "pr": 4841,
+   "axis": "spec",
+   "severity": "P2",
+   "kind": "test-process-rule",
+   "outcome": "fixed",
+   "text": "P2 crates/main/src/dynamic_complete_tests.rs:63 and :155, crates/main/tests/commands/completion.rs:725 and :845: these assert candidate order. The area doc for this behaviour, the `docs/invocation.md`"
+  },
+  {
+   "pr": 4841,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "spec-criterion-missed",
+   "outcome": "fixed",
+   "text": "P3 crates/main/src/dynamic_complete.rs:39-76 and crates/main/src/completion.rs:147: the dynamic command uses `visible_for_dynamic` (splits visible aliases) and respells help and version flags. Plan In"
+  },
+  {
+   "pr": 4841,
+   "axis": "spec",
+   "severity": "P3",
+   "kind": "missing-or-weak-test",
+   "outcome": "fixed",
+   "text": "P3 plan Task 1 gate: selector `completion::bash_login_completes_nothing_without_file_names` matches no test in the diff, so the gate runs nothing for it. The GRAMMAR `fiber login ` case covers the beh"
+  },
+  {
+   "pr": 4841,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/main/src/dynamic_complete_tests.rs:1 \u2014 delete \u2014 cut ~225 of 307 lines: unit registration and candidate tests repeat tests/commands/completion.rs, and the fixture writers duplicate install_ca"
+  },
+  {
+   "pr": 4841,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/main/src/dynamic_complete.rs:166 \u2014 shrink \u2014 cut the 25-line Entry/bool state machine in model_candidates_in \u2014 replace with BTreeMap<String, BTreeSet<String>> and keep ids with one provider. "
+  },
+  {
+   "pr": 4841,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/main/tests/completion/bash-driver.bash:29 \u2014 delete \u2014 cut the 6-line a-file guard \u2014 replace with nothing; exact assert_cases already rejects file names. Gate: bash load test; passes."
+  },
+  {
+   "pr": 4841,
+   "axis": "overbuild",
+   "severity": "P3",
+   "kind": "overbuild-cut",
+   "outcome": "fixed",
+   "text": "P3 crates/main/src/dynamic_complete.rs:39 \u2014 shrink \u2014 cut the nested if/else in separate_help_and_version_flags \u2014 replace with sequential ifs. Keep the function: the engine dedupes candidates by arg id"
+  }
+ ],
+ "prs": [
+  {
+   "pr": 4964,
+   "full_rounds": 1,
+   "verify_rounds": 3,
+   "review_rounds": 4,
+   "first_round_findings": 11,
+   "first_round_has_behaviour_defect": true,
+   "note": null
+  },
+  {
+   "pr": 4956,
+   "full_rounds": 1,
+   "verify_rounds": 2,
+   "review_rounds": 3,
+   "first_round_findings": 3,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4887,
+   "full_rounds": 1,
+   "verify_rounds": 3,
+   "review_rounds": 4,
+   "first_round_findings": 8,
+   "first_round_has_behaviour_defect": true,
+   "note": null
+  },
+  {
+   "pr": 4953,
+   "full_rounds": 1,
+   "verify_rounds": 0,
+   "review_rounds": 1,
+   "first_round_findings": 4,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4906,
+   "full_rounds": 1,
+   "verify_rounds": 3,
+   "review_rounds": 4,
+   "first_round_findings": 12,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4939,
+   "full_rounds": 1,
+   "verify_rounds": 4,
+   "review_rounds": 5,
+   "first_round_findings": 6,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4944,
+   "full_rounds": 1,
+   "verify_rounds": 1,
+   "review_rounds": 2,
+   "first_round_findings": 3,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4932,
+   "full_rounds": 1,
+   "verify_rounds": 3,
+   "review_rounds": 4,
+   "first_round_findings": 3,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4933,
+   "full_rounds": 1,
+   "verify_rounds": 1,
+   "review_rounds": 2,
+   "first_round_findings": 5,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4891,
+   "full_rounds": 1,
+   "verify_rounds": 1,
+   "review_rounds": 2,
+   "first_round_findings": 3,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4909,
+   "full_rounds": 1,
+   "verify_rounds": 2,
+   "review_rounds": 3,
+   "first_round_findings": 2,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4847,
+   "full_rounds": 1,
+   "verify_rounds": 2,
+   "review_rounds": 3,
+   "first_round_findings": 14,
+   "first_round_has_behaviour_defect": true,
+   "note": null
+  },
+  {
+   "pr": 4878,
+   "full_rounds": 0,
+   "verify_rounds": 0,
+   "review_rounds": 0,
+   "first_round_findings": 0,
+   "first_round_has_behaviour_defect": false,
+   "note": "no review-pr comments found on PR"
+  },
+  {
+   "pr": 4907,
+   "full_rounds": 1,
+   "verify_rounds": 0,
+   "review_rounds": 1,
+   "first_round_findings": 6,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4896,
+   "full_rounds": 1,
+   "verify_rounds": 0,
+   "review_rounds": 1,
+   "first_round_findings": 2,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4895,
+   "full_rounds": 1,
+   "verify_rounds": 1,
+   "review_rounds": 2,
+   "first_round_findings": 2,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4893,
+   "full_rounds": 0,
+   "verify_rounds": 0,
+   "review_rounds": 0,
+   "first_round_findings": 0,
+   "first_round_has_behaviour_defect": false,
+   "note": "no review-pr comments found on PR"
+  },
+  {
+   "pr": 4900,
+   "full_rounds": 1,
+   "verify_rounds": 2,
+   "review_rounds": 3,
+   "first_round_findings": 8,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4848,
+   "full_rounds": 1,
+   "verify_rounds": 3,
+   "review_rounds": 4,
+   "first_round_findings": 15,
+   "first_round_has_behaviour_defect": true,
+   "note": null
+  },
+  {
+   "pr": 4880,
+   "full_rounds": 1,
+   "verify_rounds": 3,
+   "review_rounds": 4,
+   "first_round_findings": 13,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4867,
+   "full_rounds": 2,
+   "verify_rounds": 8,
+   "review_rounds": 10,
+   "first_round_findings": 5,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4890,
+   "full_rounds": 1,
+   "verify_rounds": 3,
+   "review_rounds": 4,
+   "first_round_findings": 2,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4826,
+   "full_rounds": 1,
+   "verify_rounds": 8,
+   "review_rounds": 9,
+   "first_round_findings": 12,
+   "first_round_has_behaviour_defect": true,
+   "note": null
+  },
+  {
+   "pr": 4892,
+   "full_rounds": 1,
+   "verify_rounds": 0,
+   "review_rounds": 1,
+   "first_round_findings": 5,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4874,
+   "full_rounds": 1,
+   "verify_rounds": 1,
+   "review_rounds": 2,
+   "first_round_findings": 4,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4885,
+   "full_rounds": 1,
+   "verify_rounds": 0,
+   "review_rounds": 1,
+   "first_round_findings": 7,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4884,
+   "full_rounds": 1,
+   "verify_rounds": 1,
+   "review_rounds": 2,
+   "first_round_findings": 3,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4868,
+   "full_rounds": 1,
+   "verify_rounds": 4,
+   "review_rounds": 5,
+   "first_round_findings": 9,
+   "first_round_has_behaviour_defect": true,
+   "note": null
+  },
+  {
+   "pr": 4886,
+   "full_rounds": 0,
+   "verify_rounds": 0,
+   "review_rounds": 0,
+   "first_round_findings": 0,
+   "first_round_has_behaviour_defect": false,
+   "note": "no review-pr comments found on PR"
+  },
+  {
+   "pr": 4844,
+   "full_rounds": 1,
+   "verify_rounds": 7,
+   "review_rounds": 8,
+   "first_round_findings": 14,
+   "first_round_has_behaviour_defect": true,
+   "note": null
+  },
+  {
+   "pr": 4872,
+   "full_rounds": 1,
+   "verify_rounds": 2,
+   "review_rounds": 3,
+   "first_round_findings": 10,
+   "first_round_has_behaviour_defect": true,
+   "note": null
+  },
+  {
+   "pr": 4883,
+   "full_rounds": 0,
+   "verify_rounds": 0,
+   "review_rounds": 0,
+   "first_round_findings": 0,
+   "first_round_has_behaviour_defect": false,
+   "note": "no review-pr comments found on PR"
+  },
+  {
+   "pr": 4869,
+   "full_rounds": 0,
+   "verify_rounds": 0,
+   "review_rounds": 0,
+   "first_round_findings": 0,
+   "first_round_has_behaviour_defect": false,
+   "note": "no review-pr comments found on PR"
+  },
+  {
+   "pr": 4882,
+   "full_rounds": 0,
+   "verify_rounds": 0,
+   "review_rounds": 0,
+   "first_round_findings": 0,
+   "first_round_has_behaviour_defect": false,
+   "note": "no review-pr comments found on PR"
+  },
+  {
+   "pr": 4875,
+   "full_rounds": 1,
+   "verify_rounds": 0,
+   "review_rounds": 1,
+   "first_round_findings": 0,
+   "first_round_has_behaviour_defect": false,
+   "note": "first round APPROVE, no findings"
+  },
+  {
+   "pr": 4558,
+   "full_rounds": 1,
+   "verify_rounds": 8,
+   "review_rounds": 9,
+   "first_round_findings": 4,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4870,
+   "full_rounds": 1,
+   "verify_rounds": 0,
+   "review_rounds": 1,
+   "first_round_findings": 0,
+   "first_round_has_behaviour_defect": false,
+   "note": "first round APPROVE, no findings"
+  },
+  {
+   "pr": 4859,
+   "full_rounds": 1,
+   "verify_rounds": 2,
+   "review_rounds": 3,
+   "first_round_findings": 4,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4851,
+   "full_rounds": 1,
+   "verify_rounds": 2,
+   "review_rounds": 3,
+   "first_round_findings": 11,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4806,
+   "full_rounds": 0,
+   "verify_rounds": 0,
+   "review_rounds": 0,
+   "first_round_findings": 0,
+   "first_round_has_behaviour_defect": false,
+   "note": "no review-pr comments found on PR"
+  },
+  {
+   "pr": 4857,
+   "full_rounds": 1,
+   "verify_rounds": 0,
+   "review_rounds": 1,
+   "first_round_findings": 8,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4860,
+   "full_rounds": 1,
+   "verify_rounds": 1,
+   "review_rounds": 2,
+   "first_round_findings": 6,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4858,
+   "full_rounds": 1,
+   "verify_rounds": 0,
+   "review_rounds": 1,
+   "first_round_findings": 8,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4854,
+   "full_rounds": 0,
+   "verify_rounds": 0,
+   "review_rounds": 0,
+   "first_round_findings": 0,
+   "first_round_has_behaviour_defect": false,
+   "note": "no review-pr comments found on PR"
+  },
+  {
+   "pr": 4845,
+   "full_rounds": 1,
+   "verify_rounds": 0,
+   "review_rounds": 1,
+   "first_round_findings": 14,
+   "first_round_has_behaviour_defect": true,
+   "note": null
+  },
+  {
+   "pr": 4846,
+   "full_rounds": 1,
+   "verify_rounds": 0,
+   "review_rounds": 1,
+   "first_round_findings": 8,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4795,
+   "full_rounds": 0,
+   "verify_rounds": 0,
+   "review_rounds": 0,
+   "first_round_findings": 0,
+   "first_round_has_behaviour_defect": false,
+   "note": "no review-pr comments found on PR"
+  },
+  {
+   "pr": 4836,
+   "full_rounds": 1,
+   "verify_rounds": 4,
+   "review_rounds": 5,
+   "first_round_findings": 2,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  },
+  {
+   "pr": 4841,
+   "full_rounds": 1,
+   "verify_rounds": 2,
+   "review_rounds": 3,
+   "first_round_findings": 12,
+   "first_round_has_behaviour_defect": false,
+   "note": null
+  }
+ ]
+}

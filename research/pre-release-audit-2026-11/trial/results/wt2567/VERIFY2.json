@@ -1,0 +1,32 @@
+[
+ {
+  "pr": 2567,
+  "finding": "P2 crates/main/src/delegates.rs:198-204 — a repository's role `credential` still picks the delegate's label once any hig",
+  "severity": "P2",
+  "real_at_merge": "yes: roles.* is Merge::Replace, lay() merges objects key by key (lib.rs:591-617); get_segments reports the highest layer holding roles.<name> (lib.rs:294-302); Project/Run sit above Repository (lib.rs:189-208)",
+  "on_main_now": "present: delegates.rs:524-531 same source-only guard; keys.rs:1313-1335 notices but still kept.insert(value) with credential; lay unchanged",
+  "tracked": "none found (#2614/#2642 cover only the notice)",
+  "value": "real-bug-worth-fixing",
+  "evidence": "Repo sets roles.fast {model,credential:work}; person's project config or -c sets roles.fast.model; merged role keeps credential, source is Project/Run, guard skipped, delegate launched on label 'work'."
+ },
+ {
+  "pr": 2567,
+  "finding": "P2 crates/config/src/keys.rs:433-470 / delegates.rs:201 — the repository's role `credential` is ignored silently, with n",
+  "severity": "P2",
+  "real_at_merge": "yes: walk keeps any Role-accepted object with no notice; role_credential returns None silently; configuration.md:118 promises a notice",
+  "on_main_now": "fixed: keys.rs:1313-1335 pushes config_key_ignored for roles.\"<name>\".credential from a repository",
+  "tracked": "#2614 (issue), fixed by PR #2642",
+  "value": "real-but-minor",
+  "evidence": "Doc row promised a notice; merge code emitted none. Fixed after merge in #2642 by a notice in walk."
+ },
+ {
+  "pr": 2567,
+  "finding": "UNDECIDED crates/main/src/delegates.rs:201 — the global file sets `roles.fast = {\"model\":A,\"credential\":\"work\"}` and the",
+  "severity": "UNDECIDED",
+  "real_at_merge": "yes: source of roles.fast is Repository, so role_credential returns None though the merged value holds the global's credential",
+  "on_main_now": "present: delegates.rs:524-531 unchanged",
+  "tracked": "none found",
+  "value": "spec-question",
+  "evidence": "Behaviour confirmed. The doc rules only on the repository's own credential, not on a repo model override cancelling a person-layer label; the same source-only check causes finding 1."
+ }
+]

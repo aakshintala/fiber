@@ -1,0 +1,52 @@
+[
+ {
+  "pr": 1019,
+  "finding": "P2 crates/hub/src/delete.rs:770 + feed.rs:265 \u2014 a feed subscriber never gets `session_left` for a session deleted right ",
+  "severity": "P2",
+  "real_at_merge": "yes",
+  "on_main_now": "fixed",
+  "tracked": "#4494 / PR #4570",
+  "value": "real-but-minor",
+  "evidence": "session.rs close(): drop(log) releases lock before wait_writers/join_clients; delete.rs forget() only removes entry; on_left broadcasts only if entries.remove is Some. Main forget() broadcasts forgot_line (feed.rs:468-475). Narrow window."
+ },
+ {
+  "pr": 1019,
+  "finding": "P2 crates/hub/src/delete.rs:818-819 \u2014 a delete that stops between `remove_file(events.jsonl)` and the end of `remove_dir",
+  "severity": "P2",
+  "real_at_merge": "yes",
+  "on_main_now": "present",
+  "tracked": "none found",
+  "value": "real-but-minor",
+  "evidence": "remove() unlinks events.jsonl then remove_dir_all; session_dir needs find_log. Main log/delete.rs delete_opened unlinks events.jsonl first; lookup_logged/find_logged_session still require EVENTS. Needs crash or mid-removal I/O error."
+ },
+ {
+  "pr": 1019,
+  "finding": "P2 crates/hub/src/delete.rs:768-770 \u2014 when a cascade removes dependents and then fails on a later one, the rejection nam",
+  "severity": "P2",
+  "real_at_merge": "yes",
+  "on_main_now": "present",
+  "tracked": "none found",
+  "value": "real-but-minor",
+  "evidence": "Reverse loop `remove(dir).map_err(io_failed(id))?` after earlier dependents removed; message names one id; CLI returns Err without print_ids. Main delete.rs same `?` loop with io_failed(id)."
+ },
+ {
+  "pr": 1019,
+  "finding": "P2 crates/cli/src/sessions.rs:148-149 \u2014 the ask-on-a-terminal path is tested only through `delete_run` with `terminal: t",
+  "severity": "P2",
+  "real_at_merge": "yes",
+  "on_main_now": "present",
+  "tracked": "none found",
+  "value": "test-gap-only",
+  "evidence": "sessions.rs:75 `stdin.is_terminal()` one-liner; tests inject terminal. Main sessions.rs:141 same; commands/delete.rs pty journeys cover TUI /delete, not the `sessions delete` prompt."
+ },
+ {
+  "pr": 1019,
+  "finding": "UNDECIDED crates/hub/src/feed.rs:265 \u2014 deleting a crashed or waiting session drops its feed entry but tells no live subs",
+  "severity": "UNDECIDED",
+  "real_at_merge": "yes",
+  "on_main_now": "fixed",
+  "tracked": "#4494 / PR #4570",
+  "value": "spec-question",
+  "evidence": "forget() at merge silently removed the entry. Main forget(session, project, Forgotten::Deleted) broadcasts a forgotten line to subscribers, settling it."
+ }
+]

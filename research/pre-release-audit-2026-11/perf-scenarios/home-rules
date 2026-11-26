@@ -1,0 +1,4 @@
+{"decision": "allow", "tool": "delegate_spawn", "prefix": ""}
+{"decision": "allow", "tool": "delegate_fork", "prefix": ""}
+{"decision": "allow", "tool": "delegate_message", "prefix": ""}
+{"decision": "allow", "tool": "shell", "prefix": ""}

@@ -1,0 +1,32 @@
+[
+ {
+  "pr": 4885,
+  "finding": "P2 crates/main/tests/commands/completion.rs:289-297 (CaseTimings, previous_end starts at 0 = spawn) \u2014 driver startup is ",
+  "severity": "P2",
+  "real_at_merge": "yes",
+  "on_main_now": "present",
+  "tracked": "#4873 (parent flake issue), no specific issue",
+  "value": "real-but-minor",
+  "evidence": "CaseTimings.previous_end defaults 0 (completion.rs:283-297); zsh-driver.zsh:11-17 startup precedes case 1; stall there reports 'current case: 1'. Test line 85-97 encodes startup in case 1. Main completion.rs:280-293 same."
+ },
+ {
+  "pr": 4885,
+  "finding": "P2 completion.rs:338, 413-427 \u2014 no test fails if the timeout diagnostic breaks. The only new test calls CaseTimings and ",
+  "severity": "P2",
+  "real_at_merge": "yes",
+  "on_main_now": "present",
+  "tracked": "none found",
+  "value": "test-gap-only",
+  "evidence": "Only test calls CaseTimings/format_case_progress directly (lines 78-99); timeout branch of run_bounded (413-427) is unreached by any test. Main has same single unit test and no injected-timeout test."
+ },
+ {
+  "pr": 4885,
+  "finding": "UNDECIDED completion.rs:381, 414 \u2014 timings reach the main thread only when the reader hits EOF. If a stdout writer outli",
+  "severity": "UNDECIDED",
+  "real_at_merge": "partly",
+  "on_main_now": "present",
+  "tracked": "none found",
+  "value": "spec-question",
+  "evidence": "capture_stdout returns timings only at EOF (324-340); receive_stdout waits MUST_SUCCEED_WITHIN. Only a stdout holder escaping both group and tag kills triggers it; diagnostic-only. Same on main 321-419."
+ }
+]

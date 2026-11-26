@@ -1,0 +1,12 @@
+[
+ {
+  "pr": 2177,
+  "finding": "UNDECIDED crates/extensions/src/host/tool.rs:116 — an empty Lua table nested inside `args` (`{ filter = {} }`) reaches t",
+  "severity": "UNDECIDED",
+  "real_at_merge": "yes (behaviour): tool.rs:122-127 maps only a top-level empty array to {}; host.rs:617-633 to_json turns any empty table into []. But docs/extensions.md:866-868 already states this convention for hook arguments",
+  "on_main_now": "present: tool.rs:82,108,126-127 unchanged; docs/extensions.md:1272-1273 keeps the same 'empty table inside comes back as a list' rule",
+  "tracked": "none found",
+  "value": "spec-question",
+  "evidence": "Matches the project-wide Lua-to-JSON rule the docs state for hooks: a top-level empty table is an object, a nested one a list. host.tool docs just don't repeat it. Deliberate, not a defect."
+ }
+]

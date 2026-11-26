@@ -1,0 +1,22 @@
+[
+ {
+  "pr": 4579,
+  "finding": "P2 crates/extensions/src/providers.rs:791-818 (add_lua) \u2014 a switched-off Databricks provider with a warm model cache sti",
+  "severity": "P2",
+  "real_at_merge": "yes: providers.rs:789-799 cached path skips has_credential; lua_provider.rs:316-323 serves cache; admit (624) emits model_omitted; retain_credentialed runs after add_session (cli/models.rs:215-218); logout keeps cache (docs/extensions.md:1989)",
+  "on_main_now": "present (moved): providers.rs:579-589 load now runs admit on every cached list and emits, with no credential gate; add_lua 863-868 still skips presence on cache",
+  "tracked": "none found (related: #3704 logged-out shows no models, #4337 original notice)",
+  "value": "real-but-minor",
+  "evidence": "Logged-out Databricks with warm cache emits per-endpoint model_omitted notices from fiber models/session start, though docs say a credential-less provider shows no models. Noise only; list itself is filtered."
+ },
+ {
+  "pr": 4579,
+  "finding": "UNDECIDED docs/model-routing.md \"Model discovery\" \u2014 the doc says Fiber drains every marked entry into a `model_omitted` ",
+  "severity": "UNDECIDED",
+  "real_at_merge": "yes: load (providers.rs:550-555) drains cached marks silently relying on add_lua; ModelLists::Cached (cli/model_lists.rs:174-176) never calls add_lua, so no notice",
+  "on_main_now": "fixed: load emits via admit + record_notices (providers.rs:576-589); docs/model-routing.md:929-931 says load reports each model_omitted once",
+  "tracked": "#4662 (issue, closed), fixed by PR #4706 'Report omitted models on every startup path'",
+  "value": "real-bug-worth-fixing",
+  "evidence": "Triage filed #4662 for exactly this gap (cached readers skip add_lua, marks drained silently) and ruled one notice on every startup path; fixed by #4706."
+ }
+]

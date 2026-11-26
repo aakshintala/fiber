@@ -1,0 +1,32 @@
+[
+ {
+  "pr": 2399,
+  "finding": "P2 crates/tui/src/app.rs:560 (pass_line, `stream_closed | session_left`) — a delegate that dies before its opening fold ",
+  "severity": "P2",
+  "real_at_merge": "yes: app.rs:543-590 ends Until only on seq>=last, stream_closed or session_left; closed.rs:55 running() false for a crashed session (socket refuses); feed.rs:537 skips delegates; needs() app.rs:861 and fetch_page find.rs:444 return nothing while pass_open",
+  "on_main_now": "present: attach_fold.rs:527-660 same end conditions; closed.rs:57/75 still probes running; feed.rs:736 still skips delegates; pass_open now gates more (app.rs:1540,1560,1588, copy.rs:116, find.rs:491, app_mouse.rs:545)",
+  "tracked": "none found (related open #4897, session exit before session_started; #4444/#4506 widened pass_open gating)",
+  "value": "real-bug-worth-fixing",
+  "evidence": "Crashed delegate: relay EOF, running() false so no stream_closed; feed never emits session_left for delegates. Pass::Until stays until disconnect, and every pass_open() gate (paging, search, copy, scroll) stays shut for all sessions."
+ },
+ {
+  "pr": 2399,
+  "finding": "P2 crates/tui/src/event_loop/hub.rs:254 (`Connection::answer`) — only `stream_reopened` ends a history wait. A fresh `fu",
+  "severity": "P2",
+  "real_at_merge": "partly: hub.rs:243-257 ends the wait only on its answer or stream_reopened; another session's full ack and fold are stashed. Trigger needs a subscribe in flight (items.rs:396 close_item lowers to summary after) while page_in sends history; stash lasts only until A's answer",
+  "on_main_now": "present: event_loop/hub.rs:448-470 still ends only on the answer or a target stream_reopened; wait now capped by HISTORY_WAIT deadline (hub.rs:427,439), no gate on an in-flight subscribe in needs() app.rs:1540",
+  "tracked": "none found (parent #2354 closed by this PR)",
+  "value": "real-but-minor",
+  "evidence": "The stash is bounded by the race window until A's answer arrives (and on main by HISTORY_WAIT), not unbounded. Narrow timing: a subscribe in flight while history goes out. It is a memory/latency spike, not a hang."
+ },
+ {
+  "pr": 2399,
+  "finding": "UNDECIDED crates/hub/src/relay.rs:420 (`attach`, reopen=false) — a rewind redirect re-subscribes the connection at `full",
+  "severity": "UNDECIDED",
+  "real_at_merge": "partly: rewind.rs:258-267 follow() calls attach(..., replay) with reopen=false; relay.rs:401 doc says redirect sends no stream_reopened and the ack is muted, so the fold has no boundary. TUI at merge had no rewind flow of its own, so impact unclear",
+  "on_main_now": "present (hub side): rewind.rs:341-349 and relay.rs:1532-1560 unchanged with reopen=false; TUI now subscribes full to the new session itself (rewind/send.rs:358), whose own ack bounds a pass",
+  "tracked": "none found",
+  "value": "spec-question",
+  "evidence": "The behaviour is deliberate and documented in the relay comment. Ticket #2354 scoped stream_reopened to resume and reconnect. Main TUI sends its own full subscribe after rewind, which mostly covers the boundary."
+ }
+]

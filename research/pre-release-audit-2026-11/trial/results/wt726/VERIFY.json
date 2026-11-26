@@ -1,0 +1,32 @@
+[
+ {
+  "pr": 726,
+  "finding": "P2 crates/loop/src/conversation.rs:163 \u2014 no test fails if the rebuild path (`Rendered::push`) stops passing `completed.a",
+  "severity": "P2",
+  "real_at_merge": "yes",
+  "on_main_now": "present",
+  "tracked": "none found",
+  "value": "test-gap-only",
+  "evidence": "Rebuild path (conversation.rs Rendered) passes completed.artifact today; overflow tests in tests/handoff.rs are live-only. Main compaction tests compare rebuilt conversation, not carry.artifacts. Overwrite only under hypothetical regression."
+ },
+ {
+  "pr": 726,
+  "finding": "UNDECIDED crates/loop/src/handoff.rs:290 \u2014 `step_ran` is set by `run_handoff` only, not by `handoff_from_tools`. So a to",
+  "severity": "UNDECIDED",
+  "real_at_merge": "yes",
+  "on_main_now": "present",
+  "tracked": "#896 (reverse direction, closed)",
+  "value": "spec-question",
+  "evidence": "handoff_from_tools never sets step_ran; overflowed checks it. Main run_tool_compaction sets step_ran only when not Completed; test a_result_carried_past_a_tool_compaction... still asserts the double compaction."
+ },
+ {
+  "pr": 726,
+  "finding": "UNDECIDED crates/loop/src/handoff.rs:296 \u2014 when the overflow note request fails for any reason (rate_limited with retry_",
+  "severity": "UNDECIDED",
+  "real_at_merge": "yes",
+  "on_main_now": "present",
+  "tracked": "none found",
+  "value": "spec-question",
+  "evidence": "overflowed(): Outcome::Failed => ended(Failed, Some(over)). Same on main compaction.rs; docs/compaction.md now says an overflow compaction's turn fails context_overflow whatever failed, and errors.md excludes note requests. Settled as intended."
+ }
+]

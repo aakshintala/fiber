@@ -1,0 +1,22 @@
+[
+ {
+  "pr": 2177,
+  "finding": "P2 crates/extensions/src/lua/host_calls.rs:278 \u2014 `host.tool` from an extension's command fails with \"host.tool: called o",
+  "severity": "P2",
+  "real_at_merge": "yes: host_calls.rs:272-283 Target::Command(_) => None, so host.tool from a command errors; docs/extensions.md:404-408 and 1086-1088 (pre-existing) say commands may run tools",
+  "on_main_now": "fixed: host_calls.rs:448-457 anchors via admission::tool_anchor(ran_by); main/tests/extension_host/extension_commands.rs:75 tests a command's host.tool",
+  "tracked": "#2186 'Run host.tool from a command as an inner call' (closed 2026-10-12), later #4691/#4772 for process commands",
+  "value": "real-but-minor",
+  "evidence": "Doc-vs-code gap at merge was real, but PR was 'Part of #556' and the command anchor was the planned next step, delivered by #2186 shortly after."
+ },
+ {
+  "pr": 2177,
+  "finding": "UNDECIDED crates/tui/src/turn.rs:740 \u2014 the TUI never reads `ran_by`, so an inner call is drawn as an ordinary tool card ",
+  "severity": "UNDECIDED",
+  "real_at_merge": "yes: no ran_by reference anywhere under crates/tui/src at the merge commit; inner calls draw as ordinary cards; no doc rule",
+  "on_main_now": "fixed: tui/src/turn.rs, turn/group.rs and tool_group_nesting_tests.rs read ran_by and nest inner calls",
+  "tracked": "#3753 'TUI: nest inner calls under their outer call in the ledger' (closed 2026-10-31)",
+  "value": "spec-question",
+  "evidence": "No rule existed at merge for drawing inner calls; owner later specified nesting in #3753, now implemented. A presentation gap, not a defect in this PR."
+ }
+]

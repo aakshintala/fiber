@@ -1,0 +1,62 @@
+[
+ {
+  "pr": 1446,
+  "finding": "crates/extensions/src/lua/tool.rs:780 (schema) \u2014 a tool that takes no arguments, written the ordinary way as `input_sche",
+  "severity": "P1",
+  "real_at_merge": "partly: host.rs to_json maps empty table to [] and tool.rs:184 schema() checks only type, but at merge tools() was unwired so nothing reached a provider",
+  "on_main_now": "present: lua/tool.rs:266 schema() unchanged, host.rs:1024 to_json same; tools now wired (hooks.rs:1707, session_command.rs:847); providers pass schema through (strict.rs never rewrites)",
+  "tracked": "none found (#555 is the feature ticket)",
+  "value": "real-bug-worth-fixing",
+  "evidence": "On main, a Lua fiber.tool with properties = {} sends \"properties\":[] in every request. Repo's own fixtures (lazy_commands.rs:432) use this form. Workaround: omit properties. Provider rejection inferred, not run."
+ },
+ {
+  "pr": 1446,
+  "finding": "crates/extensions/src/extension_tools.rs:116 \u2014 a `run` past its timeout that the hook cannot stop fails `tool_error`, bu",
+  "severity": "P2",
+  "real_at_merge": "yes: extension_tools.rs:110-113 maps only Error::Timeout to timeout; hub.rs:734 judge returns Error::Abandoned for an unstoppable running call; doc comment line 96 says timeout",
+  "on_main_now": "present: extension_tools.rs:277-280 output_from_returned same mapping; hub.rs:1042 still returns Abandoned",
+  "tracked": "none found",
+  "value": "real-but-minor",
+  "evidence": "Wrong error code only (tool_error vs timeout) for a run stuck in a long C call; call still fails and extension stops."
+ },
+ {
+  "pr": 1446,
+  "finding": "crates/extensions/src/lua/tool.rs:851 \u2014 nothing in the product calls `LuaExtension::tools()` (grep for `LuaTool` and `.t",
+  "severity": "P2",
+  "real_at_merge": "yes: no caller of LuaTool or .tools() outside crates/extensions at merge; PR is part 1",
+  "on_main_now": "fixed: hooks.rs:1707 tools() feeds main session_command.rs:847, reload.rs:990, mcp_servers.rs:468",
+  "tracked": "#555 (ticket, closed; later parts wired it)",
+  "value": "test-gap-only",
+  "evidence": "Planned staging, not a defect; wiring landed later."
+ },
+ {
+  "pr": 1446,
+  "finding": "crates/extensions/src/lua/tool.rs:793 \u2014 docs/tools.md says an extension's effects may set `always_reviewed` and return `",
+  "severity": "UNDECIDED",
+  "real_at_merge": "yes: effects_from refuses keys other than effects/paths/reversible; output_from refuses hosts_surfaced; docs/tools.md:24-37 says any tool, extension included",
+  "on_main_now": "changed-unclear: hosts and hosts_surfaced now accepted (tool.rs:357, extension_tools.rs:329); always_reviewed still hardcoded false (extension_tools.rs:126) though tools.md:27 says extensions may set it",
+  "tracked": "none found",
+  "value": "spec-question",
+  "evidence": "Doc conflict partly resolved by later work; always_reviewed for extensions still unimplemented."
+ },
+ {
+  "pr": 1446,
+  "finding": "extension_tools.rs:119 \u2014 once a Lua extension is abandoned and stopped, its tool calls fail `tool_error`. errors.md defi",
+  "severity": "UNDECIDED",
+  "real_at_merge": "partly: Stopped/Abandoned map to tool_error; but errors.md row says 'died twice', a process-crash case, not Lua abandonment",
+  "on_main_now": "present: no producer of ErrorCode::ExtensionUnavailable on main (only matched in jobs/delegate/message/mod.rs:550)",
+  "tracked": "none found",
+  "value": "spec-question",
+  "evidence": "extension_unavailable defined but never produced; whether it covers Lua abandonment is a spec call."
+ },
+ {
+  "pr": 1446,
+  "finding": "tool.rs:685 \u2014 registering the same name twice in one extension silently keeps the second registration. This matches `fib",
+  "severity": "UNDECIDED",
+  "real_at_merge": "yes: tool.rs:85-89 functions.set and BTreeMap insert overwrite with no problem pushed",
+  "on_main_now": "present: lua/tool.rs register closure unchanged; process path now refuses (process/registry.rs:380 'already registered'), so the two backends differ",
+  "tracked": "none found",
+  "value": "spec-question",
+  "evidence": "Lua silently overwrites, process extensions refuse; docs/extensions.md:352 mentions duplicate registration failing load generally."
+ }
+]

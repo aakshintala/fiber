@@ -1,0 +1,1 @@
+{"steps":[{"text":["a","b","c"],"every_ms":2500,"tool_calls":[{"name":"shell","arguments":{"command":"python3 -c \"import time; time.sleep(25)\""}}]},{"text":"Done."}]}

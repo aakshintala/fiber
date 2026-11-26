@@ -1,0 +1,82 @@
+[
+ {
+  "pr": 2942,
+  "finding": "crates/tui/src/app/commands.rs:858 \u2014 `/feedback` never shows the person a usable link. The answer is pushed as one `feed",
+  "severity": "P1",
+  "real_at_merge": "yes: on_feedback pushes 'Wrote <path>\\n<link>'; notice_row (notice_rows.rs:273) replaces newline, cuts with one ellipsis; 'feedback' absent from notices.rs KINDS so it fades after 10 s",
+  "on_main_now": "present: commands.rs:1483-1490 same push; notice_row_and_copy (notice_rows.rs:496) still one cut row, copy text excludes the cut part; still not in KINDS",
+  "tracked": "none found",
+  "value": "real-bug-worth-fixing",
+  "evidence": "Any successful /feedback in the TUI: link base alone is 48 chars, typical link hundreds+, so it is cut on normal widths and fades. File path usually visible; fiber feedback in a shell works."
+ },
+ {
+  "pr": 2942,
+  "finding": "crates/cli/src/feedback.rs:116 \u2014 `install_method` writes \"install.sh\" whenever the version contains `(`. But build.rs se",
+  "severity": "P1",
+  "real_at_merge": "yes: feedback.rs:96-101 keys on '('; crates/main/build.rs sets FIBER_COMMIT whenever git rev-parse HEAD succeeds, so any clone build reports install.sh",
+  "on_main_now": "fixed: install_method(version, release) at feedback.rs:109 now reports 'source' without the release marker",
+  "tracked": "#4686, fixed by merged PR #4896",
+  "value": "real-but-minor",
+  "evidence": "Mislabelled diagnostic line in a report, not a P1; fixed and tracked."
+ },
+ {
+  "pr": 2942,
+  "finding": "crates/tui/src/app/commands.rs:856 \u2014 a successful answer runs `draft.clear()` on whatever draft is there when it lands. ",
+  "severity": "P2",
+  "real_at_merge": "yes: run_feedback leaves draft as typed; writer runs on a thread (tui/feedback.rs); on_feedback Ok clears the draft whenever it lands; Enter again re-runs /feedback",
+  "on_main_now": "present: run_feedback commands.rs:499 and on_feedback_inner commands.rs:1486 unchanged",
+  "tracked": "none found",
+  "value": "real-but-minor",
+  "evidence": "Needs typing during a slow write (hub probe up to STATUS_WITHIN 15 s); loses typed text or makes a duplicate report."
+ },
+ {
+  "pr": 2942,
+  "finding": "crates/cli/src/feedback.rs:138 \u2014 the fallback body carries the whole description, so a description of about 700 spaced c",
+  "severity": "P2",
+  "real_at_merge": "yes: issue_link fallback encodes full description with no cap, contradicting 'At most 2000'; main.rs feedback prints only path and link, so the attach instruction is only inside the link",
+  "on_main_now": "present: feedback.rs:139-150 identical",
+  "tracked": "none found",
+  "value": "real-but-minor",
+  "evidence": "Long or non-ASCII description yields an over-limit link; exact 700-char threshold not checked but unbounded growth is clear."
+ },
+ {
+  "pr": 2942,
+  "finding": "crates/cli/src/doctor.rs:225 \u2014 `capture` drops the `err` buffer, so doctor's startup notices reach neither the report no",
+  "severity": "P2",
+  "real_at_merge": "yes: capture passes a local err Vec to run(), which writes startup notices there (doctor.rs:63), then discards it",
+  "on_main_now": "present: capture still drops err (doctor.rs:240-253); run still writes notices to err (doctor.rs:79)",
+  "tracked": "none found",
+  "value": "real-but-minor",
+  "evidence": "Startup notices such as config warnings are silently absent from feedback and /doctor capture."
+ },
+ {
+  "pr": 2942,
+  "finding": "crates/main/src/main.rs:910 \u2014 no test goes through the production `terminal()` writer closure. The TUI tests all inject ",
+  "severity": "P2",
+  "real_at_merge": "yes: TUI tests inject stub WriteFeedback; crates/main/tests/feedback.rs covers only the CLI door",
+  "on_main_now": "present: no /feedback in crates/main/tests on main",
+  "tracked": "none found",
+  "value": "test-gap-only",
+  "evidence": "Coverage gap only."
+ },
+ {
+  "pr": 2942,
+  "finding": "crates/main/src/main.rs:883 \u2014 after the person switches workspace on home, `/feedback` still reports the launch director",
+  "severity": "UNDECIDED",
+  "real_at_merge": "yes: feedback_workspace cloned at launch and used for cwd and doctor",
+  "on_main_now": "present: main.rs:1249,1306 still capture launch workspace, with comment saying it is deliberate",
+  "tracked": "none found",
+  "value": "spec-question",
+  "evidence": "Deliberate per code comment; whether it should follow the home workspace is a spec choice."
+ },
+ {
+  "pr": 2942,
+  "finding": "docs/user/reporting.md:3 \u2014 the report goes into a public issue body with PATH, home paths and the newest log error, and ",
+  "severity": "UNDECIDED",
+  "real_at_merge": "partly: link body carries full report when short; GitHub issues/new does require sign-in, so 'cannot sign in' wording is off",
+  "on_main_now": "changed-unclear: diagnostics now kept out of the link and doc says read the file before attaching; 'cannot sign in' sentence remains",
+  "tracked": "related #2863 (closed)",
+  "value": "spec-question",
+  "evidence": "Privacy review step is a product decision; sign-in wording is a doc inaccuracy."
+ }
+]

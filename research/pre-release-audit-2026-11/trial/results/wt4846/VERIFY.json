@@ -1,0 +1,32 @@
+[
+ {
+  "pr": 4846,
+  "finding": "P2 crates/log/src/scan.rs:62-76 (reached from crates/main/src/keeper_child.rs:268-327) \u2014 the takeover now has to spawn a",
+  "severity": "P2",
+  "real_at_merge": "partly",
+  "on_main_now": "present",
+  "tracked": "none found (#4351 is the parent flake issue; #4831 an unmerged earlier attempt)",
+  "value": "real-but-minor",
+  "evidence": "scan.rs:535-549 spawn Err->Error::Io; keeper_child.rs:326 Err returns before tool_stops queued after HoldLog (keeper.rs:111-117). Delete-race NotFound already reachable pre-PR via is_file check; only spawn failure is new and rare. Main keeper_child.rs:372 same."
+ },
+ {
+  "pr": 4846,
+  "finding": "UNDECIDED crates/jobs/src/keeper.rs:111-116 \u2014 `lifeline_eof` puts `HoldLog` before the tool stops, so tool-call commands",
+  "severity": "UNDECIDED",
+  "real_at_merge": "yes",
+  "on_main_now": "present",
+  "tracked": "none found",
+  "value": "spec-question",
+  "evidence": "keeper.rs:111-117 pushes HoldLog before tool_stops; apply blocks in lock_file_until up to TAKEOVER_LOCK_WAIT (5s) first. Docs say tool calls end with the crash, no timing. Unchanged on main keeper.rs:104-117."
+ },
+ {
+  "pr": 4846,
+  "finding": "UNDECIDED crates/main/src/keeper_child.rs:325 \u2014 when the 5 s deadline wins, `lock_lost` exits and leaves adopted jobs ru",
+  "severity": "UNDECIDED",
+  "real_at_merge": "yes",
+  "on_main_now": "present",
+  "tracked": "none found",
+  "value": "spec-question",
+  "evidence": "Ok(None) -> lock_lost (keeper.rs lock_lost clears processes, Exit), adopted jobs left unsupervised. Main keeper_child.rs:176 still 'not a measured value', lock_lost unchanged at keeper.rs:183-189."
+ }
+]

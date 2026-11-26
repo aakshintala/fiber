@@ -1,0 +1,1 @@
+{"model": "scripted/parent.json", "reviewer": {"model": "scripted/rev.json"}, "roles": {"worker": "fiber:scripted/child.json", "mid": "fiber:scripted/mid.json"}}

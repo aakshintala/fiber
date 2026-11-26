@@ -1,0 +1,42 @@
+[
+ {
+  "pr": 4428,
+  "finding": "P1 crates/tui/src/app/model_picker.rs:45-47 \u2014 `has_credential = logged_out.is_empty()` treats *any* keyless installed pr",
+  "severity": "P1",
+  "real_at_merge": "yes",
+  "on_main_now": "fixed",
+  "tracked": "issues #4576/#4605, fixed by PR #4604",
+  "value": "real-bug-worth-fixing",
+  "evidence": "Merge: has_credential = logged_out.is_empty(), and model_list.rs lists every installed provider that has no key, so a mixed install reads as no credential. Main model_picker.rs:50 also counts any model-listed provider that is not logged out."
+ },
+ {
+  "pr": 4428,
+  "finding": "P1 crates/tui/src/app/config_views.rs:853-857 \u2014 `first_run_no_credential` is cleared only when the *automatic* login sav",
+  "severity": "P1",
+  "real_at_merge": "yes",
+  "on_main_now": "present",
+  "tracked": "none found",
+  "value": "real-but-minor",
+  "evidence": "first_run_no_credential is cleared only at config_views.rs:857 when automatic_login is set; a blocker click (home.rs:1285) opens a plain Login. Enter then reopens the automatic login, which clears the flag once it saves, so it is recoverable. Same on main (lines 916, 1517)."
+ },
+ {
+  "pr": 4428,
+  "finding": "P2 crates/tui/src/app/config_views.rs:614-621 \u2014 on a remote terminal the reader is dropped, so Esc closing any login cal",
+  "severity": "P2",
+  "real_at_merge": "yes",
+  "on_main_now": "present",
+  "tracked": "none found",
+  "value": "real-but-minor",
+  "evidence": "On Esc from any Login, set_home_blockers(lines) replaces all blockers; remote.rs drops doctor_blocker, so the hub start-rejection lines (home.rs:865) are wiped. The rejection is also shown as a notice. Same on main config_views.rs:632-640."
+ },
+ {
+  "pr": 4428,
+  "finding": "UNDECIDED crates/tui/src/app/model_picker.rs:48-61 \u2014 if the startup catalogue read errs, `first_run_pending` stays armed",
+  "severity": "UNDECIDED",
+  "real_at_merge": "yes",
+  "on_main_now": "present",
+  "tracked": "none found",
+  "value": "spec-question",
+  "evidence": "first_run = first_run_pending && result.is_ok(): an Err leaves pending armed, and a later Ok read opens the login or picker with no on_home check. Hard to reach in practice. Same on main model_picker.rs:57."
+ }
+]

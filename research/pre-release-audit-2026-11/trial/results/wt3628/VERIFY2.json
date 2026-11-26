@@ -1,0 +1,32 @@
+[
+ {
+  "pr": 3628,
+  "finding": "P2 crates/main/src/model_list.rs:100 \u2014 the claim \"a value that is not a host still raises its per-model notice at launch",
+  "severity": "P2",
+  "real_at_merge": "no: crates/main/tests/model_picker_keys.rs:386-470 an_unset_host_notice_shows_model_unconfigured_not_model_invalid is a pty test with workspace='x/y' asserting the model_unconfigured row at launch; added in this PR's diff",
+  "on_main_now": "code-gone (n/a): the test still exists at crates/main/tests/providers/model_picker_keys.rs:397",
+  "tracked": "none found",
+  "value": "false-positive",
+  "evidence": "The claimed missing binary-level pty test for a non-host value exists in the same PR (model_picker_keys.rs:386) and asserts the model_unconfigured row through the terminal."
+ },
+ {
+  "pr": 3628,
+  "finding": "UNDECIDED crates/routing/src/lua_providers.rs:81 / crates/main/src/parts.rs:282-284 \u2014 a session started from the termina",
+  "severity": "UNDECIDED",
+  "real_at_merge": "yes: routing/lua_providers.rs:77-83 calls ungrouped fill_placeholders (providers.rs:819-829, one notice per model); parts.rs:282-284 adds them to startup_notices, spliced into mcp.notices (498); tui app.rs:2435 pushes each",
+  "on_main_now": "fixed (flood): lua_providers.rs:79-83 still per-model, but TUI groups a batch by code (tui/src/app_focus.rs:115 group_notices) and loop process.rs:43 groups, per #3679",
+  "tracked": "#3679 (closed, one notice per code per pass, names model_unconfigured's remaining per-model cases)",
+  "value": "real-but-minor",
+  "evidence": "Session start re-raised one model_unconfigured per unconfigured model across all providers; owner then ruled one notice per code per pass (#3679), which main implements via group_notices."
+ },
+ {
+  "pr": 3628,
+  "finding": "UNDECIDED crates/tui/src/model_picker/filter.rs:42 \u2014 the ticket says the filtered count works \"as `fiber models` does\" (",
+  "severity": "UNDECIDED",
+  "real_at_merge": "partly: filter.rs:33-47 count uses picker per-word subsequence over provider/id/name; cli/models.rs uses substring of provider/model. #3582 says 'counts only the left-out models that match the query, as fiber models does' - ambiguous about rule",
+  "on_main_now": "present: tui/src/model_picker/filter.rs matches_left_out unchanged",
+  "tracked": "none found (source ticket #3582)",
+  "value": "spec-question",
+  "evidence": "Picker count agrees with picker rows, which is the coherent choice; ticket phrase likely means 'filtered like fiber models', not same matcher. Divergence real but no defect shown."
+ }
+]

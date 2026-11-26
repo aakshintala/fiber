@@ -1,0 +1,42 @@
+[
+ {
+  "pr": 4329,
+  "finding": "P1 crates/loop/src/jobs.rs:544-546 (and :523-525), crates/loop/src/resume.rs:708 — a settled delegate's final message re",
+  "severity": "P1",
+  "real_at_merge": "yes: mark_orphans appends DelegateFinished via self.write/log.append (jobs.rs:523-546) with no deliver_finish/ask_delivery; docs/extensions.md:1142 says after_tool runs on every delegate delivery",
+  "on_main_now": "present: resume.rs:686-711 settle_orphans builds the finish raw, comment 'No delivery hook runs on a settle'; jobs.rs:516-553 unchanged; extensions.md:1205 still promises the hook",
+  "tracked": "none found (#4250 is the PR's own ticket; #4313 worktree only)",
+  "value": "real-but-minor",
+  "evidence": "Trigger needs an unclean parent death (SIGKILL/OOM/power) after the delegate wrote fiber_exited with a final message but before the parent appended job_completed, plus an after_tool redaction hook; then fiber --resume. Crash-only path, so P2 not P1."
+ },
+ {
+  "pr": 4329,
+  "finding": "P2 crates/loop/src/resume.rs:724-737 — `settle_exit` treats the log's latest `fiber_started` as this job's run. A `deleg",
+  "severity": "P2",
+  "real_at_merge": "yes: settle_exit takes last fiber_started's exit with no run check; registry/runs.rs:297-311 queues job_started for run N+1 under the same job_id after runner.spawn returns, before the child logs anything",
+  "on_main_now": "present: resume.rs:733-746 settle_exit unchanged, settle_orphans does no run-count comparison",
+  "tracked": "none found",
+  "value": "real-but-minor",
+  "evidence": "invocation.md: lifeline/signal before fiber_started writes no durable event. Parent killed in the child-startup window leaves run N's fiber_exited as latest, settling run N+1 completed with the old answer."
+ },
+ {
+  "pr": 4329,
+  "finding": "P2 crates/loop/src/jobs.rs:545 — the log can hold this job's `delegate_finished` with no `job_completed` (a crash betwee",
+  "severity": "P2",
+  "real_at_merge": "yes, narrow: write_end appends delegate_finished then job_completed separately (jobs.rs:476-480); settle pair also two appends; settle never checks for an existing finish",
+  "on_main_now": "present: settle_orphans/mark_orphans have no dedupe; conversation.rs:412/620 renders every delegate_finished",
+  "tracked": "none found",
+  "value": "real-but-minor",
+  "evidence": "Needs a crash between two consecutive log appends (microsecond window); the next resume writes a second delegate_finished and the rebuild sends the final message twice."
+ },
+ {
+  "pr": 4329,
+  "finding": "UNDECIDED crates/main/tests/delegates.rs:10439 — a delegate shut down because its lifeline closed (exit 129, no final me",
+  "severity": "UNDECIDED",
+  "real_at_merge": "yes: settle_completed maps a bare code 129 to failed/nonzero_exit; the binary test asserts it",
+  "on_main_now": "present: crates/main/tests/delegation/delegates.rs:10880 asserts nonzero_exit",
+  "tracked": "none found",
+  "value": "spec-question",
+  "evidence": "delegates.md says to settle any latest run that has fiber_exited, so the behaviour follows the doc; errors.md `orphaned` (keeper died) arguably fits a lifeline shutdown better. Owner call."
+ }
+]

@@ -1,0 +1,1 @@
+{"steps":[{"tool_calls":[{"name":"delegate_spawn","arguments":{"description":"w","prompt":"p","model":"worker"}}]},{"tool_calls":[{"name":"shell","arguments":{"command":"python3 -c \"import time; time.sleep(30)\""}}]},{"text":"Done."}]}
