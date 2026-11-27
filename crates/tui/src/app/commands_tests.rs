@@ -1878,6 +1878,8 @@ fn feedback_sends_the_description_and_lands_path_plus_link() {
     );
     // The draft stays until the worker's answer lands.
     assert_eq!(app.draft(), "/feedback the sound");
+    let screen = screen_text(&app);
+    assert!(screen.contains("/feedback the sound"), "{screen}");
     app.on_feedback(Ok(feedback_done()));
     assert!(app.draft().is_empty());
     assert_eq!(
@@ -1897,6 +1899,8 @@ fn feedback_failure_keeps_the_draft_with_the_error() {
     app.on_feedback(Err("the write failed".to_owned()));
     assert_eq!(app.draft(), "/feedback the sound");
     assert_eq!(app.notice(), Some("the write failed"));
+    let screen = screen_text(&app);
+    assert!(screen.contains("the write failed"), "{screen}");
 }
 
 #[test]
@@ -1935,6 +1939,8 @@ fn feedback_second_submission_wins_over_the_first() {
     app.draft.paste("/feedback one");
     app.on_feedback(Ok(feedback_done()));
     assert_eq!(app.draft(), "/feedback one");
+    let screen = screen_text(&app);
+    assert!(screen.contains("/feedback one"), "{screen}");
 }
 
 #[test]
@@ -1955,10 +1961,12 @@ fn feedback_fallback_notice_tells_the_person_to_attach_the_file() {
             .contains("The full report was too long for a link: attach the report file.")
     );
     let screen = screen_text(&app);
+    assert!(screen.contains("Wrote /w/fiber-feedback-7.md"), "{screen}");
     assert!(
         screen.contains("https://example.test/new?title=x"),
         "{screen}"
     );
+    assert!(!screen.contains("attach the report file"), "{screen}");
 }
 
 #[test]
