@@ -382,3 +382,11 @@ crates/config/src/keys.rs	fiber-4973	plan	2026-11-27T02:00:52Z	Amoghs-MacBook-Pr
 crates/config/src/keys_tests.rs	fiber-4973	plan	2026-11-27T02:00:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/delegates.rs	fiber-4973	plan	2026-11-27T02:00:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/delegates_tests.rs	fiber-4973	plan	2026-11-27T02:00:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/event_loop/hub.rs	fiber-4976	plan	2026-11-27T02:03:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4976-feedback-draft-and-link	
+crates/tui/src/event_loop/attach_tests.rs	fiber-4976	plan	2026-11-27T02:03:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4976-feedback-draft-and-link	
+crates/tui/src/event_loop/batch_tests.rs	fiber-4976	plan	2026-11-27T02:03:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4976-feedback-draft-and-link	
+crates/tui/src/event_loop_image_tests.rs	fiber-4976	plan	2026-11-27T02:03:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4976-feedback-draft-and-link	
+crates/tui/src/event_loop_loop_tests.rs	fiber-4976	plan	2026-11-27T02:03:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4976-feedback-draft-and-link	
+crates/tui/src/install_worker_tests.rs	fiber-4976	plan	2026-11-27T02:03:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4976-feedback-draft-and-link	
+crates/tui/src/link_tests.rs	fiber-4976	plan	2026-11-27T02:03:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4976-feedback-draft-and-link	
+crates/tui/src/viewer_tests.rs	fiber-4976	plan	2026-11-27T02:03:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4976-feedback-draft-and-link	
