@@ -283,6 +283,19 @@ fn the_link_clips_on_a_character_boundary_with_ellipsis() {
 }
 
 #[test]
+fn the_link_clip_keeps_an_exact_fit_before_the_marker() {
+    // `clip_description`'s boundary: a character fitting exactly
+    // (`used + width + marker_len == budget`) is kept before the marker,
+    // and a following character one byte over budget is dropped.
+    let (kept, clipped) = super::clip_description(&"a".repeat(20), 10);
+    assert!(clipped);
+    assert_eq!(kept, "a…");
+    let (kept, clipped) = super::clip_description(&"aé".repeat(10), 10);
+    assert!(clipped);
+    assert_eq!(kept, "a…");
+}
+
+#[test]
 fn the_link_four_byte_title_and_empty_description_still_fit() {
     // A 120-character title of four-byte characters with an empty
     // description: the fallback still carries the whole title and the
