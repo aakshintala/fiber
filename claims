@@ -535,3 +535,4 @@ crates/main/tests/support/mod.rs	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse
 crates/main/tests/support/pty.rs	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/providers/quota_fetch_session.rs	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/check	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/delegation/delegates.rs	fiber-4954	plan	2026-11-27T08:04:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
