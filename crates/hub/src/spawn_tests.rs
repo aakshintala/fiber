@@ -629,6 +629,10 @@ fn starter_with(exe: PathBuf, source: VariablesSource, root: &fakes::TempDir) ->
         Environments::ready(Environment {
             vars: vec![
                 (OsString::from("MARK"), OsString::from("start")),
+                (
+                    OsString::from("FIBER_SESSION_ID"),
+                    OsString::from("s_stale"),
+                ),
                 (OsString::from("FIBER_HOME"), OsString::from("/h")),
                 (OsString::from("PATH"), OsString::from("/usr/bin:/bin")),
                 (
@@ -646,18 +650,38 @@ fn starter_with(exe: PathBuf, source: VariablesSource, root: &fakes::TempDir) ->
 /// instead of querying the hub again.
 #[test]
 fn apply_marks_the_session_for_the_startup_snapshot() {
+    let id = SessionId("s_0123456789abcdef".to_owned());
     let mut command = Command::new("fiber");
     apply(
         &mut command,
         &Environment {
-            vars: vec![(OsString::from("MARK"), OsString::from("start"))],
+            vars: vec![
+                (OsString::from("MARK"), OsString::from("start")),
+                (
+                    OsString::from("FIBER_SESSION_ID"),
+                    OsString::from("s_stale"),
+                ),
+            ],
             source: VariablesSource::Inherited,
         },
     );
-    let marked = command
+    apply_session_id(&mut command, &id);
+    let env: Vec<_> = command
         .get_envs()
-        .find(|(name, _)| name.to_str() == Some(HUB_SESSION_MARKER))
-        .map(|(_, value)| value.map(|value| value.to_owned()));
+        .map(|(name, value)| (name.to_owned(), value.map(ToOwned::to_owned)))
+        .collect();
+    assert!(env.contains(&(
+        OsString::from("FIBER_SESSION_ID"),
+        Some(OsString::from(id.0))
+    )));
+    assert!(!env.contains(&(
+        OsString::from("FIBER_SESSION_ID"),
+        Some(OsString::from("s_stale"))
+    )));
+    let marked = env
+        .iter()
+        .find(|(name, _)| name == HUB_SESSION_MARKER)
+        .map(|(_, value)| value.clone());
     assert_eq!(marked, Some(Some(OsString::from("1"))));
 }
 
@@ -691,6 +715,12 @@ fn start_runs_with_the_published_environment_and_the_flag() {
     let (args, env) = reported(&root);
     assert_eq!(args.last().map(String::as_str), Some("--login-shell"));
     assert_eq!(env, "start /h unset");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("session-id"))
+            .unwrap()
+            .trim(),
+        "s1"
+    );
 }
 
 #[test]
@@ -708,6 +738,12 @@ fn resume_runs_with_the_published_environment_and_the_flag() {
         "no credential argument without a label: {args:?}"
     );
     assert_eq!(env, "start /h unset");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("session-id"))
+            .unwrap()
+            .trim(),
+        "s1"
+    );
 }
 
 #[test]
@@ -772,6 +808,12 @@ fn rewind_runs_with_the_published_environment_and_the_flag() {
     assert_eq!(args.last().map(String::as_str), Some("--login-shell"));
     assert!(args.contains(&"--rewound-from=s0".to_owned()));
     assert_eq!(env, "start /h unset");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("session-id"))
+            .unwrap()
+            .trim(),
+        "s1"
+    );
 }
 
 #[test]

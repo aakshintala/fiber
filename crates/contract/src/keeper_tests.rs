@@ -3,7 +3,7 @@ use super::{FromKeeper, HostStdin, KeptJob, ToKeeper};
 #[test]
 fn every_session_line_round_trips_byte_for_byte() {
     // The keeper's internal protocol is one JSON object per line
-    // (docs/tools.md, "The keeper").
+    // (`docs/tools.md`, "The keeper").
     let lines = [
         r#"{"start":{"id":"call_1","program":"/bin/bash","args":["-c","make"],"cwd":"/w","env":[["FIBER_MATCHES","/w/.m"]],"stdin":"null","timeout_ms":600000,"output_cap":5368709120,"sandbox":null}}"#,
         r#"{"start":{"id":"call_1","program":"/bin/bash","args":["-c","make"],"cwd":"/w","env":[],"stdin":"pty","timeout_ms":null,"output_cap":5368709120,"sandbox":{"enabled":true,"allow_write":["/w"],"deny_read":[],"fiber_home":"/h/.fiber","workspace":"/w","baseline":"/h/.fiber/projects/k/baseline"}}}"#,

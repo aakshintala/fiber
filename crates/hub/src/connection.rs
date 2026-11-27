@@ -121,8 +121,7 @@ pub(crate) struct Hub {
     /// One start at a time per next session, and whether its single
     /// old-exit retry is already claimed: a slow rewind start blocks
     /// only the threads starting that same session, never a resume, which
-    /// takes the shared gate instead (`docs/invocation.md`, "`rewind`
-    /// starts a new session process").
+    /// takes the shared gate instead (`docs/invocation.md`, "Lifecycle").
     pub(crate) starting: Mutex<HashMap<SessionId, StartSlot>>,
     /// Tests only: a one-shot pause run before `hub_hello` is sent. It
     /// parks a connection between its attention registration and its

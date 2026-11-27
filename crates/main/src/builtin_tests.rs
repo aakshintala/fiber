@@ -357,6 +357,7 @@ fn builtin_restores_only_outstanding_live_detached_rows_before_returning_tools()
     );
     let (_tools, _infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &home,
         root.path(),
         &root.path().join("artifacts"),
@@ -504,6 +505,7 @@ fn read_is_wired_to_the_image_child() {
     );
     let (tools, _infos, _driver, _forget, _images) = super::builtin(
         fiber,
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
@@ -548,6 +550,7 @@ fn the_forget_callback_clears_what_the_file_tools_have_seen() {
     );
     let (tools, _infos, _driver, forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
@@ -597,6 +600,7 @@ fn without_the_forget_callback_the_same_write_goes_through() {
     );
     let (tools, _infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
@@ -646,6 +650,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
     );
     let (tools, infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
@@ -728,6 +733,7 @@ fn session_search_declares_reads_on_the_workspace_project_in_fiber_home() {
     );
     let (tools, _infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &home,
         root.path(),
         &root.path().join("artifacts"),
@@ -782,6 +788,7 @@ fn the_model_shell_is_non_interactive() {
     );
     let (tools, _infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
@@ -825,6 +832,7 @@ fn the_shell_schema_is_closed_and_excludes_deadline_ms() {
     );
     let (tools, _infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
@@ -875,6 +883,7 @@ fn registered_with(web_search: Option<&str>) -> (Vec<(String, Option<String>)>, 
     let web_search = super::web_search(web_search, None).unwrap();
     let (tools, infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
@@ -932,6 +941,7 @@ fn hosted_is_what_builtin_registers_for_web_search() {
     );
     let (tools, infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         root.path(),
         root.path(),
         &root.path().join("artifacts"),
@@ -1039,6 +1049,7 @@ fn every_builtin_schema_keeps_to_the_documented_subset() {
     );
     let (tools, _infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
@@ -1230,6 +1241,7 @@ fn every_builtin_fits_the_strict_shape_unless_its_section_says_strict_false() {
     let backend = stub_backend();
     let (tools, _infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
@@ -1444,6 +1456,7 @@ fn session_list_declares_reads_on_run_in_fiber_home() {
     );
     let (tools, _, _, _, _) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &home,
         root.path(),
         &root.path().join("artifacts"),
@@ -1478,6 +1491,7 @@ fn session_message_declares_writes_with_no_paths() {
     );
     let (tools, _, _, _, _) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
@@ -1522,6 +1536,7 @@ fn delegate_fork_declares_always_reviewed() {
     );
     let (tools, _, _, _, _) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
@@ -1562,6 +1577,7 @@ fn builtin_registers_the_web_search_it_is_given() {
     let given = super::web_search(None, Some(&backend)).unwrap();
     let (tools, infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
@@ -1594,6 +1610,7 @@ fn the_model_shell_carries_no_sandbox_when_off() {
     );
     let (tools, _infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
@@ -1653,6 +1670,7 @@ fn builtin_tools_carry_the_protection_handle_to_files_and_shell() {
     let images = super::session_images(root.path().join("fiber-stub"), &artifacts, None);
     let (tools, _infos, _driver, _forget, _images) = super::builtin_timed(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &artifacts,
@@ -1746,6 +1764,7 @@ fn the_model_shell_marks_confined_when_on_and_available() {
     let images = super::session_images(fiber.clone(), &artifacts, None);
     let (tools, _infos, _driver, _forget, _images) = super::builtin_timed(
         fiber,
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &artifacts,
@@ -1799,6 +1818,7 @@ fn driver_shell_has_no_foreground_default() {
     );
     let (_tools, _infos, driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),
