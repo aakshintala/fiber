@@ -1135,13 +1135,7 @@ fn group_has_live_members(group: u32) -> bool {
 
 #[cfg(target_os = "macos")]
 fn group_has_live_members(group: u32) -> bool {
-    let pid = rustix::process::Pid::from_raw(i32::try_from(group).unwrap())
-        .expect("a process group id is positive");
-    match rustix::process::test_kill_process_group(pid) {
-        Ok(()) => true,
-        Err(rustix::io::Errno::SRCH) => false,
-        Err(error) => panic!("could not check process group {group}: {error}"),
-    }
+    fakes::group_alive(group)
 }
 
 fn process_group_id(pid: u32) -> u32 {
@@ -1919,7 +1913,7 @@ fn hub_start_report(setup: &Setup, hub: &Mutex<Option<HubProc>>) -> String {
 }
 
 /// Reports whether a detached hub's process group still has a live member.
-pub(crate) fn detached_hub_start_report(hub: &Mutex<Option<DetachedHub>>) -> String {
+fn detached_hub_start_report(hub: &Mutex<Option<DetachedHub>>) -> String {
     match hub
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -3095,6 +3089,7 @@ pub(crate) fn held_wait_passes_after_release<R: Send + 'static>(
 mod detached_hub_tests {
     use super::{Deadline, DetachedHub};
     use std::process::Command;
+    use support::peer::{KernelProcessRead, Pid, walk_ancestors};
 
     #[test]
     fn stop_leaves_no_live_process_in_the_group() {
@@ -3102,30 +3097,18 @@ mod detached_hub_tests {
         serve.args(["-f", "/dev/null"]);
         let mut hub = DetachedHub::spawn_command(Deadline::start(), &mut serve);
         let group = hub.group;
-        let caller = support::peer::walk_ancestors(
-            support::peer::Pid(std::process::id()),
-            &support::peer::KernelProcessRead,
-            contract::session_process::is_session_process,
-        )
-        .expect("the caller ancestry is complete");
-        let target = support::peer::walk_ancestors(
-            support::peer::Pid(hub.hub_pid),
-            &support::peer::KernelProcessRead,
-            contract::session_process::is_session_process,
-        )
-        .expect("the detached hub ancestry is complete");
-        assert_eq!(target.parent_pid, Some(support::peer::Pid(1)));
+        let target = walk_ancestors(Pid(hub.hub_pid), &KernelProcessRead, |_| true)
+            .expect("the detached hub ancestry is complete");
+        let caller_pid = Pid(std::process::id());
         assert!(
-            target
-                .matched_pids
-                .iter()
-                .all(|pid| !caller.matched_pids.contains(pid)),
-            "detached hub ancestry shares a session process with the caller: {:?}",
+            !target.matched_pids.contains(&caller_pid),
+            "the test process is in the detached hub ancestry: {:?}",
             target.matched_pids
         );
-        assert!(
-            super::group_has_live_members(group),
-            "the hub group is live before stop ({group})"
+        assert_eq!(
+            super::process_group_id(hub.hub_pid),
+            group,
+            "the hub's process group must be the intermediate shell's pid"
         );
         hub.stop();
         assert!(

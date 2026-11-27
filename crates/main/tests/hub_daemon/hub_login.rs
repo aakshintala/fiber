@@ -22,7 +22,7 @@ use fakes::{OauthReply, OauthServer, ProviderServer, Response};
 use serde_json::{Value, json};
 use support::*;
 
-fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<HubProc>>>) -> Socket {
+fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<DetachedHub>>>) -> Socket {
     let slot = hub.clone();
     let deadline = setup.deadline;
     let mut serve = setup.fiber(&["hub", "serve"]);
@@ -35,7 +35,7 @@ fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<HubProc>>>) -> Socket {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut start = move || {
-            *slot.lock().unwrap() = Some(HubProc::spawn_command(deadline, &mut serve));
+            *slot.lock().unwrap() = Some(DetachedHub::spawn_command(deadline, &mut serve));
             Ok(())
         };
         tx.send(doors::hub::connect(&home, &mut start, &SystemClock))
@@ -229,8 +229,8 @@ fn refusal_snapshot(client: &Socket) {
         completed |= line["kind"] == "turn_completed";
     }
 }
-fn stop(hub: &Arc<Mutex<Option<HubProc>>>, guard: SessionGuard) {
-    hub.lock().unwrap().take().unwrap().kill_and_wait();
+fn stop(hub: &Arc<Mutex<Option<DetachedHub>>>, guard: SessionGuard) {
+    hub.lock().unwrap().take().unwrap().stop();
     guard.wait_gone();
 }
 

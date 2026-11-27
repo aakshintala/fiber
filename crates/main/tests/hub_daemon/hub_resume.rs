@@ -164,6 +164,7 @@ struct Hub {
     child: Option<Child>,
     group: u32,
     watchdog: Option<Watchdog>,
+    detached: Option<support::DetachedHub>,
     sessions: Option<Watchdog>,
     workspace: String,
     deadline: Deadline,
@@ -182,6 +183,21 @@ impl Hub {
             child: Some(child),
             group,
             watchdog: Some(Watchdog::group(group)),
+            detached: None,
+            sessions: Some(sessions),
+            workspace,
+            deadline,
+        }
+    }
+
+    fn spawn_detached_command(deadline: Deadline, serve: &mut Command, workspace: String) -> Self {
+        let sessions = Watchdog::matching(&workspace);
+        let detached = support::DetachedHub::spawn_command(deadline, serve);
+        Self {
+            child: None,
+            group: detached.group,
+            watchdog: None,
+            detached: Some(detached),
             sessions: Some(sessions),
             workspace,
             deadline,
@@ -192,18 +208,22 @@ impl Hub {
     /// path to exit on its own.
     #[track_caller]
     fn finish(mut self) {
-        fakes::kill_group(self.group, "KILL").unwrap();
-        if let Some(mut child) = self.child.take() {
-            let (done, finished) = mpsc::channel();
-            thread::spawn(move || done.send(child.wait().is_ok()).unwrap_or(()));
-            match self.deadline.recv(&finished) {
-                Ok(_) => {}
-                Err(_) => support::expired(
-                    self.deadline,
-                    self.group,
-                    &finished,
-                    "the killed hub to exit",
-                ),
+        if let Some(mut detached) = self.detached.take() {
+            detached.stop();
+        } else {
+            fakes::kill_group(self.group, "KILL").unwrap();
+            if let Some(mut child) = self.child.take() {
+                let (done, finished) = mpsc::channel();
+                thread::spawn(move || done.send(child.wait().is_ok()).unwrap_or(()));
+                match self.deadline.recv(&finished) {
+                    Ok(_) => {}
+                    Err(_) => support::expired(
+                        self.deadline,
+                        self.group,
+                        &finished,
+                        "the killed hub to exit",
+                    ),
+                }
             }
         }
         fakes::try_matching_exits(&self.workspace, self.deadline).unwrap_or_else(|err| {
@@ -223,7 +243,9 @@ impl Drop for Hub {
     /// thread until the cleanup deadline: a drop never blocks past it and
     /// never panics.
     fn drop(&mut self) {
-        drop(fakes::kill_group(self.group, "KILL"));
+        if self.detached.is_none() {
+            drop(fakes::kill_group(self.group, "KILL"));
+        }
         support::kill_matching_detached(&self.workspace);
         if let Some(mut child) = self.child.take() {
             let (done, reaped) = mpsc::channel();
@@ -301,6 +323,15 @@ fn until_hub(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) 
 /// [`Deadline`]; the serve command, workspace and home are built first.
 #[track_caller]
 fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<Hub>>>) -> Socket {
+    connect_hub_with(setup, hub, false)
+}
+
+fn connect_detached_hub(setup: &Setup, hub: &Arc<Mutex<Option<Hub>>>) -> Socket {
+    connect_hub_with(setup, hub, true)
+}
+
+#[track_caller]
+fn connect_hub_with(setup: &Setup, hub: &Arc<Mutex<Option<Hub>>>, detached: bool) -> Socket {
     let slot = Arc::clone(hub);
     let deadline = setup.deadline;
     let mut serve = setup.fiber_in_workspace(&["hub", "serve"]);
@@ -308,8 +339,11 @@ fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<Hub>>>) -> Socket {
     let home = setup.home();
     let connected = support::bounded(deadline, "the hub to start and say hub_hello", move || {
         let mut start = move || {
-            *slot.lock().unwrap() =
-                Some(Hub::spawn_command(deadline, &mut serve, workspace.clone()));
+            *slot.lock().unwrap() = Some(if detached {
+                Hub::spawn_detached_command(deadline, &mut serve, workspace.clone())
+            } else {
+                Hub::spawn_command(deadline, &mut serve, workspace.clone())
+            });
             Ok(())
         };
         doors::hub::connect(&home, &mut start, &SystemClock)
@@ -485,7 +519,7 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
     let id = lines[0]["session_id"].as_str().unwrap().to_owned();
 
     let hub = Arc::new(Mutex::new(None));
-    let client = connect_hub(&setup, &hub);
+    let client = connect_detached_hub(&setup, &hub);
     client.send(&subscribe_line("c_sub", &id));
     let replay = until_hub(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
