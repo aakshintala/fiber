@@ -10,13 +10,10 @@ fail() { echo "test-check-rules-by-path: $1" >&2; exit 1; }
 
 # Keep the gate's resource refusal distinct from an ordinary self-test failure.
 run_check() {
-  output=$1
-  directory=$2
-  shift 2
   code=0
-  (cd "$directory" && "$@") >"$output" 2>&1 || code=$?
+  (cd "$2" && "${@:3}") >"$1" 2>&1 || code=$?
   if [ "$code" -eq 75 ]; then
-    cat "$output" >&2
+    cat "$1" >&2
     exit 75
   fi
   return "$code"
@@ -38,7 +35,7 @@ if [ "${RULES_BY_PATH_REFUSAL_PROBE-}" = 1 ]; then
   exit 0
 fi
 code=0
-RULES_BY_PATH_REFUSAL_PROBE=1 bash "$0" >"$work/refusal-probe" 2>&1 || code=$?
+RULES_BY_PATH_REFUSAL_PROBE=1 bash "$top/scripts/test-check-rules-by-path" >"$work/refusal-probe" 2>&1 || code=$?
 [ "$code" -eq 75 ] || fail "forced nested refusal exited $code, not 75"
 grep -q "not started:" "$work/refusal-probe" || fail "forced nested refusal text was lost"
 
