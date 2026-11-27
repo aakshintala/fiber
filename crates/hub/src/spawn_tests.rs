@@ -39,7 +39,6 @@ fn exited_line(code: &str, message: &str) -> String {
     .to_string()
 }
 
-/// A child printing `lines` on stdout, then exiting 0.
 fn pre_session_exit_line() -> String {
     serde_json::to_string(&contract::PreSessionExit::new(
         1,
@@ -48,6 +47,7 @@ fn pre_session_exit_line() -> String {
     .unwrap()
 }
 
+/// A child printing `lines` on stdout, then exiting 0.
 fn printing(lines: &[String]) -> Child {
     let mut script = String::from("printf '%s\\n'");
     for line in lines {
@@ -111,8 +111,7 @@ fn exited_is_none_while_the_session_runs() {
 
 #[test]
 fn pre_session_exit_candidate_requires_the_exact_pre_session_shape() {
-    let failure = crate::fake::failure(ErrorCode::IoFailed, "recorded");
-    let valid = serde_json::to_string(&contract::PreSessionExit::new(1, failure)).unwrap();
+    let valid = pre_session_exit_line();
     assert_eq!(strict_pre_session_line(&valid), Some(valid.clone()));
     for marker in ["session_id", "ts", "seq"] {
         let mut value: Value = serde_json::from_str(&valid).unwrap();

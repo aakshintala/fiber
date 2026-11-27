@@ -377,6 +377,9 @@ fn start_forwards_pre_session_fiber_exited() {
     );
     outcome.expect("the hub returns the terminal line");
     assert_eq!(text, line);
+    client.send(&command("c_after", "status", json!({})));
+    let next = client.next("the command after the forwarded verdict");
+    assert_eq!(next["payload"]["command_id"], "c_after");
 }
 
 #[test]
