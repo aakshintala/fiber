@@ -129,6 +129,16 @@ fn process_row_parses_and_rejects_invalid_rows() {
 }
 
 #[test]
+fn process_row_reads_the_current_process() {
+    let row = crate::process_row(std::process::id())
+        .unwrap()
+        .expect("the current process has a ps row");
+    assert!(row.ppid > 0);
+    assert!(row.pgid > 0);
+    assert!(!row.args.is_empty());
+}
+
+#[test]
 fn process_row_for_unavailable_pid_is_empty() {
     assert_eq!(crate::process_row(u32::MAX).unwrap(), None);
 }

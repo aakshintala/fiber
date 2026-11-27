@@ -2040,8 +2040,7 @@ fn driver_shell_has_no_foreground_default() {
         finished.try_recv().is_err(),
         "the driver call returned after a clock advance with no deadline"
     );
-    // Capture the verified group while the driver's shell is still parked;
-    // discovery at failure time cannot identify a child that has exited.
+    // Identify the live sleep child while the parked shell still owns it.
     let (group, group_detail) = our_sleep_group();
     cancel.cancel();
     // Keep the original stop bound, but snapshot diagnostics before either
