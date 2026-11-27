@@ -311,10 +311,6 @@ fiber.command(name, { description, timeout, run })
 
 `fiber.harness` is not built yet: see #545.
 
-In a tool's `input_schema`, an empty table in a schema position becomes
-`{}`; schema array containers keep `[]`. Values under `enum`, `const`,
-`default` and `examples` are sent as written.
-
 What a harness declares is `docs/delegates.md`, "Harness extensions".
 
 A tool's `effects` is a table, `{ effects, paths?, reversible, hosts? }` as
@@ -333,6 +329,10 @@ including `start` and `end`, fails registration with a message naming it. A conf
 (`docs/tools.md`, "Bounded results"). When two extensions register one tool name,
 neither gets it, a `notice` names both, and configuration can leave one out
 (`extensions."<name>".tools.disabled`, `docs/configuration.md`).
+
+In a tool's `input_schema`, an empty table in a schema position becomes
+`{}`; schema array containers keep `[]`. Values under `enum`, `const`,
+`default` and `examples` are sent as written.
 
 A search backend's `run` takes one table, `{ query }` with
 `allowed_domains` or `blocked_domains` when the call gave one, and returns

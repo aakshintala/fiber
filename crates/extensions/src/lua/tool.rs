@@ -301,7 +301,7 @@ fn normalize_empty_array(value: &mut Value) {
 
 /// Normalize empty arrays only at schema map and single-schema positions; schema
 /// array containers keep `[]`, and data keywords are untouched (see
-/// `docs/extensions.md`, "Host calls").
+/// `docs/extensions.md`, "Registering").
 fn normalize_schema_positions(schema: &mut Value) {
     normalize_empty_array(schema);
     let Value::Object(object) = schema else {
