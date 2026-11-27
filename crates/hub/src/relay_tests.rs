@@ -10,7 +10,7 @@
 )]
 
 use fakes::{Deadline, MUST_SUCCEED_WITHIN};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 
 use serde_json::{Value, json};
@@ -1452,6 +1452,149 @@ fn a_rejected_subscribe_settles_to_nothing() {
         .is_none()
     );
     assert!(kept.lock().unwrap().is_empty(), "the rejection is consumed");
+}
+
+#[test]
+fn a_subscribe_that_fails_to_parse_keeps_the_level_and_clients_count() {
+    use std::sync::{Arc, Mutex, mpsc};
+
+    const SID: &str = "s_aaaaaaaaaaaaaaaa";
+    let held = fakes::TempDir::new("malformed-subscribe");
+    let hub = Arc::new(hub(&held));
+    let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+    let current = json!({"id":"c_1", "command":"subscribe", "args":{"level":"summary"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let malformed = json!({
+        "id":"c_2", "command":"subscribe", "args":{"level":"full", "extra":1}
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    assert_eq!(
+        subscribe_level(&malformed),
+        None,
+        "unknown args reject the level parse"
+    );
+
+    let (session, mut fake_session) = UnixStream::pair().unwrap();
+    fake_session
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+        .unwrap();
+    let session_writer = session.try_clone().unwrap();
+    let (client_writer, client_reader) = UnixStream::pair().unwrap();
+    client_reader
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+        .unwrap();
+    let client_writer = Arc::new(Mutex::new(client_writer));
+    let kept: Kept = Arc::new(Mutex::new(Vec::new()));
+    let replayed = Replayed::default();
+    let (release_live_tx, release_live_rx) = mpsc::channel();
+    let (live_done_tx, live_done_rx) = mpsc::channel();
+    let live_thread = std::thread::Builder::new()
+        .name("hub-relay-live-marker".to_owned())
+        .spawn(move || {
+            if release_live_rx.recv().is_ok() {
+                live_done_tx.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    let epoch = {
+        let mut held = crate::connection::lock(&relays);
+        let epoch = held.mint();
+        held.subscribed.push((SID.to_owned(), current.clone()));
+        held.entries.push(Relay {
+            session: SID.to_owned(),
+            epoch,
+            writer: session_writer,
+            kept: Arc::clone(&kept),
+            replayed: Arc::clone(&replayed),
+            thread: Some(live_thread),
+            retiring: None,
+            target: RelayTarget::LiveUnreadable,
+        });
+        epoch
+    };
+
+    let mut status = crate::fake::status("n", "/w", "idle", None);
+    status["clients"] = json!(0);
+    fake_session
+        .write_all(crate::fake::status_line(SID, &status).as_bytes())
+        .unwrap();
+    let id = CommandId("c_2".to_owned());
+    route(
+        &id,
+        SID,
+        malformed.clone(),
+        &hub,
+        &client_writer,
+        &relays,
+        None,
+        false,
+        None,
+    );
+    let mut sent = String::new();
+    BufReader::new(fake_session.try_clone().unwrap())
+        .read_line(&mut sent)
+        .unwrap();
+    let sent: Value = serde_json::from_str(sent.trim_end()).unwrap();
+    assert_eq!(sent["args"], json!({"level":"full", "extra":1}));
+
+    release_live_tx.send(()).unwrap();
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&live_done_rx, "the relay liveness marker");
+    let relay_thread = start_relay_thread(
+        SID,
+        epoch,
+        session,
+        Arc::clone(&hub),
+        Arc::clone(&client_writer),
+        Arc::clone(&relays),
+        kept,
+    );
+    let rejected = json!({
+        "kind":"command_rejected",
+        "payload":{"command_id":"c_2", "code":"invalid_arguments", "message":"m"}
+    });
+    fake_session
+        .write_all(format!("{rejected}\n").as_bytes())
+        .unwrap();
+    drop(fake_session);
+    join_within_deadline(relay_thread);
+    drop(client_writer);
+
+    let mut output = String::new();
+    BufReader::new(client_reader)
+        .read_to_string(&mut output)
+        .unwrap();
+    let lines: Vec<Value> = output
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let statuses: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["kind"] == "session_status")
+        .collect();
+    assert_eq!(statuses.len(), 1, "the existing status remains: {lines:?}");
+    assert_eq!(statuses[0]["payload"]["clients"], 0);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        0,
+        "a rejected full subscribe adds no counted client: {lines:?}"
+    );
+    assert!(lines.iter().any(|line| {
+        line["kind"] == "command_rejected"
+            && line["payload"]["command_id"] == "c_2"
+            && line["payload"]["code"] == "invalid_arguments"
+    }));
+    assert_eq!(
+        crate::connection::lock(&relays).subscription(SID),
+        Some(current),
+        "the rejected subscribe leaves the summary level kept"
+    );
 }
 
 /// `docs/invocation.md`, "What the hub speaks": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
