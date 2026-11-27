@@ -177,6 +177,8 @@ struct State {
     responder: Option<Responder>,
     /// The response of every request past the script.
     fallback: Option<Response>,
+    /// The next responder turn, assigned with request recording.
+    next_responder_turn: u64,
     requests: Vec<Request>,
     /// When set, a recorded request keeps its headers and `body_len` but
     /// its body is emptied before it is stored.
@@ -208,6 +210,7 @@ impl Default for State {
             responder: None,
             fallback: None,
             requests: Vec::new(),
+            next_responder_turn: 0,
             drop_bodies: false,
             hold: false,
             hold_from: 1,
@@ -222,11 +225,84 @@ impl Default for State {
     }
 }
 
-/// How often [`ProviderServer::drop`] retries its hold release: one
-/// `try_lock` can land while a serving thread holds the state lock
-/// briefly on a hold poll or while entering its hold wait, so a single
-/// attempt can miss and leave held responses unanswered. Spinning this
-/// often still ends at once past a responder stuck under the lock.
+/// How long an ordered responder turn waits before the gate stalls. This
+/// outlasts the longest test-owned responder hold and its bounded shutdown.
+const RESPONDER_TURN_WAIT: Duration = Duration::from_secs(
+    crate::deadline::WAITS.as_secs() + crate::http_server::SHUTDOWN_WITHIN.as_secs() + 8,
+);
+
+#[derive(Default)]
+struct TurnState {
+    current: u64,
+    running: bool,
+    stalled: bool,
+}
+
+#[derive(Default)]
+struct ResponderTurns {
+    state: Mutex<TurnState>,
+    changed: Condvar,
+}
+
+impl ResponderTurns {
+    #[allow(
+        clippy::print_stderr,
+        reason = "a stalled turn must report both the requested and holding turn"
+    )]
+    fn enter(&self, requested: u64) -> bool {
+        let deadline = Deadline::after(RESPONDER_TURN_WAIT);
+        let mut state = lock(&self.state);
+        while !state.stalled && (state.current != requested || state.running) {
+            let remaining = deadline.left();
+            if remaining.is_zero() {
+                state.stalled = true;
+                eprintln!(
+                    "provider responder turn timed out: requested={requested} current={}",
+                    state.current
+                );
+                self.changed.notify_all();
+                return false;
+            }
+            let (next, _) = self
+                .changed
+                .wait_timeout(state, remaining)
+                .unwrap_or_else(PoisonError::into_inner);
+            state = next;
+        }
+        if state.stalled {
+            return false;
+        }
+        state.running = true;
+        true
+    }
+
+    fn finish(&self, requested: u64) {
+        let mut state = lock(&self.state);
+        state.running = false;
+        state.current = requested + 1;
+        self.changed.notify_all();
+    }
+
+    fn stall(&self) {
+        lock(&self.state).stalled = true;
+        self.changed.notify_all();
+    }
+}
+
+struct TurnCompletion<'a> {
+    turns: &'a ResponderTurns,
+    requested: u64,
+}
+
+impl Drop for TurnCompletion<'_> {
+    fn drop(&mut self) {
+        self.turns.finish(self.requested);
+    }
+}
+
+/// How often [`ProviderServer::drop`] retries its hold release: a try-lock
+/// may miss while a serving thread updates state. Responders no longer run
+/// under that lock, so each miss is brief.
 const RELEASE_RETRIES: usize = 1_000;
 
 /// A fake provider listening on a local port. Each request gets the next
@@ -237,6 +313,7 @@ pub struct ProviderServer {
     core: HttpServer,
     state: Arc<Mutex<State>>,
     arrived: Arc<Condvar>,
+    turns: Arc<ResponderTurns>,
 }
 
 impl ProviderServer {
@@ -280,11 +357,10 @@ impl ProviderServer {
 
     /// Like [`ProviderServer::start_routed`], but every request is answered
     /// by `responder`, called with the recorded request: an answer can
-    /// depend on the request's body or on an earlier request's. `hold`,
-    /// `release` and `release_one` gate a responded answer as they do a
-    /// scripted one. The responder runs while the server holds its lock, so
-    /// it must not call back into the server; it reads all it needs from
-    /// the request.
+    /// depend on the request's body or on an earlier request's. Calls run
+    /// one at a time in request-arrival order, without the server state lock;
+    /// `hold`, `release` and `release_one` still gate the returned response.
+    /// Responders may wait on the test but must not call back into the server.
     pub fn start_responding(
         responder: impl Fn(&Request) -> Response + Send + Sync + 'static,
     ) -> io::Result<Self> {
@@ -315,13 +391,15 @@ impl ProviderServer {
             core,
             state: Arc::new(Mutex::new(state)),
             arrived: Arc::new(Condvar::new()),
+            turns: Arc::new(ResponderTurns::default()),
         };
         let shared = Arc::clone(&server.state);
         let wake = Arc::clone(&server.arrived);
+        let turns = Arc::clone(&server.turns);
         let ticking = clock;
         server
             .core
-            .serve_persistent(move |conn| serve(conn, &shared, &wake, &ticking));
+            .serve_persistent(move |conn| serve(conn, &shared, &wake, &turns, &ticking));
         server
     }
 
@@ -467,14 +545,13 @@ impl ProviderServer {
 
 impl Drop for ProviderServer {
     fn drop(&mut self) {
+        // Stop queued responder turns before releasing holds or shutting
+        // down the core, so each queued request closes without an answer.
+        self.turns.stall();
         // Release what the holds are holding before reaping: a held
         // response is answered, and every serving thread ends its core
-        // wait stopped on its own. A responder stuck under the state
-        // lock is not waited for: the release is tried, never blocking
-        // the drop, and the core's bounded shutdown reaps the rest.
-        // One attempt can miss while a serving thread holds the lock
-        // on a hold poll or entering its wait, so retry briefly: a
-        // responder past that still ends the retries, never the drop.
+        // wait stopped on its own. The state lock is retried, never blocked
+        // on, and callbacks do not hold it.
         for _ in 0..RELEASE_RETRIES {
             if let Ok(mut state) = self.state.try_lock() {
                 state.hold = false;
@@ -502,7 +579,13 @@ fn discards_pipelined(headers: &[(String, String)]) -> bool {
 /// answers from the script, the routes, the responder or the fallback. A
 /// malformed body is the client's bug: it is recorded with its decoded
 /// prefix and answered 400, and the script keeps its next response.
-fn serve(conn: Connection, state: &Mutex<State>, arrived: &Condvar, clock: &Arc<dyn Clock>) {
+fn serve(
+    conn: Connection,
+    state: &Mutex<State>,
+    arrived: &Condvar,
+    turns: &ResponderTurns,
+    clock: &Arc<dyn Clock>,
+) {
     let mut conn = conn;
     let request = match read_request(&mut conn) {
         RequestOutcome::Complete(request) => request,
@@ -512,16 +595,23 @@ fn serve(conn: Connection, state: &Mutex<State>, arrived: &Condvar, clock: &Arc<
         conn.drain_socket();
     }
     let malformed = request.malformed;
-    let response = {
+    enum Answer {
+        Response(Response),
+        Responder {
+            responder: Responder,
+            request: Request,
+            turn: u64,
+        },
+    }
+    let answer = {
         let mut state = lock(state);
-        // Cloned before the record moves it, and only when a responder
-        // reads the request it answers: the scripted path never does, and
-        // cloning every ever-growing body here copies tens of gigabytes a
-        // pass (see #2188).
-        let answered = state
-            .responder
-            .clone()
-            .map(|responder| (responder, project(&request)));
+        // Clone the request only for a valid responder call: the scripted
+        // path never reads it, and cloning every growing body is expensive.
+        let responder = if malformed.is_none() {
+            state.responder.clone()
+        } else {
+            None
+        };
         let mut record = project(&request);
         if state.drop_bodies {
             record.body = Vec::new();
@@ -530,22 +620,51 @@ fn serve(conn: Connection, state: &Mutex<State>, arrived: &Condvar, clock: &Arc<
         state.requests.push(record);
         arrived.notify_all();
         match malformed {
-            Some(why) => Response::status(
+            Some(why) => Answer::Response(Response::status(
                 400,
                 format!(r#"{{"error":"fakes: malformed chunked body: {why}"}}"#),
-            ),
-            None => match answered {
-                Some((responder, answered)) => responder(&answered),
+            )),
+            None => match responder {
+                Some(responder) => {
+                    let turn = state.next_responder_turn;
+                    state.next_responder_turn += 1;
+                    Answer::Responder {
+                        responder,
+                        request: project(&request),
+                        turn,
+                    }
+                }
                 None => {
                     let target = request_path.split('?').next().unwrap_or_default();
                     let route = state.routes.iter().position(|(path, _)| path == target);
-                    route
-                        .map(|index| state.routes.remove(index).1)
-                        .or_else(|| state.script.pop_front())
-                        .or_else(|| state.fallback.clone())
-                        .unwrap_or_else(no_scripted_response)
+                    Answer::Response(
+                        route
+                            .map(|index| state.routes.remove(index).1)
+                            .or_else(|| state.script.pop_front())
+                            .or_else(|| state.fallback.clone())
+                            .unwrap_or_else(no_scripted_response),
+                    )
                 }
             },
+        }
+    };
+    let response = match answer {
+        Answer::Response(response) => response,
+        Answer::Responder {
+            responder,
+            request,
+            turn,
+        } => {
+            if !turns.enter(turn) {
+                return;
+            }
+            let completion = TurnCompletion {
+                turns,
+                requested: turn,
+            };
+            let response = responder(&request);
+            drop(completion);
+            response
         }
     };
     if response.drop_connection {
