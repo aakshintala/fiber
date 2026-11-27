@@ -106,7 +106,7 @@ codes! {
     ExtensionShadowed = "extension_shadowed",
     /// A repository's required extension is not approved.
     ExtensionUnapproved = "extension_unapproved",
-    /// The extension providing the tool died twice.
+    /// The extension providing the tool was stopped or abandoned.
     ExtensionUnavailable = "extension_unavailable",
     /// An install or update could not fetch: git or the network failed.
     FetchFailed = "fetch_failed",

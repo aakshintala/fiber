@@ -40,6 +40,63 @@ fn text(text: &str) -> ContentPart {
 }
 
 #[test]
+fn an_abandoned_extension_fails_with_extension_unavailable() {
+    let output = output_from_returned(
+        Err(Error::Abandoned {
+            extension: "fiber.test/lua".to_owned(),
+            callback: "tool".to_owned(),
+        }),
+        "fiber.test/lua",
+        "tool",
+    );
+    assert_eq!(output.error.unwrap().code, ErrorCode::ExtensionUnavailable);
+}
+
+#[test]
+fn a_stopped_extension_fails_with_extension_unavailable() {
+    let output = output_from_returned(
+        Err(Error::Stopped {
+            extension: "fiber.test/lua".to_owned(),
+        }),
+        "fiber.test/lua",
+        "tool",
+    );
+    assert_eq!(output.error.unwrap().code, ErrorCode::ExtensionUnavailable);
+}
+
+#[test]
+fn a_lua_error_remains_tool_error() {
+    let output = output_from_returned(
+        Err(Error::Lua {
+            extension: "fiber.test/lua".to_owned(),
+            message: "bad callback".to_owned(),
+        }),
+        "fiber.test/lua",
+        "tool",
+    );
+    assert_eq!(output.error.unwrap().code, ErrorCode::ToolError);
+}
+
+#[test]
+fn a_timeout_remains_timeout() {
+    let output = output_from_returned(
+        Err(Error::Timeout {
+            extension: "fiber.test/lua".to_owned(),
+            callback: "tool".to_owned(),
+            timeout_ms: 25,
+        }),
+        "fiber.test/lua",
+        "tool",
+    );
+    let error = output.error.unwrap();
+    assert_eq!(error.code, ErrorCode::Timeout);
+    assert_eq!(
+        error.message,
+        "`fiber.test/lua`: `tool` passed its 25 ms timeout and was stopped."
+    );
+}
+
+#[test]
 fn a_string_is_one_text_part() {
     assert_eq!(
         output_from(json!("3 notes")).unwrap(),

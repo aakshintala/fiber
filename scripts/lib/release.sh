@@ -12,19 +12,21 @@
 
 readonly target=x86_64-unknown-linux-musl
 
-# Builds the checkout in the current directory into the shared target
-# directory ($top/target), selecting the binary with "$@" (`--bin fiber`
-# or `-p tui --example paging`). The caller chains the copy out of
-# target/ onto this call, so a failed build fails even where errexit does
-# not apply, and never copies a binary an earlier build left in target/.
+# Builds the checkout in the current directory into the caller-selected
+# target directory, selecting the binary with the remaining arguments
+# (`--bin fiber` or `-p tui --example paging`). The caller chains the copy
+# out of that same directory, so a failed build fails even where errexit does
+# not apply, and never copies a binary an earlier build left there.
 build() {
-  CARGO_TARGET_DIR="$top/target" cargo build --release --locked --target "$target" "$@"
+  local target_dir=$1
+  shift
+  CARGO_TARGET_DIR="$target_dir" cargo build --release --locked --target "$target" "$@"
 }
 
-# Checks out a detached worktree of $1 at $2, reusing this checkout's
-# target directory. The caller removes it on exit and decides what a
-# failed checkout means: the release comparison falls back, the jig skips
-# its base.
+# Checks out a detached worktree of $1 at $2. The caller chooses the
+# isolated target directory for its build, removes the worktree on exit and
+# decides what a failed checkout means: the release comparison falls back,
+# the jig skips its base.
 base_worktree() {
   git worktree add --detach "$2" "$1"
 }
