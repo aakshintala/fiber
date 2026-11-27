@@ -7780,12 +7780,11 @@ fn delegate_child_preamble_layers(
         );
     }
 
-    let mut args = Vec::new();
+    let mut args = vec!["ask"];
     if run_model {
-        args.extend(["ask", "-c", "roles.fast.model=fiber:pb/m", "scan the tree"]);
-    } else {
-        args.extend(["ask", "scan the tree"]);
+        args.extend(["-c", "roles.fast.model=fiber:pb/m"]);
     }
+    args.push("scan the tree");
     let mut running = Running::spawn(&setup, &args);
     running.wait_line("the delegate to finish", |line| {
         line["kind"] == "delegate_finished"
@@ -7819,18 +7818,7 @@ fn a_delegate_started_with_a_role_runs_on_the_role_label() {
     assert_eq!(completed["payload"]["status"], "completed");
 }
 
-#[test]
-fn repository_role_credential_does_not_reach_launch_over_project_model() {
-    let (lines, preamble) = delegate_child_preamble_layers(
-        "fast",
-        &json!({}),
-        Some(&json!({"fast": {"model": "fiber:pb/m", "credential": "work"}})),
-        Some("fiber:pb/m"),
-        false,
-        &["work"],
-    );
-    one(&lines, "delegate_started");
-    assert_eq!(preamble["credential"], "default");
+fn credential_notice(lines: &[Value]) {
     let notice = lines
         .iter()
         .find(|line| line["kind"] == "notice" && line["payload"]["code"] == "config_key_ignored")
@@ -7841,6 +7829,23 @@ fn repository_role_credential_does_not_reach_launch_over_project_model() {
             .unwrap()
             .contains("roles.\"fast\".credential")
     );
+}
+
+#[test]
+fn repository_role_credential_does_not_reach_launch_over_project_model() {
+    let (lines, preamble) = delegate_child_preamble_layers(
+        "fast",
+        &json!({}),
+        Some(&json!({"fast": {"model": "fiber:pb/m", "credential": "work"}})),
+        Some("fiber:pb/m"),
+        false,
+        &["work"],
+    );
+    // `docs/delegates.md`, "Events": `delegate_started` is written after
+    // `job_started`, for each run.
+    one(&lines, "delegate_started");
+    assert_eq!(preamble["credential"], "default");
+    credential_notice(&lines);
 }
 
 #[test]
@@ -7853,18 +7858,11 @@ fn repository_role_credential_does_not_reach_launch_over_run_model() {
         true,
         &["work"],
     );
+    // `docs/delegates.md`, "Events": `delegate_started` is written after
+    // `job_started`, for each run.
     one(&lines, "delegate_started");
     assert_eq!(preamble["credential"], "default");
-    let notice = lines
-        .iter()
-        .find(|line| line["kind"] == "notice" && line["payload"]["code"] == "config_key_ignored")
-        .expect("repository credential notice");
-    assert!(
-        notice["payload"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("roles.\"fast\".credential")
-    );
+    credential_notice(&lines);
 }
 
 #[test]
@@ -7877,6 +7875,8 @@ fn person_role_credential_survives_repository_object_model() {
         false,
         &["personal"],
     );
+    // `docs/delegates.md`, "Events": `delegate_started` is written after
+    // `job_started`, for each run.
     one(&lines, "delegate_started");
     assert_eq!(preamble["credential"], "personal");
     assert!(lines.iter().all(|line| {
