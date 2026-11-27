@@ -737,3 +737,4 @@ crates/tui/src/event_loop/attach_tests.rs:2049-2050	fiber-4974	plan	2026-11-27T1
 crates/tui/src/event_loop/attach_tests.rs:2157-2157	fiber-4974	plan	2026-11-27T10:27:18Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4974-plan	
 crates/tui/src/event_loop/attach_tests.rs:2176-2180	fiber-4974	plan	2026-11-27T10:27:18Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4974-plan	
 docs/invocation.md:1248-1248	fiber-4974	plan	2026-11-27T10:27:18Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4974-plan	
+crates/main/tests/session_turns/from_session.rs	fiber-5007	plan	2026-11-27T20:11:19Z	roundhouse-7010-plus-1:/home/aakshintala	
