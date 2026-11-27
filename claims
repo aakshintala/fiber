@@ -294,3 +294,5 @@ crates/tui/src/settings_view_tests.rs	fiber-4584	plan	2026-11-27T04:59:38Z	round
 crates/tui/src/event_loop_settings_tests.rs	fiber-4584	plan	2026-11-27T04:59:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 docs/tui.md	fiber-4584	plan	2026-11-27T04:59:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view_tests.rs	fiber-688	plan	2026-11-27T05:10:41Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
+crates/fakes/src/provider_server.rs	fiber-5007	plan	2026-11-27T05:19:54Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
+crates/fakes/src/provider_server_tests.rs	fiber-5007	plan	2026-11-27T05:19:54Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
