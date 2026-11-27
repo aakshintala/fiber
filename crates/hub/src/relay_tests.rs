@@ -846,6 +846,341 @@ fn start_relay_thread(
 }
 
 #[test]
+fn exited_delegate_eof_replays_missing_suffix() {
+    use std::sync::{Arc, Mutex, mpsc};
+
+    const SID: &str = "s_aaaaaaaaaaaaaaaa";
+    const PARENT: &str = "s_bbbbbbbbbbbbbbbb";
+    const JOB: &str = "j_open";
+
+    #[derive(Clone, Copy)]
+    enum Exit {
+        Clean,
+        Crash,
+    }
+
+    #[derive(Clone, Copy)]
+    enum LogTail {
+        Complete,
+        Short,
+        Unreadable,
+    }
+
+    fn event(kind: &str, seq: u64, session: &str, payload: Value) -> Value {
+        json!({
+            "kind": kind,
+            "seq": seq,
+            "session_id": session,
+            "ts": seq + 1,
+            "schema_version": contract::SCHEMA_VERSION,
+            "payload": payload,
+        })
+    }
+
+    fn run_case(
+        name: &str,
+        level: &str,
+        boundary: Option<u64>,
+        prefix_through: Option<u64>,
+        log_tail: LogTail,
+        exit: Exit,
+        expected_seqs: &[u64],
+        expect_stream_closed: bool,
+        expect_subscription: bool,
+    ) {
+        use std::io::Read;
+        use std::time::Duration;
+
+        let (held, home) = crate::testkit::with_run("relay-eof-tail");
+        let workspace = home.join("w");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let parent_dir = home.join("projects/-w/sessions").join(PARENT);
+        std::fs::create_dir_all(&parent_dir).unwrap();
+        let parent_events = [
+            event(
+                "session_started",
+                0,
+                PARENT,
+                json!({"workspace": workspace.to_string_lossy()}),
+            ),
+            event("job_started", 1, PARENT, json!({"job_id": JOB})),
+        ];
+        std::fs::write(
+            parent_dir.join("events.jsonl"),
+            parent_events
+                .iter()
+                .map(|line| format!("{}\n", line))
+                .collect::<String>(),
+        )
+        .unwrap();
+
+        let delegate_dir = home.join("projects/-w/sessions").join(SID);
+        std::fs::create_dir_all(&delegate_dir).unwrap();
+        let parent = json!({"session_id": PARENT, "delegate_id": JOB});
+        let mut fold = vec![event(
+            "session_started",
+            0,
+            SID,
+            json!({"workspace": workspace.to_string_lossy(), "parent": parent}),
+        )];
+        for seq in 1..=4 {
+            let kind = if seq == 4 && matches!(exit, Exit::Clean) {
+                "fiber_exited"
+            } else {
+                "text_completed"
+            };
+            fold.push(event(
+                kind,
+                seq,
+                SID,
+                json!({"text": format!("fold {seq}")}),
+            ));
+        }
+        match log_tail {
+            LogTail::Complete => {
+                std::fs::write(
+                    delegate_dir.join("events.jsonl"),
+                    fold.iter()
+                        .map(|line| format!("{}\n", line))
+                        .collect::<String>(),
+                )
+                .unwrap();
+            }
+            LogTail::Short => {
+                std::fs::write(
+                    delegate_dir.join("events.jsonl"),
+                    fold.iter()
+                        .take(3)
+                        .map(|line| format!("{}\n", line))
+                        .collect::<String>(),
+                )
+                .unwrap();
+            }
+            LogTail::Unreadable => {
+                std::fs::write(
+                    delegate_dir.join("events.jsonl"),
+                    format!("{}\n{{not json}}\n", fold[0]),
+                )
+                .unwrap();
+            }
+        }
+        if matches!(exit, Exit::Crash) {
+            std::fs::write(home.join("run").join(SID), "not a socket").unwrap();
+        }
+
+        let hub = Arc::new(hub(&held));
+        let relays = Arc::new(Mutex::new(Relays::default()));
+        let subscribe = json!({
+            "id": "c_sub",
+            "command": "subscribe",
+            "args": {"level": level},
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let kept: Kept = Arc::new(Mutex::new(vec![(
+            "c_sub".to_owned(),
+            subscribe,
+            CommandState::Written,
+        )]));
+        let (session, mut session_peer) = UnixStream::pair().unwrap();
+        let (session_writer, _session_writer_peer) = UnixStream::pair().unwrap();
+        let epoch = {
+            let mut held = crate::connection::lock(&relays);
+            let epoch = held.mint();
+            held.entries.push(Relay {
+                session: SID.to_owned(),
+                epoch,
+                writer: session_writer,
+                kept: Arc::clone(&kept),
+                replayed: Replayed::default(),
+                thread: None,
+                retiring: None,
+                target: RelayTarget::LiveUnreadable,
+            });
+            epoch
+        };
+        let order = crate::connection::lock(&relays).order.clone();
+        crate::retire::enqueue_new(
+            &order,
+            SID,
+            &CommandId("c_sub".to_owned()),
+            &json!({
+                "id": "c_sub", "command": "subscribe", "args": {"level": level}
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        crate::retire::report(
+            &order,
+            &CommandId("c_sub".to_owned()),
+            CommandState::Written,
+        );
+
+        let (paused_tx, paused_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *crate::connection::lock(&order.before_read) = Some(Box::new(move || {
+            paused_tx.send(()).unwrap_or(());
+            Deadline::after(MUST_SUCCEED_WITHIN)
+                .recv_or_fail(&release_rx, "the EOF-tail test to release the relay");
+        }));
+        let (client_writer, client_peer) = UnixStream::pair().unwrap();
+        client_peer
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let client_writer = Arc::new(Mutex::new(client_writer));
+        let thread = start_relay_thread(
+            SID,
+            epoch,
+            session,
+            Arc::clone(&hub),
+            Arc::clone(&client_writer),
+            Arc::clone(&relays),
+            kept,
+        );
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&paused_rx, "the relay to park before its session read");
+
+        let mut accepted = json!({
+            "kind": "command_accepted",
+            "payload": {"command_id": "c_sub", "result": {}},
+        });
+        if let Some(boundary) = boundary {
+            accepted["payload"]["result"]["last_seq"] = json!(boundary);
+        }
+        session_peer
+            .write_all(format!("{accepted}\n").as_bytes())
+            .unwrap();
+        if let Some(last) = prefix_through {
+            for line in fold.iter().take_while(|line| {
+                line.get("seq")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|seq| seq <= last)
+            }) {
+                session_peer
+                    .write_all(format!("{line}\n").as_bytes())
+                    .unwrap();
+            }
+        }
+        session_peer.flush().unwrap();
+        drop(session_peer);
+        release_tx.send(()).unwrap();
+        join_within_deadline(thread);
+        drop(client_writer);
+
+        let mut read = BufReader::new(client_peer);
+        let mut output = String::new();
+        read.read_to_string(&mut output).unwrap();
+        let lines: Vec<Value> = output
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            lines.first().and_then(|line| line["kind"].as_str()),
+            Some("command_accepted"),
+            "{name}: the subscription acknowledgement is forwarded: {lines:?}"
+        );
+        let seqs: Vec<u64> = lines
+            .iter()
+            .filter_map(|line| line.get("seq").and_then(Value::as_u64))
+            .collect();
+        assert_eq!(
+            seqs, expected_seqs,
+            "{name}: forward the prefix and only the missing suffix through last_seq"
+        );
+        assert_eq!(
+            lines.iter().any(|line| line["kind"] == "stream_closed"),
+            expect_stream_closed,
+            "{name}: stream_closed follows only a failed required-range read: {lines:?}"
+        );
+        assert_eq!(
+            crate::connection::lock(&relays).subscription(SID).is_some(),
+            expect_subscription,
+            "{name}: successful/no-op completion keeps the accepted subscription"
+        );
+    }
+
+    run_case(
+        "clean exit",
+        "full",
+        Some(4),
+        Some(1),
+        LogTail::Complete,
+        Exit::Clean,
+        &[0, 1, 2, 3, 4],
+        false,
+        true,
+    );
+    run_case(
+        "crash",
+        "full",
+        Some(4),
+        Some(1),
+        LogTail::Complete,
+        Exit::Crash,
+        &[0, 1, 2, 3, 4],
+        false,
+        true,
+    );
+    run_case(
+        "unreadable log",
+        "full",
+        Some(4),
+        Some(1),
+        LogTail::Unreadable,
+        Exit::Crash,
+        &[0, 1],
+        true,
+        false,
+    );
+    run_case(
+        "short log before the accepted boundary",
+        "full",
+        Some(4),
+        Some(1),
+        LogTail::Short,
+        Exit::Crash,
+        &[0, 1],
+        true,
+        false,
+    );
+    run_case(
+        "summary has no boundary",
+        "summary",
+        None,
+        None,
+        LogTail::Complete,
+        Exit::Clean,
+        &[],
+        false,
+        true,
+    );
+    run_case(
+        "full acknowledgement has no boundary",
+        "full",
+        None,
+        Some(0),
+        LogTail::Complete,
+        Exit::Clean,
+        &[0],
+        false,
+        true,
+    );
+    run_case(
+        "boundary already forwarded",
+        "full",
+        Some(2),
+        Some(2),
+        LogTail::Complete,
+        Exit::Clean,
+        &[0, 1, 2],
+        false,
+        true,
+    );
+}
+
+#[test]
 fn an_accepted_prompt_ack_settles_to_nothing() {
     let held = fakes::TempDir::new("rs");
     let hub = hub(&held);
