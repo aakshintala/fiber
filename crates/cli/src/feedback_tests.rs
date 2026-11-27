@@ -134,7 +134,8 @@ fn full_url(desc_len: usize, doctor_len: usize) -> String {
     let description = "a".repeat(desc_len);
     let doctor = "d".repeat(doctor_len);
     let report = build_report(VERSION, PLATFORM, INSTALL, &description, &doctor);
-    issue_link(&title(&description), &report, &description)
+    let (url, _) = issue_link(&title(&description), &report, &description);
+    url
 }
 
 /// The overhead every full link carries: the URL, the encoded title
@@ -179,7 +180,8 @@ fn the_link_carries_the_full_report_at_1999_and_2000_chars() {
         let description = "a".repeat(100);
         let doctor = "d".repeat(doctor_len_for(target));
         let report = build_report(VERSION, PLATFORM, INSTALL, &description, &doctor);
-        let url = issue_link(&title(&description), &report, &description);
+        let (url, attach) = issue_link(&title(&description), &report, &description);
+        assert!(!attach, "{target}");
         assert_eq!(url.len(), target, "{target}");
         assert!(url.starts_with("https://github.com/aakshintala/fiber/issues/new?title="));
         let (linked_title, linked_body) = linked(&url);
@@ -201,7 +203,8 @@ fn the_link_falls_back_past_2000_chars_with_the_title_kept() {
         super::encode(&report)
     );
     assert_eq!(full.len(), 2001);
-    let url = issue_link(&title(&description), &report, &description);
+    let (url, attach) = issue_link(&title(&description), &report, &description);
+    assert!(attach);
     let (linked_title, linked_body) = linked(&url);
     assert_eq!(linked_title, title(&description));
     assert_ne!(linked_body, report);
@@ -213,11 +216,140 @@ fn the_link_falls_back_past_2000_chars_with_the_title_kept() {
 fn non_ascii_and_newlines_round_trip_through_the_link() {
     let description = "héllo wörld\nsecond line";
     let report = build_report(VERSION, PLATFORM, INSTALL, description, DOCTOR);
-    let url = issue_link(&title(description), &report, description);
+    let (url, attach) = issue_link(&title(description), &report, description);
+    assert!(!attach);
     assert!(url.len() <= 2000);
     let (linked_title, linked_body) = linked(&url);
     assert_eq!(linked_title, "Feedback: héllo wörld");
     assert_eq!(linked_body, report);
+}
+
+/// The instruction every fallback body and fallback output carries.
+const ATTACH: &str = "The full report was too long for a link: attach the report file.";
+
+#[test]
+fn the_link_short_fallback_keeps_the_whole_description() {
+    // A long report with a short description: the fallback carries the
+    // description whole, with no cut marker.
+    let description = "a".repeat(100);
+    let doctor = "d".repeat(doctor_len_for(2001));
+    let report = build_report(VERSION, PLATFORM, INSTALL, &description, &doctor);
+    let (url, attach) = issue_link(&title(&description), &report, &description);
+    assert!(attach);
+    assert!(url.len() <= 2000, "{}", url.len());
+    let (linked_title, linked_body) = linked(&url);
+    assert_eq!(linked_title, title(&description));
+    assert_eq!(linked_body, format!("{description}\n\n{ATTACH}"));
+}
+
+#[test]
+fn the_link_8k_description_falls_back_capped_with_attach() {
+    // RULING-4976-1: an 8 KiB description gives a link of at most 2000
+    // characters, and the body still carries the attach instruction.
+    let description = "a".repeat(8192);
+    let report = build_report(VERSION, PLATFORM, INSTALL, &description, DOCTOR);
+    let (url, attach) = issue_link(&title(&description), &report, &description);
+    assert!(attach);
+    assert!(url.len() <= 2000, "{}", url.len());
+    let (linked_title, linked_body) = linked(&url);
+    assert_eq!(linked_title, title(&description));
+    let clipped = linked_body
+        .strip_suffix(&format!("\n\n{ATTACH}"))
+        .unwrap_or_else(|| panic!("attach sentence: {linked_body}"));
+    assert!(clipped.ends_with("…"), "{clipped}");
+    assert!(clipped.len() < description.len(), "{clipped}");
+}
+
+#[test]
+fn the_link_clips_on_a_character_boundary_with_ellipsis() {
+    // A description over the cap with multi-byte text at the cut: the
+    // link stays capped, decodes to valid text, and ends the kept
+    // description with `…` while the title and attach sentence stay whole.
+    let description = format!("{}tail", "é".repeat(2000));
+    let report = build_report(VERSION, PLATFORM, INSTALL, &description, DOCTOR);
+    let expected_title = title(&description);
+    let (url, attach) = issue_link(&expected_title, &report, &description);
+    assert!(attach);
+    assert!(url.len() <= 2000, "{}", url.len());
+    // Decoding unwraps the UTF-8, so a split character or `%XX`
+    // escape fails the test instead of passing silently.
+    let (linked_title, linked_body) = linked(&url);
+    assert_eq!(linked_title, expected_title);
+    let clipped = linked_body
+        .strip_suffix(&format!("\n\n{ATTACH}"))
+        .unwrap_or_else(|| panic!("attach sentence: {linked_body}"));
+    assert!(clipped.ends_with("…"), "{clipped}");
+    assert!(linked_body.contains(ATTACH));
+}
+
+#[test]
+fn the_link_four_byte_title_and_empty_description_still_fit() {
+    // A 120-character title of four-byte characters with an empty
+    // description: the fallback still carries the whole title and the
+    // whole attach sentence within the cap.
+    let title = title(&"𐀀".repeat(300));
+    assert_eq!(title.chars().count(), 120);
+    let report = build_report(VERSION, PLATFORM, INSTALL, "", &"d".repeat(3000));
+    let (url, attach) = issue_link(&title, &report, "");
+    assert!(attach);
+    assert!(url.len() <= 2000, "{}", url.len());
+    let (linked_title, linked_body) = linked(&url);
+    assert_eq!(linked_title, title);
+    assert_eq!(linked_body, format!("\n\n{ATTACH}"));
+}
+
+#[test]
+fn the_link_single_four_byte_description_round_trips() {
+    let description = "😀";
+    let report = build_report(VERSION, PLATFORM, INSTALL, description, DOCTOR);
+    let (url, attach) = issue_link(&title(description), &report, description);
+    assert!(!attach);
+    let (_, linked_body) = linked(&url);
+    assert_eq!(linked_body, report);
+}
+
+#[test]
+fn the_link_never_exceeds_2000_chars() {
+    // Both branches pin the cap: the full link by its length check, the
+    // fallback by clipping the description to fit.
+    let cases = [
+        String::new(),
+        "a".to_owned(),
+        "a".repeat(100),
+        "a".repeat(8192),
+        "é".repeat(3000),
+        "😀".repeat(1500),
+        "héllo wörld 😀\nsecond line".to_owned(),
+    ];
+    for description in &cases {
+        for doctor in [DOCTOR.to_owned(), "d".repeat(3000)] {
+            let report = build_report(VERSION, PLATFORM, INSTALL, description, &doctor);
+            let (url, _) = issue_link(&title(description), &report, description);
+            assert!(url.len() <= 2000, "{} for {description:?}", url.len());
+        }
+    }
+}
+
+#[test]
+fn the_link_write_reports_fallback_through_attach() {
+    let root = fakes::TempDir::new("fiber-feedback-attach");
+    let clock = FakeClock::new();
+    let doctor = || Ok(DOCTOR.to_owned());
+    let short = write(
+        DESCRIPTION,
+        None,
+        &ctx(root.path(), clock.as_ref(), &doctor),
+    )
+    .unwrap();
+    assert!(!short.attach);
+    let long = write(
+        &"a".repeat(8192),
+        None,
+        &ctx(root.path(), clock.as_ref(), &doctor),
+    )
+    .unwrap();
+    assert!(long.attach);
+    assert!(long.link.len() <= 2000, "{}", long.link.len());
 }
 
 #[test]

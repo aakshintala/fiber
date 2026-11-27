@@ -132,21 +132,24 @@ fn title(description: &str) -> String {
     }
 }
 
-/// The new-issue link for the report. At most 2000 characters: at or
-/// under it the body carries the full report, over it the body carries
-/// the description with the line saying to attach the file instead. The
-/// title is always carried.
-fn issue_link(title: &str, report: &str, description: &str) -> String {
+/// The new-issue link for the report, with whether it fell back to the
+/// description. At most 2000 characters: at or under it the body carries
+/// the full report, over it the body carries the description with the
+/// line saying to attach the file instead. The title is always carried.
+fn issue_link(title: &str, report: &str, description: &str) -> (String, bool) {
     const BASE: &str = "https://github.com/aakshintala/fiber/issues/new";
     const LIMIT: usize = 2000;
     let full = format!("{BASE}?title={}&body={}", encode(title), encode(report));
     if full.len() <= LIMIT {
-        return full;
+        return (full, false);
     }
     let fallback = format!(
         "{description}\n\nThe full report was too long for a link: attach the report file."
     );
-    format!("{BASE}?title={}&body={}", encode(title), encode(&fallback))
+    (
+        format!("{BASE}?title={}&body={}", encode(title), encode(&fallback)),
+        true,
+    )
 }
 
 /// One `%XX` query component: UTF-8 bytes, leaving only the unreserved
@@ -569,7 +572,7 @@ pub fn write(
         description,
         &doctor,
     );
-    let link = issue_link(&title(description), &report, description);
+    let (link, attach) = issue_link(&title(description), &report, description);
     let report = format!(
         "{report}\n{}{}",
         (ctx.diagnostics)(session),
@@ -591,5 +594,5 @@ pub fn write(
         drop(std::fs::remove_file(&path));
         return Err(FeedbackError::Write { path, source });
     }
-    Ok(contract::feedback::FeedbackDone { path, link })
+    Ok(contract::feedback::FeedbackDone { path, link, attach })
 }

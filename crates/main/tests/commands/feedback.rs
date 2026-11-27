@@ -202,6 +202,44 @@ fn feedback_by_stdin_with_trailing_dash_writes_the_same_report() {
 }
 
 #[test]
+fn feedback_long_description_caps_the_link_and_says_to_attach() {
+    // RULING-4976-1: an 8 KiB description gives a link of at most 2000
+    // characters, and the command's own output says to attach the file.
+    let setup = Setup::new();
+    let description = "a".repeat(8192);
+    let output = run(
+        &setup,
+        "feedback with an 8 KiB description",
+        &["feedback", description.as_str()],
+        None,
+        None,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_text(&output)
+    );
+    let text = stdout_text(&output);
+    let mut lines = text.lines();
+    let path = lines.next().unwrap();
+    let link = lines.next().unwrap();
+    let attach = lines.next().unwrap();
+    assert!(lines.next().is_none(), "{text}");
+    assert!(
+        link.starts_with("https://github.com/aakshintala/fiber/issues/new?"),
+        "{link}"
+    );
+    assert!(link.len() <= 2000, "{}", link.len());
+    assert_eq!(
+        attach,
+        "The full report was too long for a link: attach the report file."
+    );
+    let report = fs::read_to_string(path).unwrap();
+    assert!(report.contains(&description), "{report}");
+}
+
+#[test]
 fn feedback_empty_description_is_a_usage_error() {
     let setup = Setup::new();
     let output = run(

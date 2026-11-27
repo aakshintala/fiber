@@ -207,6 +207,8 @@ pub struct FeedbackDone {
     pub path: PathBuf,
     /// The new-issue link carrying the report, or its description.
     pub link: String,
+    /// The link fell back to the description, so the person attaches the file.
+    pub attach: bool,
 }
 
 #[cfg(test)]

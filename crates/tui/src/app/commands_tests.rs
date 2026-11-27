@@ -1817,6 +1817,7 @@ fn feedback_done() -> crate::FeedbackDone {
     crate::FeedbackDone {
         path: PathBuf::from("/w/fiber-feedback-7.md"),
         link: "https://example.test/new?title=x".to_owned(),
+        attach: false,
     }
 }
 
@@ -1896,6 +1897,64 @@ fn feedback_failure_keeps_the_draft_with_the_error() {
     app.on_feedback(Err("the write failed".to_owned()));
     assert_eq!(app.draft(), "/feedback the sound");
     assert_eq!(app.notice(), Some("the write failed"));
+}
+
+#[test]
+fn feedback_success_keeps_a_draft_edited_while_the_write_ran() {
+    // Text typed while the report writes replaces the submitted draft:
+    // the late success must not clear it.
+    let mut app = attached();
+    app.set_feedback(Some(feedback_writer(feedback_done())));
+    assert!(matches!(
+        enter(&mut app, "/feedback the sound"),
+        Effect::Feedback { .. }
+    ));
+    app.draft.clear();
+    app.draft.paste("a new thought");
+    app.on_feedback(Ok(feedback_done()));
+    assert_eq!(app.draft(), "a new thought");
+}
+
+#[test]
+fn feedback_second_submission_wins_over_the_first() {
+    // A second `/feedback` before the first completes replaces the
+    // pending text: restoring the first leaves the draft in place.
+    let mut app = attached();
+    app.set_feedback(Some(feedback_writer(feedback_done())));
+    assert!(matches!(
+        enter(&mut app, "/feedback one"),
+        Effect::Feedback { .. }
+    ));
+    app.draft.clear();
+    assert!(matches!(
+        enter(&mut app, "/feedback two"),
+        Effect::Feedback { .. }
+    ));
+    app.draft.clear();
+    app.draft.paste("/feedback one");
+    app.on_feedback(Ok(feedback_done()));
+    assert_eq!(app.draft(), "/feedback one");
+}
+
+#[test]
+fn feedback_fallback_notice_tells_the_person_to_attach_the_file() {
+    let mut app = attached();
+    let mut done = feedback_done();
+    done.attach = true;
+    app.set_feedback(Some(feedback_writer(done.clone())));
+    assert!(matches!(
+        enter(&mut app, "/feedback the sound"),
+        Effect::Feedback { .. }
+    ));
+    app.on_feedback(Ok(done));
+    assert!(app.draft().is_empty());
+    assert_eq!(
+        app.notice(),
+        Some(
+            "Wrote /w/fiber-feedback-7.md\nhttps://example.test/new?title=x\n\
+             The full report was too long for a link: attach the report file."
+        )
+    );
 }
 
 #[test]
