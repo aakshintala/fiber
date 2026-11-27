@@ -172,8 +172,6 @@ crates/tui/src/settings_view.rs	fiber-4584	plan	2026-11-27T04:59:38Z	roundhouse-
 crates/tui/src/settings_view_tests.rs	fiber-4584	plan	2026-11-27T04:59:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/event_loop_settings_tests.rs	fiber-4584	plan	2026-11-27T04:59:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 docs/tui.md	fiber-4584	plan	2026-11-27T04:59:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
-crates/extensions/src/lua/tool.rs	fiber-4980	plan	2026-11-27T05:45:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
-crates/extensions/src/lua/tool_tests.rs	fiber-4980	plan	2026-11-27T05:45:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-check-rules-by-path	fiber-5004	plan	2026-11-27T05:47:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 crates/doors/src/session_tests.rs:10-11	fiber-4042	plan	2026-11-27T05:46:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4042-keeper-delegates	
 crates/doors/src/session_tests.rs:39-40	fiber-4042	plan	2026-11-27T05:46:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4042-keeper-delegates	
@@ -610,14 +608,6 @@ docs/tui.md:3571-3571	fiber-688	plan	2026-11-27T08:52:27Z	roundhouse-7010-plus-1
 docs/tui.md:3573-3576	fiber-688	plan	2026-11-27T08:52:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-688-part6	
 docs/tui.md:3578-3578	fiber-688	plan	2026-11-27T08:52:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-688-part6	
 docs/tui.md:3593-3594	fiber-688	plan	2026-11-27T08:52:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-688-part6	
-crates/contract/src/codes.rs:109-109	fiber-4980	plan	2026-11-27T09:12:59Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4980-lua-extension-unavailable	
-crates/extensions/src/extension_tools.rs:279-280	fiber-4980	plan	2026-11-27T09:12:59Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4980-lua-extension-unavailable	
-crates/extensions/src/extension_tools_tests.rs:41-42	fiber-4980	plan	2026-11-27T09:12:59Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4980-lua-extension-unavailable	
-crates/extensions/tests/lua_tools.rs:1446-1446	fiber-4980	plan	2026-11-27T09:12:59Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4980-lua-extension-unavailable	
-crates/extensions/tests/lua_tools.rs:1517-1517	fiber-4980	plan	2026-11-27T09:12:59Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4980-lua-extension-unavailable	
-crates/extensions/tests/lua_tools.rs:1609-1609	fiber-4980	plan	2026-11-27T09:12:59Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4980-lua-extension-unavailable	
-docs/errors.md:346-346	fiber-4980	plan	2026-11-27T09:12:59Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4980-lua-extension-unavailable	
-docs/extensions.md:1755-1756	fiber-4980	plan	2026-11-27T09:12:59Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4980-lua-extension-unavailable	
 crates/loop/src/deliveries.rs:171-171	fiber-4977	plan	2026-11-27T09:52:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4977-resume-settle-after-tool	
 crates/loop/src/history.rs:44-45	fiber-4977	plan	2026-11-27T09:52:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4977-resume-settle-after-tool	
 crates/loop/src/history.rs:80-81	fiber-4977	plan	2026-11-27T09:52:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4977-resume-settle-after-tool	
