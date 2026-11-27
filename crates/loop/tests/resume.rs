@@ -6383,6 +6383,134 @@ fn a_settled_large_message_cuts_text_and_records_artifact() {
 }
 
 #[test]
+fn a_current_run_finish_without_completion_is_not_written_twice() {
+    let mut history = History::new(Vec::new());
+    history.write(job_started("j_duplicate"), None);
+    history.write(
+        delegate_started("j_duplicate", "s_duplicate", "fiber"),
+        None,
+    );
+    let prior_finish = match settle_exit(0, Some("already recorded"), None) {
+        Event::FiberExited(exit) => {
+            Event::DelegateFinished(exit.delegate_finished(&contract::JobId("j_duplicate".into())))
+        }
+        _ => unreachable!(),
+    };
+    history.write(prior_finish, None);
+    let delegate = stage_delegate(&history, "s_duplicate");
+    delegate.append(&fiber_started(), None, None).unwrap();
+    delegate
+        .append(&settle_exit(0, Some("already recorded"), None), None, None)
+        .unwrap();
+    drop(delegate);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    let lines = history.new_lines();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].kind(), EventKind::JobCompleted);
+    assert_eq!(lines[0].payload["job_id"], "j_duplicate");
+}
+
+#[test]
+fn a_previous_run_finish_does_not_suppress_the_current_run_finish() {
+    let mut history = History::new(Vec::new());
+    history.write(job_started("j_reopened"), None);
+    history.write(delegate_started("j_reopened", "s_reopened", "fiber"), None);
+    let old_finish = match settle_exit(0, Some("old"), None) {
+        Event::FiberExited(exit) => {
+            Event::DelegateFinished(exit.delegate_finished(&contract::JobId("j_reopened".into())))
+        }
+        _ => unreachable!(),
+    };
+    history.write(old_finish, None);
+    history.write(job_started("j_reopened"), None);
+    let delegate = stage_delegate(&history, "s_reopened");
+    delegate.append(&fiber_started(), None, None).unwrap();
+    delegate
+        .append(&settle_exit(0, Some("new"), None), None, None)
+        .unwrap();
+    drop(delegate);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    let lines = history.new_lines();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].kind(), EventKind::DelegateFinished);
+    assert_eq!(lines[0].payload["text"], "new");
+    assert_eq!(lines[1].kind(), EventKind::JobCompleted);
+}
+
+#[test]
+fn a_current_parent_run_without_a_matching_delegate_start_stays_orphaned() {
+    let mut history = History::new(Vec::new());
+    history.write(job_started("j_no_start"), None);
+    history.write(delegate_started("j_no_start", "s_no_start", "fiber"), None);
+    let delegate = stage_delegate(&history, "s_no_start");
+    delegate
+        .append(&settle_exit(0, Some("unmatched exit"), None), None, None)
+        .unwrap();
+    drop(delegate);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    assert_eq!(history.new_kinds(), [EventKind::JobCompleted]);
+    let completed = &history.new_lines()[0];
+    assert_eq!(completed.payload["status"], "failed");
+    assert_eq!(completed.payload["error"]["code"], "orphaned");
+}
+
+#[test]
+fn a_delegate_exit_from_a_run_without_a_parent_start_does_not_settle_the_job() {
+    let mut history = History::new(Vec::new());
+    history.write(job_started("j_mismatch"), None);
+    history.write(delegate_started("j_mismatch", "s_mismatch", "fiber"), None);
+    let delegate = stage_delegate(&history, "s_mismatch");
+    delegate.append(&fiber_started(), None, None).unwrap();
+    delegate
+        .append(&settle_exit(0, Some("first run"), None), None, None)
+        .unwrap();
+    delegate.append(&fiber_started(), None, None).unwrap();
+    delegate
+        .append(&settle_exit(1, Some("unmatched run"), None), None, None)
+        .unwrap();
+    drop(delegate);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    assert_eq!(history.new_kinds(), [EventKind::JobCompleted]);
+    let completed = &history.new_lines()[0];
+    assert_eq!(completed.payload["status"], "failed");
+    assert_eq!(completed.payload["error"]["code"], "orphaned");
+}
+
+#[test]
+fn two_parent_starts_settle_only_from_the_matching_latest_delegate_run() {
+    let mut history = History::new(Vec::new());
+    history.write(job_started("j_two_runs"), None);
+    history.write(delegate_started("j_two_runs", "s_two_runs", "fiber"), None);
+    history.write(job_started("j_two_runs"), None);
+    let delegate = stage_delegate(&history, "s_two_runs");
+    delegate.append(&fiber_started(), None, None).unwrap();
+    delegate
+        .append(&settle_exit(0, Some("old answer"), None), None, None)
+        .unwrap();
+    delegate.append(&fiber_started(), None, None).unwrap();
+    delegate
+        .append(&settle_exit(1, Some("current answer"), None), None, None)
+        .unwrap();
+    drop(delegate);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    let lines = history.new_lines();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].kind(), EventKind::DelegateFinished);
+    assert_eq!(lines[0].payload["text"], "current answer");
+    assert_eq!(lines[1].payload["process"]["exit_code"], 1);
+}
+
+#[test]
 fn a_stale_exit_from_an_earlier_run_keeps_the_orphan_standing() {
     let mut history = History::new(Vec::new());
     history.write(job_started("j_stale"), None);
