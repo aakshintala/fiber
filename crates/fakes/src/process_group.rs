@@ -215,10 +215,12 @@ pub(crate) const MATCHING_PATTERN_VAR: &str = "FIBER_WATCHDOG_PATTERN";
 /// [`WATCHDOG_LOOKUP_WITHIN`]: a hung lookup is killed and whatever it
 /// listed is still killed, so the script always exits. The bound waits in
 /// the background beside the lookup, so a fast lookup returns at once
-/// without waiting out the sleep. All of `&`, `wait`, `sleep`, `kill`,
-/// `$$`, redirection and `:-` are POSIX shell, so the script runs on macOS
-/// too, where `timeout(1)` is unavailable.
-pub(crate) const MATCHING_WATCHDOG_SCRIPT: &str = r#"[ -n "$FIBER_WATCHDOG_PATTERN" ] || exit 2; read -r line || { out="${TMPDIR:-/tmp}/fiber-watchdog-$$"; pgrep -f -- "$FIBER_WATCHDOG_PATTERN" > "$out" 2>/dev/null & lookup=$!; (sleep 3; kill -9 "$lookup" 2>/dev/null) & killer=$!; wait "$lookup" 2>/dev/null; kill -9 "$killer" 2>/dev/null; wait "$killer" 2>/dev/null; wait "$lookup" 2>/dev/null; for p in $(cat "$out" 2>/dev/null); do [ "$p" -gt 1 ] || continue; kill -s KILL -- "-$p"; kill -s KILL "$p"; done; rm -f "$out"; } # lookup bound: WATCHDOG_LOOKUP_WITHIN"#;
+/// without waiting out the sleep. The timer helper catches cancellation
+/// and kills and reaps its own sleep, so no descendant is orphaned. The
+/// script uses only POSIX shell features: `&`, `wait`, `sleep`, `kill`,
+/// `$$`, redirection and `:-`; it runs on macOS, where `timeout(1)` is
+/// unavailable.
+pub(crate) const MATCHING_WATCHDOG_SCRIPT: &str = r#"[ -n "$FIBER_WATCHDOG_PATTERN" ] || exit 2; read -r line || { out="${TMPDIR:-/tmp}/fiber-watchdog-$$"; pgrep -f -- "$FIBER_WATCHDOG_PATTERN" > "$out" 2>/dev/null & lookup=$!; (trap 'kill -9 "$timer" 2>/dev/null; wait "$timer" 2>/dev/null; exit 0' TERM; sleep 3 & timer=$!; wait "$timer" 2>/dev/null; kill -9 "$lookup" 2>/dev/null) & killer=$!; wait "$lookup" 2>/dev/null; kill -TERM "$killer" 2>/dev/null; wait "$killer" 2>/dev/null; wait "$lookup" 2>/dev/null; for p in $(cat "$out" 2>/dev/null); do [ "$p" -gt 1 ] || continue; kill -s KILL -- "-$p"; kill -s KILL "$p"; done; rm -f "$out"; } # lookup bound: WATCHDOG_LOOKUP_WITHIN"#;
 
 /// `text` as an extended regular expression matching itself, for `pgrep -f`.
 /// A leading plain character becomes a bracket expression (`/tmp/x` is

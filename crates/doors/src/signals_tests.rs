@@ -550,6 +550,98 @@ fn lifeline_query_times_out_when_the_keeper_does_not_reply() {
 }
 
 #[test]
+fn installed_lifeline_query_returns_the_keeper_pid() {
+    assert_eq!(
+        contract::keeper::LIFELINE_QUERY_BOUND,
+        MUST_SUCCEED_WITHIN,
+        "the keeper query bound matches the shared must-succeed bound"
+    );
+    let clock = FakeClock::new();
+    let (signals, _did) = recorded(&clock);
+    let (reader, mut keeper) = UnixStream::pair().expect("lifeline pair");
+    keeper
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+        .expect("bound keeper query read");
+    let reader_clone = reader.try_clone().expect("lifeline writer");
+    let query = signals.lifeline(Box::new(reader), Some(Box::new(reader_clone)));
+    let installed = signals.lifeline_query();
+    let handle = installed.clone().unwrap_or_else(|| query.clone());
+
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = thread::spawn(move || done_tx.send(handle.query()).expect("query result"));
+    let server = thread::spawn(move || {
+        let mut request = [0; contract::keeper::LIFELINE_QUERY.len()];
+        keeper.read_exact(&mut request).expect("query frame");
+        assert_eq!(&request, contract::keeper::LIFELINE_QUERY);
+        let mut reply = [b'P', 0, 0, 0, 0];
+        reply[1..].copy_from_slice(
+            &u32::try_from(rustix::process::getppid().unwrap().as_raw_pid())
+                .unwrap()
+                .to_le_bytes(),
+        );
+        keeper.write_all(&reply).expect("query reply");
+    });
+    let result = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&done_rx)
+        .expect("installed query answers before its bound");
+    worker.join().expect("query worker");
+    server.join().expect("keeper query server");
+    assert_eq!(
+        result,
+        Some(u32::try_from(rustix::process::getppid().unwrap().as_raw_pid()).unwrap())
+    );
+    assert!(installed.is_some(), "lifeline query is installed");
+}
+
+#[test]
+fn lifeline_query_lock_wait_expires_at_its_deadline() {
+    let clock = FakeClock::new();
+    let (signals, _did) = recorded(&clock);
+    let (reader, _keeper) = UnixStream::pair().expect("lifeline pair");
+    let reader_clone = reader.try_clone().expect("lifeline writer");
+    let query = signals.lifeline(Box::new(reader), Some(Box::new(reader_clone)));
+    let (would_block_tx, would_block_rx) = mpsc::sync_channel(1);
+    query.notify_writer_would_block(would_block_tx);
+    let writer = query.writer.lock().unwrap();
+    let worker_query = query.clone();
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = thread::spawn(move || done_tx.send(worker_query.query()).expect("query result"));
+
+    Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&would_block_rx)
+        .expect("query worker reaches writer WouldBlock while writer is held");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the lock-wait loop reads the injected clock but does not park on it"
+    )]
+    clock.advance(contract::keeper::LIFELINE_QUERY_BOUND);
+    let at_bound = Deadline::after(Duration::from_millis(250)).recv(&done_rx);
+    if at_bound.is_err() {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "release the mutant's strict-bound busy loop by advancing its injected clock"
+        )]
+        clock.advance(Duration::from_nanos(1));
+    }
+    let after_cleanup = if at_bound.is_err() {
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&done_rx)
+    } else {
+        at_bound
+    };
+    drop(writer);
+    worker.join().expect("query worker");
+
+    assert_eq!(
+        at_bound.expect("query returns None at the exact deadline while writer remains held"),
+        None
+    );
+    assert_eq!(
+        after_cleanup.expect("query worker result after cleanup"),
+        None
+    );
+}
+
+#[test]
 fn lifeline_query_routes_one_fixed_reply_and_rejects_malformed_frames() {
     let clock = FakeClock::new();
     let (signals, _did) = recorded(&clock);

@@ -183,6 +183,8 @@ pub struct LifelineQuery {
     clock: Arc<dyn Clock>,
     #[cfg(test)]
     scripted_reply: Arc<Mutex<Option<[u8; LIFELINE_REPLY_LEN]>>>,
+    #[cfg(test)]
+    writer_would_block: Arc<Mutex<Option<SyncSender<()>>>>,
 }
 
 impl LifelineQuery {
@@ -196,7 +198,13 @@ impl LifelineQuery {
             pending: Arc::new(Mutex::new(None)),
             clock,
             scripted_reply: Arc::new(Mutex::new(Some(reply))),
+            writer_would_block: Arc::new(Mutex::new(None)),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn notify_writer_would_block(&self, sender: SyncSender<()>) {
+        *lock(&self.writer_would_block) = Some(sender);
     }
 
     /// Queries the keeper and returns its pid only for a complete valid reply.
@@ -208,6 +216,10 @@ impl LifelineQuery {
                 Ok(guard) => break guard,
                 Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
                 Err(std::sync::TryLockError::WouldBlock) => {
+                    #[cfg(test)]
+                    if let Some(sender) = lock(&self.writer_would_block).as_ref() {
+                        let _notified = sender.try_send(());
+                    }
                     if self.clock.now() >= until {
                         return None;
                     }
@@ -462,6 +474,8 @@ impl Signals {
             clock: Arc::clone(&self.clock),
             #[cfg(test)]
             scripted_reply: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            writer_would_block: Arc::new(Mutex::new(None)),
         };
         let signals = Arc::clone(self);
         let watched = thread::Builder::new()
