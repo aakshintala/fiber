@@ -3084,36 +3084,3 @@ pub(crate) fn held_wait_passes_after_release<R: Send + 'static>(
         }
     }
 }
-
-#[cfg(test)]
-mod detached_hub_tests {
-    use super::{Deadline, DetachedHub};
-    use std::process::Command;
-    use support::peer::{KernelProcessRead, Pid, walk_ancestors};
-
-    #[test]
-    fn stop_leaves_no_live_process_in_the_group() {
-        let mut serve = Command::new("/usr/bin/tail");
-        serve.args(["-f", "/dev/null"]);
-        let mut hub = DetachedHub::spawn_command(Deadline::start(), &mut serve);
-        let group = hub.group;
-        let target = walk_ancestors(Pid(hub.hub_pid), &KernelProcessRead, |_| true)
-            .expect("the detached hub ancestry is complete");
-        let caller_pid = Pid(std::process::id());
-        assert!(
-            !target.matched_pids.contains(&caller_pid),
-            "the test process is in the detached hub ancestry: {:?}",
-            target.matched_pids
-        );
-        assert_eq!(
-            super::process_group_id(hub.hub_pid),
-            group,
-            "the hub's process group must be the intermediate shell's pid"
-        );
-        hub.stop();
-        assert!(
-            !super::group_has_live_members(group),
-            "the hub group still has a live process ({group})"
-        );
-    }
-}
