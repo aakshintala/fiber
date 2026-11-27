@@ -140,6 +140,7 @@ pub struct Shell {
     /// agent's `shell` tool calls keep the 10-minute default.
     no_timeout: bool,
     host: Option<Arc<dyn contract::keeper::CommandHost>>,
+    session_id: Option<contract::SessionId>,
 }
 
 impl Shell {
@@ -171,7 +172,15 @@ impl Shell {
             detached_spawner: detached::system_spawner(),
             no_timeout: false,
             host: None,
+            session_id: None,
         }
+    }
+
+    /// Sets the owning session id for child processes started by this shell.
+    #[must_use]
+    pub fn with_session_id(mut self, id: contract::SessionId) -> Self {
+        self.session_id = Some(id);
+        self
     }
 
     /// Runs non-detached commands through the session's keeper.
@@ -744,12 +753,17 @@ impl Shell {
             let Some(jobs) = self.jobs.as_ref() else {
                 return errored(ShellError::NoJobs);
             };
-            let started =
-                match detached::launch(dir, std::process::id(), program, &command, &parsed.workdir)
-                {
-                    Ok(started) => started,
-                    Err(source) => return errored(ShellError::NotStarted { source }),
-                };
+            let started = match detached::launch_with_session(
+                dir,
+                std::process::id(),
+                program,
+                &command,
+                &parsed.workdir,
+                self.session_id.as_ref(),
+            ) {
+                Ok(started) => started,
+                Err(source) => return errored(ShellError::NotStarted { source }),
+            };
             let pgid = started.pid;
             let identity = started.identity;
             let log = started.log.clone();
@@ -856,7 +870,7 @@ impl Shell {
             (Some(_), _) | (None, _) => None,
         };
         let execute = |host| {
-            hosted::execute(
+            hosted::execute_with_session(
                 host,
                 program,
                 &command,
@@ -872,11 +886,12 @@ impl Shell {
                 settings,
                 &self.workspace,
                 protection,
+                self.session_id.as_ref(),
             )
         };
         let ran = match &self.host {
             Some(host) => execute(Arc::clone(host)),
-            None => command::execute(
+            None => command::execute_inner_with_session(
                 program,
                 &command,
                 &parsed.workdir,
@@ -891,6 +906,10 @@ impl Shell {
                 settings,
                 &self.workspace,
                 protection,
+                self.session_id.as_ref(),
+                support::group::alive,
+                Path::new("ps"),
+                sandbox::install,
             ),
         };
         let mut output = match ran {

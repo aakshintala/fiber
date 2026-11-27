@@ -83,8 +83,10 @@ fn a_hosted_foreground_call_streams_and_leaves_no_local_group() {
         stopped: None,
         adopted: None,
     });
-    let shell =
-        Shell::new(std::env::temp_dir(), Arc::new(fakes::clock::SystemClock)).with_host(host);
+    let session_id = contract::SessionId("s_0123456789abcdef".into());
+    let shell = Shell::new(std::env::temp_dir(), Arc::new(fakes::clock::SystemClock))
+        .with_session_id(session_id.clone())
+        .with_host(host);
     let before = support::group::live().len();
     let (done, result) = mpsc::channel();
     std::thread::spawn(move || {
@@ -98,6 +100,7 @@ fn a_hosted_foreground_call_streams_and_leaves_no_local_group() {
     });
     let (spec, events) = Deadline::after(Duration::from_secs(10)).recv_or_fail(&rx, "host start");
     assert_eq!(spec.timeout_ms, Some(1234));
+    assert_eq!(spec.env, vec![("FIBER_SESSION_ID".into(), session_id.0)]);
     assert_eq!(support::group::live().len(), before);
     events
         .send(HostEvent::Output {

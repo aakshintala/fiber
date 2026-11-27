@@ -351,6 +351,7 @@ pub(crate) fn start_session_tools(
 )]
 pub(crate) fn session_tools(
     fiber: PathBuf,
+    session_id: contract::SessionId,
     home: &Path,
     workspace: &Path,
     artifacts: &Path,
@@ -388,6 +389,7 @@ pub(crate) fn session_tools(
     );
     let (mut tools, mut infos, driver, forget, images) = crate::builtin::builtin_timed(
         fiber,
+        session_id,
         home,
         workspace,
         artifacts,

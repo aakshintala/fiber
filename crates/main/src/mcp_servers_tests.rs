@@ -1249,6 +1249,7 @@ fn wired(
         move || {
             super::session_tools(
                 fiber,
+                contract::SessionId("s_test".into()),
                 &home,
                 &workspace,
                 &artifacts,
@@ -1374,6 +1375,7 @@ fn reload_server_names_keep_successes_and_omit_failed_starts() {
         move || {
             super::session_tools(
                 fiber,
+                contract::SessionId("s_test".into()),
                 &home,
                 &workspace,
                 &artifacts,
