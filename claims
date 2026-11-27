@@ -542,3 +542,4 @@ crates/provider/tests/support/harness.rs:44-45	fiber-4975	plan	2026-11-27T08:34:
 docs/extensions.md:332-333	fiber-4975	plan	2026-11-27T08:34:47Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4975-lua-empty-properties	
 docs/extensions.md:443-444	fiber-4975	plan	2026-11-27T08:34:47Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4975-lua-empty-properties	
 docs/model-routing.md:239-239	fiber-4975	plan	2026-11-27T08:34:47Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4975-lua-empty-properties	
+crates/contract/src/codes.rs	fiber-4980	grant	2026-11-27T08:38:39Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
