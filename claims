@@ -172,7 +172,6 @@ crates/tui/src/settings_view.rs	fiber-4584	plan	2026-11-27T04:59:38Z	roundhouse-
 crates/tui/src/settings_view_tests.rs	fiber-4584	plan	2026-11-27T04:59:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/event_loop_settings_tests.rs	fiber-4584	plan	2026-11-27T04:59:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 docs/tui.md	fiber-4584	plan	2026-11-27T04:59:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
-scripts/test-check-rules-by-path	fiber-5004	plan	2026-11-27T05:47:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 crates/doors/src/session_tests.rs:10-11	fiber-4042	plan	2026-11-27T05:46:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4042-keeper-delegates	
 crates/doors/src/session_tests.rs:39-40	fiber-4042	plan	2026-11-27T05:46:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4042-keeper-delegates	
 crates/doors/src/session_tests.rs:61-62	fiber-4042	plan	2026-11-27T05:46:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4042-keeper-delegates	
@@ -779,3 +778,12 @@ crates/main/tests/session_turns/from_session.rs:1185-1187	fiber-5007	plan	2026-1
 crates/main/tests/session_turns/from_session.rs:1391-1393	fiber-5007	plan	2026-11-27T21:51:47Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5007-provider-server-lock	
 crates/tools/src/shell.rs	fiber-4995	plan	2026-11-27T21:56:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/tool_calls/tools.rs	fiber-4995	plan	2026-11-27T21:56:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+scripts/test-check-rules-by-path:10-11	fiber-5004	plan	2026-11-27T22:12:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5004-selftest-keeps-refusal	
+scripts/test-check-rules-by-path:13-14	fiber-5004	plan	2026-11-27T22:12:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5004-selftest-keeps-refusal	
+scripts/test-check-rules-by-path:16-16	fiber-5004	plan	2026-11-27T22:12:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5004-selftest-keeps-refusal	
+scripts/test-check-rules-by-path:20-20	fiber-5004	plan	2026-11-27T22:12:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5004-selftest-keeps-refusal	
+scripts/test-check-rules-by-path:25-25	fiber-5004	plan	2026-11-27T22:12:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5004-selftest-keeps-refusal	
+scripts/test-check-rules-by-path:30-30	fiber-5004	plan	2026-11-27T22:12:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5004-selftest-keeps-refusal	
+scripts/test-check-rules-by-path:91-91	fiber-5004	plan	2026-11-27T22:12:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5004-selftest-keeps-refusal	
+scripts/test-check-rules-by-path:106-106	fiber-5004	plan	2026-11-27T22:12:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5004-selftest-keeps-refusal	
+scripts/test-check-rules-by-path:178-178	fiber-5004	plan	2026-11-27T22:12:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5004-selftest-keeps-refusal	
