@@ -486,6 +486,27 @@ fn reload_is_busy_during_a_request_and_changes_nothing() {
     session.finish();
 }
 #[test]
+fn an_empty_lua_properties_schema_reaches_the_responses_request_as_an_object() {
+    let (setup, server) = fixture();
+    extension(
+        &setup,
+        "fiber.tool('empty',{description='empty',input_schema={type='object',properties={},required={},additionalProperties=false},effects={effects={},reversible=true},timeout=5000,run=function() return 'ok' end})",
+    );
+    let mut session = Session::start(setup);
+    session.turn(true);
+    session.finish();
+    let seen = bodies(&server);
+    let tool = seen
+        .iter()
+        .flat_map(|body| body["tools"].as_array().into_iter().flatten())
+        .find(|tool| tool["name"] == "empty")
+        .expect("the registered Lua tool is sent");
+    assert_eq!(tool["parameters"]["properties"], json!({}));
+    assert_eq!(tool["parameters"]["required"], json!([]));
+    assert_eq!(tool["strict"], json!(true));
+}
+
+#[test]
 fn extension_tool_disablement_changes_the_next_tools_answer_and_request() {
     let (setup, server) = fixture();
     extension(

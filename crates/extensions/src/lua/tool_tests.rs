@@ -85,6 +85,59 @@ fn spec_with(field: &str, value: &str) -> String {
 }
 
 #[test]
+fn lua_schema_empty_tables_are_normalized_only_at_schema_positions() {
+    let cases = [
+        ("properties", "{ x = {} }", json!({"x": {}})),
+        ("patternProperties", "{ x = {} }", json!({"x": {}})),
+        ("$defs", "{ x = {} }", json!({"x": {}})),
+        ("definitions", "{ x = {} }", json!({"x": {}})),
+        ("dependentSchemas", "{ x = {} }", json!({"x": {}})),
+        ("items", "{}", json!({})),
+        ("additionalItems", "{}", json!({})),
+        ("additionalProperties", "{}", json!({})),
+        ("unevaluatedItems", "{}", json!({})),
+        ("unevaluatedProperties", "{}", json!({})),
+        ("propertyNames", "{}", json!({})),
+        ("contains", "{}", json!({})),
+        ("contentSchema", "{}", json!({})),
+        ("not", "{}", json!({})),
+        ("if", "{}", json!({})),
+        ("then", "{}", json!({})),
+        ("else", "{}", json!({})),
+        ("allOf", "{}", json!([])),
+        ("anyOf", "{}", json!([])),
+        ("oneOf", "{}", json!([])),
+        ("prefixItems", "{}", json!([])),
+        ("dependencies", "{ x = {} }", json!({"x": []})),
+    ];
+    for (keyword, value, before) in cases {
+        let field = if keyword.starts_with('$') {
+            format!("[\\\"{keyword}\\\"]")
+        } else {
+            keyword.to_owned()
+        };
+        let source = format!(
+            "fiber.tool('x', {{description='d', input_schema={{type='object', {field}={value}}}, effects={{effects={{}},reversible=true}}, timeout=100, run=function() end}})"
+        );
+        let (_dir, ext) = extension(&source);
+        let schema = tools(&ext)["x"].input_schema.clone();
+        assert_eq!(schema[keyword], before, "{keyword}: {schema}");
+    }
+}
+
+#[test]
+fn a_nested_property_schema_and_data_keywords_keep_their_conversion() {
+    let (_dir, ext) = extension(
+        "fiber.tool('x', {description='d', input_schema={type='object', properties={x={properties={}}}, required={}, enum={{properties={}}}, default={}}, effects={effects={},reversible=true}, timeout=100, run=function() end})",
+    );
+    let schema = &tools(&ext)["x"].input_schema;
+    assert_eq!(schema["properties"]["x"]["properties"], json!({}));
+    assert_eq!(schema["required"], json!([]));
+    assert_eq!(schema["enum"][0]["properties"], json!([]));
+    assert_eq!(schema["default"], json!([]));
+}
+
+#[test]
 fn a_tool_registers_its_description_schema_effects_and_timeout() {
     let (_dir, ext) = extension(
         r#"

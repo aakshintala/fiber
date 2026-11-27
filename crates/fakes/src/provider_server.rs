@@ -498,6 +498,54 @@ fn discards_pipelined(headers: &[(String, String)]) -> bool {
         && !headers.iter().any(|(name, _)| name == "transfer-encoding")
 }
 
+/// Rejects only malformed top-level OpenAI Responses function properties.
+/// Decode string tokens for the prefilter so escaped JSON keys still match;
+/// parse the request body only when that key is present.
+fn invalid_openai_properties(request: &ParsedRequest) -> bool {
+    if request.target.split('?').next() != Some("/v1/responses") {
+        return false;
+    }
+    let body = &request.body;
+    let mut at = 0;
+    let mut found = false;
+    while let Some(relative) = body[at..].iter().position(|byte| *byte == b'"') {
+        let start = at + relative;
+        let mut end = start + 1;
+        let mut escaped = false;
+        while end < body.len() {
+            let byte = body[end];
+            end += 1;
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                break;
+            }
+        }
+        if end <= body.len()
+            && serde_json::from_slice::<String>(&body[start..end]).is_ok_and(|s| s == "properties")
+        {
+            found = true;
+            break;
+        }
+        at = end;
+    }
+    if !found {
+        return false;
+    }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return false;
+    };
+    value["tools"].as_array().is_some_and(|tools| {
+        tools.iter().any(|tool| {
+            tool.get("parameters")
+                .and_then(|parameters| parameters.get("properties"))
+                .is_some_and(|properties| !properties.is_object())
+        })
+    })
+}
+
 /// Serves one connection: records the request under the state lock, then
 /// answers from the script, the routes, the responder or the fallback. A
 /// malformed body is the client's bug: it is recorded with its decoded
@@ -512,6 +560,7 @@ fn serve(conn: Connection, state: &Mutex<State>, arrived: &Condvar, clock: &Arc<
         conn.drain_socket();
     }
     let malformed = request.malformed;
+    let invalid_openai_properties = invalid_openai_properties(&request);
     let response = {
         let mut state = lock(state);
         // Cloned before the record moves it, and only when a responder
@@ -533,6 +582,10 @@ fn serve(conn: Connection, state: &Mutex<State>, arrived: &Condvar, clock: &Arc<
             Some(why) => Response::status(
                 400,
                 format!(r#"{{"error":"fakes: malformed chunked body: {why}"}}"#),
+            ),
+            None if invalid_openai_properties => Response::status(
+                400,
+                r#"{"error":"fakes: OpenAI Responses properties must be an object"}"#,
             ),
             None => match answered {
                 Some((responder, answered)) => responder(&answered),

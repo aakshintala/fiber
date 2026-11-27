@@ -733,12 +733,16 @@ fn dropping_gives_up_on_a_responder_that_never_returns() {
 
 /// Posts `body` and reads the whole response.
 fn post(addr: std::net::SocketAddr, body: &[u8]) -> Vec<u8> {
+    post_path(addr, "/v1", body)
+}
+
+fn post_path(addr: std::net::SocketAddr, path: &str, body: &[u8]) -> Vec<u8> {
     let mut stream = TcpStream::connect(addr).unwrap();
     stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
     stream
         .write_all(
             format!(
-                "POST /v1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
+                "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
                 body.len()
             )
             .as_bytes(),
@@ -748,6 +752,54 @@ fn post(addr: std::net::SocketAddr, body: &[u8]) -> Vec<u8> {
     let mut response = Vec::new();
     stream.read_to_end(&mut response).unwrap();
     response
+}
+
+#[test]
+fn openai_responses_rejects_non_object_properties_even_when_bodies_are_dropped() {
+    let server = ProviderServer::start([Response::status(200, "ok")]).unwrap();
+    server.drop_bodies();
+    let bad = br#"{"tools":[{"type":"function","parameters":{"properties":[]}}]}"#;
+    let response = post_path(server.addr, "/v1/responses", bad);
+    assert!(response.starts_with(b"HTTP/1.1 400"), "{response:?}");
+    assert!(server.await_requests(1, Deadline::after(READ_WITHIN)));
+    assert!(server.requests()[0].body.is_empty());
+}
+
+#[test]
+fn openai_responses_accepts_object_missing_escaped_keys_and_non_json() {
+    let server = ProviderServer::start((0..4).map(|_| Response::status(200, "ok"))).unwrap();
+    for body in [
+        br#"{"tools":[{"parameters":{"properties":{}}}]}"#.as_slice(),
+        br#"{"tools":[{"parameters":{}}]}"#.as_slice(),
+        br#"{"tools":[{"parameters":{"pro\u0070erties":[]}}]}"#.as_slice(),
+        b"not json".as_slice(),
+    ] {
+        let response = post_path(server.addr, "/v1/responses", body);
+        assert!(response.starts_with(b"HTTP/1.1 200"), "{response:?}");
+    }
+}
+
+#[test]
+fn validation_leaves_other_protocols_and_nested_schema_positions_alone() {
+    let server =
+        ProviderServer::start([Response::status(200, "ok"), Response::status(200, "ok")]).unwrap();
+    let cases = [
+        (
+            "/v1/chat/completions",
+            br#"{"tools":[{"parameters":{"properties":[]}}]}"#.as_slice(),
+        ),
+        (
+            "/v1/responses",
+            br#"{"tools":[{"parameters":{"properties":{"x":{"properties":[]}}}}]}"#.as_slice(),
+        ),
+    ];
+    for (path, body) in cases {
+        let response = post_path(server.addr, path, body);
+        assert!(
+            response.starts_with(b"HTTP/1.1 200"),
+            "{path}: {response:?}"
+        );
+    }
 }
 
 #[test]

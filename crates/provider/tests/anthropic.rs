@@ -1688,6 +1688,41 @@ fn an_empty_text_block_is_not_logged() {
 }
 
 #[test]
+fn corrected_lua_schema_takes_twentieth_strict_slot_by_name() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let protocol = Messages::new(endpoint(&server));
+    let mut tools: Vec<ToolDefinition> = (0..19)
+        .map(|i| strict_tool(&format!("a_{i:02}"), false))
+        .collect();
+    tools.push(ToolDefinition {
+        name: "lua_empty".into(),
+        description: "No arguments.".into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+        }),
+        deferred: false,
+        hosted: None,
+    });
+    tools.push(strict_tool("z_later", false));
+    let mut req = request();
+    req.tools = tools;
+    run(protocol.call(&req)).0.unwrap();
+    let sent = sent_body(&server, 0)["tools"].clone();
+    let find = |name: &str| {
+        sent.as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap()
+    };
+    assert_eq!(find("lua_empty")["strict"], json!(true));
+    assert_eq!(find("z_later")["strict"], json!(false));
+}
+
+#[test]
 fn wire_tools_is_what_the_request_sends() {
     let tools = wire_tools::wire_tools_fixture();
     let server = ProviderServer::start([completed_reply()]).unwrap();
