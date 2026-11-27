@@ -657,7 +657,7 @@ impl Login {
         if *key == Key::Esc {
             return Act::Close;
         }
-        if *key == Key::Enter {
+        if key.is_enter_or_space() {
             if let Some(Item::Target(at)) = self.selected() {
                 return self.open_target(at);
             }
@@ -1166,7 +1166,7 @@ impl Login {
                 None => choices.models.len().saturating_sub(1),
                 Some(at) => crate::swapped::wrap_step(at, choices.models.len(), -1),
             });
-        } else if *key == Key::Enter {
+        } else if key.is_enter_or_space() {
             let pick = choices
                 .cursor
                 .and_then(|at| choices.models.get(at).cloned())
@@ -1328,7 +1328,11 @@ impl Login {
                 }
                 self.selected = at;
                 self.said.clear();
-                Act::Stay
+                if let Some(Item::Target(target)) = self.items.get(at) {
+                    self.open_target(*target)
+                } else {
+                    Act::Stay
+                }
             }
         }
     }
