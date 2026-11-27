@@ -511,7 +511,7 @@ fn extension_tool_disablement_changes_the_next_tools_answer_and_request() {
     let (setup, server) = fixture();
     extension(
         &setup,
-        "fiber.tool('extra',{description='extra',input_schema={type='object',properties={field={type='string'}}},effects={effects={'reads'},reversible=true},timeout=5000,run=function() return 'ok' end})",
+        "fiber.tool('extra',{description='extra',input_schema={type='object',properties={}},effects={effects={'reads'},reversible=true},timeout=5000,run=function() return 'ok' end})",
     );
     let mut session = Session::start(setup);
     session.turn(true);

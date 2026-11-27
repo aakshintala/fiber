@@ -1718,6 +1718,9 @@ fn corrected_lua_schema_takes_twentieth_strict_slot_by_name() {
             .find(|tool| tool["name"] == name)
             .unwrap()
     };
+    // The 20-tool cap is documented in `docs/model-routing.md`, "Anthropic
+    // messages wire facts"; name sorting is described in `docs/prompt-cache.md`,
+    // "Bytes", and implemented by `wire_tools` in `anthropic_messages.rs`.
     assert_eq!(find("lua_empty")["strict"], json!(true));
     assert_eq!(find("z_later")["strict"], json!(false));
 }

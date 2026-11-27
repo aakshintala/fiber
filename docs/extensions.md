@@ -441,9 +441,7 @@ json.decode(str [, { lenient }]) / json.encode(value)   -- JSON, host-provided (
   `model`, and the optional `isolation`, `workspace` and `timeout_ms`),
   as a JSON object: an empty table becomes `{}`, which the service
   refuses as missing `description` and `prompt` (`invalid_arguments`).
-  In a tool's `input_schema`, an empty table in a schema position becomes
-  `{}`; values under `enum`, `const`, `default` and `examples` are sent as
-  written. A non-empty list raises the string
+  A non-empty list raises the string
   `host.delegate: `spec` must be a table of named arguments` before the
   call yields; a value `to_json` refuses raises the string
   `host.delegate: `spec` json: <reason>` before the call yields.
@@ -483,6 +481,10 @@ json.decode(str [, { lenient }]) / json.encode(value)   -- JSON, host-provided (
   loaded without the extension stops that extension's jobs with no `run`.
   Shutdown runs no `run`. On a normal end Fiber releases the
   extension-owned ids, then stops them, with no `run`.
+
+  In a tool's `input_schema`, an empty table in a schema position becomes
+  `{}`; values under `enum`, `const`, `default` and `examples` are sent as
+  written.
 - **`host.fs`** reads and writes anywhere, as a process can. The per-path lock
   Fiber's own file tools take is offered (`docs/architecture.md`, "Tool calls
   in a step").
