@@ -1197,6 +1197,13 @@ fn accepted_local_connection_retains_its_kernel_attribution() {
     assert_eq!(ack.get("kind"), Some(&json!("command_accepted")));
     let pairs = live_pairs(&hub.rejoins);
     let pair = pairs.first().expect("the accepted client is registered");
+    let expected_session_process_pids = support::peer::walk_ancestors(
+        support::peer::Pid(std::process::id()),
+        &support::peer::KernelProcessRead,
+        contract::session_process::is_session_process,
+    )
+    .expect("the test process ancestry is readable")
+    .matched_pids;
     assert!(
         matches!(
             lock(&pair.1).attribution.clone(),
@@ -1204,7 +1211,7 @@ fn accepted_local_connection_retains_its_kernel_attribution() {
                 peer_pid,
                 session_process_pids
             }) if peer_pid == support::peer::Pid(std::process::id())
-                && session_process_pids.is_empty()
+                && session_process_pids == expected_session_process_pids
         ),
         "reroutes keep the attribution read from this accepted socket"
     );
