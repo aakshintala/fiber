@@ -771,5 +771,3 @@ crates/main/tests/delegation/delegates.rs:8725-8729	fiber-5007	plan	2026-11-27T2
 crates/main/tests/session_turns/from_session.rs:1031-1033	fiber-5007	plan	2026-11-27T20:54:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5007-provider-server-lock	
 crates/main/tests/session_turns/from_session.rs:1185-1187	fiber-5007	plan	2026-11-27T20:54:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5007-provider-server-lock	
 crates/main/tests/session_turns/from_session.rs:1391-1393	fiber-5007	plan	2026-11-27T20:54:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5007-provider-server-lock	
-xtask/tests/release_size.rs:173-174	fiber-5019	plan	2026-11-27T21:14:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-5019-release-size-canonical	
-xtask/tests/release_size.rs:181-181	fiber-5019	plan	2026-11-27T21:14:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-5019-release-size-canonical	
