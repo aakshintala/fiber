@@ -368,3 +368,10 @@ docs/delegates.md	fiber-4974	plan	2026-11-27T01:49:01Z	roundhouse-7010-plus-1:/h
 Cargo.toml	fiber-4974	plan	2026-11-27T01:49:01Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/workflow.md	fiber-4974	plan	2026-11-27T01:49:01Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/bug-red	fiber-4974	plan	2026-11-27T01:49:01Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app.rs	fiber-4976	plan	2026-11-27T01:54:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/aliases_tests.rs	fiber-4976	plan	2026-11-27T01:54:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/event_loop.rs	fiber-4976	plan	2026-11-27T01:54:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/feedback.rs	fiber-4976	plan	2026-11-27T01:54:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/lib.rs	fiber-4976	plan	2026-11-27T01:54:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/feedback_tests.rs	fiber-4976	plan	2026-11-27T01:54:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/event_loop_tests.rs	fiber-4976	plan	2026-11-27T01:54:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
