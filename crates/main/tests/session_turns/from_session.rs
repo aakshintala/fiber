@@ -1028,9 +1028,11 @@ fn session_message_to_itself_is_delivered() {
         server.await_requests(2, setup.deadline),
         "the message starts a turn"
     );
-    assert!(
-        seen_self.load(std::sync::atomic::Ordering::SeqCst),
-        "the self-message reaches the model's next request"
+    let seen_self = Arc::clone(&seen_self);
+    fakes::wait_until(
+        "the self-message reaches the model's next request",
+        setup.deadline,
+        move || seen_self.load(std::sync::atomic::Ordering::SeqCst),
     );
     finish(hub, client, guard, &[&session], &[&sub]);
 }
@@ -1182,9 +1184,11 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
         server_child.await_requests(2, setup.deadline),
         "the delegate_message steers the delegate"
     );
-    assert!(
-        marked.load(std::sync::atomic::Ordering::SeqCst),
-        "the steered message reaches the delegate's next model call"
+    let marked = Arc::clone(&marked);
+    fakes::wait_until(
+        "the steered message reaches the delegate's next model call",
+        setup.deadline,
+        move || marked.load(std::sync::atomic::Ordering::SeqCst),
     );
     // `now` stops the delegate as a stop does; a graceful close waits out
     // the delegate's far idle exit. The guard reaps the delegate, which
@@ -1388,9 +1392,11 @@ fn nested_delegate_message_accepted_while_shell_steers_refused() {
         server_g.await_requests(2, setup.deadline),
         "the nested delegate_message steers the grandchild"
     );
-    assert!(
-        marked.load(std::sync::atomic::Ordering::SeqCst),
-        "the steered message reaches the grandchild's next model call"
+    let marked = Arc::clone(&marked);
+    fakes::wait_until(
+        "the steered message reaches the grandchild's next model call",
+        setup.deadline,
+        move || marked.load(std::sync::atomic::Ordering::SeqCst),
     );
     let done = until(&client, "the nested delegate_message completed", |line| {
         line["kind"] == "tool_call_completed" && line["action_id"] == action

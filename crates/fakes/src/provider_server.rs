@@ -457,6 +457,7 @@ impl ProviderServer {
 
     /// Waits, at most what remains of `deadline`, until at least `count`
     /// requests are recorded. True once they are; false at the deadline.
+    /// This does not wait for the responder to finish its callback.
     /// Dropping the server ends no wait early.
     pub fn await_requests(&self, count: usize, deadline: Deadline) -> bool {
         let within = deadline.left();
