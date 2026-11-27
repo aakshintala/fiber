@@ -25,4 +25,4 @@ Files written since the point: /w/a.rs
 Calls that may have changed files: shell
 None of it is undone.
 Jobs that stop: task one, delegate work
-↑↓ move · Enter/Space open/send · Esc close
+↑↓ move · Enter open/send · Esc close
