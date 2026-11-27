@@ -739,3 +739,11 @@ crates/tui/src/event_loop/attach_tests.rs:2176-2180	fiber-4974	plan	2026-11-27T1
 docs/invocation.md:1248-1248	fiber-4974	plan	2026-11-27T10:27:18Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4974-plan	
 crates/main/tests/session_turns/from_session.rs	fiber-5007	plan	2026-11-27T20:11:19Z	roundhouse-7010-plus-1:/home/aakshintala	
 xtask/tests/release_size.rs	fiber-5019	plan	2026-11-27T20:17:09Z	roundhouse-7010-plus-1:/home/aakshintala	
+crates/tui/src/home.rs	fiber-4781	plan	2026-11-27T20:22:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4781-space-click-views	
+crates/tui/src/app/home.rs	fiber-4781	plan	2026-11-27T20:22:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4781-space-click-views	
+crates/tui/src/app/home/workspace.rs	fiber-4781	plan	2026-11-27T20:22:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4781-space-click-views	
+crates/tui/src/app/home/typed.rs	fiber-4781	plan	2026-11-27T20:22:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4781-space-click-views	
+crates/tui/src/view/home/picker.rs	fiber-4781	plan	2026-11-27T20:22:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4781-space-click-views	
+crates/tui/src/home_view_tests.rs	fiber-4781	plan	2026-11-27T20:22:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4781-space-click-views	
+crates/tui/src/app/home/workspace_tests.rs	fiber-4781	plan	2026-11-27T20:22:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4781-space-click-views	
+crates/tui/src/app/keyboard_screen_tests.rs	fiber-4781	plan	2026-11-27T20:22:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4781-space-click-views	
