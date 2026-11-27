@@ -174,6 +174,67 @@ fn each_write_scope_answers_whether_a_repository_sets_it() {
 }
 
 #[test]
+fn repository_role_credentials_are_removed_but_other_members_survive() {
+    let source = Source::Repository("repo/.fiber/config.json".into());
+    for credential in [serde_json::json!("work"), serde_json::json!(17)] {
+        let layer = serde_json::json!({
+            "roles": {"fast": {"model": "fiber:pb/m", "credential": credential, "extra": true}}
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let mut notices = Vec::new();
+        let kept = check(layer, &source, &mut notices).expect("the role model is valid");
+        assert_eq!(
+            kept.get("roles"),
+            Some(&serde_json::json!({"fast": {"model": "fiber:pb/m", "extra": true}}))
+        );
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.code == ErrorCode::ConfigKeyIgnored),
+            "{notices:?}"
+        );
+        assert_eq!(
+            notices[0].message,
+            "repo/.fiber/config.json: ignored `roles.\"fast\".credential`, which a repository's role may not set."
+        );
+    }
+}
+
+#[test]
+fn repository_role_model_does_not_remove_a_person_role_credential() {
+    let person = Source::Project("home/projects/key/config.json".into());
+    let repository = Source::Repository("repo/.fiber/config.json".into());
+    let checked = |source: &Source, value: Value| {
+        let mut notices = Vec::new();
+        let kept = check(value.as_object().unwrap().clone(), source, &mut notices).unwrap();
+        assert!(notices.is_empty(), "{notices:?}");
+        kept
+    };
+    let person_layer = checked(
+        &person,
+        serde_json::json!({"roles": {"fast": {"model": "fiber:pb/person", "credential": "personal"}}}),
+    );
+    let repository_layer = checked(
+        &repository,
+        serde_json::json!({"roles": {"fast": {"model": "fiber:pb/m"}}}),
+    );
+    assert_eq!(
+        person_layer
+            .get("roles")
+            .and_then(|roles| roles.get("fast")),
+        Some(&serde_json::json!({"model": "fiber:pb/person", "credential": "personal"}))
+    );
+    assert_eq!(
+        repository_layer
+            .get("roles")
+            .and_then(|roles| roles.get("fast")),
+        Some(&serde_json::json!({"model": "fiber:pb/m"}))
+    );
+}
+
+#[test]
 fn mcp_server_env_accepts_a_secret_reference() {
     let layer: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
         r#"{"mcp": {"servers": {"x": {"env": {"K": {"secret": "mcp.x.K"}}}}}}"#,
