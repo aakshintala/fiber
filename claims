@@ -777,3 +777,5 @@ crates/main/tests/delegation/delegates.rs:8725-8729	fiber-5007	plan	2026-11-27T2
 crates/main/tests/session_turns/from_session.rs:1031-1033	fiber-5007	plan	2026-11-27T21:51:47Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5007-provider-server-lock	
 crates/main/tests/session_turns/from_session.rs:1185-1187	fiber-5007	plan	2026-11-27T21:51:47Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5007-provider-server-lock	
 crates/main/tests/session_turns/from_session.rs:1391-1393	fiber-5007	plan	2026-11-27T21:51:47Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5007-provider-server-lock	
+crates/tools/src/shell.rs	fiber-4995	plan	2026-11-27T21:56:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/tool_calls/tools.rs	fiber-4995	plan	2026-11-27T21:56:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
