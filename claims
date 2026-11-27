@@ -512,3 +512,12 @@ docs/workflow.md	fiber-5004	plan	2026-11-27T06:08:50Z	roundhouse-7010-plus-1:/ho
 docs/testing.md	fiber-5004	plan	2026-11-27T06:08:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/ci.md	fiber-5004	plan	2026-11-27T06:08:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 .github/workflows/ci.yml	fiber-5004	plan	2026-11-27T06:08:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/extension_host/extension_state_resume.rs	fiber-4954	plan	2026-11-27T06:11:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/extension_host/repository_offer.rs	fiber-4954	plan	2026-11-27T06:11:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/hub_daemon/hub_exit_window.rs	fiber-4954	plan	2026-11-27T06:11:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/hub_daemon/hub_login.rs	fiber-4954	plan	2026-11-27T06:11:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/hub_daemon/hub_resume.rs	fiber-4954	plan	2026-11-27T06:11:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/hub_daemon/hub_start_worktree.rs	fiber-4954	plan	2026-11-27T06:11:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/screens/ask_user_form.rs	fiber-4954	plan	2026-11-27T06:11:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/session_turns/rewind.rs	fiber-4954	plan	2026-11-27T06:11:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/tool_calls/tools.rs	fiber-4954	plan	2026-11-27T06:11:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
