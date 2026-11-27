@@ -200,6 +200,29 @@ fn invalid_layout_maps_fail_atomically_and_cache_the_failure() {
 }
 
 #[test]
+fn each_invalid_layout_rectangle_dimension_is_rejected() {
+    let input = layout_input(10, 5, &["conversation"], false);
+    for (label, rect) in [
+        ("negative x", raw_rect(-1, 0, 1, 1)),
+        ("negative y", raw_rect(0, -1, 1, 1)),
+        ("zero width", raw_rect(0, 0, 0, 1)),
+        ("zero height", raw_rect(0, 0, 1, 0)),
+    ] {
+        let cache = Cache::default();
+        assert_eq!(
+            cache.layout_regions(page(0), "test", None, &input, || {
+                LayoutDecision::Draw {
+                    extension: "test".into(),
+                    regions: vec![(Region::Conversation, rect)],
+                }
+            }),
+            None,
+            "{label} must reject the otherwise valid map"
+        );
+    }
+}
+
+#[test]
 fn failed_layout_decision_is_cached_and_reported_once_for_builtin_fallback() {
     let cache = Cache::default();
     let input = layout_input(10, 5, &["conversation"], false);
