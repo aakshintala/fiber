@@ -1443,7 +1443,7 @@ fiber.tool("other", {
     assert_eq!(
         failed(&later),
         (
-            ErrorCode::ToolError,
+            ErrorCode::ExtensionUnavailable,
             "`fiber.test/stuck` is stopped and takes no more calls.".to_owned()
         )
     );
@@ -1514,7 +1514,7 @@ fiber.tool("find", {{
     );
     assert_eq!(
         failed(&ran(&stuck, &Deadline::after(MUST_SUCCEED_WITHIN))).0,
-        ErrorCode::ToolError
+        ErrorCode::ExtensionUnavailable
     );
     assert_eq!(
         ran(&waiting, &Deadline::after(MUST_SUCCEED_WITHIN)),
@@ -1606,7 +1606,7 @@ fiber.tool("find", {{
     );
     assert_eq!(
         failed(&ran(&stuck, &Deadline::after(MUST_SUCCEED_WITHIN))).0,
-        ErrorCode::ToolError
+        ErrorCode::ExtensionUnavailable
     );
     // Abandoned with the VM: the call is still going while its group runs.
     assert!(
