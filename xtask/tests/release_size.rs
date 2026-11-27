@@ -1,8 +1,9 @@
 //! `scripts/release-size` run as a program against a small git repository,
 //! with the checked-in stubs under `release_size_fixture/bin/` standing in
 //! for cargo, rustup, strip and sha256sum (`docs/dependencies.md`, "Admitting a crate"). A stub cargo fails in the directory the test names and otherwise
-//! writes a binary that says which commit built it, so each test reads which
-//! commit the script compared against.
+//! writes a binary that names its commit and the marker for the crate it
+//! linked, so each test reads which commit the script compared against and
+//! which target supplied its crate.
 
 #![allow(
     clippy::unwrap_used,
@@ -84,6 +85,7 @@ impl Repo {
             .env("PATH", path)
             .env("RUNNER_TEMP", self.temp.path())
             .env("FAKE_CARGO_FAIL_IN", fail_in)
+            .env("FAKE_CARGO_LOG", self.temp.path().join("cargo-targets"))
             .env_remove("BASE_CACHED")
             .env_remove("BASE_MATCHED_KEY")
             .env_remove("GITHUB_STEP_SUMMARY")
@@ -103,7 +105,7 @@ impl Repo {
     }
 
     /// Runs `scripts/paging-jig` at HEAD, after `release-size` left its base.
-    fn paging_jig(&self) -> String {
+    fn paging_jig(&self, env: &[(&str, &str)]) -> String {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/release_size_fixture/bin");
         let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/paging-jig");
         let path = format!("{}:{}", fixture.display(), std::env::var("PATH").unwrap());
@@ -113,6 +115,8 @@ impl Repo {
             .env("PATH", path)
             .env("RUNNER_TEMP", self.temp.path())
             .env("FAKE_CARGO_FAIL_IN", "never")
+            .env("FAKE_CARGO_LOG", self.temp.path().join("cargo-targets"))
+            .envs(env.iter().copied())
             .current_dir(self.dir.path())
             .stdin(Stdio::null());
         let (code, out) = common::run("scripts/paging-jig", command, &[], CHILD_WITHIN);
@@ -155,11 +159,37 @@ fn a_base_that_builds_is_built_and_compared() {
     assert!(!out.contains("does not build"), "{out}");
     assert_eq!(
         fs::read_to_string(repo.base_binary()).unwrap(),
-        format!("built at {base}\n")
+        format!("built at {base}; linked crate from {base}\n")
     );
     assert_eq!(repo.base_commit().unwrap().trim(), repo.base);
-    repo.paging_jig();
-    assert_eq!(repo.base_jig().unwrap(), format!("built at {base}\n"));
+    repo.paging_jig(&[]);
+    assert_eq!(
+        repo.base_jig().unwrap(),
+        format!("built at {base}; linked crate from {base}\n")
+    );
+
+    // The base build follows release-size's head build. A later head paging
+    // build must link its own crate marker, not a stale marker from the base.
+    let head_target = repo.dir.path().join("target").display().to_string();
+    repo.paging_jig(&[("FAKE_CARGO_REUSE_TARGET", &head_target)]);
+    let head = repo.short("HEAD");
+    assert_eq!(
+        fs::read_to_string(repo.temp.path().join("release/head/paging")).unwrap(),
+        format!("built at {head}; linked crate from {head}\n")
+    );
+    let invocations = fs::read_to_string(repo.temp.path().join("cargo-targets")).unwrap();
+    let base_target = repo.dir.path().join("target/base").display().to_string();
+    let observed: std::collections::BTreeSet<_> = invocations
+        .lines()
+        .map(|line| {
+            let (target, commit) = line.split_once('\t').unwrap();
+            (target.to_owned(), commit.to_owned())
+        })
+        .collect();
+    let expected = [(head_target, head), (base_target, repo.short(&repo.base))]
+        .into_iter()
+        .collect();
+    assert_eq!(observed, expected);
 }
 
 /// A path component no directory in a run has, so the stub cargo never fails.
@@ -184,7 +214,7 @@ fn a_base_that_does_not_build_is_compared_against_its_stored_ancestor() {
     let (base, ancestor) = (repo.short(&repo.base), repo.short(&repo.ancestor));
     assert_eq!(
         fs::read_to_string(repo.base_binary()).unwrap(),
-        format!("built at {ancestor}\n"),
+        format!("built at {ancestor}; linked crate from {ancestor}\n"),
         "the ancestor's stored binary stands in for the base"
     );
     assert!(out.contains("release-size: head - base = "), "{out}");
@@ -219,7 +249,7 @@ fn a_base_that_does_not_build_with_no_stored_ancestor_skips_the_comparison() {
     let base = repo.short(&repo.base);
     assert!(!repo.base_binary().exists(), "no base binary to compare");
     assert!(repo.base_commit().is_none());
-    let jig = repo.paging_jig();
+    let jig = repo.paging_jig(&[]);
     assert!(repo.base_jig().is_none(), "no base jig: {jig}");
     assert!(!out.contains("head - base"), "{out}");
     // The head was still measured and checked against the limit.
