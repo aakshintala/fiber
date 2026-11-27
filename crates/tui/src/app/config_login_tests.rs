@@ -398,6 +398,50 @@ fn choices(models: &[&str], selected: Option<&str>) -> crate::configure::Reviewe
     }
 }
 
+#[test]
+fn typed_login_key_clears_first_run_flag_before_home_enter() {
+    let seam = seam();
+    let mut app = home(Arc::clone(&seam));
+    app.first_run_no_credential = true;
+
+    assert_eq!(slash_login(&mut app), Effect::None);
+    assert!(app.config_view_open());
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    for ch in "sk-first-run".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(seam.stores(), [("acme".to_owned(), None)]);
+
+    // Dismiss the reviewer preparation and provider rows, then try home Enter.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.config_view_open());
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(!app.config_view_open(), "home Enter must not reopen /login");
+    assert!(!app.first_run_no_credential);
+}
+
+#[test]
+fn browser_credential_save_clears_flag_before_reviewer_completion() {
+    let seam = browser_seam();
+    let mut app = browser_login_app(&seam);
+    app.first_run_no_credential = true;
+    let start = start_login(&mut app);
+    assert_eq!(
+        app.on_login(
+            start.ticket,
+            crate::login_worker::LoginStep::Done(Ok(crate::configure::Stored {
+                path: "credentials/codex/alice@example.com".to_owned(),
+                replaced: false,
+            }))
+        ),
+        None
+    );
+    assert!(!app.first_run_no_credential);
+    assert!(app.config_view_open(), "reviewer follow-up remains open");
+}
+
 /// Opens `/login`, submits the key on the first row, and takes the
 /// queued reviewer start.
 fn start_key_reviewer(app: &mut App, seam: &Arc<Fake>) -> crate::login_worker::LoginStart {

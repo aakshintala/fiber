@@ -2889,6 +2889,36 @@ fn first_run_secret_and_reviewer_saves_signal_success_only_at_last_save() {
 }
 
 #[test]
+fn browser_done_signal_distinguishes_a_saved_credential_from_failure() {
+    let fake = fake_with(targets());
+    let mut saved = waiting(&fake, LoginTicket(1));
+    assert_eq!(
+        saved.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Done(Ok(Stored {
+                path: "credentials/codex/alice@example.com".to_owned(),
+                replaced: false,
+            }))
+        ),
+        None
+    );
+    assert!(matches!(saved.mode, super::Mode::Preparing(_)));
+
+    let mut failed = waiting(&fake, LoginTicket(2));
+    assert_eq!(
+        failed.step(
+            LoginTicket(2),
+            crate::login_worker::LoginStep::Done(Err(ConfigureError {
+                code: ErrorCode::IoFailed,
+                message: "save failed".to_owned(),
+            }))
+        ),
+        None
+    );
+    assert!(matches!(failed.mode, super::Mode::Ended(_)));
+}
+
+#[test]
 fn a_browser_done_prepares_on_its_ticket_until_the_reviewer_lands() {
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));
