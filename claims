@@ -521,3 +521,5 @@ crates/main/tests/hub_daemon/hub_start_worktree.rs	fiber-4954	plan	2026-11-27T06
 crates/main/tests/screens/ask_user_form.rs	fiber-4954	plan	2026-11-27T06:11:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/session_turns/rewind.rs	fiber-4954	plan	2026-11-27T06:11:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/tool_calls/tools.rs	fiber-4954	plan	2026-11-27T06:11:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/errors.md	fiber-4980	plan	2026-11-27T06:15:19Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
+docs/extensions.md	fiber-4980	plan	2026-11-27T06:15:19Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
