@@ -42,7 +42,7 @@ mod jigs;
 mod keymap;
 mod keys;
 mod keyset;
-mod layout;
+pub mod layout;
 mod link;
 mod local_time;
 mod logical;

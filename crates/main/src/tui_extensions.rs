@@ -14,6 +14,7 @@ use tui::ext::{
     Decision, FailureKind, LayoutDecision, LayoutInput, Load, RawRect, Renderer, SessionCtx,
     SessionVersion, SlotSelection,
 };
+use tui::layout::Region;
 use tui::{CallState, Failure, RawSpan, RendererInput as Input};
 
 pub(crate) struct Loader {
@@ -869,7 +870,7 @@ impl Renderer for Composite {
         &self,
         ctx: &SessionCtx,
         input: &LayoutInput,
-        builtin: &dyn Fn(&LayoutInput) -> Vec<(String, RawRect)>,
+        builtin: &dyn Fn(&LayoutInput) -> Vec<(Region, RawRect)>,
     ) -> LayoutDecision {
         let SlotSelection::Draw { extension } = self.fills_for(ctx, "layout") else {
             return LayoutDecision::NotForSession {
@@ -889,9 +890,9 @@ impl Renderer for Composite {
         let built = |_: &Value, _width| {
             builtin(input)
                 .into_iter()
-                .map(|(name, rect)| {
+                .map(|(region, rect)| {
                     (
-                        name,
+                        region.name().to_owned(),
                         extensions::LayoutRect {
                             x: rect.x,
                             y: rect.y,
@@ -908,23 +909,32 @@ impl Renderer for Composite {
             input.width,
             &built,
         ) {
-            Ok(regions) => LayoutDecision::Draw {
-                extension,
-                regions: regions
+            Ok(regions) => {
+                let parsed = regions
                     .into_iter()
                     .map(|(name, rect)| {
-                        (
-                            name,
-                            RawRect {
-                                x: rect.x,
-                                y: rect.y,
-                                width: rect.width,
-                                height: rect.height,
-                            },
-                        )
+                        Region::from_name(&name).map(|region| {
+                            (
+                                region,
+                                RawRect {
+                                    x: rect.x,
+                                    y: rect.y,
+                                    width: rect.width,
+                                    height: rect.height,
+                                },
+                            )
+                        })
                     })
-                    .collect(),
-            },
+                    .collect::<Option<Vec<_>>>();
+                match parsed {
+                    Some(regions) => LayoutDecision::Draw { extension, regions },
+                    None => LayoutDecision::Fail(Failure {
+                        kind: FailureKind::HookFailed,
+                        extension,
+                        message: "layout output names an unknown region".to_owned(),
+                    }),
+                }
+            }
             Err(error) => LayoutDecision::Fail(Self::failure(candidate, extension, error)),
         }
     }
@@ -1298,7 +1308,7 @@ fn input_value(input: &Input<'_>) -> Value {
         Input::Layout(layout) => json!({
             "width": layout.width,
             "height": layout.height,
-            "regions": layout.regions,
+            "regions": layout.regions.iter().map(|region| region.name()).collect::<Vec<_>>(),
             "flat": layout.flat,
         }),
         Input::Home(home) => home.value.clone(),

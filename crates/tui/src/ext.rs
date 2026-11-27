@@ -11,6 +11,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::layout::Region;
+
 pub(crate) mod cache;
 
 pub mod anim;
@@ -223,7 +225,7 @@ pub enum LayoutDecision {
         /// The extension that drew.
         extension: String,
         /// Region names and untrusted integer rectangles.
-        regions: Vec<(String, RawRect)>,
+        regions: Vec<(Region, RawRect)>,
     },
     /// A typed callback failure.
     Fail(Failure),
@@ -317,7 +319,7 @@ pub trait Renderer: std::fmt::Debug {
         &self,
         _ctx: &SessionCtx,
         _input: &LayoutInput,
-        _builtin: &dyn Fn(&LayoutInput) -> Vec<(String, RawRect)>,
+        _builtin: &dyn Fn(&LayoutInput) -> Vec<(Region, RawRect)>,
     ) -> LayoutDecision {
         LayoutDecision::NotForSession {
             extension: String::new(),
@@ -482,7 +484,7 @@ impl Bound {
     pub(crate) fn layout_regions(
         &self,
         input: &LayoutInput,
-        builtin: &[(String, RawRect)],
+        builtin: &[(Region, RawRect)],
     ) -> Option<crate::layout::RegionMap> {
         let renderer = self.handle.get()?;
         let selected = renderer.fills_for(&self.ctx, "layout");

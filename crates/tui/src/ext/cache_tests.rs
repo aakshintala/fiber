@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use super::{Cache, PageKey};
 use crate::ext::{Decision, FailureKind, HomeInput, Input, LayoutDecision, LayoutInput, RawRect};
+use crate::layout::Region;
 
 fn page(index: usize) -> PageKey {
     PageKey {
@@ -18,7 +19,10 @@ fn layout_input(width: u16, height: u16, regions: &[&str], flat: bool) -> Layout
     LayoutInput::new(
         width,
         height,
-        regions.iter().map(|name| (*name).to_owned()).collect(),
+        regions
+            .iter()
+            .map(|name| Region::from_name(name).expect("known test region"))
+            .collect(),
         flat,
     )
 }
@@ -99,7 +103,7 @@ fn failed_home_render_is_cached_by_its_projected_input() {
 fn layout_cache_keys_width_height_shown_regions_and_flat() {
     let cache = Cache::default();
     let calls = Cell::new(0usize);
-    let draw = |input: &LayoutInput, regions: Vec<(String, RawRect)>| {
+    let draw = |input: &LayoutInput, regions: Vec<(Region, RawRect)>| {
         cache.layout_regions(page(0), "test", None, input, || {
             calls.set(calls.get().saturating_add(1));
             LayoutDecision::Draw {
@@ -108,7 +112,7 @@ fn layout_cache_keys_width_height_shown_regions_and_flat() {
             }
         })
     };
-    let conversation = vec![("conversation".into(), raw_rect(0, 0, 4, 3))];
+    let conversation = vec![(Region::Conversation, raw_rect(0, 0, 4, 3))];
     let first = layout_input(10, 8, &["conversation"], false);
     let first_map = draw(&first, conversation.clone()).expect("a valid map");
     assert_eq!(draw(&first, conversation.clone()), Some(first_map));
@@ -119,15 +123,15 @@ fn layout_cache_keys_width_height_shown_regions_and_flat() {
     let flat = layout_input(10, 8, &["conversation"], true);
     assert_eq!(draw(&flat, conversation.clone()), Some(first_map));
     let mut changed_builtin = first.clone();
-    changed_builtin.fingerprint_builtin(&[("conversation".into(), raw_rect(0, 0, 4, 4))]);
+    changed_builtin.fingerprint_builtin(&[(Region::Conversation, raw_rect(0, 0, 4, 4))]);
     assert_eq!(
         draw(&changed_builtin, conversation.clone()),
         Some(first_map)
     );
     let two_regions = layout_input(10, 8, &["conversation", "panel"], false);
     let two = vec![
-        ("conversation".into(), raw_rect(0, 0, 4, 3)),
-        ("panel".into(), raw_rect(4, 0, 6, 3)),
+        (Region::Conversation, raw_rect(0, 0, 4, 3)),
+        (Region::Panel, raw_rect(4, 0, 6, 3)),
     ];
     assert!(draw(&two_regions, two).is_some());
     assert_eq!(calls.get(), 6); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
@@ -139,40 +143,40 @@ fn invalid_layout_maps_fail_atomically_and_cache_the_failure() {
     let invalid = [
         // Missing a shown region.
         vec![
-            ("rail".into(), raw_rect(0, 0, 2, 5)),
-            ("conversation".into(), raw_rect(2, 0, 6, 5)),
+            (Region::Rail, raw_rect(0, 0, 2, 5)),
+            (Region::Rail, raw_rect(2, 0, 6, 5)),
         ],
         // Unknown name rather than the required panel.
         vec![
-            ("rail".into(), raw_rect(0, 0, 2, 5)),
-            ("conversation".into(), raw_rect(2, 0, 6, 5)),
-            ("other".into(), raw_rect(8, 0, 2, 5)),
+            (Region::Rail, raw_rect(0, 0, 2, 5)),
+            (Region::Rail, raw_rect(2, 0, 6, 5)),
+            (Region::Panel, raw_rect(8, 0, 2, 5)),
         ],
         // Out of bounds, overlapping, zero-sized, negative and overflowing.
         vec![
-            ("rail".into(), raw_rect(0, 0, 2, 5)),
-            ("conversation".into(), raw_rect(2, 0, 6, 5)),
-            ("panel".into(), raw_rect(8, 0, 3, 5)),
+            (Region::Rail, raw_rect(0, 0, 2, 5)),
+            (Region::Rail, raw_rect(2, 0, 6, 5)),
+            (Region::Conversation, raw_rect(8, 0, 3, 5)),
         ],
         vec![
-            ("rail".into(), raw_rect(0, 0, 2, 5)),
-            ("conversation".into(), raw_rect(1, 0, 7, 5)),
-            ("panel".into(), raw_rect(8, 0, 2, 5)),
+            (Region::Conversation, raw_rect(0, 0, 2, 5)),
+            (Region::Conversation, raw_rect(1, 0, 7, 5)),
+            (Region::Conversation, raw_rect(8, 0, 2, 5)),
         ],
         vec![
-            ("rail".into(), raw_rect(0, 0, 2, 5)),
-            ("conversation".into(), raw_rect(2, 0, 6, 5)),
-            ("panel".into(), raw_rect(8, 0, 0, 5)),
+            (Region::Conversation, raw_rect(0, 0, 2, 5)),
+            (Region::Conversation, raw_rect(2, 0, 6, 5)),
+            (Region::Panel, raw_rect(8, 0, 0, 5)),
         ],
         vec![
-            ("rail".into(), raw_rect(-1, 0, 2, 5)),
-            ("conversation".into(), raw_rect(2, 0, 6, 5)),
-            ("panel".into(), raw_rect(8, 0, 2, 5)),
+            (Region::Panel, raw_rect(-1, 0, 2, 5)),
+            (Region::Panel, raw_rect(2, 0, 6, 5)),
+            (Region::Panel, raw_rect(8, 0, 2, 5)),
         ],
         vec![
-            ("rail".into(), raw_rect(0, 0, 2, 5)),
-            ("conversation".into(), raw_rect(2, 0, 6, 5)),
-            ("panel".into(), raw_rect(i64::MAX, 0, 1, 5)),
+            (Region::Panel, raw_rect(0, 0, 2, 5)),
+            (Region::Panel, raw_rect(2, 0, 6, 5)),
+            (Region::Panel, raw_rect(i64::MAX, 0, 1, 5)),
         ],
     ];
     for (index, regions) in invalid.into_iter().enumerate() {
@@ -193,6 +197,25 @@ fn invalid_layout_maps_fail_atomically_and_cache_the_failure() {
         assert_eq!(cache.take_failures().len(), 1);
         assert!(cache.take_failures().is_empty());
     }
+}
+
+#[test]
+fn failed_layout_decision_is_cached_and_reported_once_for_builtin_fallback() {
+    let cache = Cache::default();
+    let input = layout_input(10, 5, &["conversation"], false);
+    let calls = Cell::new(0usize);
+    let draw = || {
+        cache.layout_regions(page(0), "test", None, &input, || {
+            calls.set(calls.get().saturating_add(1));
+            LayoutDecision::Fail(failed("test", "unknown layout region"))
+        })
+    };
+
+    assert_eq!(draw(), None);
+    assert_eq!(draw(), None);
+    assert_eq!(calls.get(), 1);
+    assert_eq!(cache.take_failures().len(), 1);
+    assert!(cache.take_failures().is_empty());
 }
 
 #[test]

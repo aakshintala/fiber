@@ -6,6 +6,7 @@ use super::{
     ThinkingLine, TurnCallResult, TurnCard, TurnCardState, TurnEnded, TurnGroupState,
 };
 use super::{Decision, Ext, FailureKind, SessionCtx, SlotSelection};
+use crate::layout::Region;
 use contract::events::FileChange;
 use std::cell::{Cell, RefCell};
 
@@ -858,7 +859,7 @@ pub(crate) struct SlotRenderer {
     /// The layout inputs it saw.
     pub(crate) layout_inputs: RefCell<Vec<LayoutInput>>,
     /// The map the layout slot returns.
-    pub(crate) layout: RefCell<Option<Vec<(String, RawRect)>>>,
+    pub(crate) layout: RefCell<Option<Vec<(Region, RawRect)>>>,
     /// Whether the layout slot returns the built-in map.
     pub(crate) layout_builtin: Cell<bool>,
 }
@@ -929,7 +930,7 @@ impl Renderer for SlotRenderer {
         &self,
         _ctx: &SessionCtx,
         input: &LayoutInput,
-        builtin: &dyn Fn(&LayoutInput) -> Vec<(String, RawRect)>,
+        builtin: &dyn Fn(&LayoutInput) -> Vec<(Region, RawRect)>,
     ) -> LayoutDecision {
         self.layout_inputs.borrow_mut().push(input.clone());
         LayoutDecision::Draw {

@@ -160,12 +160,12 @@ pub(crate) fn placement(app: &App) -> Option<Placement> {
     let (width, height) = app.screen_size();
     let area = Rect::new(0, 0, width, height);
     let built = placement_from_split(app, area, split);
-    let builtin: Vec<(String, crate::ext::RawRect)> = built
+    let builtin: Vec<(crate::layout::Region, crate::ext::RawRect)> = built
         .regions
         .shown()
         .map(|(region, rect)| {
             (
-                region.name().to_owned(),
+                region,
                 crate::ext::RawRect {
                     x: i64::from(rect.x),
                     y: i64::from(rect.y),
@@ -178,7 +178,7 @@ pub(crate) fn placement(app: &App) -> Option<Placement> {
     let mut input = crate::ext::LayoutInput::new(
         area.width,
         area.height,
-        builtin.iter().map(|(name, _)| name.clone()).collect(),
+        builtin.iter().map(|(region, _)| *region).collect(),
         app.pages().ext.flat,
     );
     input.fingerprint_builtin(&builtin);

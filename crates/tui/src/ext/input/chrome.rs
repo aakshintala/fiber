@@ -12,6 +12,7 @@ use contract::shapes::Usage;
 use serde_json::Value;
 
 use super::slots::{PromptImage, hash_images};
+use crate::layout::Region;
 
 /// The layout slot's complete input: terminal size, shown built-in
 /// regions and whether the screen reader drops styles.
@@ -22,7 +23,7 @@ pub struct LayoutInput {
     /// The terminal height in cells.
     pub height: u16,
     /// The shown built-in region names, in stable order.
-    pub regions: Vec<String>,
+    pub regions: Vec<Region>,
     /// The screen reader drops every style from returned spans.
     pub flat: bool,
     /// Changes to built-in placement invalidate `builtin()` results without
@@ -32,7 +33,7 @@ pub struct LayoutInput {
 
 impl LayoutInput {
     /// Creates the public layout input with no built-in placement fingerprint.
-    pub fn new(width: u16, height: u16, regions: Vec<String>, flat: bool) -> Self {
+    pub fn new(width: u16, height: u16, regions: Vec<Region>, flat: bool) -> Self {
         Self {
             width,
             height,
@@ -43,7 +44,7 @@ impl LayoutInput {
     }
 
     /// Includes the built-in map in cache identity without exposing it as input.
-    pub(crate) fn fingerprint_builtin(&mut self, regions: &[(String, crate::ext::RawRect)]) {
+    pub(crate) fn fingerprint_builtin(&mut self, regions: &[(Region, crate::ext::RawRect)]) {
         let mut key = DefaultHasher::new();
         for (name, rect) in regions {
             name.hash(&mut key);

@@ -1317,9 +1317,9 @@ impl Cache {
 /// Validates a layout extension's whole map before any rectangle is used.
 fn validate_layout(
     input: &LayoutInput,
-    regions: &[(String, RawRect)],
+    regions: &[(Region, RawRect)],
 ) -> Result<RegionMap, String> {
-    let expected: HashSet<&str> = input.regions.iter().map(String::as_str).collect();
+    let expected: HashSet<Region> = input.regions.iter().copied().collect();
     if expected.len() != input.regions.len() {
         return Err("the built-in layout input contains duplicate region names".to_owned());
     }
@@ -1329,11 +1329,9 @@ fn validate_layout(
     let mut seen = HashSet::new();
     let mut placed: Vec<(Rect, u64, u64)> = Vec::with_capacity(regions.len());
     let mut map = RegionMap::default();
-    for (name, raw) in regions {
-        let Some(region) = Region::from_name(name) else {
-            return Err(format!("layout output names unknown region `{name}`"));
-        };
-        if !expected.contains(name.as_str()) || !seen.insert(name.as_str()) {
+    for (region, raw) in regions {
+        let name = region.name();
+        if !expected.contains(region) || !seen.insert(*region) {
             return Err(format!(
                 "layout output does not match the shown region set at `{name}`"
             ));
@@ -1380,7 +1378,7 @@ fn validate_layout(
                 .map_err(|_| format!("layout region `{name}` has an invalid height"))?,
         );
         placed.push((rect, right, bottom));
-        map.set(region, Some(rect));
+        map.set(*region, Some(rect));
     }
     if seen.len() != expected.len() {
         return Err("layout output omits a shown region".to_owned());

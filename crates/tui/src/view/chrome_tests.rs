@@ -122,7 +122,7 @@ fn extension_layout_places_the_same_regions_that_chrome_draws() {
     ));
     *renderer.layout.borrow_mut() = Some(vec![
         (
-            "rail".into(),
+            crate::layout::Region::Rail,
             RawRect {
                 x: 0,
                 y: 0,
@@ -131,7 +131,7 @@ fn extension_layout_places_the_same_regions_that_chrome_draws() {
             },
         ),
         (
-            "conversation".into(),
+            crate::layout::Region::Conversation,
             RawRect {
                 x: 30,
                 y: 0,
@@ -140,7 +140,7 @@ fn extension_layout_places_the_same_regions_that_chrome_draws() {
             },
         ),
         (
-            "input_box".into(),
+            crate::layout::Region::InputBox,
             RawRect {
                 x: 30,
                 y: 35,
@@ -149,7 +149,7 @@ fn extension_layout_places_the_same_regions_that_chrome_draws() {
             },
         ),
         (
-            "panel".into(),
+            crate::layout::Region::Panel,
             RawRect {
                 x: 140,
                 y: 0,
@@ -169,7 +169,12 @@ fn extension_layout_places_the_same_regions_that_chrome_draws() {
     assert_eq!(placement.regions.panel, Some(Rect::new(140, 0, 20, 40)));
     assert_eq!(
         renderer.layout_inputs.borrow()[0].regions,
-        ["rail", "conversation", "input_box", "panel",]
+        [
+            crate::layout::Region::Rail,
+            crate::layout::Region::Conversation,
+            crate::layout::Region::InputBox,
+            crate::layout::Region::Panel,
+        ]
     );
     // The extension replaces placement only; the split still owns the
     // built-in grip/narrow decisions and width floor.
@@ -220,7 +225,7 @@ fn placement_row_counts_ignore_the_previous_extension_column_width() {
         .shown()
         .map(|(region, rect)| {
             (
-                region.name().to_owned(),
+                region,
                 RawRect {
                     x: i64::from(rect.x),
                     y: i64::from(rect.y),
@@ -257,7 +262,7 @@ fn invalid_extension_layout_falls_back_whole_and_notices_once() {
     ));
     *renderer.layout.borrow_mut() = Some(vec![
         (
-            "rail".into(),
+            crate::layout::Region::Rail,
             RawRect {
                 x: 0,
                 y: 0,
@@ -266,7 +271,7 @@ fn invalid_extension_layout_falls_back_whole_and_notices_once() {
             },
         ),
         (
-            "conversation".into(),
+            crate::layout::Region::Conversation,
             RawRect {
                 x: 30,
                 y: 0,
@@ -275,7 +280,7 @@ fn invalid_extension_layout_falls_back_whole_and_notices_once() {
             },
         ),
         (
-            "input_box".into(),
+            crate::layout::Region::InputBox,
             RawRect {
                 x: 30,
                 y: 35,
@@ -284,7 +289,7 @@ fn invalid_extension_layout_falls_back_whole_and_notices_once() {
             },
         ),
         (
-            "panel".into(),
+            crate::layout::Region::Panel,
             RawRect {
                 x: 150,
                 y: 0,

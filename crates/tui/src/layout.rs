@@ -81,19 +81,25 @@ pub(crate) struct Layout {
 }
 
 /// A built-in region the layout slot may place.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum Region {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Region {
+    /// The session rail.
     Rail,
+    /// The conversation area.
     Conversation,
+    /// The working line.
     WorkingLine,
+    /// The steering queue.
     SteeringQueue,
+    /// The input box.
     InputBox,
+    /// The side panel.
     Panel,
 }
 
 impl Region {
     /// The regions in the layout input's stable order.
-    pub(crate) const ALL: [Self; 6] = [
+    pub const ALL: [Self; 6] = [
         Self::Rail,
         Self::Conversation,
         Self::WorkingLine,
@@ -103,7 +109,7 @@ impl Region {
     ];
 
     /// The Lua and documentation name for this region.
-    pub(crate) const fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Rail => "rail",
             Self::Conversation => "conversation",
@@ -115,7 +121,7 @@ impl Region {
     }
 
     /// The built-in region named by `name`, if any.
-    pub(crate) fn from_name(name: &str) -> Option<Self> {
+    pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|region| region.name() == name)
     }
 }

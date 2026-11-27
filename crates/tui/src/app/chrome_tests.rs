@@ -187,7 +187,7 @@ fn relayout_records_extension_placed_rail_and_panel_regions() {
     ));
     *renderer.layout.borrow_mut() = Some(vec![
         (
-            "rail".into(),
+            crate::layout::Region::Rail,
             RawRect {
                 x: 0,
                 y: 0,
@@ -196,7 +196,7 @@ fn relayout_records_extension_placed_rail_and_panel_regions() {
             },
         ),
         (
-            "conversation".into(),
+            crate::layout::Region::Conversation,
             RawRect {
                 x: 30,
                 y: 0,
@@ -205,7 +205,7 @@ fn relayout_records_extension_placed_rail_and_panel_regions() {
             },
         ),
         (
-            "input_box".into(),
+            crate::layout::Region::InputBox,
             RawRect {
                 x: 30,
                 y: 35,
@@ -214,7 +214,7 @@ fn relayout_records_extension_placed_rail_and_panel_regions() {
             },
         ),
         (
-            "panel".into(),
+            crate::layout::Region::Panel,
             RawRect {
                 x: 140,
                 y: 0,

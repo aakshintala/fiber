@@ -5,6 +5,7 @@ use tui::ext::{
     AnswerDisposition, HomeInput, KeyOutcome, LayoutDecision, LayoutInput, LedgerResult, RawRect,
     RawSpan, TuiCommand, TurnCardState, TurnGroupState,
 };
+use tui::layout::Region;
 
 #[test]
 fn home_input_is_forwarded_as_its_exact_projected_table() {
@@ -79,7 +80,7 @@ fn layout_input_projects_only_size_shown_regions_and_flat() {
     let input = Input::Layout(LayoutInput::new(
         160,
         40,
-        vec!["rail".into(), "conversation".into(), "panel".into()],
+        vec![Region::Rail, Region::Conversation, Region::Panel],
         true,
     ));
     assert_eq!(
@@ -111,10 +112,10 @@ fn layout_slot_reads_its_input_and_builtin_returns_a_region_map() {
     );
     let (renderer, notices) = loader.load();
     assert!(notices.is_empty());
-    let input = LayoutInput::new(160, 40, vec!["conversation".into(), "panel".into()], true);
+    let input = LayoutInput::new(160, 40, vec![Region::Conversation, Region::Panel], true);
     let built = vec![
         (
-            "conversation".into(),
+            Region::Conversation,
             RawRect {
                 x: 0,
                 y: 0,
@@ -123,7 +124,7 @@ fn layout_slot_reads_its_input_and_builtin_returns_a_region_map() {
             },
         ),
         (
-            "panel".into(),
+            Region::Panel,
             RawRect {
                 x: 120,
                 y: 0,
@@ -138,10 +139,43 @@ fn layout_slot_reads_its_input_and_builtin_returns_a_region_map() {
         panic!("the compatible layout slot draws")
     };
     let mut actual = regions;
-    actual.sort_by(|left, right| left.0.cmp(&right.0));
+    actual.sort_by_key(|left| left.0);
     let mut expected = built;
-    expected.sort_by(|left, right| left.0.cmp(&right.0));
+    expected.sort_by_key(|left| left.0);
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn layout_slot_rejects_unknown_lua_region_names_as_failure() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "layout",
+        None,
+        Some(concat!(
+            "fiber.slot('layout',{timeout=100,render=function(input,width)\n",
+            " return {other={x=0,y=0,width=160,height=40}}\n",
+            "end})",
+        )),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "load notices: {notices:?}");
+    let input = LayoutInput::new(160, 40, vec![Region::Conversation], true);
+    let decision = renderer.render_layout(&ctx(None), &input, &|_| {
+        vec![(
+            Region::Conversation,
+            RawRect {
+                x: 0,
+                y: 0,
+                width: 160,
+                height: 40,
+            },
+        )]
+    });
+    assert!(
+        matches!(decision, LayoutDecision::Fail(_)),
+        "unexpected decision: {decision:?}"
+    );
 }
 
 #[test]
