@@ -153,7 +153,7 @@ pub(super) fn launch_with_session(
     let err = log.try_clone()?;
     cmd.stdout(log).stderr(err);
     scrub_env(&mut cmd);
-    super::command::set_session_id(&mut cmd, session_id);
+    cmd.envs(super::command::session_id_pair(session_id));
     support::group::detach(&mut cmd, false);
     let child = match cmd.spawn() {
         Ok(child) => child,

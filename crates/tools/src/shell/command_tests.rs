@@ -77,32 +77,6 @@ fn session_id_pair_names_the_session_variable() {
 }
 
 #[test]
-fn set_session_id_sets_the_variable_only_when_present() {
-    use std::process::Command;
-    // `docs/invocation.md`, "A session's environment": every command a
-    // session's tools run gets `FIBER_SESSION_ID` set to that session's id,
-    // replacing any inherited value. The doc promises the variable, not a
-    // count, so this looks the key up instead of counting the environment.
-    let id = contract::SessionId("s_0123456789abcdef".into());
-    let mut present = Command::new("/bin/sh");
-    super::set_session_id(&mut present, Some(&id));
-    let value = present
-        .get_envs()
-        .find_map(|(key, value)| (key == "FIBER_SESSION_ID").then_some(value));
-    assert_eq!(
-        value,
-        Some(Some(std::ffi::OsStr::new("s_0123456789abcdef"))),
-        "the session variable is set to the session id"
-    );
-    let mut absent = Command::new("/bin/sh");
-    super::set_session_id(&mut absent, None);
-    assert!(
-        absent.get_envs().all(|(key, _)| key != "FIBER_SESSION_ID"),
-        "no session variable is set without a session id"
-    );
-}
-
-#[test]
 fn bump_advances_the_sequence() {
     let mut inner = Inner::default();
     bump(&mut inner);

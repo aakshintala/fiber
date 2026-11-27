@@ -101,14 +101,6 @@ pub(super) fn session_id_pair(
     session_id.map(|id| ("FIBER_SESSION_ID".into(), id.0.clone()))
 }
 
-/// Applies [`session_id_pair`] to a spawned command, after `scrub_env`
-/// cleared any inherited value, giving the replacing semantics.
-pub(super) fn set_session_id(cmd: &mut Command, session_id: Option<&contract::SessionId>) {
-    if let Some((key, value)) = session_id_pair(session_id) {
-        cmd.env(key, value);
-    }
-}
-
 /// Why the command moved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MoveReason {
@@ -890,7 +882,7 @@ fn execute_confined_with_session(
     if let Some(path) = matches {
         cmd.env(crate::search::matches::MATCHES_ENV, path);
     }
-    set_session_id(&mut cmd, session_id);
+    cmd.envs(session_id_pair(session_id));
     support::group::detach(&mut cmd, tty);
     if !emit.starting() {
         return Ok(Ran::Declined);
