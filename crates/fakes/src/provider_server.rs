@@ -508,12 +508,14 @@ fn invalid_openai_properties(request: &ParsedRequest) -> bool {
     let body = &request.body;
     let mut at = 0;
     let mut found = false;
-    while let Some(relative) = body[at..].iter().position(|byte| *byte == b'"') {
+    while let Some(relative) = body
+        .get(at..)
+        .and_then(|remaining| remaining.iter().position(|byte| *byte == b'"'))
+    {
         let start = at + relative;
         let mut end = start + 1;
         let mut escaped = false;
-        while end < body.len() {
-            let byte = body[end];
+        while let Some(byte) = body.get(end).copied() {
             end += 1;
             if escaped {
                 escaped = false;
@@ -523,9 +525,9 @@ fn invalid_openai_properties(request: &ParsedRequest) -> bool {
                 break;
             }
         }
-        if end <= body.len()
-            && serde_json::from_slice::<String>(&body[start..end]).is_ok_and(|s| s == "properties")
-        {
+        if body.get(start..end).is_some_and(|token| {
+            serde_json::from_slice::<String>(token).is_ok_and(|s| s == "properties")
+        }) {
             found = true;
             break;
         }
@@ -537,13 +539,16 @@ fn invalid_openai_properties(request: &ParsedRequest) -> bool {
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
         return false;
     };
-    value["tools"].as_array().is_some_and(|tools| {
-        tools.iter().any(|tool| {
-            tool.get("parameters")
-                .and_then(|parameters| parameters.get("properties"))
-                .is_some_and(|properties| !properties.is_object())
+    value
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|tools| {
+            tools.iter().any(|tool| {
+                tool.get("parameters")
+                    .and_then(|parameters| parameters.get("properties"))
+                    .is_some_and(|properties| !properties.is_object())
+            })
         })
-    })
 }
 
 /// Serves one connection: records the request under the state lock, then
