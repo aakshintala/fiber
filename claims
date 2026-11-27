@@ -318,3 +318,7 @@ crates/fakes/src/provider_server_tests.rs	fiber-4975	plan	2026-11-27T00:09:37Z	A
 crates/main/tests/session_turns/reload.rs	fiber-4975	plan	2026-11-27T00:09:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/provider/src/openai_responses_tests.rs	fiber-4975	plan	2026-11-27T00:09:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/provider/tests/gemini.rs	fiber-4975	plan	2026-11-27T00:09:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/history.rs	fiber-4977	plan	2026-11-27T00:10:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/src/resume_tests.rs	fiber-4977	plan	2026-11-27T00:10:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/src/jobs_tests.rs	fiber-4977	plan	2026-11-27T00:10:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/loop/tests/resume.rs	fiber-4977	plan	2026-11-27T00:10:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
