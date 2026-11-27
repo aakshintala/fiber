@@ -2031,13 +2031,24 @@ fn stream_endings_close_only_the_named_pass_and_disconnect_clears_all() {
     let (mut lp, _, _, _) = opened();
     let session = lp.app.session().unwrap().clone();
     let other = contract::SessionId("s_bbbbbbbbbbbbbbbb".into());
-    for kind in ["stream_closed", "session_left"] {
-        opening(&mut lp.app, 9000);
-        lp.app.on_line(stream_event(kind, &other, None));
-        assert!(lp.app.pass_open());
-        lp.app.on_line(stream_event(kind, &session, None));
-        assert!(!lp.app.pass_open());
-    }
+    opening(&mut lp.app, 9000);
+    lp.app.on_line(stream_event("stream_closed", &other, None));
+    assert!(lp.app.pass_open());
+    lp.app
+        .on_line(stream_event("stream_closed", &session, None));
+    assert!(!lp.app.pass_open());
+    opening(&mut lp.app, 9000);
+    lp.app
+        .on_line(stream_event("stream_reopened", &other, Some(9000)));
+    let mut other_boundary = replay(9000);
+    other_boundary.session_id = other.clone();
+    lp.app.on_line(Line::Session(other_boundary));
+    assert!(
+        lp.app.pass_open(),
+        "another session's boundary leaves this pass open"
+    );
+    lp.app.on_line(stream_event("session_left", &session, None));
+    assert!(!lp.app.pass_open(), "the top-level session ends its pass");
     lp.app
         .on_line(stream_event("stream_reopened", &session, Some(9000)));
     assert!(lp.app.pass_open());

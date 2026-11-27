@@ -9,7 +9,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use fakes::MUST_SUCCEED_WITHIN;
+use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 
@@ -17,7 +17,9 @@ use serde_json::{Value, json};
 
 use super::ack::Verdict;
 use super::*;
-use fakes::Deadline;
+fn jsonl(lines: &[Value]) -> String {
+    lines.iter().map(|line| format!("{line}\n")).collect()
+}
 
 #[test]
 fn opening_a_keeper_socket_starts_one_resume_and_writes_nothing_to_it() {
@@ -819,6 +821,32 @@ fn start_relay_thread(
     relays: std::sync::Arc<std::sync::Mutex<Relays>>,
     kept: Kept,
 ) -> std::thread::JoinHandle<()> {
+    start_relay_thread_with_replayed(
+        session,
+        epoch,
+        reader,
+        hub,
+        writer,
+        relays,
+        kept,
+        Replayed::default(),
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the test stages the relay's independently owned state"
+)]
+fn start_relay_thread_with_replayed(
+    session: &'static str,
+    epoch: u64,
+    reader: UnixStream,
+    hub: std::sync::Arc<crate::connection::Hub>,
+    writer: std::sync::Arc<std::sync::Mutex<UnixStream>>,
+    relays: std::sync::Arc<std::sync::Mutex<Relays>>,
+    kept: Kept,
+    replayed: Replayed,
+) -> std::thread::JoinHandle<()> {
     let (order, gone) = {
         let held = crate::connection::lock(&relays);
         (held.order.clone(), held.rejoin.closed_flag())
@@ -830,7 +858,7 @@ fn start_relay_thread(
                 RelayThread {
                     reopen: None,
                     epoch,
-                    replayed: Replayed::default(),
+                    replayed,
                     kept,
                     order,
                     gone,
@@ -864,7 +892,6 @@ fn exited_delegate_eof_replays_missing_suffix() {
         Complete,
         Short,
         Gap,
-        BeyondBoundary,
         Unreadable,
     }
 
@@ -886,23 +913,13 @@ fn exited_delegate_eof_replays_missing_suffix() {
         prefix_through: Option<u64>,
         log_tail: LogTail,
         exit: Exit,
+        replayed_ack: bool,
+        connection_gone: bool,
         expected_seqs: &'a [u64],
         expect_stream_closed: bool,
-        expect_subscription: bool,
     }
 
     fn run_case(case: Case<'_>) {
-        let Case {
-            name,
-            level,
-            boundary,
-            prefix_through,
-            log_tail,
-            exit,
-            expected_seqs,
-            expect_stream_closed,
-            expect_subscription,
-        } = case;
         use std::io::Read;
         use std::time::Duration;
 
@@ -920,14 +937,7 @@ fn exited_delegate_eof_replays_missing_suffix() {
             ),
             event("job_started", 1, PARENT, json!({"job_id": JOB})),
         ];
-        std::fs::write(
-            parent_dir.join("events.jsonl"),
-            parent_events
-                .iter()
-                .map(|line| format!("{}\n", line))
-                .collect::<String>(),
-        )
-        .unwrap();
+        std::fs::write(parent_dir.join("events.jsonl"), jsonl(&parent_events)).unwrap();
 
         let delegate_dir = home.join("projects/-w/sessions").join(SID);
         std::fs::create_dir_all(&delegate_dir).unwrap();
@@ -939,7 +949,7 @@ fn exited_delegate_eof_replays_missing_suffix() {
             json!({"workspace": workspace.to_string_lossy(), "parent": parent}),
         )];
         for seq in 1..=4 {
-            let kind = if seq == 4 && matches!(exit, Exit::Clean) {
+            let kind = if seq == 4 && matches!(case.exit, Exit::Clean) {
                 "fiber_exited"
             } else {
                 "text_completed"
@@ -951,60 +961,22 @@ fn exited_delegate_eof_replays_missing_suffix() {
                 json!({"text": format!("fold {seq}")}),
             ));
         }
-        match log_tail {
-            LogTail::Complete => {
-                std::fs::write(
-                    delegate_dir.join("events.jsonl"),
-                    fold.iter()
-                        .map(|line| format!("{}\n", line))
-                        .collect::<String>(),
-                )
-                .unwrap();
-            }
-            LogTail::Short => {
-                std::fs::write(
-                    delegate_dir.join("events.jsonl"),
-                    fold.iter()
-                        .take(3)
-                        .map(|line| format!("{}\n", line))
-                        .collect::<String>(),
-                )
-                .unwrap();
-            }
+        let log_contents = match case.log_tail {
+            LogTail::Complete => jsonl(&fold),
+            LogTail::Short => jsonl(&fold.iter().take(3).cloned().collect::<Vec<_>>()),
             LogTail::Gap => {
                 let mut lines: Vec<_> = fold.iter().take(2).cloned().collect();
                 lines.push(event("text_completed", 3, SID, json!({"text": "fold 3"})));
                 lines.push(event("text_completed", 4, SID, json!({"text": "fold 4"})));
-                std::fs::write(
-                    delegate_dir.join("events.jsonl"),
-                    lines
-                        .iter()
-                        .map(|line| format!("{}\n", line))
-                        .collect::<String>(),
-                )
-                .unwrap();
+                jsonl(&lines)
             }
-            LogTail::BeyondBoundary => {
-                let mut lines: Vec<_> = fold.iter().take(2).cloned().collect();
-                lines.push(event("text_completed", 5, SID, json!({"text": "fold 5"})));
-                std::fs::write(
-                    delegate_dir.join("events.jsonl"),
-                    lines
-                        .iter()
-                        .map(|line| format!("{}\n", line))
-                        .collect::<String>(),
-                )
-                .unwrap();
-            }
-            LogTail::Unreadable => {
-                std::fs::write(
-                    delegate_dir.join("events.jsonl"),
-                    format!("{}\n{{not json}}\n", fold[0]),
-                )
-                .unwrap();
-            }
-        }
-        if matches!(exit, Exit::Crash) {
+            LogTail::Unreadable => format!(
+                "{}{{not json}}\n",
+                jsonl(&fold.iter().take(3).cloned().collect::<Vec<_>>())
+            ),
+        };
+        std::fs::write(delegate_dir.join("events.jsonl"), log_contents).unwrap();
+        if matches!(case.exit, Exit::Crash) {
             std::fs::write(home.join("run").join(SID), "not a socket").unwrap();
         }
 
@@ -1013,16 +985,23 @@ fn exited_delegate_eof_replays_missing_suffix() {
         let subscribe = json!({
             "id": "c_sub",
             "command": "subscribe",
-            "args": {"level": level},
+            "args": {"level": case.level},
         })
         .as_object()
         .unwrap()
         .clone();
-        let kept: Kept = Arc::new(Mutex::new(vec![(
-            "c_sub".to_owned(),
-            subscribe,
-            CommandState::Written,
-        )]));
+        let replayed = Replayed::default();
+        if case.replayed_ack {
+            crate::connection::lock(&replayed).push("c_sub".to_owned());
+            crate::connection::lock(&relays)
+                .subscribed
+                .push((SID.to_owned(), subscribe.clone()));
+        }
+        let kept: Kept = Arc::new(Mutex::new(if case.replayed_ack {
+            Vec::new()
+        } else {
+            vec![("c_sub".to_owned(), subscribe.clone(), CommandState::Written)]
+        }));
         let (session, mut session_peer) = UnixStream::pair().unwrap();
         let (session_writer, _session_writer_peer) = UnixStream::pair().unwrap();
         let epoch = {
@@ -1033,7 +1012,7 @@ fn exited_delegate_eof_replays_missing_suffix() {
                 epoch,
                 writer: session_writer,
                 kept: Arc::clone(&kept),
-                replayed: Replayed::default(),
+                replayed: Arc::clone(&replayed),
                 thread: None,
                 retiring: None,
                 target: RelayTarget::LiveUnreadable,
@@ -1041,22 +1020,24 @@ fn exited_delegate_eof_replays_missing_suffix() {
             epoch
         };
         let order = crate::connection::lock(&relays).order.clone();
-        crate::retire::enqueue_new(
-            &order,
-            SID,
-            &CommandId("c_sub".to_owned()),
-            &json!({
-                "id": "c_sub", "command": "subscribe", "args": {"level": level}
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
-        );
-        crate::retire::report(
-            &order,
-            &CommandId("c_sub".to_owned()),
-            CommandState::Written,
-        );
+        if !case.replayed_ack {
+            crate::retire::enqueue_new(
+                &order,
+                SID,
+                &CommandId("c_sub".to_owned()),
+                &json!({
+                    "id": "c_sub", "command": "subscribe", "args": {"level": case.level}
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            );
+            crate::retire::report(
+                &order,
+                &CommandId("c_sub".to_owned()),
+                CommandState::Written,
+            );
+        }
 
         let (paused_tx, paused_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -1070,7 +1051,10 @@ fn exited_delegate_eof_replays_missing_suffix() {
             .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
         let client_writer = Arc::new(Mutex::new(client_writer));
-        let thread = start_relay_thread(
+        if case.connection_gone {
+            crate::connection::lock(&relays).rejoin.close();
+        }
+        let thread = start_relay_thread_with_replayed(
             SID,
             epoch,
             session,
@@ -1078,6 +1062,7 @@ fn exited_delegate_eof_replays_missing_suffix() {
             Arc::clone(&client_writer),
             Arc::clone(&relays),
             kept,
+            replayed,
         );
         Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&paused_rx, "the relay to park before its session read");
@@ -1086,13 +1071,13 @@ fn exited_delegate_eof_replays_missing_suffix() {
             "kind": "command_accepted",
             "payload": {"command_id": "c_sub", "result": {}},
         });
-        if let Some(boundary) = boundary {
+        if let Some(boundary) = case.boundary {
             accepted["payload"]["result"]["last_seq"] = json!(boundary);
         }
         session_peer
             .write_all(format!("{accepted}\n").as_bytes())
             .unwrap();
-        if let Some(last) = prefix_through {
+        if let Some(last) = case.prefix_through {
             for line in fold.iter().take_while(|line| {
                 line.get("seq")
                     .and_then(Value::as_u64)
@@ -1117,27 +1102,31 @@ fn exited_delegate_eof_replays_missing_suffix() {
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
         assert_eq!(
-            lines.first().and_then(|line| line["kind"].as_str()),
-            Some("command_accepted"),
-            "{name}: the subscription acknowledgement is forwarded: {lines:?}"
+            lines.iter().any(|line| line["kind"] == "command_accepted"),
+            !case.replayed_ack,
+            "{}: a replayed acknowledgement stays muted: {lines:?}",
+            case.name
         );
         let seqs: Vec<u64> = lines
             .iter()
             .filter_map(|line| line.get("seq").and_then(Value::as_u64))
             .collect();
         assert_eq!(
-            seqs, expected_seqs,
-            "{name}: forward the prefix and only the missing suffix through last_seq"
+            seqs, case.expected_seqs,
+            "{}: forward the prefix and only the missing suffix through last_seq",
+            case.name
         );
         assert_eq!(
             lines.iter().any(|line| line["kind"] == "stream_closed"),
-            expect_stream_closed,
-            "{name}: stream_closed follows only a failed required-range read: {lines:?}"
+            case.expect_stream_closed,
+            "{}: stream_closed follows only a failed required-range read: {lines:?}",
+            case.name
         );
         assert_eq!(
             crate::connection::lock(&relays).subscription(SID).is_some(),
-            expect_subscription,
-            "{name}: successful/no-op completion keeps the accepted subscription"
+            !case.expect_stream_closed,
+            "{}: only a failed required-range read drops the accepted subscription",
+            case.name
         );
     }
 
@@ -1148,9 +1137,10 @@ fn exited_delegate_eof_replays_missing_suffix() {
         prefix_through: Some(1),
         log_tail: LogTail::Complete,
         exit: Exit::Clean,
+        replayed_ack: false,
+        connection_gone: false,
         expected_seqs: &[0, 1, 2, 3, 4],
         expect_stream_closed: false,
-        expect_subscription: true,
     });
     run_case(Case {
         name: "crash",
@@ -1159,20 +1149,34 @@ fn exited_delegate_eof_replays_missing_suffix() {
         prefix_through: Some(1),
         log_tail: LogTail::Complete,
         exit: Exit::Crash,
+        replayed_ack: false,
+        connection_gone: false,
         expected_seqs: &[0, 1, 2, 3, 4],
         expect_stream_closed: false,
-        expect_subscription: true,
     });
     run_case(Case {
-        name: "unreadable log",
+        name: "replayed full-subscribe acknowledgement",
+        level: "full",
+        boundary: Some(4),
+        prefix_through: Some(1),
+        log_tail: LogTail::Complete,
+        exit: Exit::Crash,
+        replayed_ack: true,
+        connection_gone: false,
+        expected_seqs: &[0, 1, 2, 3, 4],
+        expect_stream_closed: false,
+    });
+    run_case(Case {
+        name: "unreadable log after a readable suffix",
         level: "full",
         boundary: Some(4),
         prefix_through: Some(1),
         log_tail: LogTail::Unreadable,
         exit: Exit::Crash,
-        expected_seqs: &[0, 1],
+        replayed_ack: false,
+        connection_gone: false,
+        expected_seqs: &[0, 1, 2],
         expect_stream_closed: true,
-        expect_subscription: false,
     });
     run_case(Case {
         name: "short log before the accepted boundary",
@@ -1181,9 +1185,22 @@ fn exited_delegate_eof_replays_missing_suffix() {
         prefix_through: Some(1),
         log_tail: LogTail::Short,
         exit: Exit::Crash,
-        expected_seqs: &[0, 1],
+        replayed_ack: false,
+        connection_gone: false,
+        expected_seqs: &[0, 1, 2],
         expect_stream_closed: true,
-        expect_subscription: false,
+    });
+    run_case(Case {
+        name: "connection already closed",
+        level: "full",
+        boundary: Some(4),
+        prefix_through: Some(1),
+        log_tail: LogTail::Short,
+        exit: Exit::Crash,
+        replayed_ack: false,
+        connection_gone: true,
+        expected_seqs: &[0, 1],
+        expect_stream_closed: false,
     });
     run_case(Case {
         name: "log skips a required sequence",
@@ -1192,20 +1209,10 @@ fn exited_delegate_eof_replays_missing_suffix() {
         prefix_through: Some(1),
         log_tail: LogTail::Gap,
         exit: Exit::Crash,
+        replayed_ack: false,
+        connection_gone: false,
         expected_seqs: &[0, 1],
         expect_stream_closed: true,
-        expect_subscription: false,
-    });
-    run_case(Case {
-        name: "log next sequence is beyond the boundary",
-        level: "full",
-        boundary: Some(4),
-        prefix_through: Some(1),
-        log_tail: LogTail::BeyondBoundary,
-        exit: Exit::Crash,
-        expected_seqs: &[0, 1],
-        expect_stream_closed: true,
-        expect_subscription: false,
     });
     run_case(Case {
         name: "summary has no boundary",
@@ -1214,9 +1221,10 @@ fn exited_delegate_eof_replays_missing_suffix() {
         prefix_through: None,
         log_tail: LogTail::Complete,
         exit: Exit::Clean,
+        replayed_ack: false,
+        connection_gone: false,
         expected_seqs: &[],
         expect_stream_closed: false,
-        expect_subscription: true,
     });
     run_case(Case {
         name: "full acknowledgement has no boundary",
@@ -1225,9 +1233,10 @@ fn exited_delegate_eof_replays_missing_suffix() {
         prefix_through: Some(0),
         log_tail: LogTail::Complete,
         exit: Exit::Clean,
+        replayed_ack: false,
+        connection_gone: false,
         expected_seqs: &[0],
         expect_stream_closed: false,
-        expect_subscription: true,
     });
     run_case(Case {
         name: "boundary already forwarded",
@@ -1236,9 +1245,10 @@ fn exited_delegate_eof_replays_missing_suffix() {
         prefix_through: Some(2),
         log_tail: LogTail::Complete,
         exit: Exit::Clean,
+        replayed_ack: false,
+        connection_gone: false,
         expected_seqs: &[0, 1, 2],
         expect_stream_closed: false,
-        expect_subscription: true,
     });
     run_case(Case {
         name: "forwarded sequence is beyond the boundary",
@@ -1247,9 +1257,10 @@ fn exited_delegate_eof_replays_missing_suffix() {
         prefix_through: Some(3),
         log_tail: LogTail::Complete,
         exit: Exit::Clean,
+        replayed_ack: false,
+        connection_gone: false,
         expected_seqs: &[0, 1, 2, 3],
         expect_stream_closed: false,
-        expect_subscription: true,
     });
 }
 

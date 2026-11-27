@@ -1246,7 +1246,8 @@ answers each command it read exactly once. `Exited`: its log ends in
   another client before the hub checks its socket can give the client
   `stream_closed` for the session that ended; the client subscribes again and
   no line repeats. When a delegate exits before its fold reaches `last_seq`,
-  the hub sends the rest of the fold from the run's log.
+  the hub sends the rest of the fold from the run's log. A log that ends
+  before `last_seq` sends what it holds, then `stream_closed`.
 - **A command without one is for the hub.** These are the hub's commands:
 
 | Hub command | `args` | What it does |
