@@ -3490,7 +3490,24 @@ fn a_second_resume_over_a_logged_orphan_keeps_it_after_the_results() {
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
 
-    history.write(job_completed("j_a"), None);
+    history.write(
+        Event::JobCompleted(contract::events::JobCompleted {
+            job_id: contract::JobId("j_a".into()),
+            status: contract::events::Outcome::Failed,
+            error: Some(contract::shapes::Failure {
+                code: ErrorCode::Orphaned,
+                message: ORPHANED.into(),
+                retry_after_ms: None,
+                provider: None,
+            }),
+            process: None,
+            output_tail: None,
+            notice: None,
+            changed_by: None,
+            protected_paths: None,
+        }),
+        None,
+    );
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
     history.freeze();
@@ -3541,7 +3558,6 @@ fn a_second_resume_over_a_logged_orphan_keeps_it_after_the_results() {
         })
     );
 }
-
 
 #[test]
 fn a_second_resume_does_not_repeat_a_logged_orphan_completion() {
