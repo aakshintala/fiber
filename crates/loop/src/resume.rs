@@ -79,6 +79,7 @@ pub struct Resumed {
     /// the last `model_changed`'s `after` when it came later. `None` when
     /// the log holds neither.
     pub(crate) settings: Option<ModelSettings>,
+    pub(crate) parent_runs: HashMap<JobId, crate::jobs::ParentRun>,
     /// The window's start, as a position in the chain: the segment and
     /// the `seq` the window starts at: the latest `turn_started` of the
     /// latest completed compaction's turn, before that compaction; the chain's
@@ -379,6 +380,7 @@ impl Loop {
             consecutive,
             reviewed,
             orphans,
+            parent_runs,
             delegate_sessions,
             thinking,
             offers,
@@ -485,10 +487,23 @@ impl Loop {
             },
         )?;
         resumed.kept = kept;
-        let backfill = resumed.prepare_backfill(&delegate_sessions, &orphans)?;
-        let settled =
-            resumed.settle_orphans(&delegate_sessions, &orphans, settle_finish.as_ref())?;
-        resumed.staged_orphans = crate::jobs::Orphans::new(settled, backfill, settings);
+        let (settled, backfill) = {
+            let settled = resumed.settle_orphans(
+                &delegate_sessions,
+                &orphans,
+                &parent_runs,
+                settle_finish.as_ref(),
+            )?;
+            (
+                settled,
+                resumed.prepare_backfill(&delegate_sessions, &orphans)?,
+            )
+        };
+        resumed.staged_orphans = crate::jobs::StagedTail {
+            settled,
+            backfill,
+            settings,
+        };
         Ok(resumed)
     }
 }
@@ -497,13 +512,6 @@ impl Loop {
 /// a cheap lock retry, so the bound stays small on the real clock while
 /// each fake-clock retry wakes on one advance.
 const WRITER_RETRY: Duration = Duration::from_millis(50);
-
-#[derive(Default)]
-struct ParentRun {
-    count: usize,
-    started: Option<contract::events::JobStarted>,
-    finished: bool,
-}
 
 impl Loop {
     /// Prepares the orphan backfill (`docs/delegates.md`, "Lifetime"): the
@@ -642,33 +650,6 @@ impl Loop {
         }
     }
 
-    /// The current `job_started` run per job, including whether that run
-    /// already wrote its delegate finish. A later start resets finish scope.
-    fn current_parent_runs(&self) -> Result<HashMap<JobId, ParentRun>, Error> {
-        let mut runs: HashMap<JobId, ParentRun> = HashMap::new();
-        for line in log::read(self.log.dir())? {
-            if !line.is_durable() {
-                continue;
-            }
-            let Ok(Some(event)) = Event::from_envelope(&line) else {
-                continue;
-            };
-            if let Event::JobStarted(started) = event {
-                if started.kind != Some(contract::events::JobKind::Detached) {
-                    let run = runs.entry(started.job_id.clone()).or_default();
-                    run.count += 1;
-                    run.started = Some(started);
-                    run.finished = false;
-                }
-            } else if let Event::DelegateFinished(finished) = event
-                && let Some(run) = runs.get_mut(&finished.job_id)
-            {
-                run.finished = true;
-            }
-        }
-        Ok(runs)
-    }
-
     /// Settles each orphan from its delegate's own log (`docs/delegates.md`,
     /// "Lifetime"): in orphan order, one [`OrphanEnd`] per orphan. An orphan
     /// with no `delegate_sessions` entry, a missing delegate directory, or
@@ -680,9 +661,9 @@ impl Loop {
         &self,
         sessions: &HashMap<JobId, SessionId>,
         orphans: &[JobCompleted],
+        parent_runs: &HashMap<JobId, crate::jobs::ParentRun>,
         finish: Option<&contract::jobs::FinishWorktree>,
     ) -> Result<Vec<OrphanEnd>, Error> {
-        let parent_runs = self.current_parent_runs()?;
         let mut settled = Vec::with_capacity(orphans.len());
         for orphan in orphans {
             let Some(session) = sessions.get(&orphan.job_id) else {
@@ -693,10 +674,7 @@ impl Loop {
                 settled.push(OrphanEnd::Orphaned(orphan.clone()));
                 continue;
             };
-            let Some(started) = parent_run.started.clone() else {
-                settled.push(OrphanEnd::Orphaned(orphan.clone()));
-                continue;
-            };
+            let started = parent_run.started.clone();
             let Some(home) = self.log.dir().parent() else {
                 settled.push(OrphanEnd::Orphaned(orphan.clone()));
                 continue;

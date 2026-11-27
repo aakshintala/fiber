@@ -6,7 +6,7 @@
 //! A resume marks each job a crash left running `orphaned`
 //! (`docs/events.md`, "Resume").
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -599,40 +599,30 @@ pub(crate) enum OrphanEnd {
     Settled(DelegateFinished, Box<JobCompleted>),
 }
 
-/// Backfill usage lines copied from child sessions before a resumed turn.
-type UsageBackfill = Vec<(contract::SessionId, Vec<contract::events::UsageRecorded>)>;
+/// Resume work staged by history and drained at the start of `Loop::run`.
+#[derive(Default)]
+pub(crate) struct StagedTail {
+    pub(crate) settled: Vec<OrphanEnd>,
+    pub(crate) backfill: Vec<(contract::SessionId, Vec<contract::events::UsageRecorded>)>,
+    pub(crate) settings: Option<contract::events::ModelSettings>,
+}
 
-/// The resume tail, written at the opening of `Loop::run` in contract order.
+/// Accumulates job starts, finishes and completions while folding history.
 #[derive(Default)]
 pub(crate) struct Orphans {
-    settled: Vec<OrphanEnd>,
-    backfill: UsageBackfill,
-    settings: Option<contract::events::ModelSettings>,
+    pub(crate) parent_runs: HashMap<JobId, ParentRun>,
     started: Vec<JobId>,
     folded_settled: HashSet<JobId>,
 }
 
-impl Orphans {
-    pub(crate) fn new(
-        settled: Vec<OrphanEnd>,
-        backfill: Vec<(contract::SessionId, Vec<contract::events::UsageRecorded>)>,
-        settings: Option<contract::events::ModelSettings>,
-    ) -> Self {
-        Self {
-            settled,
-            backfill,
-            settings,
-            ..Self::default()
-        }
-    }
+#[derive(Clone)]
+pub(crate) struct ParentRun {
+    pub(crate) count: usize,
+    pub(crate) started: contract::events::JobStarted,
+    pub(crate) finished: bool,
+}
 
-    pub(crate) fn take(&mut self) -> ResumeTail {
-        (
-            std::mem::take(&mut self.settled),
-            std::mem::take(&mut self.backfill),
-            self.settings.take(),
-        )
-    }
+impl Orphans {
     /// Folds one durable line's event. A `job_started` reopens its job:
     /// a later run a crash cut short is still owed its orphaned end.
     pub(crate) fn fold(&mut self, event: &Event) {
@@ -640,22 +630,36 @@ impl Orphans {
             if job.kind == Some(contract::events::JobKind::Detached) {
                 return;
             }
+            let run = self
+                .parent_runs
+                .entry(job.job_id.clone())
+                .or_insert_with(|| ParentRun {
+                    count: 0,
+                    started: job.clone(),
+                    finished: false,
+                });
+            run.count += 1;
+            run.started = job.clone();
+            run.finished = false;
             self.started.push(job.job_id.clone());
             self.folded_settled.remove(&job.job_id);
+        } else if let Event::DelegateFinished(finished) = event {
+            if let Some(run) = self.parent_runs.get_mut(&finished.job_id) {
+                run.finished = true;
+            }
         } else if let Event::JobCompleted(job) = event {
             self.folded_settled.insert(job.job_id.clone());
         }
     }
 
-    /// The jobs started and never settled, in start order, each once, as
-    /// its `orphaned` completion.
-    pub(crate) fn finish(self) -> Vec<JobCompleted> {
+    /// The jobs started and never settled, in start order, each once.
+    pub(crate) fn finish(self) -> (Vec<JobCompleted>, HashMap<JobId, ParentRun>) {
         let Self {
             started,
             mut folded_settled,
-            ..
+            parent_runs,
         } = self;
-        started
+        let orphans = started
             .into_iter()
             .filter(|id| folded_settled.insert(id.clone()))
             .map(|job_id| JobCompleted {
@@ -673,20 +677,10 @@ impl Orphans {
                 changed_by: None,
                 protected_paths: None,
             })
-            .collect()
+            .collect();
+        (orphans, parent_runs)
     }
 }
-
-/// One staged resume tail, drained in order by `Loop::run`.
-type ResumeTail = (
-    Vec<OrphanEnd>,
-    UsageBackfill,
-    Option<contract::events::ModelSettings>,
-);
-
-/// The fold accumulator and the staged resume tail share one value type;
-/// each instance is used for exactly one role.
-pub(crate) type OrphanFold = Orphans;
 
 /// What a notice about running jobs tells the model, naming `job_ids`: the
 /// ending notice, or the jobs check. It is logged as its turn's `message`

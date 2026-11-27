@@ -169,7 +169,7 @@ impl support::History {
     /// Sends an optional prompt, then drives the session through its run
     /// boundary and closes the inbox so the run exits after pending work.
     #[track_caller]
-    fn run_to_close(&mut self, looped: Loop, prompt: Option<&str>) {
+    fn run_to_close(&mut self, looped: Loop, prompt: Option<&str>) -> r#loop::Summary {
         if let Some(prompt) = prompt {
             self.inbox_tx
                 .send(Delivery::Prompt(
@@ -184,13 +184,17 @@ impl support::History {
         let (done, finished) = mpsc::channel();
         std::thread::spawn(move || {
             let ran = looped.run();
-            done.send(ran.result.map_err(|error| format!("{error:?}")))
-                .unwrap();
+            done.send(
+                ran.result
+                    .map(|()| ran.summary)
+                    .map_err(|error| format!("{error:?}")),
+            )
+            .unwrap();
         });
         Deadline::after(support::DEADLINE)
             .recv(&finished)
             .expect("run ended")
-            .expect("run succeeded");
+            .expect("run succeeded")
     }
 
     /// The history's kinds, in order: the lines the resume folds.
@@ -3417,9 +3421,10 @@ fn a_job_with_a_completion_is_not_marked() {
 
 #[test]
 fn an_orphan_behind_a_suspended_batch_renders_after_its_results() {
-    // The orphan line is written on open, as on every resume; the notice
-    // joins the conversation after the open batch's results, live and on
-    // rebuild alike, so no message separates a call from its result.
+    // The orphan line is written at the run's first step, after the hooks
+    // are installed; the notice joins the conversation after the open
+    // batch's results, live and on rebuild alike, so no message separates
+    // a call from its result.
     let mut history = History::new(vec![Scripted::text("Hello."), Scripted::text("Again.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_9"));
@@ -3472,6 +3477,63 @@ fn an_orphan_behind_a_suspended_batch_renders_after_its_results() {
     // A later resume renders the same conversation from the log.
     let rebuilt = history.rebuilt();
     assert_eq!(&rebuilt[..conversation.len()], &conversation[..]);
+}
+
+#[test]
+fn a_settled_delegate_behind_a_suspended_batch_writes_after_results() {
+    let mut history = History::new(vec![Scripted::text("Hello."), Scripted::text("Again.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_9"));
+    history.write(requested("shell", "Paris"), Some("a_0"));
+    history.write(job_started("j_a"), Some("a_0"));
+    history.write(delegate_started("j_a", "s_a", "fiber"), Some("a_0"));
+    history.write(completed_event("Started j_a."), Some("a_0"));
+    history.write(requested("exec", "Paris"), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    let delegate = stage_delegate(&history, "s_a");
+    delegate.append(&fiber_started(), None, None).unwrap();
+    delegate
+        .append(&settle_exit(0, Some("settled message"), None), None, None)
+        .unwrap();
+    drop(delegate);
+    history.freeze();
+
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let hooks = Arc::new(RewriteHooks {
+        to: String::new(),
+        settlement_seen: Some(Arc::clone(&seen)),
+    });
+    let looped = history
+        .resume_headless(Vec::new())
+        .hooks(hooks as Arc<dyn contract::hook::Hooks>);
+    history.run_to_close(looped, None);
+
+    let lines = history.new_lines();
+    assert_eq!(lines[0].kind(), EventKind::DelegateFinished);
+    assert_eq!(lines[1].kind(), EventKind::JobCompleted);
+    assert_eq!(lines[0].payload["text"], "settled message");
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        &[(
+            "shell".to_owned(),
+            "settled message".to_owned(),
+            Some(contract::hook::JobDelivery::Delegate)
+        )]
+    );
+    let conversation = &history.provider.requests()[0].conversation;
+    assert!(conversation.windows(4).any(|window| matches!(
+        window,
+        [
+            Input::ToolCall { action_id: call_id, .. },
+            Input::ToolResult { action_id: result_id, .. },
+            Input::User { text: finish_notice, .. },
+            Input::User { text: completion_notice, .. },
+        ] if call_id.0 == "a_1" && result_id.0 == "a_1"
+            && finish_notice.contains("settled message")
+            && completion_notice.contains("background job j_a ended: completed")
+    )));
 }
 
 #[test]
@@ -5913,17 +5975,9 @@ fn stage_delegate(history: &History, session: &str) -> Arc<Log> {
     )
 }
 
-struct BackfillRun(r#loop::Summary);
-
-impl BackfillRun {
-    fn summary(&self) -> &r#loop::Summary {
-        &self.0
-    }
-}
-
 /// Resumes for the backfill's side effects only: no model switch, so no
 /// `model_changed`; no reviewer and no turns run.
-fn resume_for_backfill(history: &mut History) -> BackfillRun {
+fn resume_for_backfill(history: &mut History) -> r#loop::Summary {
     resume_with_finish(history, None)
 }
 
@@ -5933,12 +5987,12 @@ fn resume_for_backfill(history: &mut History) -> BackfillRun {
 fn resume_with_finish(
     history: &mut History,
     finish: Option<contract::jobs::FinishWorktree>,
-) -> BackfillRun {
+) -> r#loop::Summary {
     let (tx, rx) = mpsc::channel();
     drop(tx);
     let mut folded = r#loop::resumed(&history.dir).unwrap();
     folded.settle_finish = finish;
-    Loop::resume(
+    let looped = Loop::resume(
         r#loop::Session {
             log: Arc::clone(&history.log),
             provider: Arc::clone(&history.provider) as Arc<dyn Provider>,
@@ -5955,16 +6009,8 @@ fn resume_with_finish(
         },
         folded,
     )
-    .unwrap()
-    .run()
-    .summary
-    .into()
-}
-
-impl From<r#loop::Summary> for BackfillRun {
-    fn from(summary: r#loop::Summary) -> Self {
-        Self(summary)
-    }
+    .unwrap();
+    history.run_to_close(looped, None)
 }
 
 fn copies_of(lines: &[Envelope], generation: &str) -> Vec<Envelope> {
@@ -6028,7 +6074,7 @@ fn an_orphaned_delegate_s_records_are_backfilled_after_its_orphan_marking() {
         assert!(line.turn_id.is_none());
         assert_eq!(line.payload["origin_session_id"], "s_child");
     }
-    assert_eq!(exited_cost(&history, looped.summary()), Some(0.18));
+    assert_eq!(exited_cost(&history, &looped), Some(0.18));
 }
 
 #[test]
@@ -6060,7 +6106,7 @@ fn a_backfill_skips_the_records_the_parent_already_copied() {
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].payload["cost"], 0.18);
     assert_eq!(found[0].payload["origin_session_id"], "s_child");
-    assert_eq!(exited_cost(&history, looped.summary()), Some(0.18));
+    assert_eq!(exited_cost(&history, &looped), Some(0.18));
 }
 
 /// `event` as an ephemeral line of `session`: a `usage_recorded` with no
@@ -6152,7 +6198,7 @@ fn a_backfill_appends_nothing_the_parent_already_holds() {
     // usage, so the cost is 0, not the earlier process's 0.18
     // (`docs/events.md`, `fiber_exited`: `usage` is "this process's model
     // calls for the session").
-    assert_eq!(exited_cost(&history, looped.summary()), Some(0.0));
+    assert_eq!(exited_cost(&history, &looped), Some(0.0));
 }
 
 #[test]
@@ -6188,7 +6234,7 @@ fn a_backfill_matches_occurrences_in_order_not_the_latest_value() {
     assert_eq!(found.len(), 2);
     assert_eq!(found[0].payload["cost"], 0.15);
     assert_eq!(found[1].payload["cost"], 0.10);
-    assert_eq!(exited_cost(&history, looped.summary()), Some(0.10));
+    assert_eq!(exited_cost(&history, &looped), Some(0.10));
 }
 
 #[test]
@@ -6268,7 +6314,7 @@ fn a_backfill_keeps_generations_and_grandchild_origins_distinct() {
     assert_eq!(usages[1].payload["origin_session_id"], "s_child");
     assert_eq!(usages[2].payload["generation_id"], "g_3");
     assert_eq!(usages[2].payload["origin_session_id"], "s_grand");
-    assert_eq!(exited_cost(&history, looped.summary()), Some(0.75));
+    assert_eq!(exited_cost(&history, &looped), Some(0.75));
 }
 
 #[test]
@@ -6517,12 +6563,7 @@ fn a_settled_delegate_finish_is_redacted_before_completion_and_backfill() {
     let looped = history
         .resume(Vec::new())
         .hooks(hooks as Arc<dyn contract::hook::Hooks>);
-    history
-        .inbox_tx
-        .send(Delivery::Close(support::ignore()))
-        .unwrap();
-    let ran = looped.run();
-    ran.result.unwrap();
+    history.run_to_close(looped, None);
 
     let lines = history.new_lines();
     assert_eq!(
@@ -6550,7 +6591,7 @@ fn a_settled_delegate_finish_is_redacted_before_completion_and_backfill() {
 
 #[test]
 fn a_current_run_finish_without_completion_is_not_written_twice() {
-    let mut history = History::new(Vec::new());
+    let mut history = History::new(vec![Scripted::text("Noted.")]);
     history.write(job_started("j_duplicate"), None);
     history.write(
         delegate_started("j_duplicate", "s_duplicate", "fiber"),
@@ -6570,11 +6611,36 @@ fn a_current_run_finish_without_completion_is_not_written_twice() {
     drop(delegate);
     history.freeze();
 
-    drop(resume_for_backfill(&mut history));
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let hooks = Arc::new(RewriteHooks {
+        to: String::new(),
+        settlement_seen: Some(Arc::clone(&seen)),
+    });
+    let looped = history
+        .resume(Vec::new())
+        .hooks(hooks as Arc<dyn contract::hook::Hooks>);
+    history.run_to_close(looped, Some("continue"));
+    assert!(seen.lock().unwrap().is_empty());
+
     let lines = history.new_lines();
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].kind(), EventKind::JobCompleted);
-    assert_eq!(lines[0].payload["job_id"], "j_duplicate");
+    let completions = lines
+        .iter()
+        .filter(|line| line.kind() == EventKind::JobCompleted)
+        .collect::<Vec<_>>();
+    assert_eq!(completions.len(), 1);
+    assert_eq!(completions[0].payload["job_id"], "j_duplicate");
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.kind() == EventKind::DelegateFinished)
+            .count(),
+        0
+    );
+    let requests = history.provider.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].conversation.iter().any(|input| matches!(input,
+        Input::User { text, .. } if text.contains("j_duplicate")
+    )));
 }
 
 #[test]
@@ -6790,7 +6856,7 @@ fn a_settled_completion_carries_the_logged_exit_code() {
 /// whole wait, parks and completion together.
 fn resume_on_thread(
     history: &mut History,
-) -> mpsc::Receiver<(Option<BackfillRun>, Result<(), String>)> {
+) -> mpsc::Receiver<(Option<r#loop::Summary>, Result<(), String>)> {
     let (tx, inbox) = mpsc::channel();
     drop(tx);
     let session = r#loop::Session {
@@ -6816,11 +6882,8 @@ fn resume_on_thread(
             Ok(looped) => {
                 let ran = looped.run();
                 let r#loop::Ran { summary, result } = ran;
-                done.send((
-                    Some(BackfillRun(summary)),
-                    result.map_err(|error| format!("{error:?}")),
-                ))
-                .expect("the test waits for the resume");
+                done.send((Some(summary), result.map_err(|error| format!("{error:?}"))))
+                    .expect("the test waits for the resume");
             }
             Err(error) => done
                 .send((None, Err(format!("{error:?}"))))
@@ -6907,7 +6970,7 @@ fn a_resume_waits_out_a_live_writer_and_backfills_its_final_lines() {
     let second = copies_of(&history.new_lines(), "g_2");
     assert_eq!(second.len(), 1);
     assert_eq!(second[0].payload["origin_session_id"], "s_child");
-    assert_eq!(exited_cost(&history, looped.summary()), Some(0.625));
+    assert_eq!(exited_cost(&history, &looped), Some(0.625));
 }
 
 #[test]
@@ -6941,7 +7004,7 @@ fn a_resume_backfills_a_writer_that_died_mid_stream() {
     let found = copies_of(&history.new_lines(), "g_1");
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].payload["cost"], 0.10);
-    assert_eq!(exited_cost(&history, looped.summary()), Some(0.10));
+    assert_eq!(exited_cost(&history, &looped), Some(0.10));
 }
 
 #[test]
@@ -6976,7 +7039,7 @@ fn a_backfill_copies_the_good_prefix_past_a_corrupt_line() {
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].payload["cost"], 0.10);
     assert!(copies_of(&history.new_lines(), "g_2").is_empty());
-    assert_eq!(exited_cost(&history, looped.summary()), Some(0.10));
+    assert_eq!(exited_cost(&history, &looped), Some(0.10));
 }
 
 #[test]

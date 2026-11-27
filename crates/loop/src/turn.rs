@@ -24,14 +24,14 @@ impl Loop {
         let result = (|| {
             status = status::spawn(&self);
             self.status_tap = status.as_ref().map(status::Status::tap);
-            let (orphans, backfill, settings) = self.staged_orphans.take();
-            self.mark_orphans(orphans)?;
-            for (session, lines) in backfill {
+            let staged = std::mem::take(&mut self.staged_orphans);
+            self.mark_orphans(staged.settled)?;
+            for (session, lines) in staged.backfill {
                 for line in lines {
                     self.copy_usage(&session, line)?;
                 }
             }
-            self.resumed_label(settings)?;
+            self.resumed_label(staged.settings)?;
             loop {
                 match self.turn()? {
                     Some(_) => {}
