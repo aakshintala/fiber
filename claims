@@ -810,3 +810,8 @@ crates/tui/src/home_view_tests.rs:4298-4298	fiber-4781	plan	2026-11-27T22:58:21Z
 crates/tui/src/home_view_tests.rs:4303-4303	fiber-4781	plan	2026-11-27T22:58:21Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4781-space-click-views	
 crates/tui/src/view/home/picker.rs:129-133	fiber-4781	plan	2026-11-27T22:58:21Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4781-space-click-views	
 crates/tui/src/view/home/picker.rs:219-219	fiber-4781	plan	2026-11-27T22:58:21Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4781-space-click-views	
+docs/tui.md	fiber-4639	plan	2026-11-27T23:35:10Z	roundhouse-7010-plus-1:/home/aakshintala	
+crates/tui/src/app/home.rs	fiber-4639	plan	2026-11-27T23:35:10Z	roundhouse-7010-plus-1:/home/aakshintala	
+crates/tui/src/view/home.rs	fiber-4639	plan	2026-11-27T23:35:10Z	roundhouse-7010-plus-1:/home/aakshintala	
+crates/tui/src/home_view_tests.rs	fiber-4639	plan	2026-11-27T23:35:10Z	roundhouse-7010-plus-1:/home/aakshintala	
+crates/tui/src/app/home_tests.rs	fiber-4639	plan	2026-11-27T23:35:10Z	roundhouse-7010-plus-1:/home/aakshintala	
