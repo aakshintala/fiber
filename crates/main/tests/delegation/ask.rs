@@ -58,11 +58,9 @@ impl Setup {
         let root = fakes::TempDir::new("fa");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        support::write_json(
-            &root.path().join("h/config.json"),
-            &json!({"model_lists": {"models_dev": false}}),
-        );
-        Self { deadline, root }
+        let setup = Self { deadline, root };
+        write_home_config(&setup, &json!({"model_lists": {"models_dev": false}}));
+        setup
     }
 
     /// As [`Setup::provider`], with the model declaring the `low` and
@@ -91,19 +89,13 @@ impl Setup {
             "0.0.0",
             None,
         );
-        write(
-            &self.home().join("config.json"),
-            &json!({"model": "fake/m"}),
-        );
+        write_home_config(self, &json!({"model": "fake/m"}));
     }
 
     /// Disables retries for the next run: `retry.attempts` 0, so a
     /// retryable failure fails at once, with no backoff to sleep through.
     fn no_retry(&self) {
-        write(
-            &self.home().join("config.json"),
-            &json!({"model": "fake/m", "retry": {"attempts": 0}}),
-        );
+        write_home_config(self, &json!({"model": "fake/m", "retry": {"attempts": 0}}));
     }
 
     /// Runs `fiber` with `args`, `stdin` piped in (closed when `None`) and
@@ -248,19 +240,34 @@ fn write(file: &Path, value: &Value) {
 
 fn write_home_config(setup: &Setup, supplied: &Value) {
     let path = setup.home().join("config.json");
-    let mut config = serde_json::from_slice::<Value>(&fs::read(&path).unwrap())
-        .unwrap()
-        .as_object()
-        .unwrap()
-        .clone();
+    let mut config = match fs::read(&path) {
+        Ok(current) => serde_json::from_slice::<Value>(&current).unwrap(),
+        Err(error) => {
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::NotFound,
+                "reading home config {}",
+                path.display()
+            );
+            json!({})
+        }
+    }
+    .as_object()
+    .unwrap()
+    .clone();
     for (key, value) in supplied.as_object().unwrap() {
         config.insert(key.clone(), value.clone());
     }
+    let models_dev = supplied
+        .get("model_lists")
+        .and_then(|model_lists| model_lists.get("models_dev"))
+        .cloned()
+        .unwrap_or(Value::Bool(false));
     let mut model_lists = config
         .remove("model_lists")
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
-    model_lists.insert("models_dev".to_owned(), json!(false));
+    model_lists.insert("models_dev".to_owned(), models_dev);
     config.insert("model_lists".to_owned(), Value::Object(model_lists));
     write(&path, &Value::Object(config));
 }
@@ -830,8 +837,8 @@ fn a_failing_credential_command_is_named_by_its_program_alone() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
-    write(
-        &setup.home().join("config.json"),
+    write_home_config(
+        &setup,
         &json!({"model": "fake/m", "providers": {"fake": {"credentials": {"default": {"command": ["false", "sk-in-argument"]}}}}}),
     );
 
@@ -1804,10 +1811,7 @@ fn a_zero_budget_fails_the_turn_before_the_provider_is_called() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
-    write(
-        &setup.home().join("config.json"),
-        &json!({"model": "fake/m", "budget": {"usd": 0}}),
-    );
+    write_home_config(&setup, &json!({"model": "fake/m", "budget": {"usd": 0}}));
 
     let run = setup.run_with_stdin(&["ask", "hi"], None);
 
@@ -1846,10 +1850,7 @@ fn the_configured_budget_reaches_preamble_built() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
-    write(
-        &setup.home().join("config.json"),
-        &json!({"model": "fake/m", "budget": {"usd": 1.5}}),
-    );
+    write_home_config(&setup, &json!({"model": "fake/m", "budget": {"usd": 1.5}}));
 
     let run = setup.run_with_stdin(&["ask", "hi"], None);
 
@@ -2425,9 +2426,13 @@ fn an_openrouter_stream_closed_early_records_its_generation_at_once() {
         &setup.package("openrouter", "https://openrouter.ai", &server.url()),
     );
     // The retry's backoff is real time in the binary: kept short.
-    write(
-        &setup.home().join("config.json"),
-        &json!({"model": "fake/m", "retry": {"initial_delay_ms": 1}}),
+    write_home_config(
+        &setup,
+        &json!({
+            "model": "fake/m",
+            "retry": {"initial_delay_ms": 1},
+            "model_lists": {"models_dev": true}
+        }),
     );
 
     let run = setup.fiber_with_env(
@@ -2544,7 +2549,7 @@ fn openrouter_claude_request(
         setup,
         &setup.package("openrouter", "https://openrouter.ai", &server.url()),
     );
-    write(&setup.home().join("config.json"), &home_config);
+    write_home_config(setup, &home_config);
     if let Some(repo) = repo_config {
         write(
             &setup.root.path().join("w").join(".fiber/config.json"),
@@ -3030,10 +3035,7 @@ fn fixture(setup: &Setup, server: &ProviderServer) {
         &config::Secret::new("k1".into()),
     )
     .unwrap();
-    write(
-        &setup.home().join("config.json"),
-        &json!({"model": "fixture/m1"}),
-    );
+    write_home_config(setup, &json!({"model": "fixture/m1"}));
 }
 
 /// A token expiry far enough ahead that the running binary reads it as
@@ -3315,10 +3317,7 @@ fn a_lua_provider_without_credential_uses_the_stored_key() {
         &config::Secret::new("k-plain".into()),
     )
     .unwrap();
-    write(
-        &setup.home().join("config.json"),
-        &json!({"model": "plain/m1"}),
-    );
+    write_home_config(&setup, &json!({"model": "plain/m1"}));
 
     let run = setup.run_with_stdin(&["ask", "hi"], None);
 
@@ -3385,10 +3384,7 @@ fn a_configured_level_the_model_does_not_declare_logs_one_notice_and_runs() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider_with_thinking(&server);
-    write(
-        &setup.home().join("config.json"),
-        &json!({"model": "fake/m", "thinking": "max"}),
-    );
+    write_home_config(&setup, &json!({"model": "fake/m", "thinking": "max"}));
 
     let run = setup.run_with_stdin(&["ask", "hi"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -3414,10 +3410,7 @@ fn an_unknown_config_key_logs_one_notice_and_runs() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
-    write(
-        &setup.home().join("config.json"),
-        &json!({"model": "fake/m", "frobnicate": 1}),
-    );
+    write_home_config(&setup, &json!({"model": "fake/m", "frobnicate": 1}));
 
     let run = setup.run_with_stdin(&["ask", "hi"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -3468,10 +3461,7 @@ fn config_get_with_an_unknown_key_prints_its_notice_as_one_line() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
-    write(
-        &setup.home().join("config.json"),
-        &json!({"model": "fake/m", "frobnicate": 1}),
-    );
+    write_home_config(&setup, &json!({"model": "fake/m", "frobnicate": 1}));
 
     let run = setup.run_with_stdin(&["config", "get", "model"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -3530,10 +3520,7 @@ fn login_with_an_unknown_key_prints_its_notice_first() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
-    write(
-        &setup.home().join("config.json"),
-        &json!({"model": "fake/m", "frobnicate": 1}),
-    );
+    write_home_config(&setup, &json!({"model": "fake/m", "frobnicate": 1}));
 
     let run = setup.run_with_stdin(&["login", "fake"], Some("sk-test-login\n"));
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -3579,10 +3566,7 @@ fn inline_extension(
         "0.0.0",
         None,
     );
-    write(
-        &setup.home().join("config.json"),
-        &json!({"model": format!("{name}/m1")}),
-    );
+    write_home_config(setup, &json!({"model": format!("{name}/m1")}));
 }
 
 #[test]
@@ -3829,7 +3813,7 @@ fn provider_with(
         "0.0.0",
         None,
     );
-    write(&setup.home().join("config.json"), global);
+    write_home_config(setup, global);
 }
 
 /// Writes `config` as the per-project `config.json` for the workspace:
@@ -3876,10 +3860,7 @@ fn a_run_flag_model_wins_over_every_file() {
 
     // The files are read: with every one naming a model that resolves
     // nowhere, the run without `-c` fails before any session.
-    write(
-        &setup.home().join("config.json"),
-        &json!({"model": "fake/nope"}),
-    );
+    write_home_config(&setup, &json!({"model": "fake/nope"}));
     write(
         &setup.root.path().join("w").join(".fiber/config.json"),
         &json!({"model": "fake/nope"}),
