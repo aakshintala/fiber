@@ -216,7 +216,13 @@ pub(super) fn draw_typed_picker(
                         Span::styled(cut(name, text), if focused { bold } else { Style::new() }),
                     ],
                     right: Vec::new(),
-                    targets: Vec::new(),
+                    targets: vec![(
+                        0,
+                        u16::MAX,
+                        TargetId::Home(Spot::PickCompletion(
+                            crate::home::Spot::completion_identity(name),
+                        )),
+                    )],
                     barred: focused,
                 });
             }

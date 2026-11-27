@@ -4300,6 +4300,21 @@ fn clicking_a_recent_while_typing_chooses_it() {
         app.home_screen()
             .is_some_and(|screen| screen.picker.is_none())
     );
+    // The completion has a name-derived target; clicking it chooses the
+    // completion rather than interpreting it as a recent-row index.
+    let target = targets
+        .iter()
+        .find(|target| {
+            matches!(
+                target.id,
+                crate::mouse::TargetId::Home(Spot::PickCompletion(_))
+            )
+        })
+        .expect("completion click target");
+    let crate::mouse::TargetId::Home(Spot::PickCompletion(completion)) = target.id else {
+        unreachable!("the target was matched above");
+    };
+    assert_eq!(completion, crate::home::Spot::completion_identity("fiber"));
     assert_eq!(app.workspace(), Some(PathBuf::from("/repo0")));
 }
 

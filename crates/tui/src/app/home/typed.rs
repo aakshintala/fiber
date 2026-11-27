@@ -311,6 +311,22 @@ impl Typed {
         Some(join(path, name))
     }
 
+    /// Resolves a rendered completion identity against this live listing.
+    /// Ambiguous, stale or otherwise absent identities fail closed.
+    pub(super) fn completion_target_for(&self, identity: u64) -> Option<String> {
+        let names = self.completions();
+        let mut matching = names
+            .into_iter()
+            .filter(|name| crate::home::Spot::completion_identity(name) == identity);
+        let name = matching.next()?;
+        if matching.next().is_some() {
+            return None;
+        }
+        let (dir, _) = split(&self.text)?;
+        let path = self.cache.get(dir)?.path.as_deref()?;
+        Some(join(path, name))
+    }
+
     /// The focused recent's index into the recents fixed at open.
     pub(super) fn recent(&self) -> Option<usize> {
         match &self.focus {

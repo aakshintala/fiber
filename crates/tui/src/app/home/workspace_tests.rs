@@ -527,6 +527,47 @@ fn non_typing_picker_up_wraps_from_first_and_middle_recent() {
 }
 
 #[test]
+fn space_in_the_focused_picker_stays_typed_text() {
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    type_path(&mut app, "/a1");
+    assert_eq!(key(&mut app, Key::Char(' ')), Effect::None);
+    assert_eq!(typed_text(&app), Some("/a1 ".to_owned()));
+    assert!(picker_open(&app));
+    assert_eq!(chips(&app)[0], "[w]");
+}
+
+#[test]
+fn clicking_a_typed_completion_chooses_it_when_connected() {
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    let sent = type_path(&mut app, "/a");
+    answer(&mut app, &sent[0].0, &["a1", "a2"], "/");
+    let identity = crate::home::Spot::completion_identity("a2");
+    assert_eq!(app.home_click(Spot::PickCompletion(identity)), Effect::None);
+    assert!(!picker_open(&app));
+    assert_eq!(chips(&app)[0], "[a2]");
+}
+
+#[test]
+fn stale_or_disconnected_completion_clicks_do_nothing() {
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    let sent = type_path(&mut app, "/a");
+    answer(&mut app, &sent[0].0, &["a1"], "/");
+    let stale = crate::home::Spot::completion_identity("old");
+    assert_eq!(app.home_click(Spot::PickCompletion(stale)), Effect::None);
+    assert!(picker_open(&app));
+    assert_eq!(chips(&app)[0], "[w]");
+
+    app.outbox.link = crate::app::outbox::Link::Down;
+    let current = crate::home::Spot::completion_identity("a1");
+    assert_eq!(app.home_click(Spot::PickCompletion(current)), Effect::None);
+    assert!(picker_open(&app));
+    assert_eq!(chips(&app)[0], "[w]");
+}
+
+#[test]
 fn enter_on_a_completion_chooses_it_for_the_next_start() {
     let mut app = home_with(80, 24, launch());
     open(&mut app);

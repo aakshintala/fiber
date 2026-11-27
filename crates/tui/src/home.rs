@@ -46,8 +46,10 @@ pub(crate) enum Spot {
     Thinking,
     /// A first-run blocker line with a credential fix.
     Blocker(usize),
-    /// A picker row, by its index in the current picker list.
+    /// A picker row, by its index in the current recent list.
     Pick(usize),
+    /// A typed completion, by a stable name-derived identity.
+    PickCompletion(u64),
     /// A quit choice while the quit question is open: clicking it does
     /// what its key does.
     Quit(QuitChoice),
@@ -66,6 +68,14 @@ pub(crate) enum Spot {
 }
 
 impl Spot {
+    /// Stable identity for a workspace completion click target.
+    pub(crate) fn completion_identity(name: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        name.hash(&mut hasher);
+        hasher.finish()
+    }
+
     /// Whether the spot is a list stop: an entry and its cross normalize
     /// to the entry, and `More` and the archived head stay their own
     /// stops.
@@ -80,6 +90,7 @@ impl Spot {
             | Spot::Model
             | Spot::Thinking
             | Spot::Pick(_)
+            | Spot::PickCompletion(_)
             | Spot::Blocker(_)
             | Spot::Quit(_)
             | Spot::Clear(_)
@@ -100,6 +111,7 @@ impl Spot {
             | Spot::More(_)
             | Spot::Archived(_)
             | Spot::Pick(_)
+            | Spot::PickCompletion(_)
             | Spot::Blocker(_)
             | Spot::Keep
             | Spot::Question

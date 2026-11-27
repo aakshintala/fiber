@@ -668,6 +668,23 @@ impl App {
         Effect::None
     }
 
+    /// Clicks a typed completion using its rendered name identity. The
+    /// link-up guard matches Enter; an identity no longer unique in the
+    /// current completion list is inert.
+    pub(super) fn pick_completion(&mut self, identity: u64) -> Effect {
+        let Some(picker) = self.home.chooser.picker.as_ref() else {
+            return Effect::None;
+        };
+        if !picker.typing() || !self.outbox.is_up() {
+            return Effect::None;
+        }
+        let choice = picker.typed.completion_target_for(identity);
+        if let Some(workspace) = choice {
+            self.choose_workspace(workspace);
+        }
+        Effect::None
+    }
+
     /// Flips the new worktree switch.
     pub(super) fn toggle_worktree(&mut self) -> Effect {
         self.home.chooser.worktree = !self.home.chooser.worktree;
