@@ -521,3 +521,7 @@ crates/tui/src/snapshots/tui__settings_view__tests__settings_folder_browser_no_h
 crates/tui/src/snapshots/tui__settings_view__tests__settings_folder_browser_no_repository.snap	fiber-4584	plan	2026-11-27T08:43:44Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/snapshots/tui__settings_view__tests__settings_origin_field.snap	fiber-4584	plan	2026-11-27T08:43:44Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/snapshots/tui__settings_view__tests__settings_origin_validation_error.snap	fiber-4584	plan	2026-11-27T08:43:44Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/offer.rs	fiber-4781	plan	2026-11-27T08:51:10Z	roundhouse-7010-plus-1:/home/aakshintala	
+crates/tui/src/app/results.rs	fiber-4781	plan	2026-11-27T08:51:10Z	roundhouse-7010-plus-1:/home/aakshintala	
+crates/tui/src/app/home/prompt/hooks_offer.rs	fiber-4781	plan	2026-11-27T08:51:10Z	roundhouse-7010-plus-1:/home/aakshintala	
+crates/tui/src/app/call_view.rs	fiber-4781	plan	2026-11-27T08:51:10Z	roundhouse-7010-plus-1:/home/aakshintala	
