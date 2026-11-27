@@ -172,7 +172,8 @@ fn a_base_that_builds_is_built_and_compared() {
     // build must link its own crate marker, not a stale marker from the base.
     let repo_root = fs::canonicalize(repo.dir.path()).unwrap();
     let head_target = repo_root.join("target").display().to_string();
-    repo.paging_jig(&[("FAKE_CARGO_REUSE_TARGET", &head_target)]);
+    let reuse_target = repo.dir.path().join("target").display().to_string();
+    repo.paging_jig(&[("FAKE_CARGO_REUSE_TARGET", &reuse_target)]);
     let head = repo.short("HEAD");
     assert_eq!(
         fs::read_to_string(repo.temp.path().join("release/head/paging")).unwrap(),
