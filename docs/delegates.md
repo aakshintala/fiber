@@ -291,11 +291,12 @@ final message, any questions, usage totals and worktree state. Their keys are
   delivers the result, and it reads each delegate's log for the
   `usage_recorded` lines it is missing.
 - Before marking a delegate job orphaned, the resumed parent reads its
-  session log. When the log's latest run holds `fiber_exited`, the parent
-  settles the job from it: its exit code, its outcome, its final message
-  and, for an isolated delegate, its worktree, as a live finish would.
-  Only a delegate whose log's latest run has no `fiber_exited` is marked
-  orphaned. Shell jobs are unchanged.
+  session log. It matches the job's current `job_started` (the latest start
+  for that job) against the delegate log's `fiber_started` count. Only when
+  those counts match and that run has a `fiber_exited` does the parent settle
+  the job from it: its exit code, outcome, final message and, for an isolated
+  delegate, its worktree, as a live finish would. A missing matching start or
+  exit leaves the job orphaned. Shell jobs are unchanged.
 - A crash of any kind in a delegate, in Rust or in Lua's C code, ends that
   delegate `failed` and nothing else.
 
