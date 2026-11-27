@@ -337,3 +337,4 @@ crates/fakes/src/provider_server.rs	fiber-4975	plan	2026-11-27T00:48:18Z	roundho
 crates/provider/tests/anthropic.rs	fiber-4975	plan	2026-11-27T00:48:18Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 docs/extensions.md	fiber-4975	plan	2026-11-27T00:52:05Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 docs/workflow.md	fiber-4962	plan	2026-11-27T00:53:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/hub/src/resume.rs	fiber-4974	plan	2026-11-27T01:00:17Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
