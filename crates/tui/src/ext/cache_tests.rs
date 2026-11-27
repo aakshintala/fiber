@@ -138,6 +138,7 @@ fn layout_cache_keys_width_height_shown_regions_and_flat() {
 }
 
 #[test]
+// `docs/tui.md`, "How a TUI extension runs": renderer calls follow cache misses.
 fn layout_regions_counts_renderer_calls_only_on_cache_misses() {
     let cache = Cache::default();
     let input = layout_input(10, 8, &["conversation"], false);
@@ -243,6 +244,7 @@ fn invalid_layout_maps_fail_atomically_and_cache_the_failure() {
         assert_eq!(draw(), None, "invalid map {index} must fall back whole");
         assert_eq!(draw(), None, "a cached failure still falls back whole");
         assert_eq!(calls.get(), 1, "a cached failure does not call Lua again");
+        // `docs/tui.md`, "The slots": a failed extension produces one failure notice.
         assert_eq!(cache.take_failures().len(), 1);
         assert!(cache.take_failures().is_empty());
     }
@@ -291,6 +293,7 @@ fn m3c_layout_rejects_negative_x_with_nonnegative_y() {
 
     assert!(result.is_none(), "a map with negative x is rejected");
     let failures = cache.take_failures();
+    // `docs/tui.md`, "The slots": one failure and notice are reported.
     assert_eq!(failures.len(), 1);
     assert_eq!(
         failures[0].1.message,
@@ -357,6 +360,7 @@ fn failed_layout_decision_is_cached_and_reported_once_for_builtin_fallback() {
     assert_eq!(draw(), None);
     assert_eq!(draw(), None);
     assert_eq!(calls.get(), 1);
+    // `docs/tui.md`, "The slots": a cached failure is noticed once.
     assert_eq!(cache.take_failures().len(), 1);
     assert!(cache.take_failures().is_empty());
 }

@@ -1490,22 +1490,12 @@ fn layout_rect_from(table: &Table, name: &str) -> Result<LayoutRect, Error> {
     }
     let integer = |field| {
         let value: mlua::Value = table.raw_get(field).map_err(lua_error)?;
-        match value {
-            mlua::Value::Integer(value) => Ok(value),
-            mlua::Value::Nil
-            | mlua::Value::Boolean(_)
-            | mlua::Value::LightUserData(_)
-            | mlua::Value::Number(_)
-            | mlua::Value::String(_)
-            | mlua::Value::Table(_)
-            | mlua::Value::Function(_)
-            | mlua::Value::Thread(_)
-            | mlua::Value::UserData(_)
-            | mlua::Value::Error(_)
-            | mlua::Value::Other(_) => Err(shape(format!(
+        let mlua::Value::Integer(value) = value else {
+            return Err(shape(format!(
                 "`{field}` of layout region `{name}` must be a Lua integer"
-            ))),
-        }
+            )));
+        };
+        Ok(value)
     };
     Ok(LayoutRect {
         x: integer("x")?,
