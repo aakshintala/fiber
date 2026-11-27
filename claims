@@ -348,3 +348,9 @@ crates/tui/src/install_worker_tests.rs	fiber-4976	plan	2026-11-27T02:03:39Z	Amog
 crates/tui/src/link_tests.rs	fiber-4976	plan	2026-11-27T02:03:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4976-feedback-draft-and-link	
 crates/tui/src/viewer_tests.rs	fiber-4976	plan	2026-11-27T02:03:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4976-feedback-draft-and-link	
 crates/contract/src/feedback.rs	fiber-4976	plan	2026-11-27T02:21:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/delegation/delegates.rs	fiber-4973	plan	2026-11-27T02:43:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4973-repo-role-credential	
+crates/config/src/lib.rs	fiber-4973	plan	2026-11-27T02:43:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4973-repo-role-credential	
+crates/main/tests/commands/config.rs	fiber-4973	plan	2026-11-27T02:43:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4973-repo-role-credential	
+docs/configuration.md	fiber-4973	plan	2026-11-27T02:43:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4973-repo-role-credential	
+docs/testing.md	fiber-4973	plan	2026-11-27T02:43:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4973-repo-role-credential	
+docs/workflow.md	fiber-4973	plan	2026-11-27T02:43:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4973-repo-role-credential	
