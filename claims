@@ -145,18 +145,6 @@ crates/doors/src/session_tests.rs	fiber-4042	plan	2026-11-16T02:47:49Z	roundhous
 crates/loop/src/deliveries.rs	fiber-4977	plan	2026-11-26T22:54:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/jobs.rs	fiber-4977	plan	2026-11-26T22:54:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/resume.rs	fiber-4977	plan	2026-11-26T22:54:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/src/builtin_tests.rs:4-5	fiber-4420	plan	2026-11-26T22:56:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
-crates/main/src/builtin_tests.rs:1789-1790	fiber-4420	plan	2026-11-26T22:56:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
-crates/main/src/builtin_tests.rs:1819-1826	fiber-4420	plan	2026-11-26T22:56:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
-crates/main/src/builtin_tests.rs:1827-1828	fiber-4420	plan	2026-11-26T22:56:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
-crates/main/src/builtin_tests.rs:1828-1829	fiber-4420	plan	2026-11-26T22:56:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
-crates/main/src/builtin_tests.rs:1832-1832	fiber-4420	plan	2026-11-26T22:56:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
-crates/main/src/builtin_tests.rs:1834-1834	fiber-4420	plan	2026-11-26T22:56:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
-crates/main/src/builtin_tests.rs:1895-1898	fiber-4420	plan	2026-11-26T22:56:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
-crates/main/src/builtin_tests.rs:1900-1902	fiber-4420	plan	2026-11-26T22:56:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
-crates/main/src/builtin_tests.rs:1904-1904	fiber-4420	plan	2026-11-26T22:56:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
-crates/main/src/builtin_tests.rs:1906-1907	fiber-4420	plan	2026-11-26T22:56:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
-crates/main/src/builtin_tests.rs:1922-1923	fiber-4420	plan	2026-11-26T22:56:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
 crates/extensions/src/host.rs	fiber-4975	plan	2026-11-26T22:56:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/lua/tool.rs	fiber-4975	plan	2026-11-26T22:56:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/tests/lazy_commands.rs	fiber-4975	plan	2026-11-26T22:56:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -170,8 +158,6 @@ crates/tui/src/event_loop/attach_tests.rs	fiber-4974	plan	2026-11-26T23:27:41Z	A
 crates/hub/src/closed.rs	fiber-4974	plan	2026-11-26T23:27:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/hub/src/feed.rs	fiber-4974	plan	2026-11-26T23:27:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/delegates.md	fiber-4977	plan	2026-11-26T23:29:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/fakes/src/process_group.rs	fiber-4420	plan	2026-11-26T23:43:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4908
-crates/fakes/src/process_group_tests.rs	fiber-4420	plan	2026-11-26T23:43:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4908
 docs/tui.md	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/layout.rs::split	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/chrome.rs::layout_for	fiber-688	plan	2026-11-26T23:47:46Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
@@ -356,3 +342,19 @@ docs/testing.md	fiber-4973	plan	2026-11-27T02:43:02Z	Amoghs-MacBook-Pro:/Users/a
 docs/workflow.md	fiber-4973	plan	2026-11-27T02:43:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4973-repo-role-credential	
 crates/tui/src/input.rs	fiber-4976	plan	2026-11-27T02:54:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4976-feedback-draft-and-link	
 docs/user/reporting.md	fiber-4976	plan	2026-11-27T02:54:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4976-feedback-draft-and-link	
+crates/fakes/src/lib.rs:60-61	fiber-4420	plan	2026-11-27T02:58:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
+crates/fakes/src/process_group.rs:537-538	fiber-4420	plan	2026-11-27T02:58:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
+crates/fakes/src/process_group_tests.rs:115-116	fiber-4420	plan	2026-11-27T02:58:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
+crates/main/src/builtin_tests.rs:4-5	fiber-4420	plan	2026-11-27T02:58:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
+crates/main/src/builtin_tests.rs:1805-1806	fiber-4420	plan	2026-11-27T02:58:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
+crates/main/src/builtin_tests.rs:1839-1846	fiber-4420	plan	2026-11-27T02:58:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
+crates/main/src/builtin_tests.rs:1847-1848	fiber-4420	plan	2026-11-27T02:58:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
+crates/main/src/builtin_tests.rs:1848-1849	fiber-4420	plan	2026-11-27T02:58:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
+crates/main/src/builtin_tests.rs:1852-1852	fiber-4420	plan	2026-11-27T02:58:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
+crates/main/src/builtin_tests.rs:1854-1854	fiber-4420	plan	2026-11-27T02:58:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
+crates/main/src/builtin_tests.rs:1913-1914	fiber-4420	plan	2026-11-27T02:58:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
+crates/main/src/builtin_tests.rs:1915-1918	fiber-4420	plan	2026-11-27T02:58:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
+crates/main/src/builtin_tests.rs:1920-1922	fiber-4420	plan	2026-11-27T02:58:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
+crates/main/src/builtin_tests.rs:1924-1924	fiber-4420	plan	2026-11-27T02:58:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
+crates/main/src/builtin_tests.rs:1926-1927	fiber-4420	plan	2026-11-27T02:58:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
+crates/main/src/builtin_tests.rs:1942-1943	fiber-4420	plan	2026-11-27T02:58:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fix/4420-builtin-driver-flake	
