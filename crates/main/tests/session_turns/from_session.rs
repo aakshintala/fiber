@@ -949,13 +949,12 @@ fn session_message_to_itself_is_delivered() {
     // queued message joins the turn at its next step boundary
     // (`docs/architecture.md`, "One inbox").
     let asked = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let seen_self = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (seen_self_tx, seen_self_rx) = std::sync::mpsc::channel();
     let server = fakes::ProviderServer::start_responding({
         let asked = Arc::clone(&asked);
-        let seen_self = Arc::clone(&seen_self);
         move |request: &fakes::Request| {
             if String::from_utf8_lossy(&request.body).contains("to myself") {
-                seen_self.store(true, std::sync::atomic::Ordering::SeqCst);
+                drop(seen_self_tx.send(()));
                 return hello();
             }
             if asked.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -1028,11 +1027,9 @@ fn session_message_to_itself_is_delivered() {
         server.await_requests(2, setup.deadline),
         "the message starts a turn"
     );
-    let seen_self = Arc::clone(&seen_self);
-    fakes::wait_until(
+    setup.deadline.recv_or_fail(
+        &seen_self_rx,
         "the self-message reaches the model's next request",
-        setup.deadline,
-        move || seen_self.load(std::sync::atomic::Ordering::SeqCst),
     );
     finish(hub, client, guard, &[&session], &[&sub]);
 }
@@ -1072,13 +1069,11 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
     let hold = setup.workspace().join("delegate.hold.fifo");
     fakes::fifo(&hold);
     let hold_arg = hold.to_string_lossy().into_owned();
-    let marked = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let seen_mark = Arc::clone(&marked);
+    let (marked_tx, marked_rx) = std::sync::mpsc::channel();
     let server_child = fakes::ProviderServer::start_responding(move |request: &fakes::Request| {
         let text = String::from_utf8_lossy(&request.body);
         if text.contains(MARK) {
-            seen_mark.store(true, std::sync::atomic::Ordering::SeqCst);
-            return text_reply("d-two-done");
+            drop(marked_tx.send(()));
         }
         stream(&[function_call(
             "call_hold",
@@ -1184,11 +1179,9 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
         server_child.await_requests(2, setup.deadline),
         "the delegate_message steers the delegate"
     );
-    let marked = Arc::clone(&marked);
-    fakes::wait_until(
+    setup.deadline.recv_or_fail(
+        &marked_rx,
         "the steered message reaches the delegate's next model call",
-        setup.deadline,
-        move || marked.load(std::sync::atomic::Ordering::SeqCst),
     );
     // `now` stops the delegate as a stop does; a graceful close waits out
     // the delegate's far idle exit. The guard reaps the delegate, which
@@ -1239,13 +1232,11 @@ fn nested_delegate_message_accepted_while_shell_steers_refused() {
     let hold = setup.workspace().join("grandchild.hold.fifo");
     fakes::fifo(&hold);
     let hold_arg = hold.to_string_lossy().into_owned();
-    let marked = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let seen_mark = Arc::clone(&marked);
+    let (marked_tx, marked_rx) = std::sync::mpsc::channel();
     let server_g = fakes::ProviderServer::start_responding(move |request: &fakes::Request| {
         let text = String::from_utf8_lossy(&request.body);
         if text.contains(G_MARK) {
-            seen_mark.store(true, std::sync::atomic::Ordering::SeqCst);
-            return text_reply("g-two-done");
+            drop(marked_tx.send(()));
         }
         stream(&[function_call(
             "call_hold",
@@ -1392,11 +1383,9 @@ fn nested_delegate_message_accepted_while_shell_steers_refused() {
         server_g.await_requests(2, setup.deadline),
         "the nested delegate_message steers the grandchild"
     );
-    let marked = Arc::clone(&marked);
-    fakes::wait_until(
+    setup.deadline.recv_or_fail(
+        &marked_rx,
         "the steered message reaches the grandchild's next model call",
-        setup.deadline,
-        move || marked.load(std::sync::atomic::Ordering::SeqCst),
     );
     let done = until(&client, "the nested delegate_message completed", |line| {
         line["kind"] == "tool_call_completed" && line["action_id"] == action

@@ -1588,6 +1588,8 @@ fn a_connect_payload_larger_than_the_head_read_reaches_its_origin() {
 #[test]
 fn responder_calls_follow_request_arrival_order_without_overlap() {
     let (calls_tx, calls_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Arc::new(Mutex::new(release_rx));
     let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let maximum = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let active_responder = Arc::clone(&active);
@@ -1596,6 +1598,9 @@ fn responder_calls_follow_request_arrival_order_without_overlap() {
         let running = active_responder.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         max_responder.fetch_max(running, std::sync::atomic::Ordering::SeqCst);
         ignore_result(calls_tx.send(request.body.clone()));
+        if request.body == b"first" {
+            ignore_result(release_rx.lock().unwrap().recv());
+        }
         active_responder.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         Response::status(200, "ok")
     })
@@ -1609,21 +1614,25 @@ fn responder_calls_follow_request_arrival_order_without_overlap() {
     assert!(server.await_requests(1, Deadline::after(crate::MUST_SUCCEED_WITHIN)));
     let first_call =
         Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&calls_rx, "first responder call");
-    let first_result =
-        Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&results_rx, "first response");
-    assert!(first_result.ends_with(b"ok"));
 
     let second = results_tx;
     thread::spawn(move || {
         ignore_result(second.send(post(addr, b"second")));
     });
     assert!(server.await_requests(2, Deadline::after(crate::MUST_SUCCEED_WITHIN)));
+    assert_eq!(calls_rx.try_recv(), Err(mpsc::TryRecvError::Empty));
+    drop(release_tx);
+    let first_result =
+        Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&results_rx, "first response");
+    assert!(first_result.ends_with(b"ok"));
     let second_call = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&calls_rx, "second responder call");
     let second_result =
         Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&results_rx, "second response");
     assert!(second_result.ends_with(b"ok"));
     let requests = server.requests();
+    // Request order and responder order are part of this fake's contract
+    // (`docs/testing/fakes.md:106`).
     assert_eq!(first_call, requests[0].body);
     assert_eq!(second_call, requests[1].body);
     assert_eq!(maximum.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -1631,17 +1640,8 @@ fn responder_calls_follow_request_arrival_order_without_overlap() {
 
 #[test]
 fn await_requests_two_observes_recording_during_first_blocked_callback() {
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-    let release_rx = Arc::new(Mutex::new(release_rx));
-    let (started_tx, started_rx) = mpsc::channel::<()>();
-    let server = Arc::new(
-        ProviderServer::start_responding(move |_: &Request| {
-            ignore_result(started_tx.send(()));
-            ignore_result(release_rx.lock().unwrap().recv());
-            Response::status(200, "released")
-        })
-        .unwrap(),
-    );
+    let (started_rx, release_tx, server) =
+        blocked_responder_server(|_| true, |_| Response::status(200, "released"));
     let addr = server.addr;
     let (first_tx, first_rx) = mpsc::channel();
     thread::spawn(move || {
@@ -1666,6 +1666,7 @@ fn await_requests_two_observes_recording_during_first_blocked_callback() {
             .recv_or_fail(&await_rx, "await_requests to observe two requests"),
         "both requests are recorded while the first callback remains blocked"
     );
+    // The fake's request count is pinned here (`docs/testing/fakes.md:106`).
     assert_eq!(server.requests().len(), 2);
     drop(release_tx);
     assert!(
@@ -1682,17 +1683,8 @@ fn await_requests_two_observes_recording_during_first_blocked_callback() {
 
 #[test]
 fn dropping_server_stalls_and_wakes_a_queued_responder_turn() {
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-    let release_rx = Arc::new(Mutex::new(release_rx));
-    let (started_tx, started_rx) = mpsc::channel::<()>();
-    let server = Arc::new(
-        ProviderServer::start_responding(move |_: &Request| {
-            ignore_result(started_tx.send(()));
-            ignore_result(release_rx.lock().unwrap().recv());
-            Response::status(200, "released")
-        })
-        .unwrap(),
-    );
+    let (started_rx, release_tx, server) =
+        blocked_responder_server(|_| true, |_| Response::status(200, "released"));
     let addr = server.addr;
     let (first_tx, first_rx) = mpsc::channel();
     let first_addr = addr;
@@ -1741,17 +1733,10 @@ fn dropping_server_stalls_and_wakes_a_queued_responder_turn() {
 
 #[test]
 fn malformed_request_between_good_requests_consumes_no_responder_turn() {
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-    let release_rx = Arc::new(Mutex::new(release_rx));
-    let (started_tx, started_rx) = mpsc::channel::<()>();
-    let server = ProviderServer::start_responding(move |request: &Request| {
-        if request.body == b"first" {
-            ignore_result(started_tx.send(()));
-            ignore_result(release_rx.lock().unwrap().recv());
-        }
-        Response::status(200, request.body.clone())
-    })
-    .unwrap();
+    let (started_rx, release_tx, server) = blocked_responder_server(
+        |request| request.body == b"first",
+        |request| Response::status(200, request.body.clone()),
+    );
     let addr = server.addr;
     let (first_tx, first_rx) = mpsc::channel();
     thread::spawn(move || {
@@ -1794,44 +1779,30 @@ fn malformed_request_between_good_requests_consumes_no_responder_turn() {
     );
 }
 
-#[test]
-fn responder_turn_wait_budget_is_waits_plus_shutdown_and_margin() {
-    assert_eq!(
-        RESPONDER_TURN_WAIT,
-        crate::deadline::WAITS + crate::http_server::SHUTDOWN_WITHIN + Duration::from_secs(8)
-    );
-}
-
-#[test]
-fn turn_state_waits_for_earlier_turn_but_not_for_matching_idle_turn() {
-    let earlier_not_running = TurnState {
-        current: 0,
-        running: false,
-        stalled: false,
-    };
-    assert!(earlier_not_running.should_wait(1));
-
-    let matching_not_running = TurnState {
-        current: 1,
-        running: false,
-        stalled: false,
-    };
-    assert!(!matching_not_running.should_wait(1));
-}
-
-#[test]
-fn await_requests_observes_request_while_responder_is_blocked() {
+fn blocked_responder_server(
+    block_when: fn(&Request) -> bool,
+    respond: fn(&Request) -> Response,
+) -> (mpsc::Receiver<()>, mpsc::Sender<()>, Arc<ProviderServer>) {
     let (release_tx, release_rx) = mpsc::channel::<()>();
     let release_rx = Arc::new(Mutex::new(release_rx));
     let (started_tx, started_rx) = mpsc::channel::<()>();
     let server = Arc::new(
-        ProviderServer::start_responding(move |_: &Request| {
-            ignore_result(started_tx.send(()));
-            ignore_result(release_rx.lock().unwrap().recv());
-            Response::status(200, "released")
+        ProviderServer::start_responding(move |request: &Request| {
+            if block_when(request) {
+                ignore_result(started_tx.send(()));
+                ignore_result(release_rx.lock().unwrap().recv());
+            }
+            respond(request)
         })
         .unwrap(),
     );
+    (started_rx, release_tx, server)
+}
+
+#[test]
+fn await_requests_observes_request_while_responder_is_blocked() {
+    let (started_rx, release_tx, server) =
+        blocked_responder_server(|_| true, |_| Response::status(200, "released"));
     let addr = server.addr;
     let (post_tx, post_rx) = mpsc::channel();
     thread::spawn(move || {

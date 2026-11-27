@@ -238,12 +238,6 @@ struct TurnState {
     stalled: bool,
 }
 
-impl TurnState {
-    fn should_wait(&self, requested: u64) -> bool {
-        self.current != requested || self.running
-    }
-}
-
 #[derive(Default)]
 struct ResponderTurns {
     state: Mutex<TurnState>,
@@ -258,9 +252,18 @@ impl ResponderTurns {
     fn enter(&self, requested: u64) -> bool {
         let deadline = Deadline::after(RESPONDER_TURN_WAIT);
         let mut state = lock(&self.state);
-        while !state.stalled && state.should_wait(requested) {
-            let remaining = deadline.left();
-            if remaining.is_zero() {
+        while !state.stalled && (state.current != requested || state.running) {
+            let (next, _) = self
+                .changed
+                .wait_timeout_while(state, deadline.left(), |state| {
+                    !state.stalled && (state.current != requested || state.running)
+                })
+                .unwrap_or_else(PoisonError::into_inner);
+            state = next;
+            if !state.stalled
+                && (state.current != requested || state.running)
+                && deadline.left().is_zero()
+            {
                 state.stalled = true;
                 eprintln!(
                     "provider responder turn timed out: requested={requested} current={}",
@@ -269,11 +272,6 @@ impl ResponderTurns {
                 self.changed.notify_all();
                 return false;
             }
-            let (next, _) = self
-                .changed
-                .wait_timeout(state, remaining)
-                .unwrap_or_else(PoisonError::into_inner);
-            state = next;
         }
         if state.stalled {
             return false;
