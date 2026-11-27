@@ -281,6 +281,24 @@ fn m3b_layout_rejects_rectangles_negative_on_both_axes() {
 }
 
 #[test]
+fn m3c_layout_rejects_negative_x_with_nonnegative_y() {
+    let cache = Cache::default();
+    let input = layout_input(10, 5, &["conversation"], false);
+    let result = cache.layout_regions(page(0), "test", None, &input, || LayoutDecision::Draw {
+        extension: "test".into(),
+        regions: vec![(Region::Conversation, raw_rect(-1, 0, 1, 1))],
+    });
+
+    assert!(result.is_none(), "a map with negative x is rejected");
+    let failures = cache.take_failures();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(
+        failures[0].1.message,
+        "layout region `conversation` must be at least 1x1 and in bounds"
+    );
+}
+
+#[test]
 fn layout_regions_rejects_overlapping_rectangles_on_each_axis() {
     for (label, prior, current) in [
         ("horizontal", raw_rect(5, 0, 1, 2), raw_rect(4, 0, 2, 2)),
