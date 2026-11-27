@@ -149,6 +149,199 @@ fn session_line(kind: &str, payload: serde_json::Value) -> Line {
     })
 }
 
+fn settings_app(seam: Arc<Fake>, workspace: &std::path::Path) -> App {
+    let mut app = App::new(workspace.to_path_buf());
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: workspace.to_path_buf(),
+            project: "-settings-test".to_owned(),
+            git: false,
+        },
+        ..Default::default()
+    });
+    app.set_configure(seam as Arc<dyn Configure>);
+    app.set_size(80, 24);
+    app
+}
+
+fn browser_fake(sandbox: &str, repository: &str) -> Arc<Fake> {
+    Arc::new(Fake::new(vec![
+        appearance(controlled(
+            "sandbox.allow_write",
+            Shown::Value(sandbox.to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+            SettingControl::StringList,
+        )),
+        appearance(controlled(
+            "repository_extensions",
+            Shown::Value(repository.to_owned()),
+            "repository",
+            WriteScope::Any { repo: true },
+            SettingControl::RepositoryExtensions,
+        )),
+    ]))
+}
+
+fn frame_text(app: &App) -> Vec<String> {
+    let frame = app.config_view_screen().expect("settings frame");
+    let rows = frame.rows.iter().map(|row| {
+        row.iter()
+            .map(|(text, _, _)| text.as_str())
+            .collect::<String>()
+    });
+    rows.chain(frame.below.iter().cloned()).collect()
+}
+
+#[test]
+fn folder_browser_lists_only_sorted_directories_and_picks_a_folder() {
+    let home_root = PathBuf::from(std::env::var_os("HOME").expect("test HOME"));
+    let tree = fakes::TempDir::under(&home_root, "settings-folder-browser");
+    let home = tree.path().join("home");
+    let workspace = tree.path().join("repo");
+    for path in [
+        home.join("zeta"),
+        home.join("alpha"),
+        home.join(".hidden"),
+        workspace.join("extensions"),
+    ] {
+        std::fs::create_dir_all(&path).unwrap_or_else(|error| panic!("create {path:?}: {error}"));
+    }
+    std::fs::write(home.join("note.txt"), "not a folder")
+        .unwrap_or_else(|error| panic!("write file: {error}"));
+    let seam = browser_fake("[]", "[]");
+    let mut app = settings_app(Arc::clone(&seam), &workspace);
+    app.open_config_view_on(ConfigView::Settings, Some("sandbox.allow_write"));
+    app.on_key(Key::Enter, now());
+    app.on_key(Key::Enter, now());
+    let rows = frame_text(&app);
+    let tree_name = tree.path().file_name().unwrap().to_string_lossy();
+    let tree_row = rows
+        .iter()
+        .position(|row| row.contains(tree_name.as_ref()))
+        .expect("temporary tree listed under HOME");
+    for _ in 0..tree_row {
+        app.on_key(Key::Down, now());
+    }
+    app.on_edit(Edit::Right);
+    let rows = frame_text(&app);
+    let home_row = rows
+        .iter()
+        .position(|row| row.trim().ends_with("home"))
+        .expect("home tree folder listed");
+    for _ in 0..home_row {
+        app.on_key(Key::Down, now());
+    }
+    app.on_edit(Edit::Right);
+    let rows = frame_text(&app);
+    let names: Vec<&str> = rows
+        .iter()
+        .map(String::as_str)
+        .filter(|row| row.contains(".hidden") || row.contains("alpha") || row.contains("zeta"))
+        .collect();
+    assert_eq!(names.len(), 3, "{rows:?}");
+    assert!(names[0].contains(".hidden"), "{names:?}");
+    assert!(names[1].contains("alpha"), "{names:?}");
+    assert!(names[2].contains("zeta"), "{names:?}");
+    assert!(rows.iter().all(|row| !row.contains("note.txt")), "{rows:?}");
+    let alpha_row = rows
+        .iter()
+        .position(|row| row.contains("alpha"))
+        .expect("alpha is listed");
+    for _ in 0..alpha_row {
+        app.on_key(Key::Down, now());
+    }
+    app.on_key(Key::Enter, now());
+    let writes = seam.writes();
+    let picked = serde_json::json!([home.join("alpha").to_string_lossy()]).to_string();
+    assert_eq!(
+        writes
+            .last()
+            .map(|(_, _, key, text)| (key.as_str(), text.as_str())),
+        Some(("sandbox.allow_write", picked.as_str()))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn repository_browser_stays_in_the_canonical_workspace_and_opens_existing_entry() {
+    let home_root = PathBuf::from(std::env::var_os("HOME").expect("test HOME"));
+    let tree = fakes::TempDir::under(&home_root, "settings-repository-browser");
+    let workspace = tree.path().join("repo");
+    let extension = workspace.join("extensions");
+    let outside = tree.path().join("outside");
+    std::fs::create_dir_all(extension.join("nested"))
+        .unwrap_or_else(|error| panic!("create extension: {error}"));
+    std::fs::create_dir_all(&outside).unwrap_or_else(|error| panic!("create outside: {error}"));
+    std::os::unix::fs::symlink(&outside, workspace.join("escape"))
+        .unwrap_or_else(|error| panic!("create symlink: {error}"));
+
+    let seam = browser_fake("[]", "[]");
+    let mut app = settings_app(Arc::clone(&seam), &workspace);
+    app.open_config_view_on(ConfigView::Settings, Some("repository_extensions"));
+    app.on_key(Key::Enter, now());
+    app.on_key(Key::Enter, now());
+    let rows = frame_text(&app);
+    assert!(rows.iter().any(|row| row.trim() == "repo"), "{rows:?}");
+    assert!(
+        rows.iter().any(|row| row.contains("extensions")),
+        "{rows:?}"
+    );
+    assert!(rows.iter().all(|row| !row.contains("escape")), "{rows:?}");
+    app.on_edit(Edit::Left);
+    assert!(frame_text(&app).iter().any(|row| row.trim() == "repo"));
+
+    let entries = serde_json::json!([{"path": extension.to_string_lossy(), "required": false}]);
+    let seam = browser_fake("[]", &entries.to_string());
+    let mut app = settings_app(Arc::clone(&seam), &workspace);
+    app.open_config_view_on(ConfigView::Settings, Some("repository_extensions"));
+    app.on_key(Key::Enter, now());
+    app.on_key(Key::Enter, now());
+    let rows = frame_text(&app);
+    assert!(
+        rows.iter().any(|row| row.trim() == "extensions"),
+        "{rows:?}"
+    );
+    assert!(rows.iter().any(|row| row.contains("nested")), "{rows:?}");
+    app.on_key(Key::Esc, now());
+    app.on_key(Key::Esc, now());
+    assert!(
+        seam.writes().is_empty(),
+        "opening and cancelling must not save"
+    );
+}
+
+#[test]
+fn repository_browser_without_a_canonical_workspace_keeps_delete_available() {
+    let tree = fakes::TempDir::new("settings-no-repository");
+    let workspace = tree.path().join("does-not-exist");
+    let entry = serde_json::json!([
+        {"path": "/missing/first", "required": false},
+        {"path": "/missing/second", "required": false}
+    ]);
+    let seam = browser_fake("[]", &entry.to_string());
+    let mut app = settings_app(Arc::clone(&seam), &workspace);
+    app.open_config_view_on(ConfigView::Settings, Some("repository_extensions"));
+    app.on_key(Key::Enter, now());
+    app.on_key(Key::Enter, now());
+    let rows = frame_text(&app);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("No repository to pick folders from.")),
+        "{rows:?}"
+    );
+    app.on_edit(Edit::Delete);
+    assert_eq!(seam.writes().len(), 1);
+}
+
+#[test]
+fn hub_global_settings_context_has_no_repository_browser_root() {
+    let seam = browser_fake("[]", "[]");
+    let app = App::new(None::<PathBuf>);
+    let ctx = app.config_ctx(seam.as_ref(), std::path::Path::new("/hub-global"));
+    assert!(ctx.canonical_workspace.is_none());
+}
+
 #[test]
 fn slash_settings_opens_the_view_attached_and_on_home() {
     let seam = fake();

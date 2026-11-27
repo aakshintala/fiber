@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/settings_view_tests.rs
+expression: screen(&settings)
+---
+ Sandbox writable paths  /settings                                   Esc returns
+› /missing
+  /also-missing
+  + Add
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+No home folder to pick folders from.
+Enter edit · Delete remove · ⌥↑⌥↓ move · Esc back

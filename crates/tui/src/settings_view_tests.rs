@@ -5,7 +5,7 @@
 //! "When Fiber reads configuration"). Screens are drawn through the real
 //! frame renderer and compared whole.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use proptest::prelude::*;
 use ratatui::buffer::Buffer;
@@ -249,6 +249,18 @@ fn sized(fake: &Fake, width: usize, height: usize) -> Ctx<'_> {
     }
 }
 
+fn rooted(fake: &Fake, home: Option<PathBuf>, canonical_workspace: Option<PathBuf>) -> Ctx<'_> {
+    Ctx {
+        seam: fake,
+        workspace: Path::new("/w"),
+        canonical_workspace,
+        home,
+        height: 24,
+        width: 80,
+        usage: None,
+    }
+}
+
 /// The view over `fake`, opened with no `-c` overrides.
 fn open(fake: &Fake) -> Settings {
     Settings::open(&ctx(fake), Vec::new())
@@ -283,6 +295,259 @@ fn tab(fake: &Fake, tab: SettingsTab) -> Settings {
         settings.edit_key(Edit::Right, &ctx(fake));
     }
     settings
+}
+
+#[test]
+fn settings_folder_browser_shows_sorted_existing_directories() {
+    let tree = fakes::TempDir::new("settings-folder-view");
+    let home = tree.path().join("home");
+    for child in ["zeta", "alpha", ".hidden"] {
+        std::fs::create_dir_all(home.join(child))
+            .unwrap_or_else(|error| panic!("create folder: {error}"));
+    }
+    std::fs::write(home.join("note.txt"), "not a folder")
+        .unwrap_or_else(|error| panic!("create file: {error}"));
+    let fake = Fake::new(vec![on(
+        SettingsTab::Permissions,
+        "Sandbox writable paths",
+        "sandbox.allow_write",
+        value("[]"),
+        "global",
+        ANY,
+        SettingControl::StringList,
+    )]);
+    let ctx = rooted(&fake, Some(home.clone()), None);
+    let mut settings = Settings::open_on(&ctx, Vec::new(), "sandbox.allow_write");
+    settings.key(&Key::Enter, &ctx);
+    settings.key(&Key::Enter, &ctx);
+    assert!(settings.browser.is_some());
+    let screen = screen(&settings);
+    let names: Vec<_> = screen
+        .lines()
+        .filter(|line| {
+            [".hidden", "alpha", "zeta", "note.txt"]
+                .iter()
+                .any(|name| line.contains(name))
+        })
+        .collect();
+    assert_eq!(names.len(), 3, "{screen}");
+    assert!(names[0].contains(".hidden"), "{names:?}");
+    assert!(names[1].contains("alpha"), "{names:?}");
+    assert!(names[2].contains("zeta"), "{names:?}");
+    insta::assert_snapshot!("settings_folder_browser", screen);
+}
+
+#[test]
+fn settings_folder_browser_starts_at_existing_entry_or_repository_root() {
+    let tree = fakes::TempDir::new("settings-existing-folder");
+    let repository = tree.path().join("repo");
+    let existing = repository.join("extensions");
+    let outside = tree.path().join("outside");
+    std::fs::create_dir_all(existing.join("nested"))
+        .unwrap_or_else(|error| panic!("create repo entry: {error}"));
+    std::fs::create_dir_all(&outside)
+        .unwrap_or_else(|error| panic!("create outside folder: {error}"));
+    let fake = Fake::new(vec![on(
+        SettingsTab::Sessions,
+        "Repository extensions",
+        "repository_extensions",
+        value(&format!(
+            r#"[{{"path":{:?},"required":false}}]"#,
+            existing.to_string_lossy()
+        )),
+        "repository",
+        ANY,
+        SettingControl::RepositoryExtensions,
+    )]);
+    let repository = std::fs::canonicalize(repository)
+        .unwrap_or_else(|error| panic!("canonicalize repo: {error}"));
+    let ctx = rooted(&fake, None, Some(repository.clone()));
+    let mut settings = Settings::open_on(&ctx, Vec::new(), "repository_extensions");
+    settings.key(&Key::Enter, &ctx);
+    settings.key(&Key::Enter, &ctx);
+    assert_eq!(
+        settings
+            .browser
+            .as_ref()
+            .map(|browser| browser.path.as_path()),
+        Some(existing.as_path())
+    );
+    insta::assert_snapshot!("settings_folder_browser_existing_entry", screen(&settings));
+
+    let escaped = repository.join("../outside");
+    let outside_fake = Fake::new(vec![on(
+        SettingsTab::Sessions,
+        "Repository extensions",
+        "repository_extensions",
+        value(&format!(
+            r#"[{{"path":{:?},"required":false}}]"#,
+            escaped.to_string_lossy()
+        )),
+        "repository",
+        ANY,
+        SettingControl::RepositoryExtensions,
+    )]);
+    let outside_ctx = rooted(&outside_fake, None, Some(repository.clone()));
+    let mut settings = Settings::open_on(&outside_ctx, Vec::new(), "repository_extensions");
+    settings.key(&Key::Enter, &outside_ctx);
+    settings.key(&Key::Enter, &outside_ctx);
+    assert_eq!(
+        settings
+            .browser
+            .as_ref()
+            .map(|browser| browser.path.as_path()),
+        Some(repository.as_path())
+    );
+}
+
+#[test]
+fn sandbox_browser_can_move_above_home_to_the_filesystem_root() {
+    let tree = fakes::TempDir::new("settings-unbounded-home");
+    let home = tree.path().join("home");
+    std::fs::create_dir_all(&home).unwrap_or_else(|error| panic!("create home: {error}"));
+    let fake = Fake::new(vec![on(
+        SettingsTab::Permissions,
+        "Sandbox writable paths",
+        "sandbox.allow_write",
+        value("[]"),
+        "global",
+        ANY,
+        SettingControl::StringList,
+    )]);
+    let ctx = rooted(&fake, Some(home.clone()), None);
+    let mut settings = Settings::open_on(&ctx, Vec::new(), "sandbox.allow_write");
+    settings.key(&Key::Enter, &ctx);
+    settings.key(&Key::Enter, &ctx);
+    let count = home.components().count().saturating_add(2);
+    for _ in 0..count {
+        settings.edit_key(Edit::Left, &ctx);
+    }
+    assert_eq!(
+        settings
+            .browser
+            .as_ref()
+            .map(|browser| browser.path.as_path()),
+        Some(Path::new("/"))
+    );
+}
+
+#[test]
+fn settings_folder_browser_missing_and_file_entries_start_at_nearest_directory() {
+    let tree = fakes::TempDir::new("settings-nearest-folder");
+    let home = tree.path().join("home");
+    std::fs::create_dir_all(&home).unwrap_or_else(|error| panic!("create home: {error}"));
+    let file = home.join("note.txt");
+    std::fs::write(&file, "file").unwrap_or_else(|error| panic!("create file: {error}"));
+    for entry in [home.join("missing/child"), file] {
+        let fake = Fake::new(vec![on(
+            SettingsTab::Permissions,
+            "Sandbox writable paths",
+            "sandbox.allow_write",
+            value(&serde_json::json!([entry.to_string_lossy()]).to_string()),
+            "global",
+            ANY,
+            SettingControl::StringList,
+        )]);
+        let ctx = rooted(&fake, Some(home.clone()), None);
+        let mut settings = Settings::open_on(&ctx, Vec::new(), "sandbox.allow_write");
+        settings.key(&Key::Enter, &ctx);
+        settings.key(&Key::Enter, &ctx);
+        assert_eq!(
+            settings
+                .browser
+                .as_ref()
+                .map(|browser| browser.path.as_path()),
+            Some(home.as_path())
+        );
+    }
+}
+
+#[test]
+fn settings_folder_browser_missing_roots_keep_list_operations_available() {
+    let fake = Fake::new(vec![on(
+        SettingsTab::Permissions,
+        "Sandbox writable paths",
+        "sandbox.allow_write",
+        value(r#"["/missing","/also-missing"]"#),
+        "global",
+        ANY,
+        SettingControl::StringList,
+    )]);
+    let ctx = rooted(&fake, None, None);
+    let mut settings = Settings::open_on(&ctx, Vec::new(), "sandbox.allow_write");
+    settings.key(&Key::Enter, &ctx);
+    settings.key(&Key::Enter, &ctx);
+    assert!(settings.browser.is_none());
+    assert_eq!(settings.said, ["No home folder to pick folders from."]);
+    insta::assert_snapshot!("settings_folder_browser_no_home", screen(&settings));
+    settings.key(&Key::AltDown, &ctx);
+    assert_eq!(writes(&fake).len(), 1, "reordering remains available");
+    settings.edit_key(Edit::Delete, &ctx);
+    assert_eq!(writes(&fake).len(), 2, "deletion remains available");
+
+    let repository_fake = Fake::new(vec![on(
+        SettingsTab::Sessions,
+        "Repository extensions",
+        "repository_extensions",
+        value("[]"),
+        "repository",
+        ANY,
+        SettingControl::RepositoryExtensions,
+    )]);
+    let repository_ctx = rooted(&repository_fake, None, None);
+    let mut settings = Settings::open_on(&repository_ctx, Vec::new(), "repository_extensions");
+    settings.key(&Key::Enter, &repository_ctx);
+    settings.key(&Key::Enter, &repository_ctx);
+    assert!(settings.browser.is_none());
+    assert_eq!(settings.said, ["No repository to pick folders from."]);
+    insta::assert_snapshot!("settings_folder_browser_no_repository", screen(&settings));
+}
+
+#[test]
+fn path_lists_never_open_a_free_text_field_on_space() {
+    let sandbox = Fake::new(vec![on(
+        SettingsTab::Permissions,
+        "Sandbox writable paths",
+        "sandbox.allow_write",
+        value(r#"["/saved"]"#),
+        "global",
+        ANY,
+        SettingControl::StringList,
+    )]);
+    let ctx = rooted(&sandbox, None, None);
+    let mut settings = Settings::open_on(&ctx, Vec::new(), "sandbox.allow_write");
+    settings.key(&Key::Enter, &ctx);
+    settings.key(&Key::Char(' '), &ctx);
+    assert!(
+        settings
+            .page
+            .as_ref()
+            .is_some_and(|page| page.field.is_none())
+    );
+    assert!(settings.browser.is_none());
+    assert!(writes(&sandbox).is_empty());
+
+    let repository = Fake::new(vec![on(
+        SettingsTab::Sessions,
+        "Repository extensions",
+        "repository_extensions",
+        value(r#"[{"path":"/saved","required":false}]"#),
+        "repository",
+        ANY,
+        SettingControl::RepositoryExtensions,
+    )]);
+    let ctx = rooted(&repository, None, None);
+    let mut settings = Settings::open_on(&ctx, Vec::new(), "repository_extensions");
+    settings.key(&Key::Enter, &ctx);
+    settings.key(&Key::Char(' '), &ctx);
+    assert!(
+        settings
+            .page
+            .as_ref()
+            .is_some_and(|page| page.field.is_none())
+    );
+    assert!(settings.browser.is_none());
+    assert_eq!(writes(&repository).len(), 1, "Space flips required");
 }
 
 #[test]
@@ -459,9 +724,10 @@ fn origin_validation_rejects_invalid_field_text_before_saving() {
     one(&mut settings, &fake, Key::Enter);
     assert!(fake.writes().is_empty());
     assert!(settings.page.as_ref().unwrap().field.is_some());
-    assert!(settings.said.iter().any(|line| line.contains(
+    assert_eq!(
+        settings.said.join(" "),
         "Write the origin as a browser sends it, such as https://fiber.example.ts.net:8443: lowercase, and no path or default port."
-    )));
+    );
 }
 
 #[test]
@@ -507,6 +773,28 @@ fn an_existing_origin_list_keeps_its_own_page_for_non_field_controls() {
             r#"["first","second free text"]"#
         )]
     );
+}
+
+#[test]
+fn an_origin_placeholder_is_drawn_dim() {
+    let fake = Fake::new(origin_rows(value("[]"), "global"));
+    let mut settings = page(&fake, "hub.allowed_origins");
+    one(&mut settings, &fake, Key::Enter);
+    let frame = settings.frame(80, 24, None, 80);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&frame, area, &mut buf, &mut Vec::new());
+    let mut found = false;
+    for y in 0..24 {
+        let line: String = (0..80).map(|x| buf[(x, y)].symbol()).collect();
+        if let Some(at) = line.find("https://fiber.example.ts.net") {
+            let x = u16::try_from(at.saturating_add(2)).expect("placeholder column");
+            assert!(buf[(x, y)].modifier.contains(Modifier::DIM));
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "the origin example is drawn in the open field");
 }
 
 #[test]
@@ -2206,18 +2494,31 @@ fn layers_follow_each_write_scope() {
 
 #[test]
 fn a_repository_only_key_saves_to_the_repository_never_global() {
+    let tree = fakes::TempDir::new("repository-only-setting");
+    let repository = tree.path().join("repo");
+    let extension = repository.join("ext");
+    std::fs::create_dir_all(&extension).unwrap_or_else(|error| panic!("create extension: {error}"));
     let fake = Fake::new(rows());
-    let mut settings = at(&fake, "repository_extensions");
-    // Enter opens the page, Enter on "+ Add" opens its field.
-    press(&mut settings, &fake, &[Key::Enter, Key::Enter]);
-    typed(&mut settings, &fake, "ext");
-    one(&mut settings, &fake, Key::Enter);
+    let ctx = rooted(
+        &fake,
+        None,
+        Some(
+            std::fs::canonicalize(&repository)
+                .unwrap_or_else(|error| panic!("canonicalize: {error}")),
+        ),
+    );
+    let mut settings = Settings::open_on(&ctx, Vec::new(), "repository_extensions");
+    // Enter opens the page, Enter on "+ Add" opens the folder browser.
+    settings.key(&Key::Enter, &ctx);
+    settings.key(&Key::Enter, &ctx);
+    settings.key(&Key::Enter, &ctx);
     assert_eq!(
         writes(&fake),
         [w(
             Layer::Repository,
             "repository_extensions",
-            r#"[{"path":"ext","required":false}]"#
+            &serde_json::json!([{"path": extension.to_string_lossy(), "required": false}])
+                .to_string()
         )]
     );
 }
@@ -2644,17 +2945,21 @@ fn the_pages_footer_has_the_documented_words_with_bold_keys() {
 
 #[test]
 fn adding_saves_the_whole_list_once_at_the_layer_the_value_comes_from() {
-    let fake = Fake::new(with(
-        "sandbox.allow_write",
+    let fake = Fake::new(vec![on(
+        SettingsTab::Advanced,
+        "Hook order",
+        "hooks.order.before_tool",
         value(r#"["a/b","c/d"]"#),
         "project",
-    ));
-    let mut settings = page(&fake, "sandbox.allow_write");
+        ANY,
+        SettingControl::StringList,
+    )]);
+    let mut settings = page(&fake, "hooks.order.before_tool");
     press(&mut settings, &fake, &[Key::Down, Key::Down, Key::Enter]);
     expect(
         &screen(&settings),
         r#"
-| Sandbox writable paths  /settings                                   Esc returns
+| Hook order  /settings                                               Esc returns
 |  a/b
 |  c/d
 |›
@@ -2686,7 +2991,7 @@ fn adding_saves_the_whole_list_once_at_the_layer_the_value_comes_from() {
         writes(&fake),
         [w(
             Layer::Project,
-            "sandbox.allow_write",
+            "hooks.order.before_tool",
             r#"["a/b","c/d","e/f"]"#
         )]
     );
@@ -2698,8 +3003,16 @@ fn adding_saves_the_whole_list_once_at_the_layer_the_value_comes_from() {
 
 #[test]
 fn editing_opens_the_entrys_text_and_saves_the_whole_list() {
-    let fake = Fake::new(rows());
-    let mut settings = page(&fake, "sandbox.allow_write");
+    let fake = Fake::new(vec![on(
+        SettingsTab::Advanced,
+        "Hook order",
+        "hooks.order.before_tool",
+        value(r#"["a/b","c/d"]"#),
+        "global",
+        ANY,
+        SettingControl::StringList,
+    )]);
+    let mut settings = page(&fake, "hooks.order.before_tool");
     one(&mut settings, &fake, Key::Down);
     one(&mut settings, &fake, Key::Enter);
     assert_eq!(
@@ -2719,7 +3032,11 @@ fn editing_opens_the_entrys_text_and_saves_the_whole_list() {
     one(&mut settings, &fake, Key::Enter);
     assert_eq!(
         writes(&fake),
-        [w(Layer::Global, "sandbox.allow_write", r#"["a/b","c/x"]"#)]
+        [w(
+            Layer::Global,
+            "hooks.order.before_tool",
+            r#"["a/b","c/x"]"#
+        )]
     );
 }
 
@@ -2793,9 +3110,17 @@ fn option_up_and_down_move_the_focused_entry_one_place_and_stop_at_the_ends() {
 
 #[test]
 fn a_refused_save_keeps_the_entries_the_focus_and_an_open_field() {
-    let fake = Fake::new(with("sandbox.allow_write", value(r#"["a","b"]"#), "global"));
-    let mut settings = page(&fake, "sandbox.allow_write");
-    refuse(&fake, "sandbox.allow_write must be strings");
+    let fake = Fake::new(vec![on(
+        SettingsTab::Advanced,
+        "Hook order",
+        "hooks.order.before_tool",
+        value(r#"["a","b"]"#),
+        "global",
+        ANY,
+        SettingControl::StringList,
+    )]);
+    let mut settings = page(&fake, "hooks.order.before_tool");
+    refuse(&fake, "hooks.order.before_tool must be strings");
     // Remove, reorder and flip fail without losing the entry or its place.
     one(&mut settings, &fake, Key::Down);
     edit(&mut settings, &fake, Edit::Delete);
@@ -2812,11 +3137,11 @@ fn a_refused_save_keeps_the_entries_the_focus_and_an_open_field() {
     one(&mut settings, &fake, Key::Enter);
     let field = settings.page.as_ref().unwrap().field.as_ref().unwrap();
     assert_eq!(field.draft.expand(), "zz");
-    assert_eq!(settings.said, ["sandbox.allow_write must be strings"]);
+    assert_eq!(settings.said, ["hooks.order.before_tool must be strings"]);
     expect(
         &screen(&settings),
         r#"
-| Sandbox writable paths  /settings                                   Esc returns
+| Hook order  /settings                                               Esc returns
 |  a
 |  b
 |› zz
@@ -2838,7 +3163,7 @@ fn a_refused_save_keeps_the_entries_the_focus_and_an_open_field() {
 |
 |
 |
-|sandbox.allow_write must be strings
+|hooks.order.before_tool must be strings
 |Enter save · Esc cancel
 "#,
     );
@@ -2849,7 +3174,7 @@ fn a_refused_save_keeps_the_entries_the_focus_and_an_open_field() {
         writes(&fake).last(),
         Some(&w(
             Layer::Global,
-            "sandbox.allow_write",
+            "hooks.order.before_tool",
             r#"["a","b","zz"]"#
         ))
     );
@@ -2857,8 +3182,16 @@ fn a_refused_save_keeps_the_entries_the_focus_and_an_open_field() {
 
 #[test]
 fn esc_closes_the_field_first_then_the_page_with_the_list_row_focused() {
-    let fake = Fake::new(rows());
-    let mut settings = page(&fake, "sandbox.allow_write");
+    let fake = Fake::new(vec![on(
+        SettingsTab::Advanced,
+        "Hook order",
+        "hooks.order.before_tool",
+        value(r#"["a"]"#),
+        "global",
+        ANY,
+        SettingControl::StringList,
+    )]);
+    let mut settings = page(&fake, "hooks.order.before_tool");
     press(&mut settings, &fake, &[Key::Enter, Key::Char('x')]);
     one(&mut settings, &fake, Key::Esc);
     let open = settings.page.as_ref().unwrap();
@@ -2870,30 +3203,43 @@ fn esc_closes_the_field_first_then_the_page_with_the_list_row_focused() {
     assert!(settings.page.is_none());
     assert_eq!(
         settings.focus,
-        Some(super::Focus::Key("sandbox.allow_write".to_owned()))
+        Some(super::Focus::Key("hooks.order.before_tool".to_owned()))
     );
-    assert!(screen(&settings).contains("› Sandbox writable paths"));
+    assert!(screen(&settings).contains("› Hook order"));
 }
 
 #[test]
 fn an_empty_entry_is_the_schemas_to_judge() {
     // `fiber config set` takes an empty string member, so the page sends it
     // as typed instead of refusing it first.
-    let fake = Fake::new(with("sandbox.allow_write", value("[]"), "global"));
-    let mut settings = page(&fake, "sandbox.allow_write");
-    press(&mut settings, &fake, &[Key::Enter, Key::Enter]);
-    assert_eq!(
-        writes(&fake),
-        [w(Layer::Global, "sandbox.allow_write", r#"[""]"#)]
-    );
+    let key = "hooks.order.before_tool";
+    let make_fake = |shown| {
+        Fake::new(vec![on(
+            SettingsTab::Advanced,
+            "Hook order",
+            key,
+            shown,
+            "global",
+            ANY,
+            SettingControl::StringList,
+        )])
+    };
+    let fake = make_fake(value("[]"));
+    let mut settings = page(&fake, key);
+    press(&mut settings, &fake, &[Key::Down, Key::Enter, Key::Enter]);
+    assert_eq!(writes(&fake), [w(Layer::Global, key, r#"[""]"#)]);
     assert!(settings.page.as_ref().unwrap().field.is_none());
     // A refusal from the schema keeps the field and says why.
-    let refused = Fake::new(with("sandbox.allow_write", value("[]"), "global"));
-    let mut settings = page(&refused, "sandbox.allow_write");
-    *support::lock(&refused.refuse) = Some("sandbox.allow_write is refused".to_owned());
-    press(&mut settings, &refused, &[Key::Enter, Key::Enter]);
+    let refused = make_fake(value("[]"));
+    let mut settings = page(&refused, key);
+    *support::lock(&refused.refuse) = Some(format!("{key} is refused"));
+    press(
+        &mut settings,
+        &refused,
+        &[Key::Down, Key::Enter, Key::Enter],
+    );
     assert!(settings.page.as_ref().unwrap().field.is_some());
-    assert_eq!(settings.said, ["sandbox.allow_write is refused"]);
+    assert_eq!(settings.said, [format!("{key} is refused")]);
 }
 
 #[test]
@@ -2924,44 +3270,87 @@ fn space_flips_required_and_a_new_entry_starts_with_it_off() {
         parsed[1],
         serde_json::json!({"path":"ext/b","note":"keep","required":true})
     );
-    // A new entry has `required` off.
-    press(&mut settings, &fake, &[Key::Down, Key::Enter]);
-    typed(&mut settings, &fake, "ext/c");
-    one(&mut settings, &fake, Key::Enter);
-    let last: serde_json::Value =
-        serde_json::from_str(&writes(&fake).last().cloned().unwrap().2).unwrap();
+    // Add is a browser action rather than a text field; its default is
+    // covered by the browser pick below.
+}
+
+#[test]
+fn a_new_repository_extension_starts_with_required_off() {
+    let tree = fakes::TempDir::new("settings-new-extension");
+    let repository = tree.path().join("repo");
+    for name in ["a", "b"] {
+        std::fs::create_dir_all(repository.join("ext").join(name))
+            .unwrap_or_else(|error| panic!("create extension {name}: {error}"));
+    }
+    let fake = Fake::new(vec![on(
+        SettingsTab::Sessions,
+        "Repository extensions",
+        "repository_extensions",
+        value("[]"),
+        "repository",
+        ANY,
+        SettingControl::RepositoryExtensions,
+    )]);
+    let repository = std::fs::canonicalize(repository)
+        .unwrap_or_else(|error| panic!("canonicalize repo: {error}"));
+    let ctx = rooted(&fake, None, Some(repository.clone()));
+    let mut settings = Settings::open_on(&ctx, Vec::new(), "repository_extensions");
+    settings.key(&Key::Enter, &ctx);
+    settings.key(&Key::Enter, &ctx);
+    settings.edit_key(Edit::Right, &ctx);
+    settings.key(&Key::Down, &ctx);
+    settings.key(&Key::Enter, &ctx);
+    let saved: serde_json::Value = serde_json::from_str(&writes(&fake)[0].2).unwrap();
     assert_eq!(
-        last[2],
-        serde_json::json!({"path":"ext/c","required":false})
+        saved,
+        serde_json::json!([{"path":repository.join("ext/b").to_string_lossy(),"required":false}])
     );
 }
 
 #[test]
 fn editing_an_object_changes_its_path_and_keeps_its_other_members() {
-    let fake = Fake::new(extensions(
-        r#"[{"path":"ext/a","required":true,"note":"keep"}]"#,
-    ));
-    let mut settings = page(&fake, "repository_extensions");
-    one(&mut settings, &fake, Key::Enter);
+    let tree = fakes::TempDir::new("settings-edit-extension");
+    let repository = tree.path().join("repo");
+    let current = repository.join("ext/a");
+    let replacement = repository.join("ext/a2");
+    std::fs::create_dir_all(&current)
+        .unwrap_or_else(|error| panic!("create existing extension: {error}"));
+    std::fs::create_dir_all(&replacement)
+        .unwrap_or_else(|error| panic!("create replacement extension: {error}"));
+    let fake = Fake::new(vec![on(
+        SettingsTab::Sessions,
+        "Repository extensions",
+        "repository_extensions",
+        value(&format!(
+            r#"[{{"path":{:?},"required":true,"note":"keep"}}]"#,
+            current.to_string_lossy()
+        )),
+        "repository",
+        ANY,
+        SettingControl::RepositoryExtensions,
+    )]);
+    let repository = std::fs::canonicalize(repository)
+        .unwrap_or_else(|error| panic!("canonicalize repo: {error}"));
+    let ctx = rooted(&fake, None, Some(repository));
+    let mut settings = Settings::open_on(&ctx, Vec::new(), "repository_extensions");
+    settings.key(&Key::Enter, &ctx);
+    settings.key(&Key::Enter, &ctx);
     assert_eq!(
         settings
-            .page
+            .browser
             .as_ref()
-            .unwrap()
-            .field
-            .as_ref()
-            .unwrap()
-            .draft
-            .expand(),
-        "ext/a"
+            .map(|browser| browser.path.as_path()),
+        Some(current.as_path())
     );
-    typed(&mut settings, &fake, "2");
-    one(&mut settings, &fake, Key::Enter);
+    settings.edit_key(Edit::Left, &ctx);
+    settings.key(&Key::Down, &ctx);
+    settings.key(&Key::Enter, &ctx);
     let saved: serde_json::Value = serde_json::from_str(&writes(&fake)[0].2).unwrap();
     assert_eq!(
         saved,
-        serde_json::json!([{"path":"ext/a2","required":true,"note":"keep"}])
+        serde_json::json!([{"path":replacement.to_string_lossy(),"required":true,"note":"keep"}])
     );
+
     // Space on a string list does nothing.
     let fake = Fake::new(rows());
     let mut strings = page(&fake, "sandbox.allow_write");
@@ -2987,19 +3376,23 @@ fn each_kind_of_change_saves_the_whole_list_once() {
         ("remove", vec![], Some(Edit::Delete), r#"["b"]"#),
         ("move", vec![Key::AltDown], None, r#"["b","a"]"#),
     ] {
-        let fake = Fake::new(with(
-            "sandbox.allow_write",
+        let fake = Fake::new(vec![on(
+            SettingsTab::Advanced,
+            "Hook order",
+            "hooks.order.before_tool",
             value(r#"["a","b"]"#),
             "project",
-        ));
-        let mut settings = page(&fake, "sandbox.allow_write");
+            ANY,
+            SettingControl::StringList,
+        )]);
+        let mut settings = page(&fake, "hooks.order.before_tool");
         press(&mut settings, &fake, &keys);
         if let Some(edit_) = edit_ {
             edit(&mut settings, &fake, edit_);
         }
         assert_eq!(
             writes(&fake),
-            [w(Layer::Project, "sandbox.allow_write", want)],
+            [w(Layer::Project, "hooks.order.before_tool", want)],
             "{label}"
         );
     }
@@ -3024,19 +3417,18 @@ fn deleting_the_list_row_resets_it_and_deleting_in_the_page_removes_an_entry() {
 #[test]
 fn the_pages_clicks_and_wheel_move_its_focus_only_outside_a_field() {
     let fake = Fake::new(rows());
-    // Clicking a string-list entry opens its field and keeps it focused
-    // against clicks and the wheel.
+    // Clicking a path-list entry selects it without opening a text field.
     let mut settings = page(&fake, "sandbox.allow_write");
     settings.click(Spot::Row(1), &ctx(&fake));
     assert_eq!(settings.page.as_ref().unwrap().list.selected(), 1);
-    assert!(settings.page.as_ref().unwrap().field.is_some());
+    assert!(settings.page.as_ref().unwrap().field.is_none());
     settings.click(Spot::Row(0), &ctx(&fake));
     assert_eq!(
         settings.page.as_ref().unwrap().list.selected(),
-        1,
-        "a field holds the focus"
+        0,
+        "clicking a different row changes the selection"
     );
-    assert!(fake.writes().is_empty());
+    assert!(settings.page.as_ref().unwrap().field.is_none());
     settings.wheel(true, &ctx(&fake));
     assert!(fake.writes().is_empty());
 }
@@ -5004,23 +5396,46 @@ fn a_list_page_scrolls_its_focus_into_the_rows_the_lines_below_leave() {
 }
 
 #[test]
-fn space_and_enter_on_the_add_row_of_an_object_list_open_the_entry_field() {
-    let fake = Fake::new(extensions(r#"[{"path":"a","required":false}]"#));
-    let mut settings = page(&fake, "repository_extensions");
-    one(&mut settings, &fake, Key::Down);
-    one(&mut settings, &fake, Key::Char(' '));
-    let page = settings.page.as_ref().unwrap();
-    assert!(page.field.is_some(), "Space should open the + Add field");
-    assert_eq!(page.field.as_ref().unwrap().at, None);
-    one(&mut settings, &fake, Key::Esc);
-    one(&mut settings, &fake, Key::Enter);
-    let page = settings.page.as_ref().unwrap();
+fn space_and_enter_on_the_add_row_of_an_object_list_open_the_browser() {
+    let tree = fakes::TempDir::new("settings-object-add-browser");
+    let repository = tree.path().join("repo");
+    for name in ["a", "b"] {
+        std::fs::create_dir_all(repository.join(name))
+            .unwrap_or_else(|error| panic!("create extension {name}: {error}"));
+    }
+    let fake = Fake::new(vec![on(
+        SettingsTab::Sessions,
+        "Repository extensions",
+        "repository_extensions",
+        value(&format!(
+            r#"[{{"path":{:?},"required":false}}]"#,
+            repository.join("a").to_string_lossy()
+        )),
+        "repository",
+        ANY,
+        SettingControl::RepositoryExtensions,
+    )]);
+    let repository = std::fs::canonicalize(repository)
+        .unwrap_or_else(|error| panic!("canonicalize repo: {error}"));
+    let ctx = rooted(&fake, None, Some(repository.clone()));
+    let mut settings = Settings::open_on(&ctx, Vec::new(), "repository_extensions");
+    settings.key(&Key::Enter, &ctx);
+    settings.key(&Key::Down, &ctx);
+    settings.key(&Key::Char(' '), &ctx);
     assert!(
-        page.field.is_some(),
-        "Enter should still open the + Add field"
+        settings.browser.is_none(),
+        "Space does not open the browser"
     );
-    assert_eq!(page.field.as_ref().unwrap().at, None);
-    assert!(fake.writes().is_empty(), "{:?}", fake.writes());
+    assert!(fake.writes().is_empty());
+    settings.key(&Key::Enter, &ctx);
+    assert!(settings.page.as_ref().unwrap().field.is_none());
+    assert_eq!(
+        settings
+            .browser
+            .as_ref()
+            .map(|browser| browser.path.as_path()),
+        Some(repository.as_path())
+    );
 }
 
 #[test]
@@ -5070,13 +5485,21 @@ fn a_field_and_a_page_print_without_their_draft() {
     assert!(field.contains("redacted"), "{field}");
     assert!(!field.contains("sekret"), "{field}");
 
-    let fake = Fake::new(rows());
-    let mut settings = page(&fake, "sandbox.allow_write");
+    let fake = Fake::new(vec![on(
+        SettingsTab::Advanced,
+        "Hook order",
+        "hooks.order.before_tool",
+        value(r#"["first"]"#),
+        "global",
+        ANY,
+        SettingControl::StringList,
+    )]);
+    let mut settings = page(&fake, "hooks.order.before_tool");
     press(&mut settings, &fake, &[Key::Enter]);
     typed(&mut settings, &fake, "sekret");
     let page = format!("{:?}", settings.page);
     assert!(page.contains("Page"), "{page}");
-    assert!(page.contains("sandbox.allow_write"), "{page}");
+    assert!(page.contains("hooks.order.before_tool"), "{page}");
     assert!(page.contains("PageField"), "{page}");
     assert!(page.contains("redacted"), "{page}");
     assert!(!page.contains("sekret"), "{page}");
@@ -5862,22 +6285,32 @@ fn settings_search_controls_field_owns_its_keys_until_it_cancels() {
 
 #[test]
 fn settings_search_controls_list_page_returns_to_the_searched_row() {
-    let fake = Fake::new(rows());
-    let mut settings = searched(&fake, "sandbox");
+    let mut fixture = rows();
+    fixture.push(on(
+        SettingsTab::Advanced,
+        "Hook order",
+        "hooks.order.before_tool",
+        value(r#"["before"]"#),
+        "global",
+        ANY,
+        SettingControl::StringList,
+    ));
+    let fake = Fake::new(fixture);
+    let mut settings = searched(&fake, "hooks.order");
     one(&mut settings, &fake, Key::Enter);
     assert!(
         settings
             .page
             .as_ref()
-            .is_some_and(|page| page.key == "sandbox.allow_write")
+            .is_some_and(|page| page.key == "hooks.order.before_tool")
     );
     // Esc closes the page, not the search: the row stays focused.
     one(&mut settings, &fake, Key::Esc);
     assert!(settings.page.is_none());
-    assert_eq!(query_of(&settings), "sandbox");
+    assert_eq!(query_of(&settings), "hooks.order");
     assert_eq!(
         settings.focus,
-        Some(super::Focus::Key("sandbox.allow_write".to_owned()))
+        Some(super::Focus::Key("hooks.order.before_tool".to_owned()))
     );
     // A nested field's Esc steps come before the search's: field, then
     // page, then the search itself.
@@ -5901,10 +6334,10 @@ fn settings_search_controls_list_page_returns_to_the_searched_row() {
     assert!(settings.page.is_none());
     assert!(matches!(one(&mut settings, &fake, Key::Esc), Act::Stay));
     assert!(settings.search.is_none());
-    assert_eq!(settings.tab, SettingsTab::Permissions);
+    assert_eq!(settings.tab, SettingsTab::Advanced);
     assert_eq!(
         settings.focus,
-        Some(super::Focus::Key("sandbox.allow_write".to_owned()))
+        Some(super::Focus::Key("hooks.order.before_tool".to_owned()))
     );
     assert!(fake.writes().is_empty());
 }
