@@ -186,12 +186,9 @@ fn a_base_that_builds_is_built_and_compared() {
             (target.to_owned(), commit.to_owned())
         })
         .collect();
-    let expected = [
-        (head_target, head),
-        (base_target, repo.short(&repo.base)),
-    ]
-    .into_iter()
-    .collect();
+    let expected = [(head_target, head), (base_target, repo.short(&repo.base))]
+        .into_iter()
+        .collect();
     assert_eq!(observed, expected);
 }
 
