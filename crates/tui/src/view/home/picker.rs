@@ -126,11 +126,12 @@ fn picker_footer(escapes: bool) -> overlay::Row {
 }
 
 /// Draws the typed workspace picker over `area`: the typed row with
-/// its cursor, the completions with the focused one on the bar, the
-/// blank row, the dim header and the dim recents, with a focused
-/// recent barred. Only the recent rows take clicks, by their index
-/// into the current recents. It centres over `area` while that keeps
-/// it clear of the input box's top row `box_top`; otherwise, when it
+/// its cursor, completions with the focused one on the bar, the blank
+/// row, the dim header and the dim recents, with a focused recent barred.
+/// Completion rows take clicks by name-derived identity; recent rows use
+/// their index into the current recents. Typed, missing, blank and header
+/// rows have no target. It centres over `area` while that keeps it clear of
+/// the input box's top row `box_top`; otherwise, when it
 /// fits above the box, its bottom edge sits on the row above the box.
 /// A screen too short for that keeps it centred, over the box.
 #[allow(
@@ -219,9 +220,9 @@ pub(super) fn draw_typed_picker(
                     targets: vec![(
                         0,
                         u16::MAX,
-                        TargetId::Home(Spot::PickCompletion(
-                            crate::home::Spot::completion_identity(name),
-                        )),
+                        TargetId::Home(Spot::PickCompletion(crate::home::CompletionId::for_name(
+                            name,
+                        ))),
                     )],
                     barred: focused,
                 });

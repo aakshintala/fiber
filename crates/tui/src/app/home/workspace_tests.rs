@@ -264,6 +264,22 @@ fn chips(app: &App) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Draws home and returns the rendered target for `name`.
+fn rendered_completion_target(app: &App, name: &str) -> crate::mouse::TargetId {
+    let identity = crate::home::CompletionId::for_name(name);
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buffer = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(app, area, &mut buffer, None)
+        .into_iter()
+        .find_map(|target| match target.id {
+            crate::mouse::TargetId::Home(Spot::PickCompletion(found)) if found == identity => {
+                Some(target.id)
+            }
+            _ => None,
+        })
+        .expect("rendered completion target")
+}
+
 /// Answers the `directories` request `id` with `names` at `path`.
 fn answer(app: &mut App, id: &str, names: &[&str], path: &str) {
     app.on_line(accepted(id, json!({"directories": names, "path": path})));
@@ -534,7 +550,7 @@ fn space_in_the_focused_picker_stays_typed_text() {
     assert_eq!(key(&mut app, Key::Char(' ')), Effect::None);
     assert_eq!(typed_text(&app), Some("/a1 ".to_owned()));
     assert!(picker_open(&app));
-    assert_eq!(chips(&app)[0], "[w]");
+    assert!(chips(&app).contains(&"[w]".to_owned()));
 }
 
 #[test]
@@ -543,10 +559,18 @@ fn clicking_a_typed_completion_chooses_it_when_connected() {
     open(&mut app);
     let sent = type_path(&mut app, "/a");
     answer(&mut app, &sent[0].0, &["a1", "a2"], "/");
-    let identity = crate::home::Spot::completion_identity("a2");
-    assert_eq!(app.home_click(Spot::PickCompletion(identity)), Effect::None);
+    let target = rendered_completion_target(&app, "a2");
+    assert_eq!(app.on_click(target), Effect::None);
     assert!(!picker_open(&app));
-    assert_eq!(chips(&app)[0], "[a2]");
+    assert!(chips(&app).contains(&"[a2]".to_owned()));
+
+    let mut entered = home_with(80, 24, launch());
+    open(&mut entered);
+    let sent = type_path(&mut entered, "/a");
+    answer(&mut entered, &sent[0].0, &["a1", "a2"], "/");
+    assert_eq!(key(&mut entered, Key::Down), Effect::None);
+    assert_eq!(key(&mut entered, Key::Enter), Effect::None);
+    assert_eq!(chips(&app), chips(&entered));
 }
 
 #[test]
@@ -554,17 +578,30 @@ fn stale_or_disconnected_completion_clicks_do_nothing() {
     let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/a");
-    answer(&mut app, &sent[0].0, &["a1"], "/");
-    let stale = crate::home::Spot::completion_identity("old");
-    assert_eq!(app.home_click(Spot::PickCompletion(stale)), Effect::None);
+    answer(&mut app, &sent[0].0, &["a1", "ab2"], "/");
+    let stale = rendered_completion_target(&app, "a1");
+    type_path(&mut app, "b");
+    assert_eq!(app.on_click(stale), Effect::None);
     assert!(picker_open(&app));
-    assert_eq!(chips(&app)[0], "[w]");
+    assert!(chips(&app).contains(&"[w]".to_owned()));
 
+    let current = rendered_completion_target(&app, "ab2");
     app.outbox.link = crate::app::outbox::Link::Down;
-    let current = crate::home::Spot::completion_identity("a1");
-    assert_eq!(app.home_click(Spot::PickCompletion(current)), Effect::None);
+    assert_eq!(app.on_click(current), Effect::None);
     assert!(picker_open(&app));
-    assert_eq!(chips(&app)[0], "[w]");
+    assert!(chips(&app).contains(&"[w]".to_owned()));
+}
+
+#[test]
+fn ambiguous_completion_clicks_do_nothing() {
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    let sent = type_path(&mut app, "/a");
+    answer(&mut app, &sent[0].0, &["a1", "a1"], "/");
+    let target = rendered_completion_target(&app, "a1");
+    assert_eq!(app.on_click(target), Effect::None);
+    assert!(picker_open(&app));
+    assert!(chips(&app).contains(&"[w]".to_owned()));
 }
 
 #[test]

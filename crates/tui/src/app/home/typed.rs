@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use crate::home::CompletionId;
 use serde_json::Value;
 
 /// One listed directory: the absolute path the hub listed, `~/`
@@ -306,22 +307,31 @@ impl Typed {
         let Focus::Completion(name) = &self.focus else {
             return None;
         };
-        let (dir, _) = split(&self.text)?;
-        let path = self.cache.get(dir)?.path.as_deref()?;
-        Some(join(path, name))
+        self.completion_target_named(name)
     }
 
-    /// Resolves a rendered completion identity against this live listing.
-    /// Ambiguous, stale or otherwise absent identities fail closed.
-    pub(super) fn completion_target_for(&self, identity: u64) -> Option<String> {
-        let names = self.completions();
-        let mut matching = names
-            .into_iter()
-            .filter(|name| crate::home::Spot::completion_identity(name) == identity);
-        let name = matching.next()?;
-        if matching.next().is_some() {
-            return None;
-        }
+    /// Focuses the uniquely resolved current completion named by a rendered target.
+    /// Stale and ambiguous identities fail closed.
+    pub(super) fn focus_completion_for(&mut self, identity: CompletionId) -> bool {
+        let name = {
+            let mut matching = self
+                .completions()
+                .into_iter()
+                .filter(|name| CompletionId::for_name(name) == identity);
+            let Some(name) = matching.next() else {
+                return false;
+            };
+            if matching.next().is_some() {
+                return false;
+            }
+            name.to_owned()
+        };
+        self.focus = Focus::Completion(name);
+        true
+    }
+
+    /// Resolves the selected completion through the current directory listing.
+    fn completion_target_named(&self, name: &str) -> Option<String> {
         let (dir, _) = split(&self.text)?;
         let path = self.cache.get(dir)?.path.as_deref()?;
         Some(join(path, name))
