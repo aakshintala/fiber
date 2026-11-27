@@ -200,6 +200,44 @@ fn invalid_layout_maps_fail_atomically_and_cache_the_failure() {
 }
 
 #[test]
+fn layout_regions_accepts_edge_touching_rectangles_on_each_axis() {
+    let cache = Cache::default();
+    for (label, prior, current) in [
+        ("horizontal", raw_rect(5, 0, 1, 2), raw_rect(4, 0, 1, 2)),
+        ("vertical", raw_rect(0, 5, 2, 1), raw_rect(0, 4, 2, 1)),
+    ] {
+        let input = layout_input(10, 10, &["conversation", "panel"], false);
+        let map = cache.layout_regions(page(0), "test", None, &input, || LayoutDecision::Draw {
+            extension: "test".into(),
+            regions: vec![(Region::Conversation, prior), (Region::Panel, current)],
+        });
+        assert!(map.is_some(), "{label} edge-touching rectangles are valid");
+        cache.drop_page(page(0));
+    }
+}
+
+#[test]
+fn layout_regions_rejects_overlapping_rectangles_on_each_axis() {
+    for (label, prior, current) in [
+        ("horizontal", raw_rect(5, 0, 1, 2), raw_rect(4, 0, 2, 2)),
+        ("vertical", raw_rect(0, 5, 2, 1), raw_rect(0, 4, 2, 2)),
+    ] {
+        let cache = Cache::default();
+        let input = layout_input(10, 10, &["conversation", "panel"], false);
+        assert_eq!(
+            cache.layout_regions(page(0), "test", None, &input, || {
+                LayoutDecision::Draw {
+                    extension: "test".into(),
+                    regions: vec![(Region::Conversation, prior), (Region::Panel, current)],
+                }
+            }),
+            None,
+            "{label} overlapping rectangles must be rejected"
+        );
+    }
+}
+
+#[test]
 fn each_invalid_layout_rectangle_dimension_is_rejected() {
     let input = layout_input(10, 5, &["conversation"], false);
     for (label, rect) in [
