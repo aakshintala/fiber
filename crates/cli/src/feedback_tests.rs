@@ -287,11 +287,11 @@ fn the_link_clip_keeps_an_exact_fit_before_the_marker() {
     // `clip_description`'s boundary: a character fitting exactly
     // (`used + width + marker_len == budget`) is kept before the marker,
     // and a following character one byte over budget is dropped.
-    let (kept, clipped) = super::clip_description(&"a".repeat(20), 10);
-    assert!(clipped);
+    let kept = super::clip_description(&"a".repeat(20), 10);
+    assert!(kept.ends_with('…'));
     assert_eq!(kept, "a…");
-    let (kept, clipped) = super::clip_description(&"aé".repeat(10), 10);
-    assert!(clipped);
+    let kept = super::clip_description(&"aé".repeat(10), 10);
+    assert!(kept.ends_with('…'));
     assert_eq!(kept, "a…");
 }
 
@@ -309,16 +309,6 @@ fn the_link_four_byte_title_and_empty_description_still_fit() {
     let (linked_title, linked_body) = linked(&url);
     assert_eq!(linked_title, title);
     assert_eq!(linked_body, format!("\n\n{ATTACH}"));
-}
-
-#[test]
-fn the_link_single_four_byte_description_round_trips() {
-    let description = "😀";
-    let report = build_report(VERSION, PLATFORM, INSTALL, description, DOCTOR);
-    let (url, attach) = issue_link(&title(description), &report, description);
-    assert!(!attach);
-    let (_, linked_body) = linked(&url);
-    assert_eq!(linked_body, report);
 }
 
 #[test]

@@ -833,11 +833,7 @@ fn feedback(
             // already carries everything but the diagnostics
             // (`docs/user/reporting.md`, "Reporting a problem").
             if done.attach {
-                writeln!(
-                    out,
-                    "The full report was too long for a link: attach the report file."
-                )
-                .unwrap_or(());
+                writeln!(out, "{}", contract::feedback::ATTACH_INSTRUCTION).unwrap_or(());
             }
             0
         }

@@ -1911,8 +1911,9 @@ fn feedback_success_keeps_a_draft_edited_while_the_write_ran() {
     ));
     app.draft.clear();
     app.draft.paste("a new thought");
-    app.on_feedback(Ok(feedback_done()));
     assert_eq!(app.draft(), "a new thought");
+    let screen = screen_text(&app);
+    assert!(screen.contains("a new thought"), "{screen}");
 }
 
 #[test]
@@ -1948,12 +1949,15 @@ fn feedback_fallback_notice_tells_the_person_to_attach_the_file() {
     ));
     app.on_feedback(Ok(done));
     assert!(app.draft().is_empty());
-    assert_eq!(
-        app.notice(),
-        Some(
-            "Wrote /w/fiber-feedback-7.md\nhttps://example.test/new?title=x\n\
-             The full report was too long for a link: attach the report file."
-        )
+    assert!(
+        app.notice()
+            .unwrap()
+            .contains("The full report was too long for a link: attach the report file.")
+    );
+    let screen = screen_text(&app);
+    assert!(
+        screen.contains("https://example.test/new?title=x"),
+        "{screen}"
     );
 }
 

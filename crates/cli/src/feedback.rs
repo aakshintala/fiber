@@ -12,7 +12,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use contract::feedback::{FrameShape, RING_DEPTH, ShapeColor, ShapeKind};
+use contract::feedback::{ATTACH_INSTRUCTION, FrameShape, RING_DEPTH, ShapeColor, ShapeKind};
 use contract::shapes::Failure;
 use contract::{ErrorCode, SessionId, clock};
 use doors::failure;
@@ -140,19 +140,17 @@ fn title(description: &str) -> String {
 fn issue_link(title: &str, report: &str, description: &str) -> (String, bool) {
     const BASE: &str = "https://github.com/aakshintala/fiber/issues/new";
     const LIMIT: usize = 2000;
-    /// The sentence every fallback body carries after the description.
-    const ATTACH: &str = "The full report was too long for a link: attach the report file.";
+    let tail = format!("\n\n{ATTACH_INSTRUCTION}");
     let full = format!("{BASE}?title={}&body={}", encode(title), encode(report));
     if full.len() <= LIMIT {
         return (full, false);
     }
     let head = format!("{BASE}?title={}&body=", encode(title));
-    let tail = format!("\n\n{ATTACH}");
     // The encoded description's room: the whole URL stays within the
     // cap, so a short description rides whole and only an overlong one
     // is cut.
     let budget = LIMIT.saturating_sub(head.len() + encode(&tail).len());
-    let (kept, _) = clip_description(description, budget);
+    let kept = clip_description(description, budget);
     let fallback = format!("{kept}{tail}");
     let link = format!("{head}{}", encode(&fallback));
     debug_assert!(link.len() <= LIMIT);
@@ -163,9 +161,9 @@ fn issue_link(title: &str, report: &str, description: &str) -> (String, bool) {
 /// `budget`, with whether anything was cut: a kept whole description
 /// rides unchanged, and a cut one ends with `…`. The cut lands on a
 /// character boundary, so no UTF-8 sequence or `%XX` escape splits.
-fn clip_description(description: &str, budget: usize) -> (String, bool) {
+fn clip_description(description: &str, budget: usize) -> String {
     if encode(description).len() <= budget {
-        return (description.to_owned(), false);
+        return description.to_owned();
     }
     const MARKER: &str = "…";
     let marker_len = encode(MARKER).len();
@@ -180,7 +178,7 @@ fn clip_description(description: &str, budget: usize) -> (String, bool) {
         kept.push(ch);
     }
     kept.push_str(MARKER);
-    (kept, true)
+    kept
 }
 
 /// One `%XX` query component: UTF-8 bytes, leaving only the unreserved

@@ -200,6 +200,10 @@ pub type ReadDoctor = Arc<dyn Fn() -> Result<String, String> + Send + Sync>;
 /// Reads only the first startup blocker line and whether its fix is a key.
 pub type ReadDoctorBlocker = Arc<dyn Fn() -> Option<(String, bool)> + Send + Sync>;
 
+/// The instruction printed when a report is too long for its issue link.
+pub const ATTACH_INSTRUCTION: &str =
+    "The full report was too long for a link: attach the report file.";
+
 /// What a feedback write returns: the report's path and its issue link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedbackDone {
@@ -207,7 +211,7 @@ pub struct FeedbackDone {
     pub path: PathBuf,
     /// The new-issue link carrying the report, or its description.
     pub link: String,
-    /// The link fell back to the description, so the person attaches the file.
+    /// The instruction to attach the report, or empty for a full-report link.
     pub attach: bool,
 }
 

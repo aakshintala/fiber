@@ -1493,9 +1493,8 @@ impl App {
                 }
                 let mut notice = format!("Wrote {}\n{}", done.path.display(), done.link);
                 if done.attach {
-                    notice.push_str(
-                        "\nThe full report was too long for a link: attach the report file.",
-                    );
+                    notice.push('\n');
+                    notice.push_str(contract::feedback::ATTACH_INSTRUCTION);
                 }
                 self.notices
                     .push(ErrorCode::Other("feedback".to_owned()), notice);
