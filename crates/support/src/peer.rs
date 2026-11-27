@@ -131,6 +131,8 @@ impl ProcessRead for KernelProcessRead {
 pub struct ProcessWalk {
     /// The first strict ancestor, or `None` when the target has no parent.
     pub parent_pid: Option<Pid>,
+    /// The second strict ancestor, or `None` when the parent has no parent.
+    pub grandparent_pid: Option<Pid>,
     /// Matching strict ancestors, nearest first.
     pub matched_pids: Vec<Pid>,
 }
@@ -247,6 +249,7 @@ where
         .map_err(|_| IncompleteWalk { pid: peer_pid })?;
     let ancestors = ancestors(peer_pid, read)?;
     let parent_pid = ancestors.first().map(|ancestor| ancestor.pid);
+    let grandparent_pid = ancestors.get(1).map(|ancestor| ancestor.pid);
     let mut matched_pids = Vec::new();
     for ancestor in ancestors {
         if ancestor.euid != current {
@@ -261,6 +264,7 @@ where
     }
     Ok(ProcessWalk {
         parent_pid,
+        grandparent_pid,
         matched_pids,
     })
 }

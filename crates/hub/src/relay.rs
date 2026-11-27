@@ -247,8 +247,8 @@ fn is_approval_reply(stripped: &Map<String, Value>) -> bool {
 /// no exception. Refusal 2 rejects `prompt`, `steer`, `reply` and
 /// `sandbox` when the target pid is on the caller's walk, or when a
 /// session-host pid from the target's parent walk is also on the caller's
-/// walk, unless the caller is the target's current kernel parent with a
-/// readable target ancestry. A
+/// walk, unless the caller is the target's current kernel parent or the
+/// session process owning its keeper. A
 /// synthetic replay has no target process, so no refusal applies to it. An
 /// unreadable target pid, parent, or walk fails closed.
 pub(crate) fn session_command_refusal(
@@ -316,7 +316,18 @@ pub(crate) fn session_command_refusal(
     };
     // Parent and session-host ancestors come from one kernel walk, so a
     // second parent read cannot authorize against a different process tree.
-    if target_walk.parent_pid == attribution.peer_pid() {
+    if target_walk.parent_pid == attribution.peer_pid()
+        || target_walk.parent_pid.and_then(|parent| {
+            target_walk
+                .matched_pids
+                .iter()
+                .find(|pid| **pid != parent)
+                .copied()
+        }) == attribution.peer_pid()
+    {
+        // The session process that owns the target's keeper is the direct
+        // session parent even though the keeper is the target's kernel parent.
+        // A shell below that keeper has a different peer pid and stays refused.
         return None;
     }
     match attribution {

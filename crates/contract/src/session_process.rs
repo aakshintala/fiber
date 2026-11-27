@@ -7,18 +7,29 @@
 //! matches, with no session id.
 
 /// Whether `argv` is a session-hosting command: the `fiber` executable
-/// with `session`, `ask` or `extension-case` as its first argument. The
-/// executable matches by basename, and the subcommand matches exactly; a
+/// with `session`, `ask`, `extension-case` or `keeper` as its first argument.
+/// The executable matches by basename, and the subcommand matches exactly; a
 /// fake with the same words only adds ancestors, never removes a refusal.
 pub fn is_session_process(argv: &[Vec<u8>]) -> bool {
+    is_keeper_process(argv) || is_session_command(argv)
+}
+
+/// Whether `argv` names the keeper process, distinct from other session
+/// commands that do not own the session-control connection.
+pub fn is_keeper_process(argv: &[Vec<u8>]) -> bool {
     let [exe, sub, ..] = argv else {
         return false;
     };
     let basename = exe.rsplit(|byte| *byte == b'/').next().unwrap_or(exe);
-    if basename != b"fiber" {
+    basename == b"fiber" && sub == b"keeper"
+}
+
+fn is_session_command(argv: &[Vec<u8>]) -> bool {
+    let [exe, sub, ..] = argv else {
         return false;
-    }
-    sub == b"session" || sub == b"ask" || sub == b"extension-case"
+    };
+    let basename = exe.rsplit(|byte| *byte == b'/').next().unwrap_or(exe);
+    basename == b"fiber" && (sub == b"session" || sub == b"ask" || sub == b"extension-case")
 }
 
 #[cfg(test)]

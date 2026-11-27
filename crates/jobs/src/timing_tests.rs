@@ -227,6 +227,10 @@ impl Fixture {
         DelegateSpawn {
             resolve: resolve(),
             wiring: crate::DelegateWiring {
+                host: crate::delegate::test_rig::test_host(
+                    Arc::new(std::sync::Mutex::new(Vec::new())),
+                    Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                ),
                 create: crate::support::no_creation(),
                 finish: crate::support::clean_finish(),
                 depth: 0,
@@ -751,11 +755,15 @@ fn refused_and_failed_starts_write_nothing() {
         // The live delegate is spawned untimed, then timing is installed:
         // its start wrote nothing countable, and the resume must write
         // nothing either.
-        let live = fixture.spawner(
-            block_launch(&format!(": {marker}; read line")),
-            refused_watch(),
-        );
-        let live_output = live.run(&spawn_args(), &CancelToken::new(), &Recorder::default());
+        let (launch, reached, release) = hold_launch(marker);
+        let live = fixture.spawner(launch, refused_watch());
+        let live_output = spawn_async(live, spawn_args(), CancelToken::new());
+        // Keep the launch at the seam until the test is ready to observe the
+        // durable start records. The child then blocks on its stdin lifeline
+        // until the later `halt`, so the live-run lookup cannot race its exit.
+        deadline.recv_or_fail(&reached, "delegate launch to reach its hold");
+        release.send(()).expect("release delegate launch");
+        let live_output = deadline.recv_or_fail(&live_output, "delegate start records");
         let (live_started, _) = started_records(&live_output);
         let (probe, records) = fixture.probe();
         fixture.registry.install_timing(probe.timing());

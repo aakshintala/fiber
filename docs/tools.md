@@ -1193,8 +1193,12 @@ hub.
   that runs neither has no keeper. The keeper is the internal `fiber`
   command, started in a session of its own, so a signal to the session's
   process group does not reach it. It is the parent of every command's
-  process group and of every delegate, and it reaps them. It lives
-  until its session shuts down or, after a crash, by the rules below.
+  process group and every Fiber delegate, and it reaps them. Each Fiber
+  delegate gets a keeper-created Unix socketpair as stdin. The keeper holds
+  its peer as a lifeline. It answers only the fixed peer query, using the
+  kernel credential of its live session-control connection. It sends no
+  delegate input on that socketpair (`docs/delegates.md`, "Lifetime"). The
+  keeper lives until its session shuts down or, after a crash, by the rules below.
   One exception: a resumed session takes the jobs of a keeper that
   survived the crash but does not become that keeper's parent. The old
   keeper keeps running those jobs and exits when the last of them has
@@ -1209,9 +1213,9 @@ hub.
   lock for each confined command it runs, from its start to its end
   (`docs/sandbox.md`, "Protected paths"). It restores nothing. A keeper that dies leaves the active lock held until the confined command's last process exits, so the first confined call that finds no active holder, and so restores and reports as after a dead session, never runs while that command lives.
 - **The keeper is tiny.** It loads no provider, MCP server or model code,
-  and no extension but a harness's. It runs processes, holds their pipes and
-  terminals, writes each job's output file, enforces each job's deadline and
-  output cap, and appends to the session log. A harness written in Lua is
+  and no extension but a harness's. It runs processes, holds their pipes,
+  delegate lifelines and terminals, writes each job's output file, enforces
+  each job's deadline and output cap, and appends to the session log. A harness written in Lua is
   loaded when the session starts its first delegate on that harness, and the
   keeper calls only its `line` (`docs/delegates.md`, "Harness extensions"),
   at about 120 to 150 KiB (`docs/extensions.md`, "Process extensions"). Its

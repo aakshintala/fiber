@@ -26,6 +26,74 @@ fn runtime(
 }
 
 #[test]
+fn lifeline_query_answers_only_while_the_active_control_is_live() {
+    let temp = fakes::TempDir::new("keeper-lifeline-query");
+    let (control_peer, control) = UnixStream::pair().expect("control pair");
+    let (done, _ending) = mpsc::channel();
+    let runtime = runtime(temp.path(), control, done);
+    let (keeper_lifeline, mut delegate_lifeline) = UnixStream::pair().expect("lifeline pair");
+    runtime.watch_lifeline(keeper_lifeline);
+
+    delegate_lifeline
+        .write_all(contract::keeper::LIFELINE_QUERY)
+        .expect("query write");
+    let mut reply = [0; contract::keeper::LIFELINE_REPLY_LEN];
+    delegate_lifeline
+        .read_exact(&mut reply)
+        .expect("live reply");
+    assert_eq!(reply[0], b'P');
+    assert_eq!(
+        u32::from_le_bytes(reply[1..].try_into().expect("pid bytes")),
+        std::process::id()
+    );
+
+    {
+        let _control_peer = &control_peer;
+        runtime.control_active.store(false, Ordering::Release);
+    }
+    delegate_lifeline
+        .write_all(contract::keeper::LIFELINE_QUERY)
+        .expect("second query write");
+    delegate_lifeline
+        .read_exact(&mut reply)
+        .expect("dead reply");
+    assert_eq!(reply, [b'N', 0, 0, 0, 0]);
+}
+
+#[test]
+fn socket_pair_stdin_reaches_the_child_and_keeps_the_peer_in_the_spawn_result() {
+    let spec = Spawn {
+        id: "delegate".into(),
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), "read value; printf '%s' \"$value\"".into()],
+        cwd: std::env::temp_dir(),
+        env: Vec::new(),
+        stdin: HostStdin::SocketPair,
+        timeout_ms: None,
+        output_cap: 1024,
+        sandbox: None,
+    };
+    let (mut child, listing, mut streams) = tools::keeper_spawn(&spec).expect("spawn delegate");
+    let mut lifeline = streams
+        .lifeline
+        .take()
+        .expect("keeper owns socketpair peer");
+    lifeline
+        .write_all(b"ready\n")
+        .expect("write through lifeline");
+    drop(lifeline);
+    let mut output = String::new();
+    streams
+        .read
+        .read_to_string(&mut output)
+        .expect("read child output");
+    let status = child.wait().expect("wait for child");
+    assert!(status.success());
+    assert_eq!(output, "ready");
+    support::group::live().unlist(listing);
+}
+
+#[test]
 fn accept_error_keeps_acceptor_alive() {
     use std::os::unix::net::UnixListener;
     use std::sync::Mutex;

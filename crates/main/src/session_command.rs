@@ -294,7 +294,7 @@ pub(crate) fn run(args: cli::SessionArgs, process: &crate::startup::Process) -> 
         // A delegate's resume runs its prompt as one unattended turn,
         // then exits, as a new delegate does: stdin is its lifeline.
         if args.parent.is_some() {
-            signals.lifeline(Box::new(std::io::stdin()));
+            signals.lifeline(Box::new(std::io::stdin()), crate::keeper::lifeline_writer());
         }
         return crate::resume::session_resume(
             SessionId(args.id),
@@ -386,8 +386,8 @@ pub(crate) fn run(args: cli::SessionArgs, process: &crate::startup::Process) -> 
             process,
         );
     }
-    // A delegate's stdin is its lifeline: the parent holds the write end
-    // open and never writes to it (`docs/delegates.md`, "Lifetime").
+    // A delegate's stdin socketpair is its lifeline. The keeper answers the
+    // fixed peer query but sends no delegate input (`docs/delegates.md`, "Lifetime").
     let parent = args
         .parent
         .zip(args.delegate_id)
@@ -396,7 +396,7 @@ pub(crate) fn run(args: cli::SessionArgs, process: &crate::startup::Process) -> 
             delegate_id: contract::JobId(delegate_id),
         });
     if parent.is_some() {
-        signals.lifeline(Box::new(std::io::stdin()));
+        signals.lifeline(Box::new(std::io::stdin()), crate::keeper::lifeline_writer());
     }
     // The child session command carries the delegate's launch-time
     // folders: a fresh spawn marks them inherited, while a fork records
@@ -897,6 +897,11 @@ pub(crate) fn assemble_session(
                     return Err(Failure::from(e));
                 }
             };
+            if let Some(query) = signals.lifeline_query() {
+                session.lifeline_query(query);
+            }
+            let handed_peers = Arc::clone(&keeper);
+            session.handover_peers(Arc::new(move || handed_peers.handover_peers()));
             session.shell(driver);
             session.notes_workspace(workspace.clone());
             session.jobs(jobs.clone());
@@ -1478,6 +1483,11 @@ pub(crate) fn assemble_session(
                     return Err(Failure::from(e));
                 }
             };
+            if let Some(query) = signals.lifeline_query() {
+                session.lifeline_query(query);
+            }
+            let handed_peers = Arc::clone(&keeper);
+            session.handover_peers(Arc::new(move || handed_peers.handover_peers()));
             session.shell(driver);
             session.notes_workspace(workspace.clone());
             session.jobs(jobs.clone());

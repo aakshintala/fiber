@@ -24,6 +24,8 @@ pub(crate) enum Termination {
     OutputCap,
     /// The delegate passed its deadline.
     Timeout,
+    /// The keeper event stream ended before the keeper reported process exit.
+    HostLost,
 }
 
 /// The pure fold. `socket` is the subscription's
@@ -59,6 +61,7 @@ pub(crate) fn outcome(
         },
         Some(Termination::Timeout) => ended(job_id, &JobsError::DelegateTimedOut, process),
         Some(Termination::OutputCap) => ended(job_id, &JobsError::DelegateOutputCap, process),
+        Some(Termination::HostLost) => ended(job_id, &JobsError::JobNoResult, process),
         None => match exited.and_then(|exited| exited.error.clone()) {
             Some(error) => JobCompleted {
                 job_id: job_id.clone(),

@@ -12,7 +12,7 @@ use contract::events::{
 };
 use contract::{JobId, SessionId};
 
-use super::{Resumed, resumed};
+use super::{Resumed, completed_delegates, resumed};
 
 /// A log with `j_run` and `j_kept` started and never ended, `j_done` started
 /// and ended, and `j_again` ended and then started again.
@@ -123,6 +123,38 @@ fn keeper_resume_ignores_jobs_that_are_not_candidates() {
     assert_eq!(
         orphans(&folded),
         ["j_run", "j_kept", "j_again"].into_iter().collect()
+    );
+}
+
+#[test]
+fn keeper_completion_selects_only_unfinished_delegate_results_in_start_order() {
+    let starts = vec![
+        (JobId("j_pending".into()), SessionId("s_pending".into())),
+        (JobId("j_delivered".into()), SessionId("s_delivered".into())),
+        (JobId("j_orphan".into()), SessionId("s_orphan".into())),
+        (JobId("j_active".into()), SessionId("s_active".into())),
+    ];
+    let completed: std::collections::HashSet<_> = [
+        JobId("j_pending".into()),
+        JobId("j_delivered".into()),
+        JobId("j_orphan".into()),
+    ]
+    .into_iter()
+    .collect();
+    let finished = [JobId("j_delivered".into())].into_iter().collect();
+    let orphans = [JobCompleted {
+        job_id: JobId("j_orphan".into()),
+        status: Outcome::Failed,
+        error: None,
+        process: None,
+        output_tail: None,
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
+    }];
+    assert_eq!(
+        completed_delegates(&starts, &completed, &finished, &orphans),
+        vec![(JobId("j_pending".into()), SessionId("s_pending".into()))]
     );
 }
 

@@ -7,6 +7,7 @@
 
 use std::io::{self, BufRead, BufReader, Read};
 use std::os::unix::process::CommandExt as _;
+use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
@@ -17,6 +18,7 @@ use contract::clock::{Clock, Wake};
 use contract::diag::{Op, Timing, TimingName};
 use contract::events::{EventKind, FiberExited};
 use contract::jobs::{EndWorktree, FinishWorktree, Stop};
+use contract::keeper::{CommandHost, Exit, HostEvent, Stream};
 use contract::shapes::Usage;
 use contract::{Envelope, JobId, PreSessionExit, SessionId};
 use rustix::process::Signal;
@@ -296,6 +298,7 @@ static ON_WATCH_FOLD: Mutex<Option<Box<dyn Fn() + Send>>> = Mutex::new(None);
 /// set wins.
 pub(crate) struct Shared {
     state: Mutex<State>,
+    hosted: Mutex<Option<(Arc<dyn CommandHost>, String)>>,
     clock: Arc<dyn Clock>,
     bound: Duration,
 }
@@ -314,6 +317,7 @@ impl Shared {
                 pgid: None,
                 kill_at: None,
             }),
+            hosted: Mutex::new(None),
             clock,
             bound,
         })
@@ -321,6 +325,11 @@ impl Shared {
 
     fn set_pgid(&self, pgid: u32) {
         lock(&self.state).pgid = Some(pgid);
+    }
+
+    pub(crate) fn set_hosted(&self, host: Arc<dyn CommandHost>, id: String, pgid: u32) {
+        *lock(&self.hosted) = Some((host, id));
+        self.set_pgid(pgid);
     }
 
     /// Ends the delegate as a stop does: the reason, set once, then
@@ -342,7 +351,9 @@ impl Shared {
             state.kill_at = Some(later(self.clock.as_ref(), self.bound));
             state.pgid
         };
-        if let Some(pgid) = pgid {
+        if let Some((host, id)) = lock(&self.hosted).as_ref() {
+            let _stopped = host.stop(id);
+        } else if let Some(pgid) = pgid {
             group::signal(pgid, Signal::TERM);
         }
     }
@@ -501,6 +512,14 @@ impl Runner {
     }
 
     /// Attaches the fresh run's cleanup or a resumed run's report-only end.
+    pub(crate) fn set_hosted(&self, host: Arc<dyn CommandHost>, id: String, pgid: u32) {
+        self.shared.set_hosted(host, id, pgid);
+    }
+
+    pub(crate) fn stop(&self) {
+        self.shared.stop();
+    }
+
     pub(crate) fn with_worktree(mut self, worktree_run: Option<WorktreeRun>) -> Self {
         self.worktree_run = worktree_run;
         self
@@ -521,11 +540,154 @@ impl Runner {
         })
     }
 
-    /// Builds the child's command, pipes its stdio, makes it the leader
-    /// of its own group, and lists the group with the spawn: stdin is the
-    /// lifeline the parent holds open, stdout is drained, and stderr is
-    /// dropped. Returns the child's registration with it: only that token
-    /// unlists that entry.
+    /// Drives a keeper-hosted delegate from the keeper's bounded event
+    /// stream. The keeper owns the child and its lifeline; this runner owns
+    /// only the id, output fold and durable job ending.
+    pub(crate) fn drive_host(self, events: mpsc::Receiver<HostEvent>, finish: Unreported) {
+        let (mut line, mut stdout_exit) = (Vec::new(), None);
+        let mut ended = None;
+        let mut disconnected = false;
+        let mut exited_seen = false;
+        let mut backoff = START_BACKOFF;
+        let mut next_retry = self.clock.now();
+        let fold = Arc::new(Mutex::new(Fold {
+            last_seq: self.after,
+            ..Fold::default()
+        }));
+        let wake = Arc::clone(&self.park) as Arc<dyn Wake>;
+        loop {
+            let seen = self.park.generation();
+            let now = self.clock.now();
+            if over_cap(&self.output_path, self.cap) {
+                self.shared.halt(Termination::OutputCap);
+            }
+            if deadline_due(self.deadline, now) {
+                self.shared.halt(Termination::Timeout);
+            }
+            match lock(&fold).result.take() {
+                Some(WatchResult::Exited) => exited_seen = true,
+                Some(WatchResult::Retry) => {
+                    next_retry = later(self.clock.as_ref(), backoff);
+                    backoff = (backoff * 2).min(MAX_BACKOFF);
+                }
+                None => {}
+            }
+            let launch = {
+                let mut folded = lock(&fold);
+                if exited_seen || folded.outstanding || now < next_retry {
+                    false
+                } else {
+                    folded.outstanding = true;
+                    true
+                }
+            };
+            if launch {
+                let watcher = Watcher {
+                    watch: Arc::clone(&self.watch),
+                    session_id: self.session_id.clone(),
+                    after: self.after,
+                    fold: Arc::clone(&fold),
+                    shared: Arc::clone(&self.shared),
+                    cap: self.cap,
+                    clock: Arc::clone(&self.clock),
+                    last_check: Arc::clone(&self.last_cap_check),
+                    stat: Arc::new({
+                        let path = self.output_path.clone();
+                        move || log_len(&path)
+                    }),
+                    output_path: self.output_path.clone(),
+                    wake: Arc::clone(&wake),
+                    on_usage: self.on_usage.clone(),
+                    worktree_guard: self.worktree_run.as_ref().and_then(|run| run.guard.clone()),
+                    timing: self.timing.clone(),
+                    job_id: self.job_id.clone(),
+                };
+                thread::spawn(|| watcher.run());
+            }
+            match events.try_recv() {
+                Ok(HostEvent::Output {
+                    stream: Stream::Out,
+                    bytes,
+                }) => {
+                    feed_host_stdout(&mut line, &bytes, &mut stdout_exit);
+                }
+                Ok(HostEvent::Output {
+                    stream: Stream::Err,
+                    ..
+                }) => {}
+                Ok(HostEvent::Exit(exit)) => {
+                    ended = Some(exit);
+                    break;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    let due = park_due(
+                        later(self.clock.as_ref(), POLL),
+                        exited_seen,
+                        lock(&fold).outstanding,
+                        next_retry,
+                        self.shared.kill_at(),
+                        if self.shared.reason().is_none() {
+                            self.deadline
+                        } else {
+                            None
+                        },
+                    );
+                    self.park
+                        .park_polled(self.clock.as_ref(), Some(due), Some(POLL), seen);
+                }
+            }
+        }
+        Watcher::replay_usage(
+            &self.output_path,
+            self.after,
+            &fold,
+            &self.session_id,
+            &self.on_usage,
+        );
+        let socket = lock(&fold).socket.clone();
+        let status = ended
+            .as_ref()
+            .map_or_else(|| std::process::ExitStatus::from_raw(0), host_status);
+        let (mut completed, mut finished) = if disconnected {
+            let (completed, finished) = outcome(
+                Some(Termination::HostLost),
+                socket.as_ref(),
+                None,
+                status,
+                &self.job_id,
+            );
+            (completed, finished)
+        } else {
+            let stdout = stdout_exit.as_ref();
+            let mut termination = self.shared.reason();
+            if let Some(exit) = &ended {
+                if exit.timed_out {
+                    termination = Some(Termination::Timeout);
+                }
+                if exit.output_cap {
+                    termination = Some(Termination::OutputCap);
+                }
+            }
+            outcome(termination, socket.as_ref(), stdout, status, &self.job_id)
+        };
+        finished.worktree = self.end_worktree();
+        completed.job_id = self.job_id.clone();
+        finish.report(completed, Some(finished));
+        if let Some(timing) = &self.timing {
+            drop(timing(
+                Op::JobsDeliver,
+                Some(TimingName::Job(&self.job_id)),
+                None,
+            ));
+        }
+    }
+
+    /// Builds and locally spawns the child. Kept for direct process-group
+    /// lifecycle tests; production delegate starts use `CommandHost`.
     pub(crate) fn spawn(
         &self,
         launch: &Launch,
@@ -1117,6 +1279,31 @@ fn over_len(len: u64, cap: u64) -> bool {
 /// The drain: reads stdout to EOF and keeps only the last `fiber_exited`
 /// line, a pre-session one included. The pipe reaches EOF once every
 /// writer in the group is gone.
+fn host_status(exit: &Exit) -> std::process::ExitStatus {
+    std::process::ExitStatus::from_raw(match exit.signal {
+        Some(signal) => signal,
+        None => exit.code.unwrap_or(0).saturating_mul(256),
+    })
+}
+
+fn feed_host_stdout(line: &mut Vec<u8>, bytes: &[u8], latest: &mut Option<FiberExited>) {
+    for byte in bytes {
+        if *byte == b'\n' {
+            if let Ok(text) = std::str::from_utf8(line)
+                && let Some(exited) = fiber_exited_of_line(text)
+            {
+                *latest = Some(exited);
+            }
+            line.clear();
+        } else if line.len() < support::framing::MAX_LINE {
+            line.push(*byte);
+        } else {
+            line.clear();
+            line.push(0xff);
+        }
+    }
+}
+
 fn drain(
     read: impl Read + Send + 'static,
     done: mpsc::Sender<Option<FiberExited>>,

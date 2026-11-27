@@ -9,7 +9,8 @@
 )]
 
 use fakes::MUST_SUCCEED_WITHIN;
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -530,6 +531,99 @@ impl std::io::Read for Held {
 }
 
 #[test]
+fn lifeline_query_times_out_when_the_keeper_does_not_reply() {
+    let clock = FakeClock::new();
+    let (signals, _did) = recorded(&clock);
+    let (reader, writer) = UnixStream::pair().expect("lifeline pair");
+    let reader_clone = reader.try_clone().expect("lifeline writer");
+    let (release, wait) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let mut peer = writer;
+        let mut request = [0; contract::keeper::LIFELINE_QUERY.len()];
+        peer.read_exact(&mut request).expect("query frame");
+        wait.recv().expect("query release");
+    });
+    let query = signals.lifeline(Box::new(reader), Some(Box::new(reader_clone)));
+    assert_eq!(query.query(), None, "an absent reply fails closed");
+    release.send(()).expect("release keeper");
+    server.join().expect("keeper query server");
+}
+
+#[test]
+fn installed_lifeline_query_returns_the_keeper_pid() {
+    assert_eq!(
+        contract::keeper::LIFELINE_QUERY_BOUND,
+        MUST_SUCCEED_WITHIN,
+        "the keeper query bound matches the shared must-succeed bound"
+    );
+    let clock = FakeClock::new();
+    let (signals, _did) = recorded(&clock);
+    let (reader, mut keeper) = UnixStream::pair().expect("lifeline pair");
+    keeper
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+        .expect("bound keeper query read");
+    let reader_clone = reader.try_clone().expect("lifeline writer");
+    let query = signals.lifeline(Box::new(reader), Some(Box::new(reader_clone)));
+    let installed = signals.lifeline_query();
+    let handle = installed.clone().unwrap_or_else(|| query.clone());
+
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = thread::spawn(move || done_tx.send(handle.query()).expect("query result"));
+    let server = thread::spawn(move || {
+        let mut request = [0; contract::keeper::LIFELINE_QUERY.len()];
+        keeper.read_exact(&mut request).expect("query frame");
+        assert_eq!(&request, contract::keeper::LIFELINE_QUERY);
+        let mut reply = [b'P', 0, 0, 0, 0];
+        reply[1..].copy_from_slice(
+            &u32::try_from(rustix::process::getppid().unwrap().as_raw_pid())
+                .unwrap()
+                .to_le_bytes(),
+        );
+        keeper.write_all(&reply).expect("query reply");
+    });
+    let result = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&done_rx)
+        .expect("installed query answers before its bound");
+    worker.join().expect("query worker");
+    server.join().expect("keeper query server");
+    assert_eq!(
+        result,
+        Some(u32::try_from(rustix::process::getppid().unwrap().as_raw_pid()).unwrap())
+    );
+    assert!(installed.is_some(), "lifeline query is installed");
+}
+
+#[test]
+fn lifeline_query_routes_one_fixed_reply_and_rejects_malformed_frames() {
+    let clock = FakeClock::new();
+    let (signals, _did) = recorded(&clock);
+    let (reader, writer) = UnixStream::pair().expect("lifeline pair");
+    let reader_clone = reader.try_clone().expect("lifeline writer");
+    let server = thread::spawn(move || {
+        let mut peer = writer;
+        for index in 0..2 {
+            let mut request = [0; contract::keeper::LIFELINE_QUERY.len()];
+            peer.read_exact(&mut request).expect("query frame");
+            assert_eq!(&request, contract::keeper::LIFELINE_QUERY);
+            let mut reply = [b'P', 0, 0, 0, 0];
+            if index == 0 {
+                let parent =
+                    u32::try_from(rustix::process::getppid().expect("parent").as_raw_pid())
+                        .expect("pid fits");
+                reply[1..].copy_from_slice(&parent.to_le_bytes());
+            } else {
+                reply[0] = b'X';
+            }
+            peer.write_all(&reply).expect("reply frame");
+        }
+    });
+    let query = signals.lifeline(Box::new(reader), Some(Box::new(reader_clone)));
+    assert!(query.query().is_some(), "the live parent reply is accepted");
+    assert_eq!(query.query(), None, "an unrecognised reply fails closed");
+    server.join().expect("keeper query server");
+}
+
+#[test]
 fn a_lifeline_eof_after_start_takes_the_sighup_path() {
     let clock = FakeClock::new();
     let (signals, did) = recorded(&clock);
@@ -538,7 +632,7 @@ fn a_lifeline_eof_after_start_takes_the_sighup_path() {
     assert_eq!(start(&signals, &tx), None);
     let until = clock.now() + KILL_AT;
     // Bytes the parent writes are ignored; EOF ends the lifeline.
-    signals.lifeline(Box::new(std::io::Cursor::new(b"hello".to_vec())));
+    signals.lifeline(Box::new(std::io::Cursor::new(b"hello".to_vec())), None);
     assert_eq!(
         Deadline::after(DEADLINE).recv(&calls).unwrap(),
         Did::Signal(129),
@@ -560,10 +654,13 @@ fn a_blocked_lifeline_triggers_nothing_until_released() {
     let until = clock.now() + KILL_AT;
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
-    signals.lifeline(Box::new(Held {
-        entered: entered_tx,
-        release: release_rx,
-    }));
+    signals.lifeline(
+        Box::new(Held {
+            entered: entered_tx,
+            release: release_rx,
+        }),
+        None,
+    );
     Deadline::after(DEADLINE)
         .recv(&entered_rx)
         .expect("the lifeline blocks reading stdin: a skipped drain never reads");
@@ -594,7 +691,7 @@ fn a_lifeline_read_error_takes_the_same_path() {
     let (tx, calls) = mpsc::channel();
     arm(&signals, &tx);
     assert_eq!(start(&signals, &tx), None);
-    signals.lifeline(Box::new(Broken));
+    signals.lifeline(Box::new(Broken), None);
     assert_eq!(
         Deadline::after(DEADLINE).recv(&calls).unwrap(),
         Did::Signal(129),
@@ -606,7 +703,7 @@ fn a_lifeline_read_error_takes_the_same_path() {
 fn a_lifeline_eof_while_booting_exits_129_at_once() {
     let clock = FakeClock::new();
     let (signals, did) = recorded(&clock);
-    signals.lifeline(Box::new(std::io::Cursor::new(Vec::new())));
+    signals.lifeline(Box::new(std::io::Cursor::new(Vec::new())), None);
     assert_eq!(
         Deadline::after(DEADLINE).recv(&did).unwrap(),
         Did::Exit(129),
@@ -620,7 +717,7 @@ fn a_lifeline_eof_while_armed_is_recorded_for_start() {
     let (signals, did) = recorded(&clock);
     let (tx, calls) = mpsc::channel();
     arm(&signals, &tx);
-    signals.lifeline(Box::new(std::io::Cursor::new(Vec::new())));
+    signals.lifeline(Box::new(std::io::Cursor::new(Vec::new())), None);
     assert_eq!(
         Deadline::after(DEADLINE).recv(&calls).unwrap(),
         Did::Signal(-1),
@@ -1314,7 +1411,7 @@ fn the_lifeline_and_an_armed_race_write_one_line() {
     let home = temp.0.join("h");
     let clock = FakeClock::new();
     let (signals, did) = exiting(&clock, &home);
-    signals.lifeline(Box::new(std::io::Cursor::new(Vec::new())));
+    signals.lifeline(Box::new(std::io::Cursor::new(Vec::new())), None);
     assert_eq!(
         Deadline::after(DEADLINE).recv(&did).unwrap(),
         Did::Exit(129)
