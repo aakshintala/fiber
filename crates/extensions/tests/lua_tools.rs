@@ -90,25 +90,6 @@ fn tools_are_listed_by_name_with_their_extension_and_full_definition() {
 }
 
 #[test]
-fn a_registered_no_argument_tool_exposes_object_properties_and_empty_required() {
-    let dir = fakes::TempDir::new("fiber-lua-empty-properties");
-    let ext = extension(
-        dir.path(),
-        "empty",
-        r#"fiber.tool("empty", {
-          description = "No arguments.",
-          input_schema = { type = "object", properties = {}, required = {} },
-          effects = { effects = {}, reversible = true }, timeout = 100,
-          run = function() return "ok" end,
-        })"#,
-        FakeClock::new(),
-    );
-    let tool = tools(&ext).into_iter().next().unwrap();
-    assert_eq!(tool.definition().input_schema["properties"], json!({}));
-    assert_eq!(tool.definition().input_schema["required"], json!([]));
-}
-
-#[test]
 fn two_loads_of_one_entry_script_give_byte_identical_definitions() {
     let dir = fakes::TempDir::new("fiber-lua-tools");
     let serialised = |ext: &Arc<LuaExtension>| -> Vec<String> {

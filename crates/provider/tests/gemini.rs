@@ -45,18 +45,7 @@ const REFERENCE: &str = "gemini/gemini-3.1-flash-lite";
 fn a_corrected_empty_properties_schema_selects_validated_mode() {
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let mut req = request();
-    req.tools = vec![ToolDefinition {
-        name: "lua_empty".into(),
-        description: "No arguments.".into(),
-        input_schema: json!({
-            "type": "object",
-            "properties": {},
-            "required": [],
-            "additionalProperties": false
-        }),
-        deferred: false,
-        hosted: None,
-    }];
+    req.tools = vec![harness::lua_empty_tool()];
     run(Gemini::new(endpoint(&server)).call(&req)).0.unwrap();
     let body = sent_body(&server, 0);
     assert_eq!(

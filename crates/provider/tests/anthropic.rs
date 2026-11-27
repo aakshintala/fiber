@@ -1694,18 +1694,7 @@ fn corrected_lua_schema_takes_twentieth_strict_slot_by_name() {
     let mut tools: Vec<ToolDefinition> = (0..19)
         .map(|i| strict_tool(&format!("a_{i:02}"), false))
         .collect();
-    tools.push(ToolDefinition {
-        name: "lua_empty".into(),
-        description: "No arguments.".into(),
-        input_schema: json!({
-            "type": "object",
-            "properties": {},
-            "required": [],
-            "additionalProperties": false
-        }),
-        deferred: false,
-        hosted: None,
-    });
+    tools.push(harness::lua_empty_tool());
     tools.push(strict_tool("z_later", false));
     let mut req = request();
     req.tools = tools;
@@ -1718,9 +1707,10 @@ fn corrected_lua_schema_takes_twentieth_strict_slot_by_name() {
             .find(|tool| tool["name"] == name)
             .unwrap()
     };
-    // The 20-tool cap is documented in `docs/model-routing.md`, "Anthropic
-    // messages wire facts"; name sorting is described in `docs/prompt-cache.md`,
-    // "Bytes", and implemented by `wire_tools` in `anthropic_messages.rs`.
+    // The 20-tool cap and name-order overflow are documented in
+    // `docs/model-routing.md`, "Anthropic messages wire facts"; name sorting
+    // is also described in `docs/prompt-cache.md`, "Bytes", and implemented
+    // by `wire_tools` in `anthropic_messages.rs`.
     assert_eq!(find("lua_empty")["strict"], json!(true));
     assert_eq!(find("z_later")["strict"], json!(false));
 }

@@ -311,6 +311,10 @@ fiber.command(name, { description, timeout, run })
 
 `fiber.harness` is not built yet: see #545.
 
+In a tool's `input_schema`, an empty table in a schema position becomes
+`{}`; schema array containers keep `[]`. Values under `enum`, `const`,
+`default` and `examples` are sent as written.
+
 What a harness declares is `docs/delegates.md`, "Harness extensions".
 
 A tool's `effects` is a table, `{ effects, paths?, reversible, hosts? }` as
@@ -481,10 +485,6 @@ json.decode(str [, { lenient }]) / json.encode(value)   -- JSON, host-provided (
   loaded without the extension stops that extension's jobs with no `run`.
   Shutdown runs no `run`. On a normal end Fiber releases the
   extension-owned ids, then stops them, with no `run`.
-
-  In a tool's `input_schema`, an empty table in a schema position becomes
-  `{}`; values under `enum`, `const`, `default` and `examples` are sent as
-  written.
 - **`host.fs`** reads and writes anywhere, as a process can. The per-path lock
   Fiber's own file tools take is offered (`docs/architecture.md`, "Tool calls
   in a step").
