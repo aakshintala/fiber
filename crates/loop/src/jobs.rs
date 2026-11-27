@@ -368,6 +368,7 @@ impl Loop {
                 // move into a turn's input while running: none reaches a
                 // turn unclaimed.
                 Queued::Notice(..) => unreachable!("notices are claimed before a turn takes them"),
+                // A monitor's batch: named in a `jobs` item when it starts a turn.
                 Queued::Line(line) => {
                     name_job(&mut input, &line.job_id);
                     self.queued.push_back(Queued::Line(line));
@@ -507,18 +508,32 @@ impl Loop {
     /// completion says the process that ran the job died with the one
     /// that wrote the log; a settled pair reports the exit the delegate
     /// wrote itself. Nothing touches a process (`docs/events.md`,
-    /// "Resume"), and no hook runs on either write. A suspended turn's
-    /// batch is still open, and a message there would separate its calls
-    /// from their results, so those notices join the conversation once
-    /// [`Loop::finish_suspended`] has written the batch's results, where
-    /// `rebuild` renders them too; a settled pair's final text joins
-    /// `held` alongside its notice, as a live finish does.
+    /// "Resume"). Settled finishes run `after_tool` before either record is
+    /// written. A suspended turn's batch is still open, and a message there
+    /// would separate its calls from their results, so those notices join the
+    /// conversation once [`Loop::finish_suspended`] has written the batch's
+    /// results, where `rebuild` renders them too; a settled pair's final text
+    /// joins `held` alongside its notice, as a live finish does.
     pub(crate) fn mark_orphans(&mut self, orphans: Vec<OrphanEnd>) -> Result<(), Error> {
         for orphan in orphans {
-            let (finished, completed) = match orphan {
-                OrphanEnd::Orphaned(completed) => (None, completed),
-                OrphanEnd::Settled(finished, completed) => (Some(finished), *completed),
+            let (mut finished, completed, start) = match orphan {
+                OrphanEnd::Orphaned(completed) => (None, completed, None),
+                #[cfg(test)]
+                OrphanEnd::Settled(finished, completed) => (Some(finished), *completed, None),
+                OrphanEnd::SettledForDelivery(finished, completed, start) => {
+                    (Some(finished), *completed, Some(start))
+                }
+                OrphanEnd::FinishedAlready(completed) => (None, *completed, None),
             };
+            if let Some(start) = start {
+                self.ending.starts.fold(&Event::JobStarted(start));
+                if let Some(raw) = finished.take() {
+                    let process = completed.process.clone();
+                    let delivered =
+                        self.deliver_finish(raw, completed.status, process.as_ref(), None)?;
+                    finished = Some(crate::delegated::bounded(&self.log, delivered));
+                }
+            }
             if self.suspended.is_some() {
                 if let Some(finished) = &finished {
                     let event = Event::DelegateFinished(finished.clone());
@@ -569,23 +584,55 @@ fn name_job(input: &mut Vec<InputItem>, id: &JobId) {
 pub(crate) enum OrphanEnd {
     /// No `fiber_exited` settled the job: the orphan marking stands.
     Orphaned(JobCompleted),
-    /// Settled from the delegate's own exit line: the bounded finish and
-    /// its completion, written as one pair. The completion rides boxed: a
-    /// resume settles rarely, so the one allocation never lands on a hot
-    /// path.
+    /// Settled from the delegate's own exit line and delivered through
+    /// `after_tool` before bounding or writing. The final parent start is
+    /// carried so its tool is available to tool-scoped hooks.
+    SettledForDelivery(
+        DelegateFinished,
+        Box<JobCompleted>,
+        contract::events::JobStarted,
+    ),
+    /// The current run already has a finish: write only its missing completion.
+    FinishedAlready(Box<JobCompleted>),
+    /// Settled pair used by direct unit tests of orphan writing.
+    #[cfg(test)]
     Settled(DelegateFinished, Box<JobCompleted>),
 }
 
-/// The jobs a log started with no `job_completed`, folded one line at a
-/// time. A `rewound` settles no job: every job a rewind stops has its own
-/// `job_completed` before it.
+/// Backfill usage lines copied from child sessions before a resumed turn.
+type UsageBackfill = Vec<(contract::SessionId, Vec<contract::events::UsageRecorded>)>;
+
+/// The resume tail, written at the opening of `Loop::run` in contract order.
 #[derive(Default)]
 pub(crate) struct Orphans {
+    settled: Vec<OrphanEnd>,
+    backfill: UsageBackfill,
+    settings: Option<contract::events::ModelSettings>,
     started: Vec<JobId>,
-    settled: HashSet<JobId>,
+    folded_settled: HashSet<JobId>,
 }
 
 impl Orphans {
+    pub(crate) fn new(
+        settled: Vec<OrphanEnd>,
+        backfill: Vec<(contract::SessionId, Vec<contract::events::UsageRecorded>)>,
+        settings: Option<contract::events::ModelSettings>,
+    ) -> Self {
+        Self {
+            settled,
+            backfill,
+            settings,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn take(&mut self) -> ResumeTail {
+        (
+            std::mem::take(&mut self.settled),
+            std::mem::take(&mut self.backfill),
+            self.settings.take(),
+        )
+    }
     /// Folds one durable line's event. A `job_started` reopens its job:
     /// a later run a crash cut short is still owed its orphaned end.
     pub(crate) fn fold(&mut self, event: &Event) {
@@ -594,9 +641,9 @@ impl Orphans {
                 return;
             }
             self.started.push(job.job_id.clone());
-            self.settled.remove(&job.job_id);
+            self.folded_settled.remove(&job.job_id);
         } else if let Event::JobCompleted(job) = event {
-            self.settled.insert(job.job_id.clone());
+            self.folded_settled.insert(job.job_id.clone());
         }
     }
 
@@ -605,11 +652,12 @@ impl Orphans {
     pub(crate) fn finish(self) -> Vec<JobCompleted> {
         let Self {
             started,
-            mut settled,
+            mut folded_settled,
+            ..
         } = self;
         started
             .into_iter()
-            .filter(|id| settled.insert(id.clone()))
+            .filter(|id| folded_settled.insert(id.clone()))
             .map(|job_id| JobCompleted {
                 job_id,
                 status: Outcome::Failed,
@@ -621,7 +669,6 @@ impl Orphans {
                 }),
                 process: None,
                 output_tail: None,
-
                 notice: None,
                 changed_by: None,
                 protected_paths: None,
@@ -629,6 +676,17 @@ impl Orphans {
             .collect()
     }
 }
+
+/// One staged resume tail, drained in order by `Loop::run`.
+type ResumeTail = (
+    Vec<OrphanEnd>,
+    UsageBackfill,
+    Option<contract::events::ModelSettings>,
+);
+
+/// The fold accumulator and the staged resume tail share one value type;
+/// each instance is used for exactly one role.
+pub(crate) type OrphanFold = Orphans;
 
 /// What a notice about running jobs tells the model, naming `job_ids`: the
 /// ending notice, or the jobs check. It is logged as its turn's `message`

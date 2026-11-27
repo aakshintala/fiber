@@ -168,7 +168,7 @@ struct AskedDelivery {
 /// (`hook_file`); the file not written, neither names it. A finish naming
 /// no file (another harness) is left alone. The delegate's session
 /// directory must exist: nothing here creates one.
-pub(crate) fn write_final_file(finished: &mut DelegateFinished, hook_file: bool) {
+fn write_final_file(finished: &mut DelegateFinished, hook_file: bool) {
     let Some(file) = finished.artifact_absolute.as_deref().map(Path::new) else {
         return;
     };

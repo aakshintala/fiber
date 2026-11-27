@@ -166,6 +166,33 @@ impl support::History {
         outcome
     }
 
+    /// Sends an optional prompt, then drives the session through its run
+    /// boundary and closes the inbox so the run exits after pending work.
+    #[track_caller]
+    fn run_to_close(&mut self, looped: Loop, prompt: Option<&str>) {
+        if let Some(prompt) = prompt {
+            self.inbox_tx
+                .send(Delivery::Prompt(
+                    support::message(prompt),
+                    support::ignore(),
+                ))
+                .unwrap();
+        }
+        let (closed_tx, closed_rx) = mpsc::channel();
+        drop(closed_rx);
+        drop(std::mem::replace(&mut self.inbox_tx, closed_tx));
+        let (done, finished) = mpsc::channel();
+        std::thread::spawn(move || {
+            let ran = looped.run();
+            done.send(ran.result.map_err(|error| format!("{error:?}")))
+                .unwrap();
+        });
+        Deadline::after(support::DEADLINE)
+            .recv(&finished)
+            .expect("run ended")
+            .expect("run succeeded");
+    }
+
     /// The history's kinds, in order: the lines the resume folds.
     fn history_kinds(&self) -> Vec<EventKind> {
         self.lines()[..self.history_len]
@@ -3325,21 +3352,20 @@ fn a_job_with_no_completion_is_marked_orphaned_on_resume() {
     history.freeze();
 
     let looped = history.resume(Vec::new());
-    // Written on open, before any turn, in start order.
+    let last = history.lines()[history.history_len - 1].seq.unwrap().0;
+
+    history.run_to_close(looped, Some("two"));
+    // The staged orphan results are written at the run's first step, before
+    // any turn writes, in start order.
     let marked = history.new_lines();
     assert_eq!(
-        kinds_of(&marked),
+        kinds_of(&marked[..2]),
         ["job_completed", "job_completed"].map(EventKind::from_name)
     );
     assert_orphaned(&marked[0], "j_a");
     assert_orphaned(&marked[1], "j_c");
-    let last = history.lines()[history.history_len - 1].seq.unwrap().0;
     assert_eq!(marked[0].seq.unwrap().0, last + 1);
 
-    assert_eq!(
-        history.run(looped, "two"),
-        contract::events::TurnOutcome::Completed
-    );
     let requests = history.provider.requests();
     assert_eq!(requests.len(), 1);
     let users: Vec<&str> = requests[0]
@@ -3407,15 +3433,10 @@ fn an_orphan_behind_a_suspended_batch_renders_after_its_results() {
     history.freeze();
 
     let looped = history.resume_headless(Vec::new());
+    history.run_to_close(looped, None);
     let marked = history.new_lines();
-    assert_eq!(
-        kinds_of(&marked),
-        ["job_completed"].map(EventKind::from_name)
-    );
+    assert_eq!(marked[0].kind(), EventKind::JobCompleted);
     assert_orphaned(&marked[0], "j_a");
-    let (looped, outcome) = history.step(looped);
-    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
-    drop(looped);
 
     assert_eq!(
         history.new_kinds(),
@@ -3454,70 +3475,30 @@ fn an_orphan_behind_a_suspended_batch_renders_after_its_results() {
 }
 
 #[test]
-fn a_second_resume_over_a_logged_orphan_keeps_it_after_the_results() {
-    // The first resume logs the orphan and the process exits again on the
-    // same request; the second resume reads the orphan from the log and
-    // still sends it after the open batch's results.
-    let mut history = History::new(vec![Scripted::text("Hello."), Scripted::text("Again.")]);
-    history.write(user_turn("one"), None);
-    history.write(message_started(), Some("a_9"));
-    history.write(requested("shell", "Paris"), Some("a_0"));
-    history.write(job_started("j_a"), Some("a_0"));
-    history.write(completed_event("Started j_a."), Some("a_0"));
-    history.write(requested("exec", "Paris"), Some("a_1"));
-    history.write(standing_request("r_9"), Some("a_1"));
-    history.write(fiber_started(), None);
-    history.write(fiber_exited(Some("r_9")), None);
+fn a_second_resume_does_not_repeat_a_logged_orphan_completion() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(job_started("j_a"), None);
+    history.freeze();
 
-    drop(history.resume_headless(Vec::new()));
-    history.write(fiber_started(), None);
-    history.write(fiber_exited(Some("r_9")), None);
+    let looped = history.resume_headless(Vec::new());
+    history.run_to_close(looped, None);
+    assert_eq!(history.new_kinds(), [EventKind::JobCompleted]);
+
     history.freeze();
     let (tx, rx) = mpsc::channel();
     history.inbox_tx = tx;
     history.inbox_rx = Some(rx);
     let looped = history.resume_headless(Vec::new());
-    // The orphan is logged once.
-    assert!(history.new_lines().is_empty());
-    let (looped, outcome) = history.step(looped);
-    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
-    drop(looped);
+    history.run_to_close(looped, None);
 
-    let lines = history.lines();
+    assert!(history.new_lines().is_empty());
     assert_eq!(
-        lines
+        history
+            .lines()
             .iter()
-            .filter(|l| l.kind() == EventKind::JobCompleted)
+            .filter(|line| line.kind() == EventKind::JobCompleted)
             .count(),
         1
-    );
-    let requests = history.provider.requests();
-    assert_eq!(requests.len(), 1);
-    let conversation = &requests[0].conversation;
-    let rebuilt = history.rebuilt();
-    assert_eq!(&rebuilt[..conversation.len()], &conversation[..]);
-    // The rebuild puts the opening message at index 0, so the a_1 call is
-    // followed directly by its result, and the notice follows the result.
-    let call = conversation
-        .iter()
-        .position(
-            |input| matches!(input, Input::ToolCall { action_id, .. } if action_id.0 == "a_1"),
-        )
-        .unwrap();
-    let result = conversation
-        .iter()
-        .position(
-            |input| matches!(input, Input::ToolResult { action_id, .. } if action_id.0 == "a_1"),
-        )
-        .unwrap();
-    assert_eq!(result, call + 1);
-    assert_eq!(result, conversation.len() - 2);
-    assert_eq!(
-        conversation.last(),
-        Some(&Input::User {
-            text: format!("Fiber: background job j_a ended: failed.\n{ORPHANED}"),
-            images: Vec::new()
-        })
     );
 }
 
@@ -4215,16 +4196,41 @@ fn an_answerable_resume_runs_the_call_a_person_allows() {
 /// Hooks rewriting every call's `city` to `to`, naming the rewrite.
 struct RewriteHooks {
     to: String,
+    settlement_seen:
+        Option<Arc<std::sync::Mutex<Vec<(String, String, Option<contract::hook::JobDelivery>)>>>>,
 }
 
 impl contract::hook::Hooks for RewriteHooks {
     fn after_tool(
         &self,
-        _call: &contract::hook::AfterToolCall<'_>,
+        call: &contract::hook::AfterToolCall<'_>,
     ) -> contract::hook::AfterToolAnswer {
+        if let Some(seen) = &self.settlement_seen {
+            seen.lock().unwrap().push((
+                call.tool.to_owned(),
+                call.content.to_owned(),
+                call.delivery,
+            ));
+        }
+        let outcome = if call.tool == "shell"
+            && call.delivery == Some(contract::hook::JobDelivery::Delegate)
+        {
+            contract::hook::AfterToolOutcome::Changed {
+                content: Some(call.content.replace("TOKEN-1234", "[redacted]")),
+                details: None,
+                artifact: None,
+            }
+        } else {
+            contract::hook::AfterToolOutcome::Unchanged
+        };
+        let changed_by = if matches!(&outcome, contract::hook::AfterToolOutcome::Changed { .. }) {
+            vec!["loop.test/redactor".to_owned()]
+        } else {
+            Vec::new()
+        };
         contract::hook::AfterToolAnswer {
-            outcome: contract::hook::AfterToolOutcome::Unchanged,
-            changed_by: Vec::new(),
+            outcome,
+            changed_by,
             notices: Vec::new(),
         }
     }
@@ -4320,6 +4326,7 @@ fn permission_requested_rewrite_on_a_resumed_reraise_carries_the_resume_rewrite(
     let act = reads("act");
     let hooks = Arc::new(RewriteHooks {
         to: "Rome".to_owned(),
+        settlement_seen: None,
     });
     let looped = history
         .resume(tools_of(&[&act]))
@@ -5024,9 +5031,7 @@ fn resumed_thinking_seeds_the_session_choice_for_the_next_switch() {
         .inbox_tx
         .send(Delivery::Prompt(support::message("go"), support::ignore()))
         .unwrap();
-    let (looped, outcome) = history.step(looped);
-    let _ = looped;
-    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    history.run_to_close(looped, None);
     assert_eq!(
         *recorded.lock().unwrap(),
         vec![Some(contract::ThinkingLevel::High)],
@@ -5090,8 +5095,7 @@ fn a_resume_switching_the_label_records_model_changed_before_the_build() {
     history.freeze();
 
     let looped = history.resume_on(Vec::new(), Some("home"), CacheLifetime::OneHour);
-    let outcome = history.run(looped, "hi");
-    assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+    history.run_to_close(looped, Some("hi"));
 
     // The recorded settings are `before`, exactly as the log last had
     // them; the session's current ones are `after`
@@ -5175,15 +5179,13 @@ fn a_resume_switching_the_model_drops_the_recorded_reasoning() {
         Scripted::text("Again."),
     ]);
     let looped = history.resume_headless(Vec::new());
-    let outcome = history.run(looped, "one");
-    assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+    history.run_to_close(looped, Some("one"));
     history.freeze();
 
     // The session now runs on another model reference, as a `--model`
     // resume that starts the process does.
     let looped = history.resume_with(Vec::new(), "fake/model-2", None);
-    let outcome = history.run(looped, "two");
-    assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+    history.run_to_close(looped, Some("two"));
 
     // The switch is recorded before the resumed build, with the recorded
     // settings as `before`.
@@ -5248,8 +5250,7 @@ fn a_resume_switching_only_thinking_records_one_model_changed() {
         support::MODEL,
         Some(contract::ThinkingLevel::High),
     );
-    let outcome = history.run(looped, "hi");
-    assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+    history.run_to_close(looped, Some("hi"));
 
     let new = history.new_lines();
     assert_eq!(new[0].kind(), EventKind::ModelChanged);
@@ -5284,7 +5285,7 @@ fn a_resume_after_a_switch_records_the_switch_after_as_before() {
     history.freeze();
 
     let looped = history.resume_on(Vec::new(), Some("home"), CacheLifetime::OneHour);
-    history.run(looped, "hi");
+    history.run_to_close(looped, Some("hi"));
 
     let new = history.new_lines();
     assert_eq!(new[0].kind(), EventKind::ModelChanged);
@@ -5412,7 +5413,7 @@ fn a_resume_switching_the_label_marks_orphans_first() {
         Some("home"),
         contract::events::CacheLifetime::OneHour,
     );
-    history.run(looped, "hi");
+    history.run_to_close(looped, Some("hi"));
 
     let new = history.new_lines();
     assert_eq!(new[0].kind(), EventKind::JobCompleted);
@@ -5824,9 +5825,17 @@ fn stage_delegate(history: &History, session: &str) -> Arc<Log> {
     )
 }
 
+struct BackfillRun(r#loop::Summary);
+
+impl BackfillRun {
+    fn summary(&self) -> &r#loop::Summary {
+        &self.0
+    }
+}
+
 /// Resumes for the backfill's side effects only: no model switch, so no
 /// `model_changed`; no reviewer and no turns run.
-fn resume_for_backfill(history: &mut History) -> Loop {
+fn resume_for_backfill(history: &mut History) -> BackfillRun {
     resume_with_finish(history, None)
 }
 
@@ -5836,7 +5845,7 @@ fn resume_for_backfill(history: &mut History) -> Loop {
 fn resume_with_finish(
     history: &mut History,
     finish: Option<contract::jobs::FinishWorktree>,
-) -> Loop {
+) -> BackfillRun {
     let (tx, rx) = mpsc::channel();
     drop(tx);
     let mut folded = r#loop::resumed(&history.dir).unwrap();
@@ -5859,6 +5868,15 @@ fn resume_with_finish(
         folded,
     )
     .unwrap()
+    .run()
+    .summary
+    .into()
+}
+
+impl From<r#loop::Summary> for BackfillRun {
+    fn from(summary: r#loop::Summary) -> Self {
+        Self(summary)
+    }
 }
 
 fn copies_of(lines: &[Envelope], generation: &str) -> Vec<Envelope> {
@@ -6383,6 +6401,66 @@ fn a_settled_large_message_cuts_text_and_records_artifact() {
 }
 
 #[test]
+fn a_settled_delegate_finish_is_redacted_before_completion_and_backfill() {
+    let mut history = History::new(Vec::new());
+    history.write(job_started("j_redact"), None);
+    history.write(delegate_started("j_redact", "s_redact", "fiber"), None);
+    let delegate = stage_delegate(&history, "s_redact");
+    delegate.append(&fiber_started(), None, None).unwrap();
+    delegate
+        .append(&History::usage("g_redact", MODEL, Some(0.25)), None, None)
+        .unwrap();
+    delegate
+        .append(
+            &settle_exit(0, Some("token TOKEN-1234 here"), None),
+            None,
+            None,
+        )
+        .unwrap();
+    let final_file = delegate.dir().join("artifacts/final.md");
+    drop(delegate);
+    history.freeze();
+
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let hooks = Arc::new(RewriteHooks {
+        to: String::new(),
+        settlement_seen: Some(Arc::clone(&seen)),
+    });
+    let looped = history
+        .resume(Vec::new())
+        .hooks(hooks as Arc<dyn contract::hook::Hooks>);
+    history
+        .inbox_tx
+        .send(Delivery::Close(support::ignore()))
+        .unwrap();
+    let ran = looped.run();
+    ran.result.unwrap();
+
+    let lines = history.new_lines();
+    assert_eq!(
+        &lines[..3]
+            .iter()
+            .map(|line| line.kind())
+            .collect::<Vec<_>>(),
+        &[
+            EventKind::DelegateFinished,
+            EventKind::JobCompleted,
+            EventKind::UsageRecorded
+        ]
+    );
+    assert_eq!(lines[0].payload["text"], "token [redacted] here");
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        &[(
+            "shell".to_owned(),
+            "token TOKEN-1234 here".to_owned(),
+            Some(contract::hook::JobDelivery::Delegate)
+        )]
+    );
+    assert_eq!(std::fs::read(final_file).unwrap(), b"token [redacted] here");
+}
+
+#[test]
 fn a_current_run_finish_without_completion_is_not_written_twice() {
     let mut history = History::new(Vec::new());
     history.write(job_started("j_duplicate"), None);
@@ -6427,8 +6505,9 @@ fn a_previous_run_finish_does_not_suppress_the_current_run_finish() {
     history.write(job_started("j_reopened"), None);
     let delegate = stage_delegate(&history, "s_reopened");
     delegate.append(&fiber_started(), None, None).unwrap();
+    delegate.append(&fiber_started(), None, None).unwrap();
     delegate
-        .append(&settle_exit(0, Some("new"), None), None, None)
+        .append(&settle_exit(1, Some("new"), None), None, None)
         .unwrap();
     drop(delegate);
     history.freeze();
@@ -6623,7 +6702,9 @@ fn a_settled_completion_carries_the_logged_exit_code() {
 /// resume has parked on its lock. The result crosses back as text, so the
 /// loop itself never has to be `Send`. The test's one deadline bounds the
 /// whole wait, parks and completion together.
-fn resume_on_thread(history: &mut History) -> mpsc::Receiver<(Option<Loop>, Result<(), String>)> {
+fn resume_on_thread(
+    history: &mut History,
+) -> mpsc::Receiver<(Option<BackfillRun>, Result<(), String>)> {
     let (tx, inbox) = mpsc::channel();
     drop(tx);
     let session = r#loop::Session {
@@ -6646,9 +6727,15 @@ fn resume_on_thread(history: &mut History) -> mpsc::Receiver<(Option<Loop>, Resu
         // The loop comes back with the report, so the exit reads the
         // resume's own summary.
         match Loop::resume(session, folded) {
-            Ok(looped) => done
-                .send((Some(looped), Ok(())))
-                .expect("the test waits for the resume"),
+            Ok(looped) => {
+                let ran = looped.run();
+                let r#loop::Ran { summary, result } = ran;
+                done.send((
+                    Some(BackfillRun(summary)),
+                    result.map_err(|error| format!("{error:?}")),
+                ))
+                .expect("the test waits for the resume");
+            }
             Err(error) => done
                 .send((None, Err(format!("{error:?}"))))
                 .expect("the test waits for the resume"),

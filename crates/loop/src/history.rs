@@ -119,7 +119,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         // them. The position names its segment, so a turn in a parent
         // and one in the child never share it.
         starts: HashMap::new(),
-        orphans: crate::jobs::Orphans::default(),
+        orphans: crate::jobs::OrphanFold::default(),
         delegate_sessions: HashMap::new(),
         summary: false,
     };
@@ -220,7 +220,7 @@ struct Pass {
     staged: HashMap<RequestId, bool>,
     running: Carry,
     starts: HashMap<TurnId, ((usize, u64), Carry)>,
-    orphans: crate::jobs::Orphans,
+    orphans: crate::jobs::OrphanFold,
     delegate_sessions: HashMap<JobId, SessionId>,
     summary: bool,
 }
