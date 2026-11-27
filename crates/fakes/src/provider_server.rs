@@ -526,10 +526,9 @@ fn invalid_openai_properties(request: &ParsedRequest) -> bool {
             }
         }
         if body.get(start..end).is_some_and(|token| {
-            matches!(
-                serde_json::from_slice::<String>(token).as_deref(),
-                Ok("properties")
-            )
+            serde_json::from_slice::<String>(token)
+                .as_deref()
+                .is_ok_and(|decoded| decoded == "properties")
         }) {
             found = true;
             break;
