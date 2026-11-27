@@ -526,7 +526,7 @@ impl Fold {
                 self.cache_ts = None;
             }
             // A reload rebuilds the preamble from the start, so the old
-            // cache entry is dead (`docs/prompt-cache.md`, "Reload").
+            // cache entry is dead (`docs/prompt-cache.md`, "What misses the cache on purpose").
             Event::Reloaded(_) => self.cache_ts = None,
             Event::JobStarted(_) => self.refresh_running(),
             // A delegate's end removes it from the status fold, whether
