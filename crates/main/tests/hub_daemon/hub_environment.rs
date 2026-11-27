@@ -208,6 +208,7 @@ fn a_session_runs_with_the_login_shell_capture() {
     let names = names_of(&variables);
     assert!(names.contains(&"LOGIN_MARK".to_owned()), "{names:?}");
     assert!(names.contains(&"FIBER_HOME".to_owned()), "{names:?}");
+    assert!(names.contains(&"FIBER_SESSION_ID".to_owned()), "{names:?}");
     assert!(!names.contains(&"HUB_ONLY".to_owned()), "{names:?}");
     // After the session exits, a relayed command resumes it with the
     // hub's current environment.

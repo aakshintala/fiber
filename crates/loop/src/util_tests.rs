@@ -31,14 +31,36 @@ use crate::{BlockLimits, Loop, Model, Reviewer, TurnCancel};
 #[test]
 fn unset_source_is_inherited() {
     assert_eq!(variables_source(), VariablesSource::Inherited);
-    assert_eq!(variables().source, VariablesSource::Inherited);
+    assert_eq!(
+        variables(&SessionId("s_test".into())).source,
+        VariablesSource::Inherited
+    );
 }
 
 #[test]
 fn setting_login_shell_is_observed() {
     set_variables_source(VariablesSource::LoginShell);
     assert_eq!(variables_source(), VariablesSource::LoginShell);
-    assert_eq!(variables().source, VariablesSource::LoginShell);
+    assert_eq!(
+        variables(&SessionId("s_test".into())).source,
+        VariablesSource::LoginShell
+    );
+}
+
+#[test]
+fn variables_include_session_id_name_without_value() {
+    let variables = variables(&SessionId("s_secret_value".into()));
+    assert!(variables.names.contains(&"FIBER_SESSION_ID".into()));
+    assert!(!variables.names.contains(&"s_secret_value".into()));
+}
+
+#[test]
+fn variables_do_not_duplicate_inherited_session_id_name() {
+    let variables = super::variables_from([
+        ("PATH".into(), "/bin".into()),
+        ("FIBER_SESSION_ID".into(), "s_stale".into()),
+    ]);
+    assert_eq!(variables.names, ["FIBER_SESSION_ID".to_owned()]);
 }
 
 /// How long a driven turn may take before the test fails naming the

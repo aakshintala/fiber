@@ -30,6 +30,39 @@ use support::group::alive;
 #[path = "../../tests/support/sandbox_home.rs"]
 mod sandbox_home;
 
+#[cfg(target_os = "macos")]
+#[test]
+fn confined_child_receives_its_explicit_session_id() {
+    let dir = fakes::TempDir::new("fiber-confined-session-id");
+    let session_id = contract::SessionId("s_0123456789abcdef".into());
+    let ran = super::execute_confined_with_session(
+        std::path::Path::new("/bin/sh"),
+        "printf '%s\\n' \"$FIBER_SESSION_ID\"",
+        dir.path(),
+        Some(Duration::from_secs(10)),
+        FakeClock::new().as_ref(),
+        &CancelToken::new(),
+        &Recorder::default(),
+        MovePolicy::Stay,
+        None,
+        None,
+        None,
+        alive,
+        std::path::Path::new("ps"),
+        "(version 1)\n(allow default)",
+        &[],
+        Some(&session_id),
+    )
+    .unwrap();
+    let super::Ran::Finished(finished, _) = ran else {
+        panic!("confined echo should finish in the foreground");
+    };
+    let super::Kept::Whole(bytes) = finished.output else {
+        panic!("short confined output should stay in memory");
+    };
+    assert_eq!(bytes, b"s_0123456789abcdef\n");
+}
+
 #[test]
 fn bump_advances_the_sequence() {
     let mut inner = Inner::default();
