@@ -467,22 +467,35 @@ fn a_resumed_session_writes_one_status_for_its_history() {
     .unwrap();
     let finished = run(resumed);
     let (mut lines, seen) = statuses_until(lines, |_| true);
+    assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].payload["name"], "say hi");
     assert_eq!(seen[0].payload["turns"], 1);
     assert_eq!(seen[0].payload["state"], "idle");
+    let first_expiry = seen[0].payload["cache_expires"].clone();
     drop(inbox);
     Deadline::after(DEADLINE)
         .recv(&finished)
         .expect("the loop ended with its inbox")
         .unwrap();
-    // One status for the whole history, and none after it.
+    let (mut lines, next) = statuses_until(lines, move |line| {
+        line.payload["cache_expires"] != first_expiry
+    });
+    assert_eq!(next.len(), 1, "the resumed process writes one fresh status");
+    let second_expiry = &next[0].payload["cache_expires"];
+    // Resume starts a new status observer, whose cache expiry differs from
+    // the first process; after that status, no further status is written.
     loop {
         match lines.try_recv() {
-            Ok(Some(line)) => assert_ne!(
-                line.kind(),
-                EventKind::SessionStatus,
-                "only one status for the whole history"
-            ),
+            Ok(Some(line)) => {
+                if line.kind() == EventKind::SessionStatus {
+                    assert_ne!(
+                        &line.payload["cache_expires"],
+                        second_expiry,
+                        "no status follows the resumed process's status"
+                    );
+                    panic!("unexpected additional session_status");
+                }
+            }
             Ok(None) => break,
             Err(e) => panic!("the resumed watcher failed: {e}"),
         }
