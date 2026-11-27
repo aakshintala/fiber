@@ -509,3 +509,6 @@ crates/provider/tests/anthropic.rs:1689-1690	fiber-4975	plan	2026-11-27T06:26:26
 crates/provider/tests/gemini.rs:43-44	fiber-4975	plan	2026-11-27T06:26:26Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4975-lua-empty-properties	
 docs/extensions.md:443-444	fiber-4975	plan	2026-11-27T06:26:26Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4975-lua-empty-properties	
 docs/extensions.md:483-484	fiber-4975	plan	2026-11-27T06:26:26Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4975-lua-empty-properties	
+crates/tui/src/rules_view_tests.rs	fiber-4584	plan	2026-11-27T06:33:29Z	roundhouse-7010-plus-1:/home/aakshintala	
+crates/tui/src/tools_view_tests.rs	fiber-4584	plan	2026-11-27T06:33:29Z	roundhouse-7010-plus-1:/home/aakshintala	
+crates/tui/src/login_view_tests.rs	fiber-4584	plan	2026-11-27T06:33:29Z	roundhouse-7010-plus-1:/home/aakshintala	
