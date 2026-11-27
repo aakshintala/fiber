@@ -9,10 +9,10 @@
 # its size printed beside the head's; the base size never fails the script.
 # BASE_CACHED=true means the workflow restored the base binary and its
 # checksum into $RUNNER_TEMP/release/cache; anything else builds the base in
-# a git worktree, reusing this checkout's target directory. A base that does
-# not build does not fail the script: BASE_MATCHED_KEY, the cache key the
-# workflow restored under (release-musl-<sha>, empty when none matched), then
-# names the nearest first-parent ancestor of the base with a stored binary,
+# a git worktree with its own warm target directory, separate from the head.
+# A base that does not build does not fail the script: BASE_MATCHED_KEY, the
+# cache key the workflow restored under (release-musl-<sha>, empty when none
+# matched), then names the nearest first-parent ancestor of the base with a
 # which stands in as the base. With none, the base comparison is skipped.
 # Either way the line "base <sha> does not build" goes to stdout and to
 # $GITHUB_STEP_SUMMARY, and only a failed head build or a head over the
@@ -38,13 +38,14 @@ base_commit=${1:-}
 out="${RUNNER_TEMP:?}/release"
 top=$PWD
 
-# Builds the checkout in the current directory into the shared target
+# Builds the checkout in the current directory into the selected target
 # directory and writes the stripped binary to $1. Each step is chained, so a
 # failed build fails the function even where errexit does not apply.
 build_fiber() {
-  build --bin fiber &&
+  local target_dir=$2
+  build "$target_dir" --bin fiber &&
     mkdir -p "${1%/*}" &&
-    strip -o "$1" "$top/target/$target/release/fiber"
+    strip -o "$1" "$target_dir/$target/release/fiber"
 }
 
 # Prints $* and adds it to the job summary.
@@ -75,8 +76,8 @@ size() {
 }
 
 head_sha=$(git rev-parse --short HEAD)
-# The head is stripped out of target/ before any base build overwrites it.
-build_fiber "$out/head/fiber"
+# The head is copied out of its target directory before the base build.
+build_fiber "$out/head/fiber" "$top/target"
 head_size=$(size "$out/head/fiber")
 read -r head_bytes head_mib <<<"$head_size"
 echo "release-size: head $head_sha fiber is $head_bytes bytes ($head_mib MiB); the limit is $limit bytes"
@@ -104,7 +105,7 @@ else
         cd "$worktree" &&
           rustup toolchain install &&
           rustup target add "$target" &&
-          build_fiber "$out/base/fiber"
+          build_fiber "$out/base/fiber" "$top/target/base"
       ); }; then
       rm -f "$out/base/fiber"
       ancestor=${BASE_MATCHED_KEY:-}
