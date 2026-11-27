@@ -317,3 +317,4 @@ crates/main/tests/delegation/ask.rs:3502-3505	fiber-4965	plan	2026-11-27T03:10:5
 crates/main/tests/delegation/ask.rs:3551-3554	fiber-4965	plan	2026-11-27T03:10:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4965-plan	
 crates/main/tests/delegation/ask.rs:3801-3801	fiber-4965	plan	2026-11-27T03:10:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4965-plan	
 crates/main/tests/delegation/ask.rs:3848-3851	fiber-4965	plan	2026-11-27T03:10:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4965-plan	
+crates/loop/src/lib.rs	fiber-4977	plan	2026-11-27T03:24:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
