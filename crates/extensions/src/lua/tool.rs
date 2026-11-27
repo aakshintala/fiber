@@ -306,11 +306,11 @@ fn normalize_schema_positions(schema: &mut Value) {
                 *value = Value::Object(serde_json::Map::new());
             }
             normalize_schema_positions(value);
-        } else if SCHEMA_ARRAY_KEYWORDS.contains(&keyword.as_str()) {
-            if let Value::Array(items) = value {
-                for item in items {
-                    normalize_schema_positions(item);
-                }
+        } else if SCHEMA_ARRAY_KEYWORDS.contains(&keyword.as_str())
+            && let Value::Array(items) = value
+        {
+            for item in items {
+                normalize_schema_positions(item);
             }
         }
     }
