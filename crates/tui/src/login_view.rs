@@ -283,6 +283,8 @@ pub(crate) struct Login {
     mode: Mode,
     /// What the last action said, shown below the rows.
     said: Vec<String>,
+    /// Whether this login has successfully stored a credential.
+    stored: bool,
 }
 
 /// The note with the carried mask notes under it.
@@ -321,6 +323,7 @@ impl Login {
             top: 0,
             mode: Mode::Rows,
             said,
+            stored: false,
         };
         // Focus opens on the first target; with none it stays at 0.
         login.selected = login
@@ -601,6 +604,11 @@ impl Login {
         (framed, joins)
     }
 
+    /// Whether this login has stored a credential successfully.
+    pub(crate) fn stored(&self) -> bool {
+        self.stored
+    }
+
     /// Whether the login's final step stored successfully.
     pub(crate) fn ended_successfully(&self) -> bool {
         matches!(
@@ -866,6 +874,7 @@ impl Login {
                     // presence gaps on this same ticket before the
                     // reviewer.
                     Ok(_) => {
+                        self.stored = true;
                         self.mode = Mode::Preparing(Preparing {
                             ticket,
                             name,
@@ -1221,6 +1230,7 @@ impl Login {
         };
         match ctx.seam.store_key(&name, label.as_deref(), secret) {
             Ok(_) => {
+                self.stored = true;
                 if kind == LoginKind::Secret {
                     self.mode = Mode::Ended(Ended {
                         name,
