@@ -20,8 +20,7 @@ impl Loop {
     /// gone, then, while jobs still run, the ending notice and their ends
     /// (`docs/invocation.md`, "Lifecycle"; `docs/tools.md`, "Background jobs").
     pub fn run(mut self) -> crate::Ran {
-        let status = status::spawn(&self);
-        self.status_tap = status.as_ref().map(status::Status::tap);
+        let mut status = None;
         let result = (|| {
             let (orphans, backfill, settings) = self.staged_orphans.take();
             self.mark_orphans(orphans)?;
@@ -31,6 +30,10 @@ impl Loop {
                 }
             }
             self.resumed_label(settings)?;
+            // Fold the whole resume tail as history before the status
+            // observer begins emitting changes for this process.
+            status = status::spawn(&self);
+            self.status_tap = status.as_ref().map(status::Status::tap);
             loop {
                 match self.turn()? {
                     Some(_) => {}
