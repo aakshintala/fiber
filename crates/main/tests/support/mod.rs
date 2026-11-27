@@ -1036,7 +1036,14 @@ impl DetachedHub {
             Ok(Ok(status)) => panic!("detached hub shell exited with {status}"),
             Ok(Err(error)) => panic!("could not reap detached hub shell {group}: {error}"),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                let _ = fakes::kill_group(group, "KILL");
+                match fakes::kill_group(group, "KILL") {
+                    Ok(true) => {}
+                    Ok(false) if !fakes::group_alive(group) => {}
+                    Ok(false) => panic!("could not kill detached hub shell group {group}"),
+                    Err(error) => {
+                        panic!("could not kill detached hub shell group {group}: {error}")
+                    }
+                }
                 panic!("waited past the deadline for detached hub shell {group} to exit");
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -1050,7 +1057,9 @@ impl DetachedHub {
             .trim()
             .parse::<u32>()
             .unwrap_or_else(|error| panic!("invalid detached hub pidfile {pidfile:?}: {error}"));
-        let _ = fs::remove_file(&pidfile);
+        fs::remove_file(&pidfile).unwrap_or_else(|error| {
+            panic!("could not remove detached hub pidfile {pidfile:?}: {error}")
+        });
         assert!(hub_pid > 1, "detached hub pid {hub_pid} is not signalable");
         assert_eq!(
             process_group_id(hub_pid),
@@ -1073,10 +1082,24 @@ impl DetachedHub {
             return;
         }
         let cleanup = self.deadline.cleanup_phase();
-        let _ = fakes::kill_group(self.group, "TERM");
+        // If TERM does not remove the group, the bounded exit wait below
+        // escalates to KILL and reports a group that remains alive.
+        fakes::kill_group(self.group, "TERM").unwrap_or_else(|error| {
+            panic!(
+                "could not send TERM to detached hub group {}: {error}",
+                self.group
+            )
+        });
         let grace = cleanup.within(cleanup.left() / 4);
         if !wait_for_group_exit(self.group, grace) {
-            let _ = fakes::kill_group(self.group, "KILL");
+            // If KILL does not remove the group, assert_group_exits reports
+            // the live members after the cleanup deadline.
+            fakes::kill_group(self.group, "KILL").unwrap_or_else(|error| {
+                panic!(
+                    "could not send KILL to detached hub group {}: {error}",
+                    self.group
+                )
+            });
             assert_group_exits(self.group, cleanup);
         }
         if let Some(watchdog) = self.watchdog.take() {
@@ -1101,7 +1124,13 @@ fn wait_for_group_exit(group: u32, deadline: Deadline) -> bool {
             return false;
         }
         let (_never, wait) = mpsc::channel::<()>();
-        let _ = deadline.within(Duration::from_millis(10)).recv(&wait);
+        // The empty channel's timeout is the expected end of this probe slice.
+        match deadline.within(Duration::from_millis(10)).recv(&wait) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the process-group exit probe channel disconnected")
+            }
+        }
     }
 }
 
