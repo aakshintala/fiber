@@ -180,6 +180,7 @@ fn session(
     let images = super::session_images(fiber.clone(), &artifacts, timing.clone());
     let (tools, _infos, _driver, _forget, images) = super::builtin_timed(
         fiber,
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &artifacts,

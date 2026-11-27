@@ -17,13 +17,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, KillGroup, PIXEL, PIXEL_BASE64, SENT, Setup, StdoutRun, TOOL_NAMES, function_call,
-    git, hello, holds_marker, is_status, read_kinds, spawn_watched, stream, text_reply, tool_names,
+    Deadline, HubProc, KillGroup, PIXEL, PIXEL_BASE64, SENT, SessionGuard, Setup, StdoutRun,
+    TOOL_NAMES, connect_hub, function_call, git, hello, holds_marker, is_status, read_kinds,
+    spawn_watched, stream, subscribe_as, text_reply, tool_names, until,
 };
 
 impl Setup {
@@ -155,6 +157,11 @@ impl Setup {
     /// A watchdog beside it kills that group if this process dies first.
     #[track_caller]
     fn tools_run(&self, args: &[&str]) -> StdoutRun {
+        self.tools_run_with_session_env(args, None)
+    }
+
+    #[track_caller]
+    fn tools_run_with_session_env(&self, args: &[&str], session_env: Option<&str>) -> StdoutRun {
         let home = self.home();
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -169,6 +176,9 @@ impl Setup {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if let Some(value) = session_env {
+            command.env("FIBER_SESSION_ID", value);
+        }
         let (child, watchdog) = spawn_watched(&mut command);
         let group = child.id();
         let guard = KillGroup(group);
@@ -202,6 +212,7 @@ impl Setup {
         args: &[&str],
         when: impl Fn(&[Value]) -> bool + Send + 'static,
         act: impl FnOnce(),
+        session_env: Option<&str>,
     ) -> StdoutRun {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -216,6 +227,9 @@ impl Setup {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if let Some(value) = session_env {
+            command.env("FIBER_SESSION_ID", value);
+        }
         let (mut child, watchdog) = spawn_watched(&mut command);
         let group = child.id();
         let guard = KillGroup(group);
@@ -1101,6 +1115,167 @@ fn a_configured_read_only_command_skips_review() {
 }
 
 #[test]
+fn a_shell_child_replaces_a_stale_caller_session_id() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "shell_0",
+            "shell",
+            &json!({"command": "printf '%s\\n' \"$FIBER_SESSION_ID\""}),
+        )]),
+        text_reply("allow"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_defaults(&server);
+    with_reviewer(&setup);
+
+    let run = setup.tools_run_with_session_env(&["ask", "print the session id"], Some("s_stale"));
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let expected = run.session_id();
+    assert!(expected.starts_with("s_"));
+    // Session IDs are `s_` plus 16 lowercase hex digits (`docs/invocation.md`, “Commands and flags”).
+    assert_eq!(expected.len(), 18);
+    let completed = run.first("tool_call_completed");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed["payload"]["content"][0]["text"],
+        format!("{expected}\nExit code 0.\n")
+    );
+    assert!(
+        run.first("session_started")["payload"]["variables"]["names"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|name| name == "FIBER_SESSION_ID")
+    );
+}
+
+#[test]
+fn a_rewound_session_shell_child_receives_the_new_session_id() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([
+        hello(),
+        hello(),
+        stream(&[function_call(
+            "shell_0",
+            "shell",
+            &json!({"command": "printf '%s\\n' \"$FIBER_SESSION_ID\""}),
+        )]),
+        text_reply("allow"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_defaults(&server);
+    with_reviewer(&setup);
+
+    let hub = Arc::new(Mutex::new(None::<HubProc>));
+    let (client, greeting) = connect_hub(&setup, &hub);
+    assert_eq!(greeting["kind"], "hub_hello");
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    client.send(
+        &serde_json::to_string(&json!({
+            "id": "start_session",
+            "command": "start",
+            "args": {"workspace": workspace, "content": [{"type": "text", "text": "one"}]}
+        }))
+        .unwrap(),
+    );
+    let started = until(&client, "the start acknowledgement", |line| {
+        line["payload"].get("command_id").and_then(Value::as_str) == Some("start_session")
+    });
+    let old_id = started.last().unwrap()["payload"]["result"]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    subscribe_as(&client, "subscribe_old", &old_id);
+    until(&client, "the original session's first turn", |line| {
+        line["kind"] == "turn_completed" && line["session_id"] == old_id
+    });
+
+    client.send(
+        &serde_json::to_string(&json!({
+            "id": "prompt_old",
+            "session_id": old_id,
+            "command": "prompt",
+            "args": {"content": [{"type": "text", "text": "two"}]}
+        }))
+        .unwrap(),
+    );
+    until(&client, "the original prompt acknowledgement", |line| {
+        line["payload"].get("command_id").and_then(Value::as_str) == Some("prompt_old")
+    });
+    until(&client, "the original session's second turn", |line| {
+        line["kind"] == "turn_completed" && line["session_id"] == old_id
+    });
+
+    client.send(
+        &serde_json::to_string(&json!({
+            "id": "rewind_session",
+            "session_id": old_id,
+            "command": "rewind",
+            "args": {}
+        }))
+        .unwrap(),
+    );
+    let rewound = until(&client, "the rewind acknowledgement", |line| {
+        line["payload"].get("command_id").and_then(Value::as_str) == Some("rewind_session")
+    });
+    let new_id = rewound.last().unwrap()["payload"]["result"]["new_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let new_started = until(&client, "the rewound session start", |line| {
+        line["kind"] == "session_started" && line["session_id"] == new_id
+    });
+    assert!(
+        new_started.last().unwrap()["payload"]["variables"]["names"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|name| name == "FIBER_SESSION_ID")
+    );
+
+    client.send(
+        &serde_json::to_string(&json!({
+            "id": "prompt_rewound",
+            "session_id": new_id,
+            "command": "prompt",
+            "args": {"content": [{"type": "text", "text": "print the session id"}]}
+        }))
+        .unwrap(),
+    );
+    until(&client, "the rewound prompt acknowledgement", |line| {
+        line["payload"].get("command_id").and_then(Value::as_str) == Some("prompt_rewound")
+    });
+    let completed = until(&client, "the rewound shell result", |line| {
+        line["kind"] == "tool_call_completed" && line["session_id"] == new_id
+    });
+    assert_eq!(
+        completed.last().unwrap()["payload"]["content"][0]["text"],
+        format!("{new_id}\nExit code 0.\n")
+    );
+
+    client.send(
+        &serde_json::to_string(&json!({
+            "id": "close_rewound",
+            "session_id": new_id,
+            "command": "close",
+            "args": {}
+        }))
+        .unwrap(),
+    );
+    until(&client, "the rewound session close", |line| {
+        line["kind"] == "fiber_exited" && line["session_id"] == new_id
+    });
+    guard.wait_gone();
+    drop(client);
+    hub.lock().unwrap().take().unwrap().kill_and_wait();
+}
+
+#[test]
 fn a_configured_flag_on_a_built_in_command_skips_review() {
     // `git status` has a flag list, so the person's same-named entry merges:
     // `git status --long` declares `reads` and never reaches a reviewer
@@ -1880,7 +2055,11 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
     // final reply and the ending notice. One plain command, so a standing
     // rule can match it.
     let script = setup.workspace().join("wait.sh");
-    fs::write(&script, "read -r _ < ready\necho done\n").unwrap();
+    fs::write(
+        &script,
+        "printf '%s\\n' \"$FIBER_SESSION_ID\" > session-id\nread -r _ < ready\necho done\n",
+    )
+    .unwrap();
     // The job runs in its own session and group, outside fiber's: this
     // guard kills it if the test fails, and if this process dies before
     // the job opens the FIFO, which then has no writer.
@@ -1921,6 +2100,7 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
                 })
         },
         || std::io::Write::write_all(&mut &release, b"\n").unwrap(),
+        Some("s_stale"),
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -1988,6 +2168,11 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
     let completed = &lines[35];
     assert_eq!(completed["payload"]["job_id"], job_id);
     assert_eq!(completed["payload"]["status"], "completed");
+    let owner_id = run.first("session_started")["session_id"].as_str().unwrap();
+    assert_eq!(
+        fs::read_to_string(setup.workspace().join("session-id")).unwrap(),
+        format!("{owner_id}\n")
+    );
     job_guard.stand_down(setup.deadline.cleanup_phase());
     assert!(completed.get("action_id").is_none_or(Value::is_null));
     assert_eq!(server.requests().len(), 4);
@@ -2009,7 +2194,11 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
     // the final reply and the ending notice. Both lines go out in one
     // write, so they are one batch.
     let script = setup.workspace().join("watch.sh");
-    fs::write(&script, "read -r _ < ready\nprintf 'one\\ntwo\\n'\n").unwrap();
+    fs::write(
+        &script,
+        "printf '%s\\n' \"$FIBER_SESSION_ID\" > session-id\nread -r _ < ready\nprintf 'one\\ntwo\\n'\n",
+    )
+    .unwrap();
     // The monitor runs in its own session and group, outside fiber's: this
     // guard kills it if the test fails, and if this process dies before
     // the monitor opens the FIFO, which then has no writer.
@@ -2054,6 +2243,7 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
                 })
         },
         || std::io::Write::write_all(&mut &release, b"\n").unwrap(),
+        Some("s_stale"),
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -2169,6 +2359,11 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
     let completed = &lines[ended_at];
     assert_eq!(completed["payload"]["job_id"], job_id);
     assert_eq!(completed["payload"]["status"], "completed");
+    let owner_id = run.first("session_started")["session_id"].as_str().unwrap();
+    assert_eq!(
+        fs::read_to_string(setup.workspace().join("session-id")).unwrap(),
+        format!("{owner_id}\n")
+    );
     job_guard.stand_down(setup.deadline.cleanup_phase());
     // The deltas left out above: all of this job's, inside its life, and
     // together exactly what it printed, so a missing or duplicated one fails.

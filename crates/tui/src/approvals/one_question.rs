@@ -109,14 +109,24 @@ impl OneQuestion {
     /// Handles a key on the one-question panel. `None` lets the screen
     /// behind it handle the key.
     pub(crate) fn on_key(&mut self, key: &Key) -> Option<PanelKey> {
+        if key.is_enter_or_space() && matches!(key, Key::Char(' ')) {
+            match self.kind {
+                Kind::MultiSelect if matches!(self.at, Row::Option(_)) => {
+                    self.toggle();
+                    return Some(PanelKey::Handled);
+                }
+                Kind::TextInput => {
+                    self.type_char(' ');
+                    return Some(PanelKey::Handled);
+                }
+                Kind::Confirm | Kind::Select | Kind::MultiSelect => {
+                    return Some(self.enter());
+                }
+            }
+        }
         match key {
             Key::Esc => return Some(PanelKey::Decline),
             Key::Enter => return Some(self.enter()),
-            Key::Char(' ') => match self.kind {
-                Kind::MultiSelect => self.toggle(),
-                Kind::TextInput => self.type_char(' '),
-                Kind::Confirm | Kind::Select => {}
-            },
             Key::Char(ch) => match self.kind {
                 // A digit chooses that option: it toggles a multi-choice
                 // option and moves the cursor to a confirm or select one,

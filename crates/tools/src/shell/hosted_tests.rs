@@ -83,8 +83,10 @@ fn a_hosted_foreground_call_streams_and_leaves_no_local_group() {
         stopped: None,
         adopted: None,
     });
-    let shell =
-        Shell::new(std::env::temp_dir(), Arc::new(fakes::clock::SystemClock)).with_host(host);
+    let session_id = contract::SessionId("s_0123456789abcdef".into());
+    let shell = Shell::new(std::env::temp_dir(), Arc::new(fakes::clock::SystemClock))
+        .with_session_id(session_id.clone())
+        .with_host(host);
     let before = support::group::live().len();
     let (done, result) = mpsc::channel();
     std::thread::spawn(move || {
@@ -98,6 +100,7 @@ fn a_hosted_foreground_call_streams_and_leaves_no_local_group() {
     });
     let (spec, events) = Deadline::after(Duration::from_secs(10)).recv_or_fail(&rx, "host start");
     assert_eq!(spec.timeout_ms, Some(1234));
+    assert_eq!(spec.env, vec![("FIBER_SESSION_ID".into(), session_id.0)]);
     assert_eq!(support::group::live().len(), before);
     events
         .send(HostEvent::Output {
@@ -204,7 +207,7 @@ fn cancellation_stops_the_host_once_without_a_local_signal() {
         }))
         .expect("exit");
     let _ = Deadline::after(Duration::from_secs(10)).recv_or_fail(&result, "cancelled end");
-    // docs/tools.md, "Stopping a command": later cancels never start a second stop.
+    // `docs/tools.md`, "Stopping a command": later cancels never start a second stop.
     assert_eq!(*host.stops.lock().expect("stops"), vec![spec.id]);
 }
 
@@ -248,7 +251,7 @@ fn a_background_call_adopts_after_job_started_and_keeps_writing_its_file() {
         lines,
     } = Deadline::after(Duration::from_secs(10)).recv_or_fail(&adopts, "adopt");
     assert_eq!((errors, lines), (None, false), "a plain background job");
-    // docs/tools.md, "The keeper": adoption follows the durable job start.
+    // `docs/tools.md`, "The keeper": adoption follows the durable job start.
     assert_eq!(
         jobs.started()
             .iter()

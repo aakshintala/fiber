@@ -905,15 +905,21 @@ impl App {
         Some(Effect::None)
     }
 
+    fn clear_first_run_on_save(&mut self) {
+        if self.login_view().is_some_and(Login::stored) {
+            self.first_run_no_credential = false;
+        }
+    }
+
     /// Carries out what the view asked.
     fn config_act(&mut self, act: Act) -> Effect {
         match act {
             Act::Stay => {
+                self.clear_first_run_on_save();
                 let finished = self.config_views.automatic_login
                     && self.login_view().is_some_and(Login::ended_successfully);
                 if finished {
                     self.config_views.automatic_login = false;
-                    self.first_run_no_credential = false;
                     self.config_views.open = None;
                     if self.home.launch.model.is_none() {
                         self.open_model_picker(crate::model_picker::Mode::Choose);
@@ -1011,6 +1017,7 @@ impl App {
                 if let Some(Open::Login(login)) = &mut self.config_views.open {
                     login.wait_reviewer(ticket, name);
                 }
+                self.clear_first_run_on_save();
                 Effect::None
             }
             Act::McpReconnect(server) => self.send_mcp_driver(
@@ -1081,10 +1088,12 @@ impl App {
     /// for another ticket changes nothing. Returns the URL to open, only
     /// for `Open` on the waiting ticket.
     pub(crate) fn on_login(&mut self, ticket: LoginTicket, step: LoginStep) -> Option<String> {
-        match &mut self.config_views.open {
+        let url = match &mut self.config_views.open {
             Some(Open::Login(login)) => login.step(ticket, step),
-            _ => None,
-        }
+            _ => return None,
+        };
+        self.clear_first_run_on_save();
+        url
     }
 
     /// The open logout view, in any mode: what the swapped view draws in

@@ -438,14 +438,38 @@ fn esc_closes_and_moving_clears_what_was_said() {
 }
 
 #[test]
-fn clicking_selects_the_row_enter_acts_on() {
+fn clicking_selects_and_acts_on_the_row() {
     let (fake, mut mcp) = opened(&[failed("down"), needs_login("remote")]);
     let context = context(&fake);
-    mcp.click(Spot::Row(1), &context);
-    assert!(
-        matches!(mcp.key(&Key::Enter, &context), Act::McpLogin(name) if name == "remote"),
-        "enter acts on the clicked row"
-    );
+    assert!(matches!(
+        mcp.click(Spot::Row(1), &context),
+        Act::McpLogin(name) if name == "remote"
+    ));
+}
+
+#[test]
+fn space_dispatches_enter_on_actionable_rows_and_stays_inert_elsewhere() {
+    let (fake, mut failed_row) = opened(&[failed("down")]);
+    let ctx = context(&fake);
+    assert!(matches!(
+        failed_row.key(&Key::Char(' '), &ctx),
+        Act::McpReconnect(name) if name == "down"
+    ));
+
+    let (fake, mut login_row) = opened(&[needs_login("remote")]);
+    let ctx = context(&fake);
+    assert!(matches!(
+        login_row.key(&Key::Char(' '), &ctx),
+        Act::McpLogin(name) if name == "remote"
+    ));
+
+    let (fake, mut ready_row) = opened(&[not_started("new"), ready("up")]);
+    let ctx = context(&fake);
+    assert!(matches!(ready_row.key(&Key::Char(' '), &ctx), Act::Stay));
+    assert!(matches!(ready_row.key(&Key::Down, &ctx), Act::Stay));
+    assert!(matches!(ready_row.key(&Key::Char(' '), &ctx), Act::Stay));
+    assert!(matches!(ready_row.key(&Key::Down, &ctx), Act::Stay));
+    assert!(matches!(ready_row.key(&Key::Char(' '), &ctx), Act::Stay));
 }
 
 /// The wheel shifts the visible rows three a step, keeping a visible

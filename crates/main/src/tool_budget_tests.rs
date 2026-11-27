@@ -60,6 +60,7 @@ fn builtin_definitions() -> Vec<ToolDefinition> {
     );
     let (tools, _infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
+        contract::SessionId("s_test".into()),
         &root.path().join("home"),
         root.path(),
         &root.path().join("artifacts"),

@@ -51,6 +51,7 @@ type SessionTools = (
 )]
 pub(crate) fn builtin(
     fiber: PathBuf,
+    session_id: contract::SessionId,
     home: &Path,
     workspace: &Path,
     artifacts: &Path,
@@ -72,6 +73,7 @@ pub(crate) fn builtin(
     let images = session_images(fiber.clone(), artifacts, None);
     builtin_timed(
         fiber,
+        session_id,
         home,
         workspace,
         artifacts,
@@ -117,6 +119,7 @@ pub(crate) fn session_images(
 )]
 pub(crate) fn builtin_timed(
     fiber: PathBuf,
+    session_id: contract::SessionId,
     home: &Path,
     workspace: &Path,
     artifacts: &Path,
@@ -158,6 +161,7 @@ pub(crate) fn builtin_timed(
     // the built-in list; the driver runs the person's own command and is
     // not classified for review, so it stays unlisted.
     let mut shell = tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock))
+        .with_session_id(session_id)
         .with_search(fiber.clone())
         .with_jobs(moves)
         .with_artifacts(artifacts.to_path_buf())

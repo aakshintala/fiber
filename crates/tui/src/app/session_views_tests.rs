@@ -1587,6 +1587,42 @@ fn down_then_enter_opens_the_second_item_and_closes_the_list() {
 }
 
 #[test]
+fn space_opens_the_selected_delegate_and_all_delegates_row() {
+    for view in [SessionView::Delegates, SessionView::AllDelegates] {
+        let mut app = attached(80, 24);
+        start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
+        if view == SessionView::Delegates {
+            open_delegates(&mut app);
+            app.on_key(Key::Down, now());
+        } else {
+            open_all_delegates(&mut app);
+        }
+        let (before, _) = screen(&app, 80, 24);
+        assert!(before.contains("task j_1"), "{before}");
+        assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+        assert!(app.item_open());
+        assert!(!app.session_view_open());
+        assert_eq!(
+            app.item_view().map(|view| view.description),
+            Some("task j_1".to_owned())
+        );
+    }
+
+    let mut app = attached(80, 24);
+    start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
+    open_all_delegates(&mut app);
+    app.on_key(Key::Down, now());
+    app.on_key(Key::Down, now());
+    assert_eq!(selected(&app), 2, "the blank tail follows delegate rows");
+    let (before, _) = screen(&app, 80, 24);
+    assert!(before.contains("a row opens that item's view"), "{before}");
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert!(!app.item_open());
+    assert!(app.session_view_open());
+    assert_eq!(selected(&app), 2);
+}
+
+#[test]
 fn clicking_a_delegate_row_opens_it_and_a_blank_tail_only_selects() {
     let mut app = attached(80, 24);
     start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
@@ -1676,6 +1712,36 @@ fn an_empty_list_says_nothing_running_and_enter_does_nothing() {
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert!(app.session_view_open());
     assert!(!app.item_open());
+}
+
+#[test]
+fn space_opens_the_selected_job_and_blank_tail_is_inert() {
+    let mut app = attached(80, 24);
+    start_job(&mut app, "j_1");
+    open_jobs(&mut app);
+    app.on_key(Key::Down, now());
+    let (before, _) = screen(&app, 80, 24);
+    assert!(before.contains("task j_1"), "{before}");
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert!(app.item_open());
+    assert!(!app.session_view_open());
+    assert_eq!(
+        app.item_view().map(|view| view.description),
+        Some("task j_1".to_owned())
+    );
+
+    let mut app = attached(80, 24);
+    start_job(&mut app, "j_1");
+    open_jobs(&mut app);
+    app.on_key(Key::Down, now());
+    app.on_key(Key::Down, now());
+    assert_eq!(selected(&app), 2, "the blank tail follows the job row");
+    let (before, _) = screen(&app, 80, 24);
+    assert!(before.contains("a row opens that item's view"), "{before}");
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert!(!app.item_open());
+    assert!(app.session_view_open());
+    assert_eq!(selected(&app), 2);
 }
 
 #[test]

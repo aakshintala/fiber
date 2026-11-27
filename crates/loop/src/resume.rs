@@ -874,7 +874,7 @@ impl Loop {
                 // Armed with the decision line: a shutdown before it
                 // writes nothing more, so the next resume settles again.
                 // The decision is always `deny`: a hook still never
-                // approves (`docs/extensions.md`, "`before_tool`").
+                // approves (`docs/extensions.md`, "Hooks").
                 let cancel = Arc::clone(&self.cancel);
                 let answered = cancel.commit(Commit::Arm, || {
                     self.decided(

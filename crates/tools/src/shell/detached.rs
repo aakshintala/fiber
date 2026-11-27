@@ -116,12 +116,24 @@ impl StopControl {
 /// one shared offset. The leader identity is read before it is admitted to
 /// the registry. If a reaper thread cannot start, this call waits for the
 /// child itself, then returns the same completion channel so the sole child handle is never dropped without being waited.
+#[cfg(test)]
 pub(super) fn launch(
+    dir: &Path,
+    pid: u32,
+    program: &Path,
+    command: &str,
+    workdir: &Path,
+) -> Result<Started, io::Error> {
+    launch_with_session(dir, pid, program, command, workdir, None)
+}
+
+pub(super) fn launch_with_session(
     dir: &Path,
     fiber_pid: u32,
     program: &Path,
     command: &str,
     workdir: &Path,
+    session_id: Option<&contract::SessionId>,
 ) -> Result<Started, io::Error> {
     // The file name is always UTF-8, so only the directory can refuse
     // this: a log with no path the model can read fails before spawn, so
@@ -141,6 +153,9 @@ pub(super) fn launch(
     let err = log.try_clone()?;
     cmd.stdout(log).stderr(err);
     scrub_env(&mut cmd);
+    if let Some(id) = session_id {
+        cmd.env("FIBER_SESSION_ID", id.0.clone());
+    }
     support::group::detach(&mut cmd, false);
     let child = match cmd.spawn() {
         Ok(child) => child,

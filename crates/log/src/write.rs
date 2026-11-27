@@ -50,6 +50,7 @@ pub struct Log {
     clock: Arc<dyn Clock>,
     /// The session directory, copied out of `inner` so [`Log::dir`] can lend it.
     dir: PathBuf,
+    session_id: SessionId,
     /// The diagnostic writer timing appends, installed once per process.
     diag: OnceLock<Arc<Diag>>,
     /// The rate fold over the events [`Log::open`] replayed. No append
@@ -491,7 +492,7 @@ impl Log {
 
     /// Writes `bytes` to the file `name` in the session's `artifacts/`,
     /// replacing any file of that name, and returns its path relative to the
-    /// session directory (`docs/events.md`, "Conventions") and its absolute
+    /// session directory (`docs/events.md`, "The session directory") and its absolute
     /// path. A name that is not one plain file name is refused.
     pub fn write_artifact(&self, name: &str, bytes: &[u8]) -> Result<(String, PathBuf), Error> {
         let dir = self.lock().dir.join(ARTIFACTS);
@@ -507,9 +508,14 @@ impl Log {
     }
 
     /// The session directory: what an `image` part's path is relative to
-    /// (`docs/events.md`, "Conventions").
+    /// (`docs/events.md`, "The session directory").
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// The id of the session this log belongs to.
+    pub fn session_id(&self) -> &SessionId {
+        &self.session_id
     }
 
     /// How many fsyncs this log has made, counted where they are made
@@ -534,6 +540,7 @@ impl Log {
     fn from_parts(inner: Inner, clock: Arc<dyn Clock>) -> Self {
         Self {
             dir: inner.dir.clone(),
+            session_id: inner.session_id.clone(),
             offsets: Arc::clone(&inner.offsets),
             inner: Mutex::new(inner),
             clock,
@@ -806,8 +813,8 @@ thread_local! {
 }
 
 /// How many full parses the open path has made on the calling thread
-/// (`docs/testing.md`, "a test of how much work something does counts the
-/// work"). The counted-work test reads it before and after `Log::open`.
+/// (`docs/testing.md`, "What a test asserts"). The counted-work test
+/// reads it before and after `Log::open`.
 #[cfg(test)]
 pub(crate) fn full_parses() -> usize {
     FULL_PARSES.with(|count| count.get())

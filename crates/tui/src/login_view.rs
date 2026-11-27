@@ -283,6 +283,8 @@ pub(crate) struct Login {
     mode: Mode,
     /// What the last action said, shown below the rows.
     said: Vec<String>,
+    /// Whether this login has successfully stored a credential.
+    stored: bool,
 }
 
 /// The note with the carried mask notes under it.
@@ -321,6 +323,7 @@ impl Login {
             top: 0,
             mode: Mode::Rows,
             said,
+            stored: false,
         };
         // Focus opens on the first target; with none it stays at 0.
         login.selected = login
@@ -601,6 +604,11 @@ impl Login {
         (framed, joins)
     }
 
+    /// Whether this login has stored a credential successfully.
+    pub(crate) fn stored(&self) -> bool {
+        self.stored
+    }
+
     /// Whether the login's final step stored successfully.
     pub(crate) fn ended_successfully(&self) -> bool {
         matches!(
@@ -657,7 +665,7 @@ impl Login {
         if *key == Key::Esc {
             return Act::Close;
         }
-        if *key == Key::Enter {
+        if key.is_enter_or_space() {
             if let Some(Item::Target(at)) = self.selected() {
                 return self.open_target(at);
             }
@@ -866,6 +874,7 @@ impl Login {
                     // presence gaps on this same ticket before the
                     // reviewer.
                     Ok(_) => {
+                        self.stored = true;
                         self.mode = Mode::Preparing(Preparing {
                             ticket,
                             name,
@@ -1166,7 +1175,7 @@ impl Login {
                 None => choices.models.len().saturating_sub(1),
                 Some(at) => crate::swapped::wrap_step(at, choices.models.len(), -1),
             });
-        } else if *key == Key::Enter {
+        } else if key.is_enter_or_space() {
             let pick = choices
                 .cursor
                 .and_then(|at| choices.models.get(at).cloned())
@@ -1221,6 +1230,7 @@ impl Login {
         };
         match ctx.seam.store_key(&name, label.as_deref(), secret) {
             Ok(_) => {
+                self.stored = true;
                 if kind == LoginKind::Secret {
                     self.mode = Mode::Ended(Ended {
                         name,
@@ -1328,7 +1338,11 @@ impl Login {
                 }
                 self.selected = at;
                 self.said.clear();
-                Act::Stay
+                if let Some(Item::Target(target)) = self.items.get(at) {
+                    self.open_target(*target)
+                } else {
+                    Act::Stay
+                }
             }
         }
     }
