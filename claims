@@ -182,8 +182,6 @@ crates/tui/src/settings_view.rs	fiber-4584	plan	2026-11-27T04:59:38Z	roundhouse-
 crates/tui/src/settings_view_tests.rs	fiber-4584	plan	2026-11-27T04:59:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/event_loop_settings_tests.rs	fiber-4584	plan	2026-11-27T04:59:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 docs/tui.md	fiber-4584	plan	2026-11-27T04:59:38Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
-crates/fakes/src/provider_server.rs	fiber-5007	plan	2026-11-27T05:19:54Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
-crates/fakes/src/provider_server_tests.rs	fiber-5007	plan	2026-11-27T05:19:54Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/lua/tool.rs	fiber-4980	plan	2026-11-27T05:45:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/lua/tool_tests.rs	fiber-4980	plan	2026-11-27T05:45:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-check-rules-by-path	fiber-5004	plan	2026-11-27T05:47:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
@@ -208,7 +206,6 @@ crates/main/tests/hub_daemon/hub_start_worktree.rs	fiber-4954	plan	2026-11-27T06
 crates/main/tests/screens/ask_user_form.rs	fiber-4954	plan	2026-11-27T06:11:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/session_turns/rewind.rs	fiber-4954	plan	2026-11-27T06:11:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/tool_calls/tools.rs	fiber-4954	plan	2026-11-27T06:11:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/delegation/delegates.rs	fiber-5007	plan	2026-11-27T06:18:29Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/tests/lua_tools.rs:91-92	fiber-4975	plan	2026-11-27T06:26:26Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4975-lua-empty-properties	
 crates/tui/src/rules_view_tests.rs	fiber-4584	plan	2026-11-27T06:33:29Z	roundhouse-7010-plus-1:/home/aakshintala	
 crates/tui/src/tools_view_tests.rs	fiber-4584	plan	2026-11-27T06:33:29Z	roundhouse-7010-plus-1:/home/aakshintala	
@@ -465,18 +462,6 @@ crates/tui/src/event_loop/attach_tests.rs:2049-2050	fiber-4974	plan	2026-11-27T0
 crates/tui/src/event_loop/attach_tests.rs:2157-2157	fiber-4974	plan	2026-11-27T07:42:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4974-plan	
 crates/tui/src/event_loop/attach_tests.rs:2176-2180	fiber-4974	plan	2026-11-27T07:42:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4974-plan	
 docs/invocation.md:1248-1248	fiber-4974	plan	2026-11-27T07:42:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4974-plan	
-docs/architecture.md	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/workflow.md	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/ci.md	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/testing.md	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/testing/fakes.md	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/support/src/deadline.rs	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/fakes/src/http_server.rs	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/fakes/src/http_server/request.rs	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/tests/support/mod.rs	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/tests/support/pty.rs	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/tests/providers/quota_fetch_session.rs	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-scripts/check	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/delegation/delegates.rs	fiber-4954	plan	2026-11-27T08:04:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/tui/src/logout_view_tests.rs	fiber-4584	plan	2026-11-27T08:31:31Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/mcp_view_tests.rs	fiber-4584	plan	2026-11-27T08:31:31Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
