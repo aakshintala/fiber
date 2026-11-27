@@ -109,6 +109,16 @@ fn home_line_builders_preserve_padding_alignment_and_cut_boundaries() {
 }
 
 #[test]
+fn m3b_wide_grapheme_at_boundary_stops_later_spans() {
+    let spans = [
+        ratatui::text::Span::raw("界"),
+        ratatui::text::Span::raw("later"),
+    ];
+
+    assert!(super::cut_home_spans(&spans, 1).is_empty());
+}
+
+#[test]
 fn remote_home_draws_an_unset_dim_chip_and_non_escaping_footer() {
     for typed in [false, true] {
         let mut app = home(80, 24);
