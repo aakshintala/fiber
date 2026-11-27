@@ -246,6 +246,25 @@ fn write(file: &Path, value: &Value) {
     fs::write(file, value.to_string()).unwrap();
 }
 
+fn write_home_config(setup: &Setup, supplied: &Value) {
+    let path = setup.home().join("config.json");
+    let mut config = serde_json::from_slice::<Value>(&fs::read(&path).unwrap())
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone();
+    for (key, value) in supplied.as_object().unwrap() {
+        config.insert(key.clone(), value.clone());
+    }
+    let mut model_lists = config
+        .remove("model_lists")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    model_lists.insert("models_dev".to_owned(), json!(false));
+    config.insert("model_lists".to_owned(), Value::Object(model_lists));
+    write(&path, &Value::Object(config));
+}
+
 /// A pseudo-terminal, opened through rustix's safe calls. The main side
 /// stays open while the run uses the terminal side.
 struct Terminal {
@@ -3477,9 +3496,21 @@ fn models_with_an_unknown_key_prints_its_notice_as_one_line() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
-    write(
-        &setup.home().join("config.json"),
-        &json!({"model": "fake/m", "frobnicate": 1}),
+    write_home_config(&setup, &json!({"model": "fake/m", "frobnicate": 1}));
+
+    let config_value = setup.run_with_stdin(&["config", "get", "model_lists.models_dev"], None);
+    assert_eq!(
+        config_value.code,
+        Some(0),
+        "stderr: {}",
+        config_value.stderr
+    );
+    assert_eq!(
+        config_value.stdout,
+        format!(
+            "false from {}\n",
+            setup.home().join("config.json").display()
+        )
     );
 
     let run = setup.run_with_stdin(&["models"], None);
