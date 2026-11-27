@@ -1606,18 +1606,22 @@ fn responder_calls_follow_request_arrival_order_without_overlap() {
     thread::spawn(move || {
         ignore_result(first.send(post(addr, b"first")));
     });
-    assert!(server.await_requests(1, Deadline::after(READ_WITHIN)));
-    let first_call = Deadline::after(READ_WITHIN).recv_or_fail(&calls_rx, "first responder call");
-    let first_result = Deadline::after(READ_WITHIN).recv_or_fail(&results_rx, "first response");
+    assert!(server.await_requests(1, Deadline::after(crate::MUST_SUCCEED_WITHIN)));
+    let first_call =
+        Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&calls_rx, "first responder call");
+    let first_result =
+        Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&results_rx, "first response");
     assert!(first_result.ends_with(b"ok"));
 
     let second = results_tx;
     thread::spawn(move || {
         ignore_result(second.send(post(addr, b"second")));
     });
-    assert!(server.await_requests(2, Deadline::after(READ_WITHIN)));
-    let second_call = Deadline::after(READ_WITHIN).recv_or_fail(&calls_rx, "second responder call");
-    let second_result = Deadline::after(READ_WITHIN).recv_or_fail(&results_rx, "second response");
+    assert!(server.await_requests(2, Deadline::after(crate::MUST_SUCCEED_WITHIN)));
+    let second_call = Deadline::after(crate::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&calls_rx, "second responder call");
+    let second_result =
+        Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&results_rx, "second response");
     assert!(second_result.ends_with(b"ok"));
     let requests = server.requests();
     assert_eq!(first_call, requests[0].body);
@@ -1643,7 +1647,8 @@ fn await_requests_two_observes_recording_during_first_blocked_callback() {
     thread::spawn(move || {
         ignore_result(first_tx.send(post(addr, b"first")));
     });
-    Deadline::after(READ_WITHIN).recv_or_fail(&started_rx, "the first responder to block");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&started_rx, "the first responder to block");
     let (second_tx, second_rx) = mpsc::channel();
     thread::spawn(move || {
         ignore_result(second_tx.send(post(addr, b"second")));
@@ -1652,22 +1657,24 @@ fn await_requests_two_observes_recording_during_first_blocked_callback() {
     let awaiting = Arc::clone(&server);
     let (await_tx, await_rx) = mpsc::channel();
     thread::spawn(move || {
-        ignore_result(await_tx.send(awaiting.await_requests(2, Deadline::after(READ_WITHIN))));
+        ignore_result(
+            await_tx.send(awaiting.await_requests(2, Deadline::after(crate::MUST_SUCCEED_WITHIN))),
+        );
     });
     assert!(
-        Deadline::after(READ_WITHIN)
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv_or_fail(&await_rx, "await_requests to observe two requests"),
         "both requests are recorded while the first callback remains blocked"
     );
     assert_eq!(server.requests().len(), 2);
     drop(release_tx);
     assert!(
-        Deadline::after(READ_WITHIN)
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv_or_fail(&first_rx, "first response")
             .ends_with(b"released")
     );
     assert!(
-        Deadline::after(READ_WITHIN)
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv_or_fail(&second_rx, "second response")
             .ends_with(b"released")
     );
@@ -1692,7 +1699,8 @@ fn dropping_server_stalls_and_wakes_a_queued_responder_turn() {
     thread::spawn(move || {
         ignore_result(first_tx.send(post(first_addr, b"first")));
     });
-    Deadline::after(READ_WITHIN).recv_or_fail(&started_rx, "the first responder to block");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&started_rx, "the first responder to block");
     let (second_tx, second_rx) = mpsc::channel();
     thread::spawn(move || {
         ignore_result(second_tx.send(post(addr, b"second")));
@@ -1701,12 +1709,13 @@ fn dropping_server_stalls_and_wakes_a_queued_responder_turn() {
     let awaiting = Arc::clone(&server);
     let (await_tx, await_rx) = mpsc::channel();
     thread::spawn(move || {
-        let seen = awaiting.await_requests(2, Deadline::after(READ_WITHIN));
+        let seen = awaiting.await_requests(2, Deadline::after(crate::MUST_SUCCEED_WITHIN));
         drop(awaiting);
         ignore_result(await_tx.send(seen));
     });
     assert!(
-        Deadline::after(READ_WITHIN).recv_or_fail(&await_rx, "the second request to be recorded")
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&await_rx, "the second request to be recorded")
     );
     let server =
         Arc::try_unwrap(server).unwrap_or_else(|_| panic!("only the test owns the server"));
@@ -1715,7 +1724,7 @@ fn dropping_server_stalls_and_wakes_a_queued_responder_turn() {
         drop(server);
         ignore_result(done_tx.send(()));
     });
-    let deadline = Deadline::after(READ_WITHIN);
+    let deadline = Deadline::after(crate::MUST_SUCCEED_WITHIN);
     deadline.recv_or_fail(&done_rx, "server drop to finish");
     assert!(
         deadline
@@ -1727,7 +1736,7 @@ fn dropping_server_stalls_and_wakes_a_queued_responder_turn() {
         "the stalled turn closes without a response"
     );
     drop(release_tx);
-    ignore_result(Deadline::after(READ_WITHIN).recv(&first_rx));
+    ignore_result(Deadline::after(crate::MUST_SUCCEED_WITHIN).recv(&first_rx));
 }
 
 #[test]
@@ -1748,7 +1757,8 @@ fn malformed_request_between_good_requests_consumes_no_responder_turn() {
     thread::spawn(move || {
         ignore_result(first_tx.send(post(addr, b"first")));
     });
-    Deadline::after(READ_WITHIN).recv_or_fail(&started_rx, "first responder to block");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&started_rx, "first responder to block");
 
     let (bad_tx, bad_rx) = mpsc::channel();
     let (good_tx, good_rx) = mpsc::channel();
@@ -1763,21 +1773,22 @@ fn malformed_request_between_good_requests_consumes_no_responder_turn() {
         ignore_result(stream.read_to_end(&mut response));
         ignore_result(bad_tx.send(response));
     });
-    let bad = Deadline::after(READ_WITHIN).recv_or_fail(&bad_rx, "malformed request response");
+    let bad = Deadline::after(crate::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&bad_rx, "malformed request response");
     assert!(bad.starts_with(b"HTTP/1.1 400"), "{bad:?}");
     let good_addr = server.addr;
     thread::spawn(move || {
         ignore_result(good_tx.send(post(good_addr, b"second")));
     });
-    assert!(server.await_requests(3, Deadline::after(READ_WITHIN)));
+    assert!(server.await_requests(3, Deadline::after(crate::MUST_SUCCEED_WITHIN)));
     drop(release_tx);
     assert!(
-        Deadline::after(READ_WITHIN)
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv_or_fail(&first_rx, "first responder reply")
             .ends_with(b"first")
     );
     assert!(
-        Deadline::after(READ_WITHIN)
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv_or_fail(&good_rx, "second good responder reply")
             .ends_with(b"second")
     );
@@ -1801,15 +1812,17 @@ fn await_requests_observes_request_while_responder_is_blocked() {
     thread::spawn(move || {
         ignore_result(post_tx.send(post(addr, b"blocked")));
     });
-    Deadline::after(READ_WITHIN).recv_or_fail(&started_rx, "the responder to block");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&started_rx, "the responder to block");
 
     let awaiting = Arc::clone(&server);
     let (await_tx, await_rx) = mpsc::channel();
     thread::spawn(move || {
-        ignore_result(await_tx.send(awaiting.await_requests(1, Deadline::after(READ_WITHIN))));
+        ignore_result(
+            await_tx.send(awaiting.await_requests(1, Deadline::after(crate::MUST_SUCCEED_WITHIN))),
+        );
     });
     assert!(
-        Deadline::after(READ_WITHIN).recv_or_fail(
+        Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(
             &await_rx,
             "await_requests to observe a recorded blocked request"
         ),
@@ -1817,5 +1830,5 @@ fn await_requests_observes_request_while_responder_is_blocked() {
     );
 
     drop(release_tx);
-    ignore_result(Deadline::after(READ_WITHIN).recv(&post_rx));
+    ignore_result(Deadline::after(crate::MUST_SUCCEED_WITHIN).recv(&post_rx));
 }
