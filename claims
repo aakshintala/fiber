@@ -359,3 +359,12 @@ docs/errors.md:97-97	fiber-4897	plan	2026-11-27T01:34:46Z	roundhouse-7010-plus-1
 xtask/src/rules.rs:1255-1256	fiber-4897	plan	2026-11-27T01:34:46Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4897-hub-silent-child-exit	
 crates/main/src/main.rs	fiber-4976	plan	2026-11-27T01:40:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/commands/feedback.rs	fiber-4976	plan	2026-11-27T01:40:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/hub/src/closed_tests.rs	fiber-4974	plan	2026-11-27T01:49:01Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/delegation/delegates.rs	fiber-4974	plan	2026-11-27T01:49:01Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/hub/src/retire.rs	fiber-4974	plan	2026-11-27T01:49:01Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing.md	fiber-4974	plan	2026-11-27T01:49:01Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/tui.md	fiber-4974	plan	2026-11-27T01:49:01Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/delegates.md	fiber-4974	plan	2026-11-27T01:49:01Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+Cargo.toml	fiber-4974	plan	2026-11-27T01:49:01Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/workflow.md	fiber-4974	plan	2026-11-27T01:49:01Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+scripts/bug-red	fiber-4974	plan	2026-11-27T01:49:01Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
