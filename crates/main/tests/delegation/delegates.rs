@@ -7727,6 +7727,17 @@ fn a_depth_two_session_refuses_delegate_message() {
 /// and the session to exit, and returns the parent's lines with the child's
 /// `preamble_built` payload.
 fn delegate_child_preamble(model: &str, roles: &Value, stored: &[&str]) -> (Vec<Value>, Value) {
+    delegate_child_preamble_layers(model, roles, None, None, false, stored)
+}
+
+fn delegate_child_preamble_layers(
+    model: &str,
+    roles: &Value,
+    repository_roles: Option<&Value>,
+    project_model: Option<&str>,
+    run_model: bool,
+    stored: &[&str],
+) -> (Vec<Value>, Value) {
     let setup = support::Setup::new();
     let _guard = arm(&setup);
     let parent = ProviderServer::start([
@@ -7754,8 +7765,27 @@ fn delegate_child_preamble(model: &str, roles: &Value, stored: &[&str]) -> (Vec<
     let mut config: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     config["roles"] = roles.clone();
     support::write_json(&path, &config);
+    if let Some(repository_roles) = repository_roles {
+        let repository = setup.root.path().join(".fiber/config.json");
+        fs::create_dir_all(repository.parent().unwrap()).unwrap();
+        support::write_json(&repository, &json!({"roles": repository_roles}));
+    }
+    if let Some(project_model) = project_model {
+        let workspace = fs::canonicalize(setup.root.path()).unwrap();
+        let key = log::project_key(&workspace);
+        let project = setup.home().join("projects").join(key).join("config.json");
+        support::write_json(
+            &project,
+            &json!({"roles": {"fast": {"model": project_model}}}),
+        );
+    }
 
-    let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    let mut args = vec!["ask"];
+    if run_model {
+        args.extend(["-c", "roles.fast.model=fiber:pb/m"]);
+    }
+    args.push("scan the tree");
+    let mut running = Running::spawn(&setup, &args);
     running.wait_line("the delegate to finish", |line| {
         line["kind"] == "delegate_finished"
     });
@@ -7786,6 +7816,72 @@ fn a_delegate_started_with_a_role_runs_on_the_role_label() {
     assert_eq!(preamble["credential"], "default");
     let completed = completed_for(&lines, "delegate_spawn");
     assert_eq!(completed["payload"]["status"], "completed");
+}
+
+fn credential_notice(lines: &[Value]) {
+    let notice = lines
+        .iter()
+        .find(|line| line["kind"] == "notice" && line["payload"]["code"] == "config_key_ignored")
+        .expect("repository credential notice");
+    assert!(
+        notice["payload"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("roles.\"fast\".credential")
+    );
+}
+
+#[test]
+fn repository_role_credential_does_not_reach_launch_over_project_model() {
+    let (lines, preamble) = delegate_child_preamble_layers(
+        "fast",
+        &json!({}),
+        Some(&json!({"fast": {"model": "fiber:pb/m", "credential": "work"}})),
+        Some("fiber:pb/m"),
+        false,
+        &["work"],
+    );
+    // `docs/delegates.md`, "Events": `delegate_started` is written after
+    // `job_started`, for each run.
+    one(&lines, "delegate_started");
+    assert_eq!(preamble["credential"], "default");
+    credential_notice(&lines);
+}
+
+#[test]
+fn repository_role_credential_does_not_reach_launch_over_run_model() {
+    let (lines, preamble) = delegate_child_preamble_layers(
+        "fast",
+        &json!({}),
+        Some(&json!({"fast": {"model": "fiber:pb/m", "credential": "work"}})),
+        None,
+        true,
+        &["work"],
+    );
+    // `docs/delegates.md`, "Events": `delegate_started` is written after
+    // `job_started`, for each run.
+    one(&lines, "delegate_started");
+    assert_eq!(preamble["credential"], "default");
+    credential_notice(&lines);
+}
+
+#[test]
+fn person_role_credential_survives_repository_object_model() {
+    let (lines, preamble) = delegate_child_preamble_layers(
+        "fast",
+        &json!({"fast": {"model": "fiber:pb/m", "credential": "personal"}}),
+        Some(&json!({"fast": {"model": "fiber:pb/m"}})),
+        None,
+        false,
+        &["personal"],
+    );
+    // `docs/delegates.md`, "Events": `delegate_started` is written after
+    // `job_started`, for each run.
+    one(&lines, "delegate_started");
+    assert_eq!(preamble["credential"], "personal");
+    assert!(lines.iter().all(|line| {
+        line["kind"] != "notice" || line["payload"]["code"] != "config_key_ignored"
+    }));
 }
 
 /// A spawn with the session's own bare `provider/model` string, the form
