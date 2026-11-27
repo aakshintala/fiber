@@ -105,7 +105,7 @@ impl Mcp {
         if *key == Key::Esc {
             return Act::Close;
         }
-        if *key == Key::Enter {
+        if key.is_enter_or_space() {
             return self.enter();
         }
         let shown = self.shown(ctx);
@@ -134,7 +134,7 @@ impl Mcp {
             Spot::Row(at) => {
                 let shown = self.shown(ctx);
                 self.list.select(at, self.len(), shown);
-                Act::Stay
+                self.enter()
             }
             Spot::Revoke(_) | Spot::Cell(_, _) | Spot::Item(_) | Spot::Switch { .. } => Act::Stay,
         }

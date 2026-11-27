@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/app/rewind_tests.rs
-assertion_line: 1060
 expression: shot(&app)
 ---
  Rewind  /rewind                                                     Esc returns
@@ -26,4 +25,4 @@ Files written since the point: /w/a.rs
 Calls that may have changed files: shell
 None of it is undone.
 Jobs that stop: task one, delegate work
-↑↓ move · Enter open/send · Space summarise · Esc close
+↑↓ move · Enter open/send · Esc close

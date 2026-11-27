@@ -1369,7 +1369,7 @@ fn a_rejected_subscribe_settles_to_nothing() {
     assert!(kept.lock().unwrap().is_empty(), "the rejection is consumed");
 }
 
-/// `docs/invocation.md:1106`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
+/// `docs/invocation.md`, "What the hub speaks": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
 #[test]
 fn a_relay_without_a_thread_is_recovered_with_its_queue_first() {
     use std::io::{BufRead, BufReader};
@@ -1760,8 +1760,8 @@ fn a_failed_transfer_leaves_a_dead_relay_that_a_route_recovers() {
     assert_eq!(got[1], ("c_1".into(), "reply".into()));
 }
 
-/// `docs/invocation.md:1106`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
-/// `docs/invocation.md:1157`, "What the hub speaks": the retiring relay passes a queued command on after the handover ahead is answered when exiting, at its end when dead.
+/// `docs/invocation.md`, "What the hub speaks": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
+/// `docs/invocation.md`, "What the hub speaks": the retiring relay passes a queued command on after the handover ahead is answered when exiting, at its end when dead.
 #[test]
 fn a_recovered_command_never_queues_behind_an_older_relay() {
     use std::io::{BufRead, BufReader};
@@ -2254,8 +2254,8 @@ fn a_transfer_registers_before_the_session_can_answer() {
     );
 }
 
-/// `docs/invocation.md:1106`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
-/// `docs/invocation.md:1157`, "What the hub speaks": the retiring relay passes a queued command on after the handover ahead is answered when exiting, at its end when dead.
+/// `docs/invocation.md`, "What the hub speaks": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
+/// `docs/invocation.md`, "What the hub speaks": the retiring relay passes a queued command on after the handover ahead is answered when exiting, at its end when dead.
 #[test]
 fn the_acknowledgement_queue_orders_a_retiring_relays_handovers() {
     use std::sync::{Arc, mpsc};
@@ -2498,8 +2498,8 @@ fn forwarding_does_not_wait_for_a_different_epoch_to_retire() {
     assert!(timely, "a different epoch must not hold back this forward");
 }
 
-/// `docs/invocation.md:1106`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
-/// `docs/invocation.md:1157`, "What the hub speaks": the retiring relay passes a queued command on after the handover ahead is answered when exiting, at its end when dead.
+/// `docs/invocation.md`, "What the hub speaks": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
+/// `docs/invocation.md`, "What the hub speaks": the retiring relay passes a queued command on after the handover ahead is answered when exiting, at its end when dead.
 #[test]
 fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
     use std::io::Write;
@@ -2687,7 +2687,7 @@ fn passing_an_empty_queue_does_not_finish_its_retiring_relay() {
     let mut read = std::io::BufReader::new(client_peer);
     // Both lines arrive; their relative order is stream order, which no
     // contract row promises (the order promise in
-    // `docs/invocation.md:1106` covers acknowledgements), so the test
+    // `docs/invocation.md`, "What the hub speaks" covers acknowledgements), so the test
     // accepts either order.
     let mut first = String::new();
     read.read_line(&mut first).unwrap();
@@ -2765,7 +2765,7 @@ fn a_relay_end_drops_sent_commands_and_clears_only_unsent_commands() {
         .expect("the relay end drains and clears its queue");
     join_within_deadline(thread);
 
-    // `docs/invocation.md:1158`, "What the hub speaks": the relay ends with
+    // `docs/invocation.md`, "What the hub speaks": the relay ends with
     // no entry left, so its two queued commands drop without an answer.
     assert!(matches!(passed, crate::retire::PassOn::Dropped(2)));
     assert!(kept.lock().unwrap().is_empty());
@@ -2825,7 +2825,7 @@ fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
         .write_all(b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_known\"}}\n")
         .unwrap();
     session_peer.flush().unwrap();
-    // `docs/invocation.md:1106`, "Commands keep their order": the
+    // `docs/invocation.md`, "What the hub speaks": the
     // session's acknowledgements come back in the order it sends them,
     // so a forwarded unknown acknowledgement would be the first line:
     // the first line is the known one. The read keeps the 10 s socket
@@ -2877,8 +2877,8 @@ fn a_transfer_does_not_use_another_sessions_live_relay() {
     assert!(replayed.lock().unwrap().is_empty());
 }
 
-/// `docs/invocation.md:1106`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
-/// `docs/invocation.md:1155`, "What the hub speaks": the relay's thread never starts, or its admission is refused, after the write — one `command_rejected` with the refusal's code.
+/// `docs/invocation.md`, "What the hub speaks": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
+/// `docs/invocation.md`, "What the hub speaks": the relay's thread never starts, or its admission is refused, after the write — one `command_rejected` with the refusal's code.
 #[test]
 fn the_relay_parses_each_session_line_once() {
     use std::io::{BufRead, BufReader, Write};
@@ -3184,7 +3184,7 @@ fn stage_command(order: &crate::retire::AckOrder, from: crate::relay::CommandSta
     );
 }
 
-/// `docs/invocation.md:1136-1161`, "What the hub speaks": only the move
+/// `docs/invocation.md`, "What the hub speaks": only the move
 /// into `Rerouted` claims a command's one permitted re-route, and only
 /// from `Written`. Every other second claim, every move out of a terminal
 /// state, and every move for an unrecorded command is refused, and a
@@ -3256,7 +3256,7 @@ fn transition_allows_each_documented_move_and_refuses_the_rest() {
     }
 }
 
-/// `docs/invocation.md:1134-1161`, "What the hub speaks" (`docs/code-quality/lints.md:20-22`):
+/// `docs/invocation.md`, "What the hub speaks" (`docs/code-quality/lints.md`, "Tools enforce the rules"):
 /// the relayed-command state table mirrors `CommandState` and the transition
 /// API, so a test fails when the two differ. Every state is named in the
 /// table, every bare move the table documents is allowed by
@@ -3572,7 +3572,7 @@ fn rejection(id: &str, code: &str) -> Value {
     json!({"kind": "command_rejected", "payload": {"command_id": id, "code": code, "message": "m"}})
 }
 
-/// `docs/invocation.md:1152`, "What the hub speaks" (#2054): after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
+/// `docs/invocation.md`, "What the hub speaks" (#2054): after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
 #[test]
 fn a_clean_exit_re_routes_a_sent_unanswered_command_once() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -3613,7 +3613,7 @@ fn a_queue_pump_reroute_rechecks_the_connection_attribution() {
     );
 }
 
-/// `docs/invocation.md:1152`, "What the hub speaks" (#2054): a command is delivered once; a second unanswered end is rejected `closing` instead of routed again.
+/// `docs/invocation.md`, "What the hub speaks" (#2054): a command is delivered once; a second unanswered end is rejected `closing` instead of routed again.
 #[test]
 fn a_command_already_handed_once_is_rejected_closing_by_the_drain() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -3640,10 +3640,10 @@ fn a_command_already_handed_once_is_rejected_closing_by_the_drain() {
     );
 }
 
-/// `docs/invocation.md:1152`, "What the hub speaks": a command already
+/// `docs/invocation.md`, "What the hub speaks": a command already
 /// rerouted once keeps its `Rerouted` claim through the resumed session's
 /// write, so a second clean exit without an answer is rejected `closing`
-/// instead of delivered again (`docs/invocation.md:1161`).
+/// instead of delivered again (`docs/invocation.md`, "What the hub speaks").
 #[test]
 fn a_second_exit_after_a_resumed_write_is_rejected_closing() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -3694,7 +3694,7 @@ fn a_second_exit_after_a_resumed_write_is_rejected_closing() {
     );
 }
 
-/// `docs/invocation.md:1161`, "What the hub speaks": a `Partial` candidate
+/// `docs/invocation.md`, "What the hub speaks": a `Partial` candidate
 /// reported after the `Written -> Rerouted` claim is refused, so the
 /// canonical state stays `Rerouted`; the wire answer is the same `closing`
 /// rejection a second clean exit earns.
@@ -3727,9 +3727,9 @@ fn a_partial_report_after_reroute_keeps_the_canonical_claim() {
     assert!(ended.received_ids().is_empty(), "nothing is delivered");
 }
 
-/// `docs/invocation.md:1145`, "What the hub speaks": a `Written` command the
+/// `docs/invocation.md`, "What the hub speaks": a `Written` command the
 /// session answers accepted finishes `Answered` with the acknowledgement;
-/// `docs/invocation.md:1160`: a `Rerouted` command the resumed session
+/// `docs/invocation.md`, "What the hub speaks": a `Rerouted` command the resumed session
 /// answers finishes `Answered` with the acknowledgement. An accepted
 /// acknowledgement that consumes the kept attempt while it is still
 /// `Written` is forwarded even when a later flush-failure candidate reports
@@ -4028,25 +4028,24 @@ fn join_route(thread: std::thread::JoinHandle<()>, what: &str) {
     );
 }
 
-/// `docs/invocation.md:1148`, "What the hub speaks": a `closing` answer
-/// `docs/invocation.md:1147`, "What the hub speaks": a post-exit `closing`
-/// confirms `Written` from `Read`, `Queued` or `Writing`; `docs/invocation.md:1148`
+/// `docs/invocation.md`, "What the hub speaks": a `closing` answer
+/// `docs/invocation.md`, "What the hub speaks": a post-exit `closing`
+/// confirms `Written` from `Read`, `Queued` or `Writing`; `docs/invocation.md`, "What the hub speaks"
 /// then claims the one `Rerouted`, suppressing the old answer and delivering
-/// once to the resumed session (`docs/invocation.md:1106`, "Commands keep
-/// their order"). `docs/invocation.md:1142` answers a write cut after the
+/// once to the resumed session (`docs/invocation.md`, "What the hub speaks"). `docs/invocation.md`, "What the hub speaks" answers a write cut after the
 /// session may have read a byte (`#3619`, `#3616`) with one `indeterminate`,
-/// never delivered again. `docs/invocation.md:1151` answers a session-read
+/// never delivered again. `docs/invocation.md`, "What the hub speaks" answers a session-read
 /// command in the exit window (`#3279`, `#3326`) exactly once before shutdown.
-/// `docs/invocation.md:1145` answers a command the session read while closing
-/// (`#3491`, `#3534`) with its own `closing`, never stranded. `docs/invocation.md:1183`
+/// `docs/invocation.md`, "What the hub speaks" answers a command the session read while closing
+/// (`#3491`, `#3534`) with its own `closing`, never stranded. `docs/invocation.md`, "What the hub speaks"
 /// completes no command when the connection ends before `hub_hello`
-/// (`#1662`, `#2094`). `docs/invocation.md:1152` reroutes a sent, unanswered
+/// (`#1662`, `#2094`). `docs/invocation.md`, "What the hub speaks" reroutes a sent, unanswered
 /// command after a clean exit (`#2054`) once, in read order.
 /// Ticket #3665 Fix step 3: one crate-level test enumerates pause points
 /// across write, line-feed, exit, resume and the close grace through existing
 /// test-only seams, asserting exactly one answer per command read on every
 /// path. `#3565`'s interleaving stays in `rewind_tests.rs`
-/// (`a_failed_old_exit_retry_is_never_repeated`, `docs/invocation.md:1179`).
+/// (`a_failed_old_exit_retry_is_never_repeated`, `docs/invocation.md`, "What the hub speaks").
 /// No production hook is added.
 #[test]
 fn ticket_3665_enumerates_pause_points_with_exactly_one_answer() {
@@ -4315,7 +4314,7 @@ fn clean_exit_reroutes_sent_command_once() {
     );
 }
 
-/// `docs/invocation.md:1145`, "What the hub speaks": a rejected answer
+/// `docs/invocation.md`, "What the hub speaks": a rejected answer
 /// consumes the in-flight `Writing` attempt and settles to nothing to
 /// forward, so the ordered forward writes the session's original rejection
 /// to the client; a late write result is refused as unknown, so the
@@ -4390,11 +4389,11 @@ fn a_rejected_answer_consumes_an_in_flight_write() {
     );
 }
 
-/// `docs/invocation.md:1141`, "What the hub speaks": a write that accepts
+/// `docs/invocation.md`, "What the hub speaks": a write that accepts
 /// nothing reports `Queued` when no acknowledgement got there first. The
 /// relay's end passes the queued command to the resumed session, whose
 /// accepted answer is the client's one acknowledgement
-/// (`docs/invocation.md:1145`).
+/// (`docs/invocation.md`, "What the hub speaks").
 #[test]
 fn a_failed_write_before_the_acknowledgement_keeps_the_command_queued() {
     let mut harness = LiveWrite::start("rwf", false);
@@ -4434,7 +4433,7 @@ fn a_failed_write_before_the_acknowledgement_keeps_the_command_queued() {
     assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
 }
 
-/// `docs/invocation.md:1149`, "What the hub speaks" (#2054): a command is delivered once; a `closing` answer to it after it already rerouted once is rejected `closing`, never routed again.
+/// `docs/invocation.md`, "What the hub speaks" (#2054): a command is delivered once; a `closing` answer to it after it already rerouted once is rejected `closing`, never routed again.
 #[test]
 fn a_closing_answer_for_a_command_handed_once_is_forwarded_not_routed() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -4452,7 +4451,7 @@ fn a_closing_answer_for_a_command_handed_once_is_forwarded_not_routed() {
     assert!(ended.received_ids().is_empty(), "nothing is delivered");
 }
 
-/// `docs/invocation.md:1148`, "What the hub speaks" (#2054): after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
+/// `docs/invocation.md`, "What the hub speaks" (#2054): after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
 #[test]
 fn a_closing_answer_the_first_time_is_routed_to_the_resumed_session() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -4464,10 +4463,10 @@ fn a_closing_answer_the_first_time_is_routed_to_the_resumed_session() {
     ended.close_session();
 }
 
-/// `docs/invocation.md:1176`, "Lifecycle": after a crash each sent, unanswered command gets one `indeterminate` and is never delivered again, and queued commands pass on.
-/// `docs/invocation.md:1153`, "What the hub speaks": a command the session crashes without answering is rejected `indeterminate` and never delivered again.
-/// `docs/invocation.md:1106`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
-/// `docs/invocation.md:1157`, "What the hub speaks": the retiring relay passes a queued command on after the handover ahead is answered when exiting.
+/// `docs/invocation.md`, "What the hub speaks": after a crash each sent, unanswered command gets one `indeterminate` and is never delivered again, and queued commands pass on.
+/// `docs/invocation.md`, "What the hub speaks": a command the session crashes without answering is rejected `indeterminate` and never delivered again.
+/// `docs/invocation.md`, "What the hub speaks": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
+/// `docs/invocation.md`, "What the hub speaks": the retiring relay passes a queued command on after the handover ahead is answered when exiting.
 #[test]
 fn a_crash_rejects_each_sent_command_indeterminate_and_passes_the_unsent_on() {
     let (popped_tx, popped_rx) = std::sync::mpsc::channel();
@@ -4502,10 +4501,10 @@ fn a_crash_rejects_each_sent_command_indeterminate_and_passes_the_unsent_on() {
     );
 }
 
-/// `docs/invocation.md:568`, "Lifecycle", "`rewind` starts a new session process": the session being rewound closes with `rewound` while it still holds its lock, and the hub starts the new one.
-/// `docs/invocation.md:1154`, "What the hub speaks": a command the session is rewound or moved without answering is dropped, already answered at the rewind.
-/// `docs/invocation.md:1157`, "What the hub speaks": the retiring relay passes the unsent queued command on.
-/// `docs/invocation.md:1106`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
+/// `docs/invocation.md`, "Lifecycle": the session being rewound closes with `rewound` while it still holds its lock, and the hub starts the new one.
+/// `docs/invocation.md`, "What the hub speaks": a command the session is rewound or moved without answering is dropped, already answered at the rewind.
+/// `docs/invocation.md`, "What the hub speaks": the retiring relay passes the unsent queued command on.
+/// `docs/invocation.md`, "What the hub speaks": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
 #[test]
 fn after_a_rewind_a_sent_command_gets_no_line_and_only_unsent_ones_pass_on() {
     let mut ended = Ended::start("rewound", true, &["c_1"], &["c_2"]);
@@ -4523,7 +4522,7 @@ fn after_a_rewind_a_sent_command_gets_no_line_and_only_unsent_ones_pass_on() {
     assert_eq!(ended.order.session_for("c_1"), None, "c_1 left the queue");
 }
 
-/// `docs/invocation.md:1156`, "What the hub speaks": the client disconnects, so every kept command drops with nothing delivered and nothing resumed.
+/// `docs/invocation.md`, "What the hub speaks": the client disconnects, so every kept command drops with nothing delivered and nothing resumed.
 #[test]
 fn a_gone_entry_with_an_exited_log_drops_everything_and_routes_nothing() {
     let (dropped_tx, dropped_rx) = std::sync::mpsc::channel();
@@ -4531,7 +4530,7 @@ fn a_gone_entry_with_an_exited_log_drops_everything_and_routes_nothing() {
     *crate::connection::lock(&ended.hub.on_pass_on) = Some(Box::new(move |passed| {
         dropped_tx.send(passed).unwrap_or(());
     }));
-    // `docs/invocation.md:1156`, "Lifecycle": a disconnected client gets
+    // `docs/invocation.md`, "What the hub speaks": a disconnected client gets
     // no `indeterminate` answer; the partly written command is dropped too.
     ended.order.enqueue(END_SID, &CommandId("c_p".to_owned()));
     lock(&ended.kept).push((
@@ -4563,7 +4562,7 @@ fn a_gone_entry_with_an_exited_log_drops_everything_and_routes_nothing() {
     assert!(ended.kept.lock().unwrap().is_empty());
 }
 
-/// `docs/invocation.md:1156`, "What the hub speaks": the client disconnects, so its `Written` command drops with nothing delivered and nothing resumed.
+/// `docs/invocation.md`, "What the hub speaks": the client disconnects, so its `Written` command drops with nothing delivered and nothing resumed.
 #[test]
 fn a_client_that_is_gone_while_its_entry_remains_gets_nothing_re_routed() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -4581,9 +4580,9 @@ fn a_client_that_is_gone_while_its_entry_remains_gets_nothing_re_routed() {
     assert_eq!(ended.order.session_for("c_1"), None);
 }
 
-/// `docs/invocation.md:1148`, "What the hub speaks": a `closing` answer after the exited window reroutes the command, delivered once to the resumed session.
-/// `docs/invocation.md:1177`, "Lifecycle": once the log ends in `fiber_exited`, each sent, unanswered command goes once to the resumed session, in read order.
-/// `docs/invocation.md:1106`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
+/// `docs/invocation.md`, "What the hub speaks": a `closing` answer after the exited window reroutes the command, delivered once to the resumed session.
+/// `docs/invocation.md`, "What the hub speaks": once the log ends in `fiber_exited`, each sent, unanswered command goes once to the resumed session, in read order.
+/// `docs/invocation.md`, "What the hub speaks": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
 #[test]
 fn a_relay_that_saw_the_exited_window_is_clean_even_when_the_log_moved_on() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1", "c_2"], &[]);
@@ -4611,7 +4610,7 @@ fn a_relay_that_saw_the_exited_window_is_clean_even_when_the_log_moved_on() {
     assert_eq!(ended.received_ids(), ["c_1", "c_2"]);
 }
 
-/// `docs/invocation.md:1150`, "What the hub speaks": the session answers a command still running `indeterminate`, so the rejection is forwarded and the command is never replayed.
+/// `docs/invocation.md`, "What the hub speaks": the session answers a command still running `indeterminate`, so the rejection is forwarded and the command is never replayed.
 #[test]
 fn an_indeterminate_answer_from_the_session_is_forwarded_and_never_routed() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -4623,13 +4622,13 @@ fn an_indeterminate_answer_from_the_session_is_forwarded_and_never_routed() {
     assert!(ended.received_ids().is_empty(), "nothing is delivered");
 }
 
-/// `docs/invocation.md:1142`, "What the hub speaks" (#3616): a command whose
+/// `docs/invocation.md`, "What the hub speaks" (#3616): a command whose
 /// write fails after the session may have read a byte — a whole JSON body
 /// without its line feed counts — is answered `indeterminate` and never
 /// delivered again. End-of-file framing delivers the cut body as a final
 /// line, so the session answers it, and the hub suppresses that answer:
 /// the client gets exactly one `indeterminate` answer, and the command is
-/// never routed again (`docs/invocation.md:1159`).
+/// never routed again (`docs/invocation.md`, "What the hub speaks").
 #[test]
 fn a_reply_cut_before_its_line_feed_is_answered_indeterminate_once() {
     const SID: &str = "s_0123456789abcdef";
@@ -4760,7 +4759,7 @@ fn a_reply_cut_before_its_line_feed_is_answered_indeterminate_once() {
     drop(park_tx);
 }
 
-/// `docs/invocation.md:1145`, "What the hub speaks" (#3491, #3534): a command the session
+/// `docs/invocation.md`, "What the hub speaks" (#3491, #3534): a command the session
 /// read while closing is answered `closing`, never stranded and never
 /// `indeterminate`. Without the exited window the hub forwards the
 /// session's answer as promised instead of routing it again.
@@ -4783,7 +4782,7 @@ fn a_command_read_while_closing_is_answered_closing_not_stranded() {
     assert!(ended.kept.lock().unwrap().is_empty());
 }
 
-/// `docs/invocation.md:1151`, "What the hub speaks", "Commands keep their order"
+/// `docs/invocation.md`, "What the hub speaks"
 /// (#3279, #3326): a session-read command in the exit window gets exactly
 /// one answer before shutdown. The session's accept is forwarded, and the
 /// relay's end routes nothing, resumes nothing and refuses nothing.
@@ -4805,7 +4804,7 @@ fn a_session_read_command_in_the_exit_window_is_answered_exactly_once() {
     assert!(ended.kept.lock().unwrap().is_empty());
 }
 
-/// `docs/invocation.md:1183`, "What the hub speaks" (#1662, #2094): a
+/// `docs/invocation.md`, "What the hub speaks" (#1662, #2094): a
 /// connection that ends before `hub_hello` is a connect retry, never a
 /// completed relayed command. While the hub is exiting, the accept is
 /// dropped unanswered: the peer reads EOF with no line before it.
@@ -5173,7 +5172,7 @@ fn a_spawn_failure_answers_the_written_command() {
     assert_eq!(order.session_for("c_unspawned"), None);
 }
 
-/// `docs/invocation.md:1141-1142`, "What the hub speaks": `attach_inner`'s
+/// `docs/invocation.md`, "What the hub speaks": `attach_inner`'s
 /// pending-command write classifies its failure once. A write that accepted
 /// nothing stays unsent (`Queued`, attach goes stale for a resume and
 /// retry); a write that accepted bytes may have reached the session
@@ -5377,12 +5376,12 @@ fn the_command_writer_counts_accepted_bytes_before_its_failure() {
     );
 }
 
-/// `docs/invocation.md:1142`, "What the hub speaks": a command the hub had
+/// `docs/invocation.md`, "What the hub speaks": a command the hub had
 /// started writing to the session when the write failed may have been
 /// read, so it is rejected `indeterminate` however the session ends, and
 /// is never delivered again. Any answer the session sends for the cut
 /// command is suspect, so the hub suppresses it and settles one
-/// `indeterminate` answer instead (`docs/invocation.md:1159`).
+/// `indeterminate` answer instead (`docs/invocation.md`, "What the hub speaks").
 #[test]
 fn a_closing_answer_for_a_partly_written_command_is_suppressed_for_indeterminate() {
     let held = fakes::TempDir::new("rs");
@@ -5425,11 +5424,11 @@ fn parse_typed_rejects_wrong_typed_payload_values_like_the_full_parse() {
 /// the relay answers the start's own code, and the redirect at the
 /// socket's end still finds the level, so `follow` retries the recorded
 /// child once.
-/// `docs/invocation.md:1155`, "What the hub speaks": a refused admission after
+/// `docs/invocation.md`, "What the hub speaks": a refused admission after
 /// the write is answered with the refusal's code and never written again.
-/// `docs/invocation.md:467`, "What each command does": the kept subscription
+/// `docs/invocation.md`, "What each command does": the kept subscription
 /// level survives the refusal.
-/// `docs/invocation.md:1179`, "What the hub speaks": the recorded child is
+/// `docs/invocation.md`, "What the hub speaks": the recorded child is
 /// retried once when the old process exits, at most one attempt.
 #[test]
 fn a_failed_change_workspace_start_keeps_the_old_subscription_for_the_retry() {

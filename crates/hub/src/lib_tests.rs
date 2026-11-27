@@ -1,4 +1,4 @@
-//! Tests for the hub's start (`docs/state.md`, "Diagnostic logs"): the
+//! Tests for the hub's start (`docs/state.md`, "What each part holds"): the
 //! lock first, then the log, then configuration and the bind, each
 //! failure after the lock written to `hub.log` once; and for the hub's
 //! signal arm: a raised signal reaches the flag the idle wait reads, then

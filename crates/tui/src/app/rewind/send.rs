@@ -484,12 +484,8 @@ impl App {
             self.close_session_view();
             return Some(Effect::None);
         }
-        if *key == Key::Enter {
+        if key.is_enter_or_space() {
             return Some(self.rewind_enter());
-        }
-        if *key == Key::Char(' ') {
-            self.rewind.send.toggle_summarise();
-            return Some(Effect::None);
         }
         let Some((rows, height)) = self.rewind_metrics() else {
             return Some(Effect::None);
@@ -544,6 +540,7 @@ impl App {
                 self.rewind.select_at(at);
                 let (at, rows) = self.rewind.reseat_at(at);
                 self.rewind_list_to(at, rows);
+                return self.rewind_enter();
             }
             Spot::Cell(at, _) => match self.rewind.visible_row(at) {
                 Some(Vis::Check) => self.rewind.send.toggle_summarise(),
