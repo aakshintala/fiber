@@ -1265,6 +1265,80 @@ fn exited_delegate_eof_replays_missing_suffix() {
 }
 
 #[test]
+fn exited_fold_stops_a_corrupt_segment_at_its_to_boundary() {
+    const ROOT: &str = "s_cccccccccccccccc";
+    const CHILD: &str = "s_dddddddddddddddd";
+    const TO: u64 = 2;
+
+    let (_held, home) = crate::testkit::with_run("exited-fold-corrupt-to-boundary");
+    let workspace = home.join("w");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let root_dir = home.join("projects/-w/sessions").join(ROOT);
+    let child_dir = home.join("projects/-w/sessions").join(CHILD);
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::create_dir_all(&child_dir).unwrap();
+
+    let root_lines: Vec<String> = (0..=4)
+        .map(|seq| {
+            if seq == 0 {
+                gone_line(
+                    ROOT,
+                    seq,
+                    "session_started",
+                    json!({"workspace": workspace.to_string_lossy()}),
+                )
+            } else {
+                gone_line(
+                    ROOT,
+                    seq,
+                    "text_completed",
+                    json!({"text": format!("root {seq}")}),
+                )
+            }
+        })
+        .collect();
+    let root_log = root_dir.join("events.jsonl");
+    std::fs::write(&root_log, format!("{}\n", root_lines[0])).unwrap();
+    let child_started = gone_line(
+        CHILD,
+        0,
+        "session_started",
+        json!({
+            "workspace": workspace.to_string_lossy(),
+            "forked_from": {"session_id": ROOT, "seq": TO},
+        }),
+    );
+    std::fs::write(child_dir.join("events.jsonl"), format!("{child_started}\n")).unwrap();
+
+    // Prime the per-segment offset cache while the ancestor is short of
+    // `to`; its cached read remains corrupt after the readable tail arrives.
+    let segments = log::history(&child_dir).unwrap();
+    let ancestor = segments.first().expect("the root segment is present");
+    assert_eq!(ancestor.to, Some(contract::Seq(TO)));
+    assert!(
+        ancestor.lines(0).is_err(),
+        "the ancestor is short of its boundary"
+    );
+
+    let mut append = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&root_log)
+        .unwrap();
+    for line in &root_lines[1..] {
+        writeln!(append, "{line}").unwrap();
+    }
+
+    let folded = exited_fold(&child_dir);
+    let expected: Vec<contract::Envelope> = root_lines
+        .iter()
+        .take(usize::try_from(TO + 1).unwrap())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(folded.lines, expected, "the fallback ends exactly at `to`");
+    assert_eq!(folded.error, Some(ErrorCode::LogCorrupt));
+}
+
+#[test]
 fn an_accepted_prompt_ack_settles_to_nothing() {
     let held = fakes::TempDir::new("rs");
     let hub = hub(&held);
