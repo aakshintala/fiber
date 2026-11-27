@@ -495,7 +495,8 @@ fn run_archive(app: &mut App, _rest: &str) -> Option<Effect> {
 /// `/feedback`: with no description, asks for one by leaving the draft
 /// on `/feedback `; with a description, the loop writes the report off
 /// its thread through the injected writer, and the answer lands as a
-/// notice.
+/// notice. The submitted draft text stays pending, so a late success
+/// clears the draft only when it still holds that text.
 fn run_feedback(app: &mut App, rest: &str) -> Option<Effect> {
     let description = rest.trim();
     if description.is_empty() {
@@ -507,6 +508,7 @@ fn run_feedback(app: &mut App, rest: &str) -> Option<Effect> {
         app.draft.paste("/feedback ");
         return Some(Effect::None);
     }
+    app.feedback_submitted = Some(app.draft.expand());
     Some(Effect::Feedback {
         description: description.to_owned(),
     })
@@ -1471,8 +1473,10 @@ impl App {
     }
 
     /// A feedback report finished writing: the path with the issue link
-    /// shows, and the draft clears. A failure keeps the draft with its
-    /// notice, as a rejected command does.
+    /// shows, and the draft clears only when it still holds the
+    /// submitted text. A failure keeps the draft with its notice, as a
+    /// rejected command does. A fallback link appends the line saying to
+    /// attach the report file.
     #[cfg(test)]
     pub(crate) fn on_feedback(&mut self, result: Result<crate::FeedbackDone, String>) {
         self.on_feedback_inner(result);
@@ -1483,13 +1487,21 @@ impl App {
     pub(crate) fn on_feedback_inner(&mut self, result: Result<crate::FeedbackDone, String>) {
         match result {
             Ok(done) => {
-                self.draft.clear();
-                self.notices.push(
-                    ErrorCode::Other("feedback".to_owned()),
-                    format!("Wrote {}\n{}", done.path.display(), done.link),
-                );
+                let submitted = self.feedback_submitted.take();
+                if submitted.is_some_and(|sent| self.draft.expand() == sent) {
+                    self.draft.clear();
+                }
+                let mut notice = format!("Wrote {}\n{}", done.path.display(), done.link);
+                if done.attach {
+                    notice.push_str(
+                        "\nThe full report was too long for a link: attach the report file.",
+                    );
+                }
+                self.notices
+                    .push(ErrorCode::Other("feedback".to_owned()), notice);
             }
             Err(notice) => {
+                self.feedback_submitted = None;
                 self.notices
                     .push(ErrorCode::Other("feedback".to_owned()), notice);
             }
