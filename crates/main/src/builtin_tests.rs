@@ -2,6 +2,7 @@
 
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -1803,6 +1804,110 @@ fn the_model_shell_marks_confined_when_on_and_available() {
     assert!(!effects.declared.confined);
 }
 
+// The `sleep 60` this test started, verified by its parent chain: the row
+// must read exactly `sleep 60`, its parent must run this test's command,
+// and that parent must be a child of this test process. A same-named
+// sleep from another test in this binary or another lane fails one of
+// the three checks, so it can never arm the failure path's cleanup.
+fn select_our_sleep(
+    me: u32,
+    candidates: &[u32],
+    row: &dyn Fn(u32) -> Option<(u32, u32, String)>,
+) -> (Option<u32>, String) {
+    for &pid in candidates {
+        let Some(process) = row(pid) else {
+            continue;
+        };
+        let (ppid, pgid, args) = (process.0, process.1, process.2);
+        if args != "sleep 60" {
+            continue;
+        }
+        let Some(parent) = row(ppid) else {
+            continue;
+        };
+        if parent.0 != me || !parent.2.contains("true; sleep 60") {
+            continue;
+        }
+        return (Some(pgid), format!("sleep child {pid} in group {pgid}"));
+    }
+    (
+        None,
+        format!(
+            "no sleep child of this test among {} candidates",
+            candidates.len()
+        ),
+    )
+}
+
+// The group holding this test's `sleep 60`, or why it cannot be named.
+// The candidate listing comes from `pgrep`; every candidate is verified
+// by its parent chain before its group is trusted.
+fn our_sleep_group() -> (Option<u32>, String) {
+    match fakes::matching("sleep 60", fakes::MUST_SUCCEED_WITHIN) {
+        Ok(candidates) => select_our_sleep(std::process::id(), &candidates, &|pid| {
+            fakes::process_row(pid)
+                .ok()
+                .flatten()
+                .map(|row| (row.ppid, row.pgid, row.args))
+        }),
+        Err(error) => (None, format!("pgrep for the sleep child failed: {error}")),
+    }
+}
+
+/// The selector accepts only the sleep child parented by this test's command.
+#[test]
+fn select_our_sleep_trusts_only_the_parent_chain() {
+    let me = 4242;
+    let cases = [
+        (
+            "the sleep whose parent runs this test's command is trusted",
+            me,
+            "sleep 60",
+            "sh -c true; sleep 60",
+            Some(60),
+        ),
+        (
+            "a same-named sleep running another command is not trusted",
+            6,
+            "sleep 61",
+            "sh -c true; sleep 60",
+            None,
+        ),
+        (
+            "a sleep parented outside this test process is not trusted",
+            9999,
+            "sleep 60",
+            "sh -c true; sleep 60",
+            None,
+        ),
+        (
+            "a sleep whose parent runs another command is not trusted",
+            me,
+            "sleep 60",
+            "sh -c exec sleep 60",
+            None,
+        ),
+    ];
+    for (message, parent, sleep_args, parent_args, expected) in cases {
+        let rows = [
+            (7, 6, 60, sleep_args.to_owned()),
+            (6, parent, 60, parent_args.to_owned()),
+        ];
+        let row = |pid: u32| {
+            rows.iter()
+                .find(|(id, _, _, _)| *id == pid)
+                .map(|(_, ppid, pgid, args)| (*ppid, *pgid, args.clone()))
+        };
+        assert_eq!(select_our_sleep(me, &[7], &row).0, expected, "{message}");
+    }
+    let no_rows = |_: u32| None;
+    assert_eq!(
+        select_our_sleep(me, &[], &no_rows).0,
+        None,
+        "no candidates names no group"
+    );
+}
+
 /// The person's `!` command runs with no foreground timeout: advancing the
 /// clock past the agent's 10-minute default moves nothing, and a cancel
 /// still stops the run.
@@ -1836,22 +1941,66 @@ fn driver_shell_has_no_foreground_default() {
         serde_json::Value::String("true; sleep 60".to_owned()),
     );
     let cancel = fakes::CancelToken::new();
-    let run_cancel = cancel.clone();
-    // A recording emitter for this call only: `Quiet` drops every event,
-    // so a missed stop below could name only the wait. `fakes::EventLog`
-    // records every event unfiltered, in arrival order. It is created
-    // before the driver thread spawns, so its registration precedes the
-    // emitter's start (`docs/testing.md`, "Waits and timeouts"). The
-    // record is read only in the failure path; a passing run drops it
-    // unread. The other `Quiet` call sites in this file stay as they are.
+    // The driver sees a cancel that records whether the call ever observed
+    // cancellation: `is_cancelled` sets the flag the timeout branch reads.
+    // The test still cancels the underlying token.
+    struct ObservingCancel {
+        inner: fakes::CancelToken,
+        observed: Arc<AtomicBool>,
+    }
+    impl Cancel for ObservingCancel {
+        fn is_cancelled(&self) -> bool {
+            let cancelled = self.inner.is_cancelled();
+            if cancelled {
+                self.observed.store(true, Ordering::Relaxed);
+            }
+            cancelled
+        }
+
+        fn subscribe(&self, waker: Weak<dyn Wake>) {
+            self.inner.subscribe(waker);
+        }
+    }
+    let observed = Arc::new(AtomicBool::new(false));
+    let run_cancel = ObservingCancel {
+        inner: cancel.clone(),
+        observed: Arc::clone(&observed),
+    };
+    struct RecordingEmit {
+        events: Arc<fakes::EventLog>,
+        clock: fakes::clock::SystemClock,
+        origin: std::time::Instant,
+        starting: std::sync::Mutex<Option<Duration>>,
+    }
+    impl Emit for RecordingEmit {
+        fn emit(&self, event: &Event) {
+            self.events.emit(event);
+        }
+
+        fn starting(&self) -> bool {
+            *self.starting.lock().unwrap() = Some(self.clock.now().duration_since(self.origin));
+            true
+        }
+    }
+    // Keep the event log registered before the driver thread starts, and
+    // record shell-start independently because it is not a driver event.
     let recorded = Arc::new(fakes::EventLog::default());
+    let clock = fakes::clock::SystemClock;
+    let origin = clock.now();
+    let emitter = Arc::new(RecordingEmit {
+        events: Arc::clone(&recorded),
+        clock,
+        origin,
+        starting: std::sync::Mutex::new(None),
+    });
     let (done, finished) = std::sync::mpsc::channel();
+    let sent = emitter.clock.now().duration_since(origin);
     let driver_thread = match std::thread::Builder::new()
         .name("fiber-driver-no-timeout".to_owned())
         .spawn({
-            let recorded = Arc::clone(&recorded);
+            let emitter = Arc::clone(&emitter);
             move || {
-                let output = driver.run(&arguments, &run_cancel, recorded.as_ref());
+                let output = driver.run(&arguments, &run_cancel, emitter.as_ref());
                 done.send(output).unwrap_or(());
             }
         }) {
@@ -1911,20 +2060,30 @@ fn driver_shell_has_no_foreground_default() {
         finished.try_recv().is_err(),
         "the driver call returned after a clock advance with no deadline"
     );
+    let (group, group_detail) = our_sleep_group();
     cancel.cancel();
-    // The stop keeps its own bound and still fails through `recv_or_fail`.
-    // On a miss the recorded driver events join the panic in arrival order
-    // with their count and last entry, so the failure names the stalled
-    // step instead of only the wait.
     let stop = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
-    let output = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        stop.recv_or_fail(&finished, "the driver call")
-    })) {
+    let output = match stop.recv(&finished) {
         Ok(output) => output,
-        Err(payload) => {
+        Err(error) => {
+            let cancel_seen_at_deadline = observed.load(Ordering::Relaxed);
             let seen = recorded.events();
-            let summary = format!(
-                "{count} driver events seen, last: {last}\nevents in order:\n{events}",
+            // Dropping the watchdog on unwind kills the verified group; no cleanup probe can delay the failure report.
+            let _watchdog = group.map(fakes::Watchdog::group);
+            let group_state = group
+                .map(|pgid| {
+                    if fakes::group_alive(pgid) {
+                        "alive"
+                    } else {
+                        "dead"
+                    }
+                })
+                .unwrap_or("unknown");
+            let diagnostics = format!(
+                "shell started at {:?}; driver thread start at {:?} (sampled before spawn, not done.send); driver saw cancel: {}; sleep group {group_state} ({group_detail}); {count} driver events seen, last: {last}\nevents in order:\n{events}",
+                *emitter.starting.lock().unwrap(),
+                sent,
+                cancel_seen_at_deadline,
                 count = seen.len(),
                 last = seen
                     .last()
@@ -1939,8 +2098,14 @@ fn driver_shell_has_no_foreground_default() {
                         .join("\n")
                 },
             );
-            let message = payload.downcast_ref::<String>().unwrap().clone();
-            panic!("{message}\n{summary}");
+            match error {
+                std::sync::mpsc::RecvTimeoutError::Timeout => {
+                    panic!("waited until the deadline for the driver call\n{diagnostics}");
+                }
+                std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                    panic!("the sender for the driver call hung up before sending\n{diagnostics}");
+                }
+            }
         }
     };
     let text = match output.content.first() {

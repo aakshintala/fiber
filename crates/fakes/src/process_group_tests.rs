@@ -114,6 +114,36 @@ fn survived(mut sentinel: Child) -> bool {
 // or less through then sends `kill -0`, which signals nothing, instead of
 // SIGKILL to every process the user owns.
 #[test]
+fn process_row_parses_and_rejects_invalid_rows() {
+    assert_eq!(
+        super::parse_process_row(" 12 34 sh -c true; sleep 60\n"),
+        Some(super::ProcessRow {
+            ppid: 12,
+            pgid: 34,
+            args: "sh -c true; sleep 60".to_owned()
+        })
+    );
+    for text in ["", "not-a-pid 34 sleep 60", "12 bad sleep 60", "12 34"] {
+        assert_eq!(super::parse_process_row(text), None, "{text:?}");
+    }
+}
+
+#[test]
+fn process_row_reads_the_current_process() {
+    let row = crate::process_row(std::process::id())
+        .unwrap()
+        .expect("the current process has a ps row");
+    assert!(row.ppid > 0);
+    assert!(row.pgid > 0);
+    assert!(!row.args.is_empty());
+}
+
+#[test]
+fn process_row_for_unavailable_pid_is_empty() {
+    assert_eq!(crate::process_row(u32::MAX).unwrap(), None);
+}
+
+#[test]
 fn kill_group_refuses_group_zero_and_one() {
     for group in [0, 1] {
         let sentinel = sentinel();
