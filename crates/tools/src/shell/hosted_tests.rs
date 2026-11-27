@@ -385,6 +385,7 @@ fn hosted_move_policy(policy: super::command::MovePolicy) {
             &settings,
             &workdir,
             None,
+            None,
         );
         done.send(ran).expect("execute result");
     });
@@ -771,6 +772,7 @@ fn execute_noting(answer: bool, paced: bool, refusal: Option<&str>) -> Noted {
             &settings,
             &workdir,
             None,
+            None,
         );
         let _sent = done.send(ran);
     });
@@ -831,6 +833,7 @@ fn execute_noting_on(
             None,
             &settings,
             &workdir,
+            None,
             None,
         );
         let _sent = done.send(ran);
