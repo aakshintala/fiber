@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
@@ -420,6 +421,22 @@ fn typed_login_key_clears_first_run_flag_before_home_enter() {
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert!(!app.config_view_open(), "home Enter must not reopen /login");
     assert!(!app.first_run_no_credential);
+
+    // `docs/tui.md`, "First run", step 1: home reopens the login overlay
+    // on every launch until a credential exists.
+    let mut painted =
+        crate::screen::Screen::new(TestBackend::new(80, 24), 80, 24).expect("a test screen");
+    painted
+        .draw_with(&mut app, None, crate::view::render)
+        .expect("a draw");
+    let grid = &painted.last().expect("a drawn frame").0;
+    let rows = (0..24)
+        .map(|y| (0..80).map(|x| grid[(x, y)].symbol()).collect::<String>())
+        .collect::<Vec<_>>();
+    assert!(
+        !rows.iter().any(|row| row.contains("Providers")),
+        "{rows:?}"
+    );
 }
 
 #[test]

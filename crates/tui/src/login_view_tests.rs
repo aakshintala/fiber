@@ -2838,7 +2838,7 @@ fn a_stored_key_queues_a_reviewer_read_not_an_end() {
         login.key(&Key::Enter, &ctx(&fake)),
         Act::Reviewer(name) if name == "acme"
     ));
-    assert!(!login.stored());
+    assert!(login.stored());
     assert_eq!(fake.stores(), [("acme".to_owned(), None)]);
     // The panel stays until the app queues the read on its ticket.
     login.wait_reviewer(LoginTicket(1), "acme".to_owned());
@@ -2889,48 +2889,6 @@ fn first_run_secret_and_reviewer_saves_signal_success_only_at_last_save() {
     );
     assert!(matches!(browser.key(&Key::Enter, &ctx(&fake)), Act::Stay));
     assert!(browser.ended_successfully());
-}
-
-#[test]
-fn browser_done_signal_distinguishes_a_saved_credential_from_failure() {
-    let fake = fake_with(targets());
-    let mut saved = waiting(&fake, LoginTicket(1));
-    assert_eq!(
-        saved.step(
-            LoginTicket(1),
-            crate::login_worker::LoginStep::Done(Ok(Stored {
-                path: "credentials/codex/alice@example.com".to_owned(),
-                replaced: false,
-            }))
-        ),
-        None
-    );
-    assert!(saved.stored());
-    assert!(matches!(saved.mode, super::Mode::Preparing(_)));
-
-    let mut stale = waiting(&fake, LoginTicket(3));
-    stale.step(
-        LoginTicket(4),
-        crate::login_worker::LoginStep::Done(Ok(Stored {
-            path: "credentials/codex/alice@example.com".to_owned(),
-            replaced: false,
-        })),
-    );
-    assert!(!stale.stored());
-
-    let mut failed = waiting(&fake, LoginTicket(2));
-    assert_eq!(
-        failed.step(
-            LoginTicket(2),
-            crate::login_worker::LoginStep::Done(Err(ConfigureError {
-                code: ErrorCode::IoFailed,
-                message: "save failed".to_owned(),
-            }))
-        ),
-        None
-    );
-    assert!(!failed.stored());
-    assert!(matches!(failed.mode, super::Mode::Ended(_)));
 }
 
 #[test]

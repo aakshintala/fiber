@@ -992,7 +992,6 @@ impl Login {
     /// stored: the panel gives way to the preparing step.
     pub(crate) fn wait_reviewer(&mut self, ticket: LoginTicket, name: String) {
         self.said.clear();
-        self.stored = true;
         self.mode = Mode::Preparing(Preparing {
             ticket,
             name,
@@ -1231,8 +1230,8 @@ impl Login {
         };
         match ctx.seam.store_key(&name, label.as_deref(), secret) {
             Ok(_) => {
+                self.stored = true;
                 if kind == LoginKind::Secret {
-                    self.stored = true;
                     self.mode = Mode::Ended(Ended {
                         name,
                         outcome: Outcome::Done,
