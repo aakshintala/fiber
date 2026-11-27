@@ -109,6 +109,7 @@ pub(crate) struct Ack {
     pub(crate) last_seq: Option<u64>,
 }
 
+#[cfg(test)]
 pub(crate) fn acknowledgement(line: &[u8]) -> Option<Ack> {
     parse_typed(line)
 }
@@ -124,6 +125,7 @@ pub(crate) fn acknowledgement_and_seq(line: &[u8]) -> (Option<Ack>, Option<u64>)
 /// keys and skips every other value in place, so a wrong-typed optional
 /// reads as absent instead of losing the whole `Ack`, while a malformed
 /// value still rejects the line.
+#[cfg(test)]
 pub(crate) fn parse_typed(line: &[u8]) -> Option<Ack> {
     parse_typed_with_seq(line).0
 }

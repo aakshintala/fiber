@@ -48,9 +48,11 @@ mod relays;
 use crate::connection::{Hub, Refused, lock, reject};
 use crate::retire::{AckOrder, Retire, report};
 
+pub(crate) use ack::Ack;
 #[cfg(test)]
 pub(crate) use ack::ack_parses;
-pub(crate) use ack::{Ack, acknowledgement};
+#[cfg(test)]
+pub(crate) use ack::acknowledgement;
 use ack::{Settled, Verdict, kept_has, muted, settle};
 pub(crate) use relays::Relays;
 

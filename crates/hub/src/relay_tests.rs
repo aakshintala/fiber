@@ -879,17 +879,30 @@ fn exited_delegate_eof_replays_missing_suffix() {
         })
     }
 
-    fn run_case(
-        name: &str,
-        level: &str,
+    struct Case<'a> {
+        name: &'a str,
+        level: &'a str,
         boundary: Option<u64>,
         prefix_through: Option<u64>,
         log_tail: LogTail,
         exit: Exit,
-        expected_seqs: &[u64],
+        expected_seqs: &'a [u64],
         expect_stream_closed: bool,
         expect_subscription: bool,
-    ) {
+    }
+
+    fn run_case(case: Case<'_>) {
+        let Case {
+            name,
+            level,
+            boundary,
+            prefix_through,
+            log_tail,
+            exit,
+            expected_seqs,
+            expect_stream_closed,
+            expect_subscription,
+        } = case;
         use std::io::Read;
         use std::time::Duration;
 
@@ -1128,116 +1141,116 @@ fn exited_delegate_eof_replays_missing_suffix() {
         );
     }
 
-    run_case(
-        "clean exit",
-        "full",
-        Some(4),
-        Some(1),
-        LogTail::Complete,
-        Exit::Clean,
-        &[0, 1, 2, 3, 4],
-        false,
-        true,
-    );
-    run_case(
-        "crash",
-        "full",
-        Some(4),
-        Some(1),
-        LogTail::Complete,
-        Exit::Crash,
-        &[0, 1, 2, 3, 4],
-        false,
-        true,
-    );
-    run_case(
-        "unreadable log",
-        "full",
-        Some(4),
-        Some(1),
-        LogTail::Unreadable,
-        Exit::Crash,
-        &[0, 1],
-        true,
-        false,
-    );
-    run_case(
-        "short log before the accepted boundary",
-        "full",
-        Some(4),
-        Some(1),
-        LogTail::Short,
-        Exit::Crash,
-        &[0, 1],
-        true,
-        false,
-    );
-    run_case(
-        "log skips a required sequence",
-        "full",
-        Some(4),
-        Some(1),
-        LogTail::Gap,
-        Exit::Crash,
-        &[0, 1],
-        true,
-        false,
-    );
-    run_case(
-        "log next sequence is beyond the boundary",
-        "full",
-        Some(4),
-        Some(1),
-        LogTail::BeyondBoundary,
-        Exit::Crash,
-        &[0, 1],
-        true,
-        false,
-    );
-    run_case(
-        "summary has no boundary",
-        "summary",
-        None,
-        None,
-        LogTail::Complete,
-        Exit::Clean,
-        &[],
-        false,
-        true,
-    );
-    run_case(
-        "full acknowledgement has no boundary",
-        "full",
-        None,
-        Some(0),
-        LogTail::Complete,
-        Exit::Clean,
-        &[0],
-        false,
-        true,
-    );
-    run_case(
-        "boundary already forwarded",
-        "full",
-        Some(2),
-        Some(2),
-        LogTail::Complete,
-        Exit::Clean,
-        &[0, 1, 2],
-        false,
-        true,
-    );
-    run_case(
-        "forwarded sequence is beyond the boundary",
-        "full",
-        Some(2),
-        Some(3),
-        LogTail::Complete,
-        Exit::Clean,
-        &[0, 1, 2, 3],
-        false,
-        true,
-    );
+    run_case(Case {
+        name: "clean exit",
+        level: "full",
+        boundary: Some(4),
+        prefix_through: Some(1),
+        log_tail: LogTail::Complete,
+        exit: Exit::Clean,
+        expected_seqs: &[0, 1, 2, 3, 4],
+        expect_stream_closed: false,
+        expect_subscription: true,
+    });
+    run_case(Case {
+        name: "crash",
+        level: "full",
+        boundary: Some(4),
+        prefix_through: Some(1),
+        log_tail: LogTail::Complete,
+        exit: Exit::Crash,
+        expected_seqs: &[0, 1, 2, 3, 4],
+        expect_stream_closed: false,
+        expect_subscription: true,
+    });
+    run_case(Case {
+        name: "unreadable log",
+        level: "full",
+        boundary: Some(4),
+        prefix_through: Some(1),
+        log_tail: LogTail::Unreadable,
+        exit: Exit::Crash,
+        expected_seqs: &[0, 1],
+        expect_stream_closed: true,
+        expect_subscription: false,
+    });
+    run_case(Case {
+        name: "short log before the accepted boundary",
+        level: "full",
+        boundary: Some(4),
+        prefix_through: Some(1),
+        log_tail: LogTail::Short,
+        exit: Exit::Crash,
+        expected_seqs: &[0, 1],
+        expect_stream_closed: true,
+        expect_subscription: false,
+    });
+    run_case(Case {
+        name: "log skips a required sequence",
+        level: "full",
+        boundary: Some(4),
+        prefix_through: Some(1),
+        log_tail: LogTail::Gap,
+        exit: Exit::Crash,
+        expected_seqs: &[0, 1],
+        expect_stream_closed: true,
+        expect_subscription: false,
+    });
+    run_case(Case {
+        name: "log next sequence is beyond the boundary",
+        level: "full",
+        boundary: Some(4),
+        prefix_through: Some(1),
+        log_tail: LogTail::BeyondBoundary,
+        exit: Exit::Crash,
+        expected_seqs: &[0, 1],
+        expect_stream_closed: true,
+        expect_subscription: false,
+    });
+    run_case(Case {
+        name: "summary has no boundary",
+        level: "summary",
+        boundary: None,
+        prefix_through: None,
+        log_tail: LogTail::Complete,
+        exit: Exit::Clean,
+        expected_seqs: &[],
+        expect_stream_closed: false,
+        expect_subscription: true,
+    });
+    run_case(Case {
+        name: "full acknowledgement has no boundary",
+        level: "full",
+        boundary: None,
+        prefix_through: Some(0),
+        log_tail: LogTail::Complete,
+        exit: Exit::Clean,
+        expected_seqs: &[0],
+        expect_stream_closed: false,
+        expect_subscription: true,
+    });
+    run_case(Case {
+        name: "boundary already forwarded",
+        level: "full",
+        boundary: Some(2),
+        prefix_through: Some(2),
+        log_tail: LogTail::Complete,
+        exit: Exit::Clean,
+        expected_seqs: &[0, 1, 2],
+        expect_stream_closed: false,
+        expect_subscription: true,
+    });
+    run_case(Case {
+        name: "forwarded sequence is beyond the boundary",
+        level: "full",
+        boundary: Some(2),
+        prefix_through: Some(3),
+        log_tail: LogTail::Complete,
+        exit: Exit::Clean,
+        expected_seqs: &[0, 1, 2, 3],
+        expect_stream_closed: false,
+        expect_subscription: true,
+    });
 }
 
 #[test]
