@@ -5,6 +5,7 @@
 //! value already comes from, and when a written key applies
 //! (`docs/configuration.md`, "When Fiber reads configuration").
 
+use std::net::Ipv6Addr;
 use std::path::{Path, PathBuf};
 
 use contract::settings::{SettingControl, SettingsMetadata, SettingsTab};
@@ -286,6 +287,8 @@ pub(crate) enum Act {
 pub(crate) struct Ctx<'a> {
     pub(crate) seam: &'a dyn Configure,
     pub(crate) workspace: &'a Path,
+    pub(crate) canonical_workspace: Option<PathBuf>,
+    pub(crate) home: Option<PathBuf>,
     pub(crate) height: usize,
     pub(crate) width: usize,
     pub(crate) usage: Option<u64>,
@@ -435,6 +438,8 @@ struct Page {
     layer: Layer,
     /// Whether the entries are `{path, required}` objects.
     objects: bool,
+    /// Whether entries are validated browser origins.
+    origins: bool,
     entries: Vec<Value>,
     list: List,
     field: Option<PageField>,
@@ -1581,6 +1586,7 @@ impl Settings {
                     label: row.presentation.label.clone(),
                     layer,
                     objects: row.control == SettingControl::RepositoryExtensions,
+                    origins: row.key == "hub.allowed_origins",
                     entries,
                     list: List::gutter(),
                     field: None,
@@ -1697,6 +1703,20 @@ impl Settings {
             .unwrap_or(from);
         if to == from {
             return Act::Stay;
+        }
+        if row.key == "hub.allowed_origins" {
+            let values = serde_json::from_str::<Vec<Value>>(original).unwrap_or_default();
+            if let Some(invalid) = values.iter().find_map(|value| {
+                value
+                    .as_str()
+                    .filter(|origin| !valid_origin(origin))
+                    .or_else(|| value.as_str().is_none().then_some("<non-string value>"))
+            }) {
+                self.said = vec![format!(
+                    "Cannot move invalid origin {invalid:?} to another layer."
+                )];
+                return Act::Stay;
+            }
         }
         if let Err(error) = ctx.seam.set(ctx.workspace, to, &row.key, original) {
             self.said = vec![error.message];
@@ -2086,6 +2106,10 @@ impl Settings {
         let typed = field.draft.expand();
         let mut candidate = page.entries.clone();
         let at = field.at;
+        if page.origins && !valid_origin(&typed) {
+            self.said = vec![ORIGIN_GUIDANCE.to_owned()];
+            return;
+        }
         match at.and_then(|at| candidate.get_mut(at)) {
             Some(entry) => set_path(entry, &typed),
             None => candidate.push(new_entry(page.objects, &typed)),
@@ -2574,6 +2598,150 @@ impl Settings {
             }),
         }
     }
+}
+
+const ORIGIN_GUIDANCE: &str = "Write the origin as a browser sends it, such as https://fiber.example.ts.net:8443: lowercase, and no path or default port.";
+
+/// Whether `text` is exactly an origin serialized by a browser.
+fn valid_origin(text: &str) -> bool {
+    let Some((scheme, authority)) = text.split_once("://") else {
+        return false;
+    };
+    let default_port = match scheme {
+        "http" => 80,
+        "https" => 443,
+        _ => return false,
+    };
+    if authority.is_empty()
+        || authority
+            .bytes()
+            .any(|byte| matches!(byte, b'/' | b'?' | b'#' | b'@'))
+    {
+        return false;
+    }
+
+    let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
+        let Some((literal, suffix)) = rest.split_once(']') else {
+            return false;
+        };
+        if !valid_ipv6_literal(literal) {
+            return false;
+        }
+        if suffix.is_empty() {
+            (None, None)
+        } else if let Some(port) = suffix.strip_prefix(':') {
+            (None, Some(port))
+        } else {
+            return false;
+        }
+    } else {
+        let (host, port) = match authority.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        };
+        if !valid_origin_host(host) {
+            return false;
+        }
+        (Some(host), port)
+    };
+    let _ = host;
+    match port {
+        None => true,
+        Some(port) => {
+            if port.is_empty()
+                || (port.len() > 1 && port.starts_with('0'))
+                || !port.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return false;
+            }
+            let Ok(port) = port.parse::<u16>() else {
+                return false;
+            };
+            port != 0 && u32::from(port) != default_port
+        }
+    }
+}
+
+fn valid_origin_host(host: &str) -> bool {
+    if host.is_empty() || !host.is_ascii() || host.ends_with('.') {
+        return false;
+    }
+    let labels: Vec<&str> = host.split('.').collect();
+    if labels.iter().any(|label| {
+        label.is_empty()
+            || !label.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-_".contains(&byte)
+            })
+    }) {
+        return false;
+    }
+    let Some(last) = labels.last() else {
+        return false;
+    };
+    if last.bytes().all(|byte| byte.is_ascii_digit())
+        || last.starts_with("0x")
+        || last.starts_with("0X")
+    {
+        return canonical_ipv4(host);
+    }
+    true
+}
+
+fn canonical_ipv4(host: &str) -> bool {
+    let octets: Vec<&str> = host.split('.').collect();
+    octets.len() == 4
+        && octets.iter().all(|octet| {
+            !octet.is_empty()
+                && !(octet.len() > 1 && octet.starts_with('0'))
+                && octet.bytes().all(|byte| byte.is_ascii_digit())
+                && octet
+                    .parse::<u8>()
+                    .is_ok_and(|value| value.to_string() == *octet)
+        })
+}
+
+fn valid_ipv6_literal(literal: &str) -> bool {
+    literal
+        .parse::<Ipv6Addr>()
+        .is_ok_and(|address| ipv6_serialized(address) == literal)
+}
+
+fn ipv6_serialized(address: Ipv6Addr) -> String {
+    let segments = address.segments();
+    let mut best_start = 8;
+    let mut best_len = 0;
+    let mut at = 0;
+    while at < segments.len() {
+        if segments[at] != 0 {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < segments.len() && segments[at] == 0 {
+            at += 1;
+        }
+        let len = at - start;
+        if len >= 2 && len > best_len {
+            best_start = start;
+            best_len = len;
+        }
+    }
+    let mut out = String::new();
+    let mut index = 0;
+    while index < segments.len() {
+        if index == best_start {
+            out.push_str("::");
+            index += best_len;
+            continue;
+        }
+        if !out.is_empty() && !out.ends_with(':') {
+            out.push(':');
+        }
+        use std::fmt::Write as _;
+        let _ = write!(out, "{:x}", segments[index]);
+        index += 1;
+    }
+    out
 }
 
 /// A JSON number as a count, or `None` when the text is no number.

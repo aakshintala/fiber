@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use proptest::prelude::*;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
@@ -240,6 +241,8 @@ fn sized(fake: &Fake, width: usize, height: usize) -> Ctx<'_> {
     Ctx {
         seam: fake,
         workspace: Path::new("/w"),
+        canonical_workspace: None,
+        home: None,
         height,
         width,
         usage: None,
@@ -280,6 +283,248 @@ fn tab(fake: &Fake, tab: SettingsTab) -> Settings {
         settings.edit_key(Edit::Right, &ctx(fake));
     }
     settings
+}
+
+#[test]
+fn origin_validation_accepts_only_browser_serialized_origins() {
+    for origin in [
+        "http://fiber.example.ts.net",
+        "https://fiber.example.ts.net:8443",
+        "https://[::1]",
+        "https://[::ffff:102:304]",
+        "https://1.2.3.4",
+    ] {
+        assert!(super::valid_origin(origin), "should accept {origin:?}");
+    }
+}
+
+#[test]
+fn origin_validation_refuses_non_serialized_origins() {
+    for origin in [
+        "https://user@fiber.example.ts.net",
+        "https://fiber.example.ts.net/",
+        "https://fiber.example.ts.net:70000",
+        "https://fiber.example.ts.net:",
+        "https://fiber.example .ts.net",
+        "https://fíber.example.ts.net",
+        "HTTPS://fiber.example.ts.net",
+        "https://fiber.example.ts.net:+8443",
+        "https://fiber.example.ts.net:08443",
+        "https://fiber.example.ts.net:443",
+        "http://fiber.example.ts.net:80",
+        "https://[0:0:0:0:0:0:0:1]",
+        "https://[::ffff:1.2.3.4]",
+        "https://1.2.3",
+        "https://010.0.0.1",
+        "https://999.1.1.1",
+        "https://1.2.3.0x4",
+        "https://fiber.example.ts.net?query",
+        "https://fiber.example.ts.net#fragment",
+        "https://fiber.example.ts.net.",
+    ] {
+        assert!(!super::valid_origin(origin), "should refuse {origin:?}");
+    }
+}
+
+#[test]
+fn origin_validation_accepts_port_and_ipv4_boundaries() {
+    for origin in [
+        "http://x:1",
+        "http://x:65535",
+        "https://x:65535",
+        "https://0.0.0.0",
+        "https://255.255.255.255",
+        "https://[1::2:0:0:3:4]",
+    ] {
+        assert!(super::valid_origin(origin), "should accept {origin:?}");
+    }
+}
+
+#[test]
+fn origin_validation_rejects_values_just_outside_port_and_ipv4_boundaries() {
+    for origin in [
+        "http://x:0",
+        "http://x:65536",
+        "https://x:65536",
+        "https://256.0.0.0",
+        "https://1:2:0:0:3:4",
+        "https://x:８０８０",
+    ] {
+        assert!(!super::valid_origin(origin), "should refuse {origin:?}");
+    }
+}
+
+#[test]
+fn origin_validation_rejects_editing_an_invalid_existing_entry() {
+    let fake = Fake::new(origin_rows(value(r#"["https://bad.example/"]"#), "global"));
+    let mut settings = page(&fake, "hub.allowed_origins");
+    one(&mut settings, &fake, Key::Enter);
+    one(&mut settings, &fake, Key::Enter);
+    assert!(fake.writes().is_empty());
+    assert!(settings.page.as_ref().unwrap().field.is_some());
+    assert!(
+        settings
+            .said
+            .iter()
+            .any(|line| line.contains("Write the origin"))
+    );
+}
+
+#[test]
+fn origin_validation_never_panics_on_arbitrary_utf8() {
+    proptest!(|(origin in any::<String>())| {
+        let _ = super::valid_origin(&origin);
+    });
+}
+
+#[test]
+fn origin_validation_blocks_invalid_layer_moves_before_any_write() {
+    let invalid = "https://bad.example/";
+    let fake = Fake::new(origin_rows(
+        value(&format!(r#"[{invalid:?},"https://good.example"]"#)),
+        "global",
+    ));
+    let mut settings = at(&fake, "hub.allowed_origins");
+    one(&mut settings, &fake, Key::Tab);
+    assert!(fake.writes().is_empty());
+    assert!(resets(&fake).is_empty());
+    assert!(settings.said.iter().any(|line| line.contains(invalid)));
+}
+
+#[test]
+fn origin_validation_allows_valid_layer_moves() {
+    let fake = Fake::new(origin_rows(
+        value(r#"["https://fiber.example.ts.net","http://localhost:8080"]"#),
+        "global",
+    ));
+    let mut settings = at(&fake, "hub.allowed_origins");
+    one(&mut settings, &fake, Key::Tab);
+    assert_eq!(
+        writes(&fake),
+        [w(
+            Layer::Project,
+            "hub.allowed_origins",
+            r#"["https://fiber.example.ts.net","http://localhost:8080"]"#
+        )]
+    );
+    assert_eq!(
+        resets(&fake),
+        [(
+            Layer::Global,
+            "hub.allowed_origins".to_owned(),
+            r#"["https://fiber.example.ts.net","http://localhost:8080"]"#.to_owned()
+        )]
+    );
+}
+
+#[test]
+fn origin_validation_same_layer_delete_preserves_an_untouched_invalid_value() {
+    let invalid_json = r#"["https://bad.example/","https://also-bad.example/"]"#;
+    let fake = Fake::new(origin_rows(value(invalid_json), "global"));
+    let mut settings = page(&fake, "hub.allowed_origins");
+    edit(&mut settings, &fake, Edit::Delete);
+    assert_eq!(
+        writes(&fake),
+        [w(
+            Layer::Global,
+            "hub.allowed_origins",
+            r#"["https://also-bad.example/"]"#
+        )]
+    );
+}
+
+#[test]
+fn origin_validation_same_layer_reorder_preserves_invalid_values_byte_for_byte() {
+    let invalid_json = r#"["https://bad.example/","https://also-bad.example/"]"#;
+    let fake = Fake::new(origin_rows(value(invalid_json), "global"));
+    let mut settings = page(&fake, "hub.allowed_origins");
+    one(&mut settings, &fake, Key::AltDown);
+    // Values remain the same bytes; only their order changes.
+    assert_eq!(
+        writes(&fake),
+        [w(
+            Layer::Global,
+            "hub.allowed_origins",
+            r#"["https://also-bad.example/","https://bad.example/"]"#
+        )]
+    );
+}
+
+#[test]
+fn origin_validation_rejects_invalid_field_text_before_saving() {
+    let fake = Fake::new(origin_rows(value("[]"), "global"));
+    let mut settings = page(&fake, "hub.allowed_origins");
+    one(&mut settings, &fake, Key::Enter);
+    typed(&mut settings, &fake, "https://fiber.example.ts.net/");
+    one(&mut settings, &fake, Key::Enter);
+    assert!(fake.writes().is_empty());
+    assert!(settings.page.as_ref().unwrap().field.is_some());
+    assert!(settings.said.iter().any(|line| line.contains(
+        "Write the origin as a browser sends it, such as https://fiber.example.ts.net:8443: lowercase, and no path or default port."
+    )));
+}
+
+#[test]
+fn origin_validation_accepts_field_text_without_normalizing_it() {
+    let origin = "https://fiber.example.ts.net:8443";
+    let fake = Fake::new(origin_rows(value("[]"), "global"));
+    let mut settings = page(&fake, "hub.allowed_origins");
+    one(&mut settings, &fake, Key::Enter);
+    typed(&mut settings, &fake, origin);
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(
+            Layer::Global,
+            "hub.allowed_origins",
+            &format!(r#"["{origin}"]"#)
+        )]
+    );
+}
+
+#[test]
+fn an_existing_origin_list_keeps_its_own_page_for_non_field_controls() {
+    let fake = Fake::new(vec![on(
+        SettingsTab::Advanced,
+        "Hook order",
+        "hooks.order.before_tool",
+        value(r#"["first","second"]"#),
+        "global",
+        ANY,
+        SettingControl::StringList,
+    )]);
+    let mut settings = page(&fake, "hooks.order.before_tool");
+    assert!(settings.page.is_some());
+    one(&mut settings, &fake, Key::Down);
+    one(&mut settings, &fake, Key::Enter);
+    typed(&mut settings, &fake, " free text");
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake),
+        [w(
+            Layer::Global,
+            "hooks.order.before_tool",
+            r#"["first","second free text"]"#
+        )]
+    );
+}
+
+#[test]
+fn an_origin_list_draws_the_example_in_its_field() {
+    let fake = Fake::new(origin_rows(value("[]"), "global"));
+    let mut settings = page(&fake, "hub.allowed_origins");
+    one(&mut settings, &fake, Key::Enter);
+    insta::assert_snapshot!("settings_origin_field", screen(&settings));
+}
+
+#[test]
+fn an_invalid_origin_field_draws_its_guidance() {
+    let fake = Fake::new(origin_rows(value("[]"), "global"));
+    let mut settings = page(&fake, "hub.allowed_origins");
+    one(&mut settings, &fake, Key::Enter);
+    typed(&mut settings, &fake, "https://bad.example/");
+    one(&mut settings, &fake, Key::Enter);
+    insta::assert_snapshot!("settings_origin_validation_error", screen(&settings));
 }
 
 #[test]
@@ -2249,6 +2494,21 @@ fn entries(settings: &Settings) -> Vec<serde_json::Value> {
 /// The sub-page's focused row.
 fn page_at(settings: &Settings) -> usize {
     settings.page.as_ref().unwrap().list.selected()
+}
+
+fn origin_rows(shown: Shown, layer: &str) -> Vec<SettingRow> {
+    let mut rows = rows();
+    rows.push(on(
+        SettingsTab::Advanced,
+        "Allowed origins",
+        "hub.allowed_origins",
+        shown,
+        layer,
+        ANY,
+        SettingControl::StringList,
+    ));
+    rows.sort_by(|left, right| left.key.cmp(&right.key));
+    rows
 }
 
 fn extensions(shown: &str) -> Vec<SettingRow> {

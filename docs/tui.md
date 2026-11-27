@@ -1233,9 +1233,11 @@ install still running.
         entry opens the browser at that entry.
       - For `hub.allowed_origins`, Enter on "+ Add" opens a field with
         "https://fiber.example.ts.net" dim in it as the example, and Enter
-        on an entry opens a field holding its text. The field refuses
-        anything but a scheme `http` or `https`, a host and an optional
-        port, with the error under it, before it saves. Esc cancels.
+        on an entry opens a field holding its text. The field accepts an origin
+        only as a browser sends it: `http://` or `https://`, a lowercase host,
+        and an optional port other than the scheme's default, with nothing
+        after it. Anything else is refused, with the error under it, before it
+        saves. Esc cancels.
       - Delete removes the focused entry. ⌥↑ and ⌥↓ move it one place.
       - A `repository_extensions` entry shows its `path` as its text, then
         `[x] required` or `[ ] required`. Space flips `required`. A new

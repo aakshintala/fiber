@@ -576,9 +576,15 @@ impl App {
             .as_ref()
             .filter(|(session, _)| self.session() == Some(session))
             .map(|(_, tokens)| *tokens);
+        let canonical_workspace = self
+            .workspace()
+            .and_then(|workspace| std::fs::canonicalize(workspace).ok());
+        let home = crate::files::Roots::new(workspace.to_path_buf(), std::env::var_os("HOME")).home;
         Ctx {
             seam,
             workspace,
+            canonical_workspace,
+            home,
             height,
             width,
             usage,

@@ -91,6 +91,8 @@ fn ctx(fake: &Fake) -> Ctx<'_> {
     Ctx {
         seam: fake,
         workspace: Path::new("/w"),
+        canonical_workspace: None,
+        home: None,
         height: 24,
         width: 80,
         usage: None,
@@ -720,6 +722,8 @@ fn moving_down_past_the_first_row_keeps_three_rows_in_view() {
     let ctx = Ctx {
         seam: &fake,
         workspace: Path::new("/w"),
+        canonical_workspace: None,
+        home: None,
         height: 5,
         width: 80,
         usage: None,
