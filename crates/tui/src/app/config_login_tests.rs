@@ -441,6 +441,8 @@ fn typed_login_key_clears_first_run_flag_before_home_enter() {
 
 #[test]
 fn browser_credential_save_clears_flag_before_reviewer_completion() {
+    // `docs/tui.md`, "First run", step 1: clear the first-run flag once the
+    // credential is saved, even while reviewer follow-up remains open.
     let seam = browser_seam();
     let mut app = browser_login_app(&seam);
     app.first_run_no_credential = true;
