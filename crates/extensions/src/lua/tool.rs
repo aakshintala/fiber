@@ -261,13 +261,69 @@ fn keep(value: &LuaValue) -> Result<Bound, String> {
         .ok_or_else(|| "`keep`: `head` plus `tail` is too large".to_owned())
 }
 
+const SCHEMA_MAP_KEYWORDS: [&str; 5] = [
+    "properties",
+    "patternProperties",
+    "$defs",
+    "definitions",
+    "dependentSchemas",
+];
+const SCHEMA_SINGLE_KEYWORDS: [&str; 12] = [
+    "items",
+    "additionalItems",
+    "additionalProperties",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+    "propertyNames",
+    "contains",
+    "contentSchema",
+    "not",
+    "if",
+    "then",
+    "else",
+];
+const SCHEMA_ARRAY_KEYWORDS: [&str; 4] = ["allOf", "anyOf", "oneOf", "prefixItems"];
+
+fn normalize_schema_positions(schema: &mut Value) {
+    if schema.as_array().is_some_and(Vec::is_empty) {
+        *schema = Value::Object(serde_json::Map::new());
+    }
+    let Value::Object(object) = schema else {
+        return;
+    };
+    for (keyword, value) in object {
+        if SCHEMA_MAP_KEYWORDS.contains(&keyword.as_str()) {
+            if value.as_array().is_some_and(Vec::is_empty) {
+                *value = Value::Object(serde_json::Map::new());
+            }
+            if let Value::Object(map) = value {
+                for child in map.values_mut() {
+                    normalize_schema_positions(child);
+                }
+            }
+        } else if SCHEMA_SINGLE_KEYWORDS.contains(&keyword.as_str()) {
+            if value.as_array().is_some_and(Vec::is_empty) {
+                *value = Value::Object(serde_json::Map::new());
+            }
+            normalize_schema_positions(value);
+        } else if SCHEMA_ARRAY_KEYWORDS.contains(&keyword.as_str()) {
+            if let Value::Array(items) = value {
+                for item in items {
+                    normalize_schema_positions(item);
+                }
+            }
+        }
+    }
+}
+
 /// A tool's `input_schema`: a table that reads as a JSON object whose `type`
 /// is `object`.
 fn schema(value: &LuaValue) -> Result<Value, String> {
-    let schema = host::to_json(value).map_err(|e| format!("`input_schema`: {e}"))?;
+    let mut schema = host::to_json(value).map_err(|e| format!("`input_schema`: {e}"))?;
     if schema.get("type").and_then(Value::as_str) != Some("object") {
         return Err("`input_schema` must be a JSON object whose `type` is `object`".to_owned());
     }
+    normalize_schema_positions(&mut schema);
     Ok(schema)
 }
 

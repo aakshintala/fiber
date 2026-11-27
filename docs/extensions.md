@@ -440,8 +440,10 @@ json.decode(str [, { lenient }]) / json.encode(value)   -- JSON, host-provided (
   `spec` carries the delegate tool's keys (`description`, `prompt`,
   `model`, and the optional `isolation`, `workspace` and `timeout_ms`),
   as a JSON object: an empty table becomes `{}`, which the service
-  refuses as missing `description` and `prompt` (`invalid_arguments`);
-  a non-empty list raises the string
+  refuses as missing `description` and `prompt` (`invalid_arguments`).
+  In a tool's `input_schema`, an empty table in a schema position becomes
+  `{}`; values under `enum`, `const`, `default` and `examples` are sent as
+  written. A non-empty list raises the string
   `host.delegate: `spec` must be a table of named arguments` before the
   call yields; a value `to_json` refuses raises the string
   `host.delegate: `spec` json: <reason>` before the call yields.
