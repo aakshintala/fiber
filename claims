@@ -512,3 +512,12 @@ docs/extensions.md:483-484	fiber-4975	plan	2026-11-27T06:26:26Z	roundhouse-7010-
 crates/tui/src/rules_view_tests.rs	fiber-4584	plan	2026-11-27T06:33:29Z	roundhouse-7010-plus-1:/home/aakshintala	
 crates/tui/src/tools_view_tests.rs	fiber-4584	plan	2026-11-27T06:33:29Z	roundhouse-7010-plus-1:/home/aakshintala	
 crates/tui/src/login_view_tests.rs	fiber-4584	plan	2026-11-27T06:33:29Z	roundhouse-7010-plus-1:/home/aakshintala	
+crates/main/tests/session_turns/from_session.rs	fiber-4954	plan	2026-11-27T06:36:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/tool_calls/driver_shell_sent.rs	fiber-4954	plan	2026-11-27T06:36:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/session_turns/session_message.rs	fiber-4954	plan	2026-11-27T06:36:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/extension_host/reviewer_setup.rs	fiber-4954	plan	2026-11-27T06:36:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/providers/quota_fetch_session.rs	fiber-4954	plan	2026-11-27T06:36:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/extension_host/repository_servers.rs	fiber-4954	plan	2026-11-27T06:36:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/hub_daemon/hub_environment.rs	fiber-4954	plan	2026-11-27T06:36:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/hub_daemon/hub_remote_terminal.rs	fiber-4954	plan	2026-11-27T06:36:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/hub_daemon/hub_status.rs	fiber-4954	plan	2026-11-27T06:36:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
