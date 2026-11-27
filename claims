@@ -301,3 +301,4 @@ crates/extensions/src/extension_tools_tests.rs	fiber-4980	plan	2026-11-27T05:45:
 crates/extensions/src/lua/tool.rs	fiber-4980	plan	2026-11-27T05:45:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/lua/tool_tests.rs	fiber-4980	plan	2026-11-27T05:45:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/tests/lua_tools.rs	fiber-4980	plan	2026-11-27T05:45:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
+scripts/test-check-rules-by-path	fiber-5004	plan	2026-11-27T05:47:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
