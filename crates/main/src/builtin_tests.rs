@@ -2040,19 +2040,15 @@ fn driver_shell_has_no_foreground_default() {
         finished.try_recv().is_err(),
         "the driver call returned after a clock advance with no deadline"
     );
-    // Identify the live sleep child while the parked shell still owns it.
     let (group, group_detail) = our_sleep_group();
     cancel.cancel();
-    // Keep the original stop bound, but snapshot diagnostics before either
-    // timeout panic can unwind the driver thread's concurrent event writes.
     let stop = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let output = match stop.recv(&finished) {
         Ok(output) => output,
         Err(error) => {
             let cancel_seen_at_deadline = observed.load(Ordering::Relaxed);
             let seen = recorded.events();
-            // Dropping the watchdog on unwind kills the previously verified
-            // group; no cleanup probe can delay the failure report.
+            // Dropping the watchdog on unwind kills the verified group; no cleanup probe can delay the failure report.
             let _watchdog = group.map(fakes::Watchdog::group);
             let group_state = group
                 .map(|pgid| {
