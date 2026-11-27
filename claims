@@ -503,3 +503,12 @@ crates/tui/src/event_loop/attach_tests.rs:2049-2050	fiber-4974	plan	2026-11-27T0
 crates/tui/src/event_loop/attach_tests.rs:2157-2157	fiber-4974	plan	2026-11-27T05:57:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4974-plan	
 crates/tui/src/event_loop/attach_tests.rs:2176-2180	fiber-4974	plan	2026-11-27T05:57:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4974-plan	
 docs/invocation.md:1248-1248	fiber-4974	plan	2026-11-27T05:57:08Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4974-plan	
+scripts/test-script-selftests	fiber-5004	plan	2026-11-27T06:08:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+scripts/check	fiber-5004	plan	2026-11-27T06:08:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+scripts/check-resources	fiber-5004	plan	2026-11-27T06:08:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+xtask/src/check_resources_tests.rs	fiber-5004	plan	2026-11-27T06:08:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+xtask/tests/check_resources/df	fiber-5004	plan	2026-11-27T06:08:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/workflow.md	fiber-5004	plan	2026-11-27T06:08:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing.md	fiber-5004	plan	2026-11-27T06:08:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/ci.md	fiber-5004	plan	2026-11-27T06:08:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+.github/workflows/ci.yml	fiber-5004	plan	2026-11-27T06:08:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
