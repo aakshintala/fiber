@@ -1111,7 +1111,7 @@ fn on_command(
             } else {
                 match hub.pairing.mint(hub, who, &line.args) {
                     Ok(crate::pairing::Outcome::Done(result)) => {
-                        accept_result(writer, hub, &line.id, result)
+                        let _ = accept_result(writer, hub, &line.id, result);
                     }
                     Ok(crate::pairing::Outcome::Dropped) => {}
                     Err(refused) => {
@@ -1283,31 +1283,19 @@ struct PreSessionForwarder {
 
 impl PreSessionForwarder {
     fn deliver(&self, line: String) {
-        enum Action {
-            Buffer,
-            Send,
-            Log,
-            Drop,
-        }
-        let action = {
-            let mut state = lock(&self.state);
-            if let Some(log_closed) = state.cancelled {
-                if log_closed {
-                    Action::Log
-                } else {
-                    Action::Drop
-                }
-            } else if state.acknowledged {
-                Action::Send
-            } else {
-                state.pending = Some(line.clone());
-                Action::Buffer
+        let mut state = lock(&self.state);
+        let cancelled = state.cancelled;
+        match cancelled {
+            Some(true) => {
+                drop(state);
+                self.log_line(&line);
             }
-        };
-        match action {
-            Action::Buffer | Action::Drop => {}
-            Action::Send => self.write_line(&line),
-            Action::Log => self.log_line(&line),
+            Some(false) => {}
+            None if state.acknowledged => {
+                drop(state);
+                self.write_line(&line);
+            }
+            None => state.pending = Some(line),
         }
     }
 
@@ -1440,7 +1428,7 @@ fn on_start(
         None => None,
     };
     let result = CommandResult::Start { session_id };
-    let acknowledged = accept_start_result(
+    let acknowledged = accept_result(
         writer,
         hub,
         id,
@@ -1529,7 +1517,9 @@ fn on_stop(
         let payload = Map::from_iter([("command_id".to_owned(), Value::String(id.0.clone()))]);
         match web {
             Some(web) => drain_web(hub, writer, web, HubEventKind::CommandAccepted, payload),
-            None => send(writer, hub, HubEventKind::CommandAccepted, payload),
+            None => {
+                let _ = send(writer, hub, HubEventKind::CommandAccepted, payload);
+            }
         }
         #[cfg(test)]
         if let Some(pause) = lock(&hub.bare_stop_pause).take() {
@@ -1581,7 +1571,9 @@ fn on_stop(
                     payload.insert("result".to_owned(), result);
                     drain_web(hub, writer, web, HubEventKind::CommandAccepted, payload);
                 }
-                None => accept_result(writer, hub, id, result),
+                None => {
+                    let _ = accept_result(writer, hub, id, result);
+                }
             }
         }
         crate::sessions_stop::Outcome::Listed {
@@ -1668,7 +1660,9 @@ fn on_stop_keepers(
                 payload.insert("result".to_owned(), result);
                 drain_web(hub, writer, web, HubEventKind::CommandAccepted, payload);
             }
-            None => accept_result(writer, hub, id, result),
+            None => {
+                let _ = accept_result(writer, hub, id, result);
+            }
         }
     }
     drop(_answering);
@@ -1959,25 +1953,11 @@ pub(crate) fn accept_result(
     hub: &Hub,
     id: &CommandId,
     result: Value,
-) {
+) -> bool {
     let mut payload = Map::new();
     payload.insert("command_id".to_owned(), Value::String(id.0.clone()));
     payload.insert("result".to_owned(), result);
-    send(writer, hub, HubEventKind::CommandAccepted, payload);
-}
-
-fn accept_start_result(
-    writer: &Arc<Mutex<UnixStream>>,
-    hub: &Hub,
-    id: &CommandId,
-    result: Value,
-) -> bool {
-    let payload = Map::from_iter([
-        ("command_id".to_owned(), Value::String(id.0.clone())),
-        ("result".to_owned(), result),
-    ]);
-    let bytes = line(hub, HubEventKind::CommandAccepted, payload);
-    support::framing::write_line(&mut *lock(writer), &bytes).is_ok()
+    send(writer, hub, HubEventKind::CommandAccepted, payload)
 }
 
 /// Why a hub command is rejected: its code and Fiber's own sentence.
@@ -2052,10 +2032,10 @@ pub(crate) fn send(
     hub: &Hub,
     kind: HubEventKind,
     payload: Map<String, Value>,
-) {
+) -> bool {
     let bytes = line(hub, kind, payload);
     let mut writer = lock(writer);
-    support::framing::write_line(&mut *writer, &bytes).unwrap_or(());
+    support::framing::write_line(&mut *writer, &bytes).is_ok()
 }
 
 /// Serialises one hub line, without its trailing newline: the port sends

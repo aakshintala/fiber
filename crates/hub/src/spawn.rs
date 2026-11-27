@@ -242,17 +242,16 @@ fn spawn(id: &SessionId, mut command: Command) -> std::io::Result<Box<dyn Starte
     let reading = support::lock(&DRAIN_READING)
         .take_if(|(wanted, _)| *wanted == *id)
         .map(|(_, sender)| sender);
-    let shared: Arc<(Mutex<State>, Condvar)> = Arc::new((
-        Mutex::new(State {
-            exited: false,
-            failure: None,
-            pre_session_line: None,
-            pre_session_watch: None,
-            #[cfg(test)]
-            reading,
-        }),
-        Condvar::new(),
-    ));
+    #[cfg(test)]
+    let mut initial_state = State::default();
+    #[cfg(not(test))]
+    let initial_state = State::default();
+    #[cfg(test)]
+    {
+        initial_state.reading = reading;
+    }
+    let shared: Arc<(Mutex<State>, Condvar)> =
+        Arc::new((Mutex::new(initial_state), Condvar::new()));
     let child = Arc::new(Mutex::new(child));
     let watch = Arc::clone(&shared);
     match thread::Builder::new().name("hub-drain".to_owned()).spawn({
@@ -293,6 +292,7 @@ struct Spawned {
     state: Arc<(Mutex<State>, Condvar)>,
 }
 
+#[derive(Default)]
 struct State {
     exited: bool,
     /// The last line on stdout, when it parsed as a `fiber_exited` verdict.
@@ -416,15 +416,12 @@ fn strict_pre_session_line(line: &str) -> Option<String> {
     let value: Value = serde_json::from_str(line).ok()?;
     let object = value.as_object()?;
     if object.len() != 3
-        || !object.contains_key("kind")
-        || !object.contains_key("schema_version")
-        || !object.contains_key("payload")
         || object.get("schema_version")?.as_u64()? != u64::from(contract::SCHEMA_VERSION)
     {
         return None;
     }
     let payload = object.get("payload")?.as_object()?;
-    if payload.len() != 2 || !payload.contains_key("error") || !payload.contains_key("exit_code") {
+    if payload.len() != 2 {
         return None;
     }
     let _: contract::PreSessionExit = serde_json::from_value(value).ok()?;
