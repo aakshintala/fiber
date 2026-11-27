@@ -761,7 +761,7 @@ fn openai_responses_rejects_non_object_properties_even_when_bodies_are_dropped()
     let bad = br#"{"tools":[{"type":"function","parameters":{"properties":[]}}]}"#;
     let response = post_path(server.addr, "/v1/responses", bad);
     assert!(response.starts_with(b"HTTP/1.1 400"), "{response:?}");
-    assert!(server.await_requests(1, Deadline::after(READ_WITHIN)));
+    assert!(server.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)));
     assert!(server.requests()[0].body.is_empty());
 }
 
