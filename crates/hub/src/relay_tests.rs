@@ -863,6 +863,8 @@ fn exited_delegate_eof_replays_missing_suffix() {
     enum LogTail {
         Complete,
         Short,
+        Gap,
+        BeyondBoundary,
         Unreadable,
     }
 
@@ -951,6 +953,31 @@ fn exited_delegate_eof_replays_missing_suffix() {
                     delegate_dir.join("events.jsonl"),
                     fold.iter()
                         .take(3)
+                        .map(|line| format!("{}\n", line))
+                        .collect::<String>(),
+                )
+                .unwrap();
+            }
+            LogTail::Gap => {
+                let mut lines: Vec<_> = fold.iter().take(2).cloned().collect();
+                lines.push(event("text_completed", 3, SID, json!({"text": "fold 3"})));
+                lines.push(event("text_completed", 4, SID, json!({"text": "fold 4"})));
+                std::fs::write(
+                    delegate_dir.join("events.jsonl"),
+                    lines
+                        .iter()
+                        .map(|line| format!("{}\n", line))
+                        .collect::<String>(),
+                )
+                .unwrap();
+            }
+            LogTail::BeyondBoundary => {
+                let mut lines: Vec<_> = fold.iter().take(2).cloned().collect();
+                lines.push(event("text_completed", 5, SID, json!({"text": "fold 5"})));
+                std::fs::write(
+                    delegate_dir.join("events.jsonl"),
+                    lines
+                        .iter()
                         .map(|line| format!("{}\n", line))
                         .collect::<String>(),
                 )
@@ -1146,6 +1173,28 @@ fn exited_delegate_eof_replays_missing_suffix() {
         false,
     );
     run_case(
+        "log skips a required sequence",
+        "full",
+        Some(4),
+        Some(1),
+        LogTail::Gap,
+        Exit::Crash,
+        &[0, 1],
+        true,
+        false,
+    );
+    run_case(
+        "log next sequence is beyond the boundary",
+        "full",
+        Some(4),
+        Some(1),
+        LogTail::BeyondBoundary,
+        Exit::Crash,
+        &[0, 1],
+        true,
+        false,
+    );
+    run_case(
         "summary has no boundary",
         "summary",
         None,
@@ -1175,6 +1224,17 @@ fn exited_delegate_eof_replays_missing_suffix() {
         LogTail::Complete,
         Exit::Clean,
         &[0, 1, 2],
+        false,
+        true,
+    );
+    run_case(
+        "forwarded sequence is beyond the boundary",
+        "full",
+        Some(2),
+        Some(3),
+        LogTail::Complete,
+        Exit::Clean,
+        &[0, 1, 2, 3],
         false,
         true,
     );

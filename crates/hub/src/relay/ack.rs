@@ -113,15 +113,28 @@ pub(crate) fn acknowledgement(line: &[u8]) -> Option<Ack> {
     parse_typed(line)
 }
 
+/// The acknowledgement, if any, and envelope sequence number from one
+/// typed pass over a relayed session line.
+pub(crate) fn acknowledgement_and_seq(line: &[u8]) -> (Option<Ack>, Option<u64>) {
+    parse_typed_with_seq(line)
+}
+
 /// One map-only typed pass over the relayed line's bytes into `Ack`,
 /// with no `Value` tree. A custom visitor reads the acknowledgement's
 /// keys and skips every other value in place, so a wrong-typed optional
 /// reads as absent instead of losing the whole `Ack`, while a malformed
 /// value still rejects the line.
 pub(crate) fn parse_typed(line: &[u8]) -> Option<Ack> {
+    parse_typed_with_seq(line).0
+}
+
+fn parse_typed_with_seq(line: &[u8]) -> (Option<Ack>, Option<u64>) {
     #[cfg(test)]
     ACK_PARSES.with(|count| count.set(count.get().saturating_add(1)));
-    serde_json::from_slice::<RawAck>(line).ok()?.into_ack()
+    serde_json::from_slice::<RawAck>(line)
+        .ok()
+        .map(RawAck::into_parts)
+        .unwrap_or((None, None))
 }
 
 /// The acknowledgement's keys as the line carries them: every optional
@@ -129,6 +142,7 @@ pub(crate) fn parse_typed(line: &[u8]) -> Option<Ack> {
 struct RawAck {
     kind: LenientString,
     payload: LenientPayload,
+    seq: LenientU64,
 }
 
 struct RawPayload {
@@ -176,16 +190,18 @@ impl<'de> Deserialize<'de> for RawAck {
             {
                 let mut kind = LenientString::default();
                 let mut payload = LenientPayload::default();
+                let mut seq = LenientU64::default();
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "kind" => kind = map.next_value()?,
                         "payload" => payload = map.next_value()?,
+                        "seq" => seq = map.next_value()?,
                         _ => {
                             map.next_value::<Validate>()?;
                         }
                     }
                 }
-                Ok(RawAck { kind, payload })
+                Ok(RawAck { kind, payload, seq })
             }
         }
         deserializer.deserialize_map(AckVisitor)
@@ -694,6 +710,11 @@ impl<'de> Deserialize<'de> for Validate {
 }
 
 impl RawAck {
+    fn into_parts(self) -> (Option<Ack>, Option<u64>) {
+        let seq = self.seq.0;
+        (self.into_ack(), seq)
+    }
+
     fn into_ack(self) -> Option<Ack> {
         let kind = self.kind.0?;
         if !matches!(kind.as_str(), "command_accepted" | "command_rejected") {

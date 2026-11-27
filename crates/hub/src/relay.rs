@@ -1914,6 +1914,104 @@ fn not_found(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, session
     reject(writer, hub, Some(id), &refused.code, &refused.message);
 }
 
+enum DelegateTail {
+    NotNeeded,
+    Replayed,
+    Incomplete,
+    WriteFailed,
+}
+
+/// Completes a delegate's accepted full fold after its session socket ends:
+/// only a missing range through `last_seq` is written, and the whole range
+/// is checked before any tail line is sent.
+fn replay_delegate_tail(
+    session: &str,
+    accepted_last_seq: Option<u64>,
+    last_forwarded_seq: Option<u64>,
+    hub: &Hub,
+    writer: &Arc<Mutex<UnixStream>>,
+) -> DelegateTail {
+    let Some(boundary) = accepted_last_seq else {
+        return DelegateTail::NotNeeded;
+    };
+    if last_forwarded_seq.is_some_and(|forwarded| forwarded >= boundary) {
+        return DelegateTail::NotNeeded;
+    }
+    let session_id = SessionId(session.to_owned());
+    let Some((_, dir)) = crate::recent::lookup_logged(&hub.home, &session_id) else {
+        return DelegateTail::NotNeeded;
+    };
+    if crate::resume::delegate_job(&dir).is_none() || crate::closed::running(hub, session) {
+        return DelegateTail::NotNeeded;
+    }
+    let Ok(fold) = exited_fold(&dir) else {
+        return DelegateTail::Incomplete;
+    };
+    let mut expected = match last_forwarded_seq {
+        Some(forwarded) => match forwarded.checked_add(1) {
+            Some(next) => next,
+            None => return DelegateTail::Incomplete,
+        },
+        None => 0,
+    };
+    let mut suffix = Vec::new();
+    for line in &fold {
+        let Some(seq) = line.seq.map(|seq| seq.0) else {
+            continue;
+        };
+        if seq < expected {
+            continue;
+        }
+        if seq > boundary {
+            break;
+        }
+        if seq != expected {
+            return DelegateTail::Incomplete;
+        }
+        suffix.push(line);
+        if seq == boundary {
+            break;
+        }
+        let Some(next) = seq.checked_add(1) else {
+            return DelegateTail::Incomplete;
+        };
+        expected = next;
+    }
+    if suffix.last().and_then(|line| line.seq.map(|seq| seq.0)) != Some(boundary) {
+        return DelegateTail::Incomplete;
+    }
+    let Ok(bytes) = suffix
+        .iter()
+        .map(|line| serde_json::to_vec(*line))
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        return DelegateTail::Incomplete;
+    };
+    let mut client = lock(writer);
+    for line in &bytes {
+        if support::framing::write_line(&mut *client, line).is_err() {
+            return DelegateTail::WriteFailed;
+        }
+    }
+    DelegateTail::Replayed
+}
+
+/// Drops the accepted subscription and sends the existing unreadable-stream
+/// fallback after a delegate's required tail could not be read.
+fn close_failed_delegate_tail(
+    session: &str,
+    hub: &Hub,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+) {
+    lock(relays)
+        .subscribed
+        .retain(|(subscribed, _)| subscribed != session);
+    let mut payload = Map::new();
+    payload.insert("session_id".to_owned(), Value::String(session.to_owned()));
+    crate::connection::send(writer, hub, HubEventKind::StreamClosed, payload);
+}
+
 /// Copies every session line back verbatim onto the client's shared
 /// writer, except the acknowledgement of the subscription the hub sent
 /// again, replaced at full by `stream_reopened` before the fold on a
@@ -1949,6 +2047,8 @@ fn relay(
     // disconnects first fails its forward, and its dead connection
     // follows nothing.
     let mut ended = false;
+    let mut accepted_full_last_seq = None;
+    let mut last_forwarded_seq = None;
     loop {
         #[cfg(test)]
         if let Some(before_read) = lock(&order.before_read).take() {
@@ -1962,7 +2062,7 @@ fn relay(
             Ok(Some(mut buf)) => {
                 // The forwarded line keeps its one trailing line feed.
                 buf.push(b'\n');
-                let mut ack = acknowledgement(&buf);
+                let (mut ack, seq) = ack::acknowledgement_and_seq(&buf);
                 let replayed_ack = muted(ack.as_ref(), &replayed);
                 #[cfg(test)]
                 {
@@ -1971,6 +2071,13 @@ fn relay(
                     }
                 }
                 if replayed_ack {
+                    if let Some(ack) = ack.as_ref() {
+                        accepted_full_last_seq = if ack.verdict == Verdict::Accepted {
+                            ack.last_seq
+                        } else {
+                            None
+                        };
+                    }
                     if let Some(ack) = ack.as_ref()
                         && reopen.as_deref() == Some(ack.id.as_str())
                     {
@@ -2120,6 +2227,17 @@ fn relay(
                         });
                     }
                     Some(Settled::Subscribed(line)) => {
+                        let full = line
+                            .get("args")
+                            .and_then(Value::as_object)
+                            .and_then(|args| args.get("level"))
+                            .and_then(Value::as_str)
+                            == Some("full");
+                        accepted_full_last_seq = if full {
+                            ack.as_ref().and_then(|ack| ack.last_seq)
+                        } else {
+                            None
+                        };
                         #[cfg(test)]
                         {
                             if let Some(before) = lock(&hub.before_accepted).take() {
@@ -2144,6 +2262,9 @@ fn relay(
                 {
                     break;
                 }
+                if let Some(seq) = seq {
+                    last_forwarded_seq = Some(seq);
+                }
                 // An exiting relay passes its queue on once the
                 // acknowledgement ahead of it reached the client, so the
                 // replacement never answers a command first. A dead relay
@@ -2155,7 +2276,31 @@ fn relay(
             }
         }
     }
-    crate::closed::on_end(session, ended && !exiting, hub, writer, relays, &gone);
+    let mut failed_tail = false;
+    if ended && !gone.load(Ordering::SeqCst) {
+        match replay_delegate_tail(
+            session,
+            accepted_full_last_seq,
+            last_forwarded_seq,
+            hub,
+            writer,
+        ) {
+            DelegateTail::Incomplete => {
+                close_failed_delegate_tail(session, hub, writer, relays);
+                failed_tail = true;
+            }
+            DelegateTail::WriteFailed => ended = false,
+            DelegateTail::NotNeeded | DelegateTail::Replayed => {}
+        }
+    }
+    crate::closed::on_end(
+        session,
+        ended && !exiting && !failed_tail,
+        hub,
+        writer,
+        relays,
+        &gone,
+    );
     // A loop that broke on a failed `forward` did not see the session
     // close: the client is gone.
     let client_gone = gone.load(Ordering::SeqCst) || !ended;
