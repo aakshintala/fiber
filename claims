@@ -311,3 +311,4 @@ crates/main/tests/delegation/ask.rs	fiber-4965	plan	2026-11-26T23:59:06Z	Amoghs-
 scripts/lib/release.sh	fiber-4962	plan	2026-11-27T00:00:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/release-size	fiber-4962	plan	2026-11-27T00:00:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/paging-jig	fiber-4962	plan	2026-11-27T00:00:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/events.md	fiber-4977	plan	2026-11-27T00:02:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
