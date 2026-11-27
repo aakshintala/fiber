@@ -833,6 +833,7 @@ pub(crate) fn assemble_session(
                 .then(|| Arc::clone(&diag) as Arc<dyn DebugLog>);
             let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
                 fiber_path.clone(),
+                id.clone(),
                 &home,
                 Path::new(&folded.workspace),
                 &dir.artifacts(),
@@ -1394,6 +1395,7 @@ pub(crate) fn assemble_session(
                 .then(|| Arc::clone(&diag) as Arc<dyn DebugLog>);
             let (tools, infos, driver, session_servers) = match mcp_servers::session_tools(
                 fiber_path.clone(),
+                id.clone(),
                 &home,
                 &workspace,
                 &dir.artifacts(),

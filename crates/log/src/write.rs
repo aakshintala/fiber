@@ -50,6 +50,7 @@ pub struct Log {
     clock: Arc<dyn Clock>,
     /// The session directory, copied out of `inner` so [`Log::dir`] can lend it.
     dir: PathBuf,
+    session_id: SessionId,
     /// The diagnostic writer timing appends, installed once per process.
     diag: OnceLock<Arc<Diag>>,
     /// The rate fold over the events [`Log::open`] replayed. No append
@@ -512,6 +513,11 @@ impl Log {
         &self.dir
     }
 
+    /// The id of the session this log belongs to.
+    pub fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+
     /// How many fsyncs this log has made, counted where they are made
     /// (`docs/performance.md`, "Measuring").
     pub fn fsyncs(&self) -> u64 {
@@ -534,6 +540,7 @@ impl Log {
     fn from_parts(inner: Inner, clock: Arc<dyn Clock>) -> Self {
         Self {
             dir: inner.dir.clone(),
+            session_id: inner.session_id.clone(),
             offsets: Arc::clone(&inner.offsets),
             inner: Mutex::new(inner),
             clock,
