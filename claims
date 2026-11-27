@@ -312,3 +312,9 @@ scripts/lib/release.sh	fiber-4962	plan	2026-11-27T00:00:45Z	Amoghs-MacBook-Pro:/
 scripts/release-size	fiber-4962	plan	2026-11-27T00:00:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/paging-jig	fiber-4962	plan	2026-11-27T00:00:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/events.md	fiber-4977	plan	2026-11-27T00:02:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/lua/tool_tests.rs	fiber-4975	plan	2026-11-27T00:09:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/tests/lua_tools.rs	fiber-4975	plan	2026-11-27T00:09:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/fakes/src/provider_server_tests.rs	fiber-4975	plan	2026-11-27T00:09:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/session_turns/reload.rs	fiber-4975	plan	2026-11-27T00:09:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/provider/src/openai_responses_tests.rs	fiber-4975	plan	2026-11-27T00:09:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/provider/tests/gemini.rs	fiber-4975	plan	2026-11-27T00:09:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
