@@ -204,7 +204,7 @@ fn feedback_by_stdin_with_trailing_dash_writes_the_same_report() {
 #[test]
 fn feedback_long_description_caps_the_link_and_says_to_attach() {
     // RULING-4976-1: an 8 KiB description produces a capped link.
-    // `docs/user/reporting.md:3` promises the attach instruction when the report is too long for a link.
+    // `docs/user/reporting.md`, "Reporting a problem" promises the attach instruction when the report is too long for a link.
     let setup = Setup::new();
     let description = "a".repeat(8192);
     let output = run(
