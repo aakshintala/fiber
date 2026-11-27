@@ -22,6 +22,8 @@ impl Loop {
     pub fn run(mut self) -> crate::Ran {
         let mut status = None;
         let result = (|| {
+            status = status::spawn(&self);
+            self.status_tap = status.as_ref().map(status::Status::tap);
             let (orphans, backfill, settings) = self.staged_orphans.take();
             self.mark_orphans(orphans)?;
             for (session, lines) in backfill {
@@ -30,10 +32,6 @@ impl Loop {
                 }
             }
             self.resumed_label(settings)?;
-            // Fold the whole resume tail as history before the status
-            // observer begins emitting changes for this process.
-            status = status::spawn(&self);
-            self.status_tap = status.as_ref().map(status::Status::tap);
             loop {
                 match self.turn()? {
                     Some(_) => {}
