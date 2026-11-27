@@ -498,16 +498,11 @@ fn discards_pipelined(headers: &[(String, String)]) -> bool {
         && !headers.iter().any(|(name, _)| name == "transfer-encoding")
 }
 
-/// Rejects only malformed top-level OpenAI Responses function properties.
-/// Decode string tokens for the prefilter so escaped JSON keys still match;
-/// parse the request body only when that key is present.
-fn invalid_openai_properties(request: &ParsedRequest) -> bool {
-    if request.target.split('?').next() != Some("/v1/responses") {
-        return false;
-    }
-    let body = &request.body;
+/// Whether `body` contains a JSON string token that decodes to `properties`.
+/// Decode string tokens so escaped JSON keys still match, without parsing
+/// unrelated request bodies.
+fn mentions_properties(body: &[u8]) -> bool {
     let mut at = 0;
-    let mut found = false;
     while let Some(relative) = body
         .get(at..)
         .and_then(|remaining| remaining.iter().position(|byte| *byte == b'"'))
@@ -530,12 +525,21 @@ fn invalid_openai_properties(request: &ParsedRequest) -> bool {
                 .as_deref()
                 .is_ok_and(|decoded| decoded == "properties")
         }) {
-            found = true;
-            break;
+            return true;
         }
         at = end;
     }
-    if !found {
+    false
+}
+
+/// Rejects only malformed top-level OpenAI Responses function properties.
+/// Parse the request body only when the prefilter finds that key.
+fn invalid_openai_properties(request: &ParsedRequest) -> bool {
+    if request.target.split('?').next() != Some("/v1/responses") {
+        return false;
+    }
+    let body = &request.body;
+    if !mentions_properties(body) {
         return false;
     }
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {

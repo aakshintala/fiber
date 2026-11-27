@@ -755,6 +755,20 @@ fn post_path(addr: std::net::SocketAddr, path: &str, body: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+fn mentions_properties_decodes_escaped_json_keys() {
+    assert!(mentions_properties(
+        br#"{"tools":[{"parameters":{"pro\u0070erties":[]}}]}"#
+    ));
+}
+
+#[test]
+fn mentions_properties_is_false_when_body_has_no_such_key() {
+    assert!(!mentions_properties(
+        br#"{"tools":[{"parameters":{"required":[]}}]}"#
+    ));
+}
+
+#[test]
 fn openai_responses_rejects_non_object_properties_even_when_bodies_are_dropped() {
     let server = ProviderServer::start([Response::status(200, "ok")]).unwrap();
     server.drop_bodies();
