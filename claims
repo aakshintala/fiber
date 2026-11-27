@@ -322,3 +322,10 @@ crates/loop/src/history.rs	fiber-4977	plan	2026-11-27T00:10:42Z	roundhouse-7010-
 crates/loop/src/resume_tests.rs	fiber-4977	plan	2026-11-27T00:10:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/loop/src/jobs_tests.rs	fiber-4977	plan	2026-11-27T00:10:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/loop/tests/resume.rs	fiber-4977	plan	2026-11-27T00:10:42Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/login_view.rs	fiber-4979	plan	2026-11-27T00:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/config_views_tests.rs	fiber-4979	plan	2026-11-27T00:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/commands_tests.rs	fiber-4979	plan	2026-11-27T00:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/event_loop.rs	fiber-4979	plan	2026-11-27T00:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/login_view_tests.rs	fiber-4979	plan	2026-11-27T00:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/tui.md	fiber-4979	plan	2026-11-27T00:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing/screens.md	fiber-4979	plan	2026-11-27T00:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
