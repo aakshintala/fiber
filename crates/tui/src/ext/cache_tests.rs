@@ -138,6 +138,55 @@ fn layout_cache_keys_width_height_shown_regions_and_flat() {
 }
 
 #[test]
+fn layout_regions_counts_renderer_calls_only_on_cache_misses() {
+    let cache = Cache::default();
+    let input = layout_input(10, 8, &["conversation"], false);
+    let draw = || {
+        cache.layout_regions(page(0), "test", None, &input, || LayoutDecision::Draw {
+            extension: "test".into(),
+            regions: vec![(Region::Conversation, raw_rect(0, 0, 4, 3))],
+        })
+    };
+
+    crate::work::take();
+    assert!(draw().is_some());
+    assert_eq!(crate::work::take().renderer_calls, 1);
+    assert!(draw().is_some());
+    assert_eq!(crate::work::take().renderer_calls, 0);
+}
+
+#[test]
+fn dropping_a_page_removes_only_its_layout_cache_entry() {
+    let cache = Cache::default();
+    let input = layout_input(10, 8, &["conversation"], false);
+    let calls = Cell::new(0usize);
+    let draw = |page| {
+        cache.layout_regions(page, "test", None, &input, || {
+            calls.set(calls.get().saturating_add(1));
+            LayoutDecision::Draw {
+                extension: "test".into(),
+                regions: vec![(Region::Conversation, raw_rect(0, 0, 4, 3))],
+            }
+        })
+    };
+
+    assert!(draw(page(0)).is_some());
+    assert_eq!(calls.get(), 1);
+    assert!(draw(page(1)).is_some());
+    assert_eq!(calls.get(), 2);
+    assert!(draw(page(0)).is_some());
+    assert_eq!(calls.get(), 2);
+    assert!(draw(page(1)).is_some());
+    assert_eq!(calls.get(), 2);
+
+    cache.drop_page(page(0));
+    assert!(draw(page(0)).is_some());
+    assert_eq!(calls.get(), 3);
+    assert!(draw(page(1)).is_some());
+    assert_eq!(calls.get(), 3);
+}
+
+#[test]
 fn invalid_layout_maps_fail_atomically_and_cache_the_failure() {
     let input = layout_input(10, 5, &["rail", "conversation", "panel"], false);
     let invalid = [
