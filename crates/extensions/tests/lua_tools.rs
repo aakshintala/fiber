@@ -1443,7 +1443,7 @@ fiber.tool("other", {
     assert_eq!(
         failed(&later),
         (
-            ErrorCode::ToolError,
+            ErrorCode::ExtensionUnavailable,
             "`fiber.test/stuck` is stopped and takes no more calls.".to_owned()
         )
     );
