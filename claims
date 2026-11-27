@@ -331,3 +331,7 @@ docs/code-quality.md	fiber-4975	plan	2026-11-27T01:08:44Z	roundhouse-7010-plus-1
 docs/code-quality/lints.md	fiber-4975	plan	2026-11-27T01:08:44Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/dependencies.md	fiber-4975	plan	2026-11-27T01:08:44Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/performance.md	fiber-4975	plan	2026-11-27T01:08:44Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/commands.rs	fiber-4976	plan	2026-11-27T01:26:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/commands_tests.rs	fiber-4976	plan	2026-11-27T01:26:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/feedback.rs	fiber-4976	plan	2026-11-27T01:26:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/feedback_tests.rs	fiber-4976	plan	2026-11-27T01:26:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
