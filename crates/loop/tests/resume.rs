@@ -4193,11 +4193,14 @@ fn an_answerable_resume_runs_the_call_a_person_allows() {
     assert_eq!(done[0].action_id, Some(ActionId("a_1".into())));
 }
 
+/// The hook's observed settlement delivery, when this test enables it.
+type SettlementObservation =
+    Arc<std::sync::Mutex<Vec<(String, String, Option<contract::hook::JobDelivery>)>>>;
+
 /// Hooks rewriting every call's `city` to `to`, naming the rewrite.
 struct RewriteHooks {
     to: String,
-    settlement_seen:
-        Option<Arc<std::sync::Mutex<Vec<(String, String, Option<contract::hook::JobDelivery>)>>>>,
+    settlement_seen: Option<SettlementObservation>,
 }
 
 impl contract::hook::Hooks for RewriteHooks {
@@ -6468,12 +6471,11 @@ fn a_current_run_finish_without_completion_is_not_written_twice() {
         delegate_started("j_duplicate", "s_duplicate", "fiber"),
         None,
     );
-    let prior_finish = match settle_exit(0, Some("already recorded"), None) {
-        Event::FiberExited(exit) => {
-            Event::DelegateFinished(exit.delegate_finished(&contract::JobId("j_duplicate".into())))
-        }
-        _ => unreachable!(),
+    let Event::FiberExited(exit) = settle_exit(0, Some("already recorded"), None) else {
+        unreachable!();
     };
+    let prior_finish =
+        Event::DelegateFinished(exit.delegate_finished(&contract::JobId("j_duplicate".into())));
     history.write(prior_finish, None);
     let delegate = stage_delegate(&history, "s_duplicate");
     delegate.append(&fiber_started(), None, None).unwrap();
@@ -6495,12 +6497,11 @@ fn a_previous_run_finish_does_not_suppress_the_current_run_finish() {
     let mut history = History::new(Vec::new());
     history.write(job_started("j_reopened"), None);
     history.write(delegate_started("j_reopened", "s_reopened", "fiber"), None);
-    let old_finish = match settle_exit(0, Some("old"), None) {
-        Event::FiberExited(exit) => {
-            Event::DelegateFinished(exit.delegate_finished(&contract::JobId("j_reopened".into())))
-        }
-        _ => unreachable!(),
+    let Event::FiberExited(exit) = settle_exit(0, Some("old"), None) else {
+        unreachable!();
     };
+    let old_finish =
+        Event::DelegateFinished(exit.delegate_finished(&contract::JobId("j_reopened".into())));
     history.write(old_finish, None);
     history.write(job_started("j_reopened"), None);
     let delegate = stage_delegate(&history, "s_reopened");
