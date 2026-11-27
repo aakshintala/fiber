@@ -747,3 +747,4 @@ crates/tui/src/view/home/picker.rs	fiber-4781	plan	2026-11-27T20:22:04Z	roundhou
 crates/tui/src/home_view_tests.rs	fiber-4781	plan	2026-11-27T20:22:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4781-space-click-views	
 crates/tui/src/app/home/workspace_tests.rs	fiber-4781	plan	2026-11-27T20:22:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4781-space-click-views	
 crates/tui/src/app/keyboard_screen_tests.rs	fiber-4781	plan	2026-11-27T20:22:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4781-space-click-views	
+crates/tui/src/offer_tests.rs	fiber-4781	plan	2026-11-27T20:24:57Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
