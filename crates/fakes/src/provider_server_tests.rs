@@ -767,16 +767,18 @@ fn openai_responses_rejects_non_object_properties_even_when_bodies_are_dropped()
 
 #[test]
 fn openai_responses_accepts_object_missing_escaped_keys_and_non_json() {
-    let server = ProviderServer::start((0..4).map(|_| Response::status(200, "ok"))).unwrap();
+    let server = ProviderServer::start((0..3).map(|_| Response::status(200, "ok"))).unwrap();
     for body in [
         br#"{"tools":[{"parameters":{"properties":{}}}]}"#.as_slice(),
         br#"{"tools":[{"parameters":{}}]}"#.as_slice(),
-        br#"{"tools":[{"parameters":{"pro\u0070erties":[]}}]}"#.as_slice(),
         b"not json".as_slice(),
     ] {
         let response = post_path(server.addr, "/v1/responses", body);
         assert!(response.starts_with(b"HTTP/1.1 200"), "{response:?}");
     }
+    let escaped = br#"{"tools":[{"parameters":{"pro\u0070erties":[]}}]}"#;
+    let response = post_path(server.addr, "/v1/responses", escaped);
+    assert!(response.starts_with(b"HTTP/1.1 400"), "{response:?}");
 }
 
 #[test]

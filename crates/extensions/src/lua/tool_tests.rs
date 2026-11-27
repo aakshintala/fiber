@@ -111,11 +111,7 @@ fn lua_schema_empty_tables_are_normalized_only_at_schema_positions() {
         ("dependencies", "{ x = {} }", json!({"x": []})),
     ];
     for (keyword, value, before) in cases {
-        let field = if keyword.starts_with('$') {
-            format!("[\\\"{keyword}\\\"]")
-        } else {
-            keyword.to_owned()
-        };
+        let field = format!(r#"["{keyword}"]"#);
         let source = format!(
             "fiber.tool('x', {{description='d', input_schema={{type='object', {field}={value}}}, effects={{effects={{}},reversible=true}}, timeout=100, run=function() end}})"
         );
