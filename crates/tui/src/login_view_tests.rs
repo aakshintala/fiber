@@ -2838,9 +2838,11 @@ fn a_stored_key_queues_a_reviewer_read_not_an_end() {
         login.key(&Key::Enter, &ctx(&fake)),
         Act::Reviewer(name) if name == "acme"
     ));
+    assert!(!login.stored());
     assert_eq!(fake.stores(), [("acme".to_owned(), None)]);
     // The panel stays until the app queues the read on its ticket.
     login.wait_reviewer(LoginTicket(1), "acme".to_owned());
+    assert!(login.stored());
     let screen = drawn(&login, 80, 24);
     assert!(
         screen.contains("Reading acme's reviewer models"),
@@ -2870,6 +2872,7 @@ fn first_run_secret_and_reviewer_saves_signal_success_only_at_last_save() {
     typed(&mut secret, &fake, "v1");
     assert!(matches!(secret.key(&Key::Enter, &ctx(&fake)), Act::Stay));
     assert!(secret.ended_successfully());
+    assert!(secret.stored());
 
     let mut browser = waiting(&fake, LoginTicket(1));
     browser.step(
@@ -2902,7 +2905,18 @@ fn browser_done_signal_distinguishes_a_saved_credential_from_failure() {
         ),
         None
     );
+    assert!(saved.stored());
     assert!(matches!(saved.mode, super::Mode::Preparing(_)));
+
+    let mut stale = waiting(&fake, LoginTicket(3));
+    stale.step(
+        LoginTicket(4),
+        crate::login_worker::LoginStep::Done(Ok(Stored {
+            path: "credentials/codex/alice@example.com".to_owned(),
+            replaced: false,
+        })),
+    );
+    assert!(!stale.stored());
 
     let mut failed = waiting(&fake, LoginTicket(2));
     assert_eq!(
@@ -2915,6 +2929,7 @@ fn browser_done_signal_distinguishes_a_saved_credential_from_failure() {
         ),
         None
     );
+    assert!(!failed.stored());
     assert!(matches!(failed.mode, super::Mode::Ended(_)));
 }
 

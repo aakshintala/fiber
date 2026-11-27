@@ -442,6 +442,63 @@ fn browser_credential_save_clears_flag_before_reviewer_completion() {
     assert!(app.config_view_open(), "reviewer follow-up remains open");
 }
 
+#[test]
+fn secret_credential_save_clears_first_run_flag() {
+    let seam = Fake::new(Vec::new());
+    *seam.targets.lock().unwrap() = Ok(vec![LoginTarget {
+        name: "acme.api_key".to_owned(),
+        kind: LoginKind::Secret,
+        label: None,
+    }]);
+    let seam = Arc::new(seam);
+    let mut app = home(Arc::clone(&seam));
+    app.first_run_no_credential = true;
+
+    assert_eq!(slash_login(&mut app), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    for ch in "secret-value".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+
+    assert_eq!(seam.stores(), [("acme.api_key".to_owned(), None)]);
+    assert!(!app.first_run_no_credential);
+    assert!(app.config_view_open(), "manual login remains open");
+}
+
+#[test]
+fn stale_browser_save_and_failed_save_keep_first_run_flag() {
+    let seam = browser_seam();
+    let mut app = browser_login_app(&seam);
+    app.first_run_no_credential = true;
+    let start = start_login(&mut app);
+    let stored = crate::configure::Stored {
+        path: "credentials/codex/alice@example.com".to_owned(),
+        replaced: false,
+    };
+
+    assert_eq!(
+        app.on_login(
+            start.ticket.next(),
+            crate::login_worker::LoginStep::Done(Ok(stored)),
+        ),
+        None
+    );
+    assert!(app.first_run_no_credential, "a stale ticket saved nothing");
+
+    assert_eq!(
+        app.on_login(
+            start.ticket,
+            crate::login_worker::LoginStep::Done(Err(crate::configure::ConfigureError {
+                code: contract::ErrorCode::AuthenticationFailed,
+                message: "save failed".to_owned(),
+            })),
+        ),
+        None
+    );
+    assert!(app.first_run_no_credential, "a failed save clears nothing");
+}
+
 /// Opens `/login`, submits the key on the first row, and takes the
 /// queued reviewer start.
 fn start_key_reviewer(app: &mut App, seam: &Arc<Fake>) -> crate::login_worker::LoginStart {
