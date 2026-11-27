@@ -1752,8 +1752,10 @@ and each process extension is restarted. Both are handed their current state aga
   coroutine a callback runs on, and it replaces `coroutine.create` and
   `coroutine.wrap` with versions that arm it on each new coroutine. With either
   one left as Lua ships it, a loop inside a coroutine is never stopped
-  (`research/extension-runtime/linux-containment/`). A
-  process extension is not interrupted: Fiber stops waiting, and its late
+  (`research/extension-runtime/linux-containment/`). When the interrupt cannot
+  stop a Lua callback, the extension is stopped for the session: its tools
+  stay declared, and every call to them fails with code `extension_unavailable`.
+  A process extension is not interrupted: Fiber stops waiting, and its late
   reply is dropped.
 - **It allocates without bound.** A per-extension memory cap turns this into an
   error in that extension's VM, not an out-of-memory kill of the process. A
