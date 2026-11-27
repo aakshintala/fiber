@@ -331,7 +331,11 @@ that no longer makes sense is closed and its work replanned.
 ## Merging
 
 A pull request opens as a draft and stays a draft until its review loop is
-done; marking it ready starts CI's full run (`docs/ci.md`). When `CI` is
+done. A draft runs the same jobs as a ready pull request, with mutation
+testing only once it carries the `mutants` label, and its verdict reports as
+`CI (draft)`. Marking it ready runs the selection again at the same head,
+reusing a same-head mutants pass, and reports the required `CI` check
+(`docs/ci.md`, "The merge gate"). When `CI` is
 green, the full run passed on the exact head, and every review finding is
 resolved, the orchestrator squash-merges the pull request, deletes its
 branch and checks the ticket closed.
