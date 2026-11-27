@@ -1961,7 +1961,7 @@ pub(crate) fn connect_detached_hub(
         done.send(doors::hub::connect(&home, &mut start, &clock))
             .unwrap();
     });
-    let connected = match Deadline::after(wait).recv(&connected) {
+    let connected = match deadline.recv(&connected) {
         Ok(Ok(connected)) => connected,
         Ok(Err(error)) => panic!(
             "hub connect failed with {error} waiting for the detached hub to start and say hub_hello: the hub {}",
