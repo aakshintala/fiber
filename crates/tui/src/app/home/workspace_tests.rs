@@ -271,12 +271,13 @@ fn rendered_completion_target(app: &App, name: &str) -> crate::mouse::TargetId {
     let mut buffer = ratatui::buffer::Buffer::empty(area);
     crate::view::render(app, area, &mut buffer, None)
         .into_iter()
-        .find_map(|target| match target.id {
-            crate::mouse::TargetId::Home(Spot::PickCompletion(found)) if found == identity => {
-                Some(target.id)
-            }
-            _ => None,
+        .find(|target| {
+            matches!(
+                target.id,
+                crate::mouse::TargetId::Home(Spot::PickCompletion(found)) if found == identity
+            )
         })
+        .map(|target| target.id)
         .expect("rendered completion target")
 }
 
