@@ -1632,7 +1632,7 @@ fn responder_calls_follow_request_arrival_order_without_overlap() {
     assert!(second_result.ends_with(b"ok"));
     let requests = server.requests();
     // Request order and responder order are part of this fake's contract
-    // (`docs/testing/fakes.md:106`).
+    // (`docs/testing/fakes.md`, "Fakes").
     assert_eq!(first_call, requests[0].body);
     assert_eq!(second_call, requests[1].body);
     assert_eq!(maximum.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -1666,7 +1666,7 @@ fn await_requests_two_observes_recording_during_first_blocked_callback() {
             .recv_or_fail(&await_rx, "await_requests to observe two requests"),
         "both requests are recorded while the first callback remains blocked"
     );
-    // The fake's request count is pinned here (`docs/testing/fakes.md:106`).
+    // The fake's request count is pinned here (`docs/testing/fakes.md`, "Fakes").
     assert_eq!(server.requests().len(), 2);
     drop(release_tx);
     assert!(

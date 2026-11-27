@@ -954,7 +954,10 @@ fn session_message_to_itself_is_delivered() {
         let asked = Arc::clone(&asked);
         move |request: &fakes::Request| {
             if String::from_utf8_lossy(&request.body).contains("to myself") {
-                drop(seen_self_tx.send(()));
+                assert!(
+                    seen_self_tx.send(()).is_ok(),
+                    "the test awaits the self-message marker"
+                );
                 return hello();
             }
             if asked.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -1073,7 +1076,10 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
     let server_child = fakes::ProviderServer::start_responding(move |request: &fakes::Request| {
         let text = String::from_utf8_lossy(&request.body);
         if text.contains(MARK) {
-            drop(marked_tx.send(()));
+            assert!(
+                marked_tx.send(()).is_ok(),
+                "the test awaits the delegate marker"
+            );
         }
         stream(&[function_call(
             "call_hold",
@@ -1236,7 +1242,10 @@ fn nested_delegate_message_accepted_while_shell_steers_refused() {
     let server_g = fakes::ProviderServer::start_responding(move |request: &fakes::Request| {
         let text = String::from_utf8_lossy(&request.body);
         if text.contains(G_MARK) {
-            drop(marked_tx.send(()));
+            assert!(
+                marked_tx.send(()).is_ok(),
+                "the test awaits the grandchild marker"
+            );
         }
         stream(&[function_call(
             "call_hold",
