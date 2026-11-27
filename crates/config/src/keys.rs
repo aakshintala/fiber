@@ -1284,7 +1284,7 @@ fn walk(
         expected,
     };
     let mut kept = Map::new();
-    for (name, value) in map {
+    for (name, mut value) in map {
         path.push(name.clone());
         if let Some(key) = leaf(path) {
             if matches!(source, Source::Repository(_)) && !key.scope.repo() {
@@ -1331,6 +1331,9 @@ fn walk(
                                     ),
                                     extension: None,
                                 });
+                                if let Value::Object(object) = &mut value {
+                                    object.remove("credential");
+                                }
                             }
                             kept.insert(name, value);
                         } else {
