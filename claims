@@ -523,3 +523,15 @@ crates/tui/src/event_loop/attach_tests.rs:2049-2050	fiber-4974	plan	2026-11-27T0
 crates/tui/src/event_loop/attach_tests.rs:2157-2157	fiber-4974	plan	2026-11-27T07:42:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4974-plan	
 crates/tui/src/event_loop/attach_tests.rs:2176-2180	fiber-4974	plan	2026-11-27T07:42:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4974-plan	
 docs/invocation.md:1248-1248	fiber-4974	plan	2026-11-27T07:42:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4974-plan	
+docs/architecture.md	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/workflow.md	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/ci.md	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing.md	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing/fakes.md	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/support/src/deadline.rs	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/fakes/src/http_server.rs	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/fakes/src/http_server/request.rs	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/support/mod.rs	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/support/pty.rs	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/providers/quota_fetch_session.rs	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+scripts/check	fiber-5007	plan	2026-11-27T07:46:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
