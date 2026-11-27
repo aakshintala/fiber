@@ -1795,6 +1795,31 @@ fn malformed_request_between_good_requests_consumes_no_responder_turn() {
 }
 
 #[test]
+fn responder_turn_wait_budget_is_waits_plus_shutdown_and_margin() {
+    assert_eq!(
+        RESPONDER_TURN_WAIT,
+        crate::deadline::WAITS + crate::http_server::SHUTDOWN_WITHIN + Duration::from_secs(8)
+    );
+}
+
+#[test]
+fn turn_state_waits_for_earlier_turn_but_not_for_matching_idle_turn() {
+    let earlier_not_running = TurnState {
+        current: 0,
+        running: false,
+        stalled: false,
+    };
+    assert!(earlier_not_running.should_wait(1));
+
+    let matching_not_running = TurnState {
+        current: 1,
+        running: false,
+        stalled: false,
+    };
+    assert!(!matching_not_running.should_wait(1));
+}
+
+#[test]
 fn await_requests_observes_request_while_responder_is_blocked() {
     let (release_tx, release_rx) = mpsc::channel::<()>();
     let release_rx = Arc::new(Mutex::new(release_rx));

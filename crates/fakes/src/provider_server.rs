@@ -238,6 +238,12 @@ struct TurnState {
     stalled: bool,
 }
 
+impl TurnState {
+    fn should_wait(&self, requested: u64) -> bool {
+        self.current != requested || self.running
+    }
+}
+
 #[derive(Default)]
 struct ResponderTurns {
     state: Mutex<TurnState>,
@@ -252,7 +258,7 @@ impl ResponderTurns {
     fn enter(&self, requested: u64) -> bool {
         let deadline = Deadline::after(RESPONDER_TURN_WAIT);
         let mut state = lock(&self.state);
-        while !state.stalled && (state.current != requested || state.running) {
+        while !state.stalled && state.should_wait(requested) {
             let remaining = deadline.left();
             if remaining.is_zero() {
                 state.stalled = true;
