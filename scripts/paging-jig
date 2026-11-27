@@ -8,10 +8,10 @@
 # When scripts/release-size left $RUNNER_TEMP/release/base/commit (a pull
 # request whose base comparison is not skipped), the base jig is also built
 # at that commit, the base or the ancestor standing in for it, in a git
-# worktree reusing this checkout's target directory. A base with no jig, or
-# whose jig does not build, has none: the script says so, exits 0, and the
-# base's paging timings are reported unavailable. Only a failed head build
-# fails the script.
+# worktree with its own warm target directory, separate from the head. A base
+# with no jig, or whose jig does not build, has none: the script says so,
+# exits 0, and the base's paging timings are reported unavailable. Only a
+# failed head build fails the script.
 #
 # Outputs: $RUNNER_TEMP/release/head/paging, and $RUNNER_TEMP/release/base/paging
 # when the base has a jig that builds. Runs on Linux.
@@ -32,18 +32,19 @@ if [ -f "$out/base/commit" ]; then
 fi
 top=$PWD
 
-# Builds the jig of the checkout in the current directory into the shared
+# Builds the jig of the checkout in the current directory into the selected
 # target directory and copies it to $1. Each step is chained, so a failed
 # build fails the function even where errexit does not apply, and never
-# copies a jig an earlier build left in target/.
+# copies a jig an earlier build left there.
 build_paging() {
-  build -p tui --example paging &&
+  local target_dir=$2
+  build "$target_dir" -p tui --example paging &&
     mkdir -p "${1%/*}" &&
-    cp "$top/target/$target/release/examples/paging" "$1"
+    cp "$target_dir/$target/release/examples/paging" "$1"
 }
 
 # The head is copied out of target/ before any base build overwrites it.
-build_paging "$out/head/paging"
+build_paging "$out/head/paging" "$top/target"
 echo "paging-jig: head $(git rev-parse --short HEAD) jig built"
 
 if [ -n "$base_commit" ]; then
@@ -58,7 +59,7 @@ if [ -n "$base_commit" ]; then
   # The base may pin another toolchain; each command reads its
   # rust-toolchain.toml.
   if (cd "$worktree" && rustup toolchain install && rustup target add "$target" &&
-    build_paging "$out/base/paging"); then
+    build_paging "$out/base/paging" "$top/target/base"); then
     echo "paging-jig: base $base_sha jig built"
   else
     rm -f "$out/base/paging"

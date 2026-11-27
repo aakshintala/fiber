@@ -343,7 +343,7 @@ the lines that carry it.
 | `extension_required_failed` | exit, driver command (`rewind`) | a required extension failed to start | — |
 | `extension_shadowed` | notice | a repository's approved copy of an extension loads in place of the personal install of the same name, or in place of another version of it that another of the repository's extensions brings; the message names both versions (`docs/extensions.md`, "Code a repository ships") | event |
 | `extension_unapproved` | exit, driver command (`rewind`) | a repository's required extension is not approved; run `fiber approve` in the repository | — |
-| `extension_unavailable` | tool call | the extension providing the tool died twice | — |
+| `extension_unavailable` | tool call | the extension providing the tool is stopped for the rest of the session: a process extension that died twice, or a Lua extension Fiber stopped, as when it could not be stopped at a timeout (`docs/extensions.md`, "When an extension misbehaves") | — |
 | `fetch_failed` | exit, driver command (`rewind`) | an install or update could not fetch: git or the network failed; try again later. Not retried automatically (`docs/extensions.md`, "Installing") | — |
 | `flooded` | job | a monitor was suppressed for 30 seconds (`docs/tools.md`) | — |
 | `history_loading` | notice | the terminal is still reading the session's history (`docs/tui.md`, "Notices") | condition |
