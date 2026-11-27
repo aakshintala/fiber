@@ -518,15 +518,11 @@ fn unknown_model(argument: &str) -> String {
 /// A role's credential label as configured now: the object's string
 /// `credential`, whatever its `model` is. `None` for a string role, an
 /// object without one, a non-string `credential`, or a non-role argument.
-/// A repository's role names no credential: its winning source is the
-/// repository layer, and its `credential` is ignored, so it reads as
-/// `None` too (`docs/configuration.md`, "Keys").
+/// A repository's role names no credential: layer checking removes that
+/// member, while other layers may supply one (`docs/configuration.md`, "Keys").
 fn role_credential(config: &config::Config, name: &str) -> Option<String> {
     let key = format!("roles.{}", config::path::display(&[name.to_owned()]));
-    let (value, source) = config.get(&key, None)?;
-    if matches!(source, config::Source::Repository(_)) {
-        return None;
-    }
+    let (value, _) = config.get(&key, None)?;
     value.get("credential")?.as_str().map(str::to_owned)
 }
 
