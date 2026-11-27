@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
@@ -396,6 +397,125 @@ fn choices(models: &[&str], selected: Option<&str>) -> crate::configure::Reviewe
         selected: selected.map(str::to_owned),
         notices: Vec::new(),
     }
+}
+
+#[test]
+fn typed_login_key_clears_first_run_flag_before_home_enter() {
+    let seam = seam();
+    let mut app = home(Arc::clone(&seam));
+    app.first_run_no_credential = true;
+
+    assert_eq!(slash_login(&mut app), Effect::None);
+    assert!(app.config_view_open());
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    for ch in "sk-first-run".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(seam.stores(), [("acme".to_owned(), None)]);
+
+    // Dismiss the reviewer preparation and provider rows, then try home Enter.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.config_view_open());
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(!app.config_view_open(), "home Enter must not reopen /login");
+    assert!(!app.first_run_no_credential);
+
+    // `docs/tui.md`, "First run", step 1: home reopens the login overlay
+    // on every launch until a credential exists.
+    let mut painted =
+        crate::screen::Screen::new(TestBackend::new(80, 24), 80, 24).expect("a test screen");
+    painted
+        .draw_with(&mut app, None, crate::view::render)
+        .expect("a draw");
+    let grid = &painted.last().expect("a drawn frame").0;
+    let rows = (0..24)
+        .map(|y| (0..80).map(|x| grid[(x, y)].symbol()).collect::<String>())
+        .collect::<Vec<_>>();
+    assert!(
+        !rows.iter().any(|row| row.contains("Providers")),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn browser_credential_save_clears_flag_before_reviewer_completion() {
+    // `docs/tui.md`, "First run", step 1: clear the first-run flag once the
+    // credential is saved, even while reviewer follow-up remains open.
+    let seam = browser_seam();
+    let mut app = browser_login_app(&seam);
+    app.first_run_no_credential = true;
+    let start = start_login(&mut app);
+    assert_eq!(
+        app.on_login(
+            start.ticket,
+            crate::login_worker::LoginStep::Done(Ok(crate::configure::Stored {
+                path: "credentials/codex/alice@example.com".to_owned(),
+                replaced: false,
+            }))
+        ),
+        None
+    );
+    assert!(!app.first_run_no_credential);
+    assert!(app.config_view_open(), "reviewer follow-up remains open");
+}
+
+#[test]
+fn secret_credential_save_clears_first_run_flag() {
+    let seam = Fake::new(Vec::new());
+    *seam.targets.lock().unwrap() = Ok(vec![LoginTarget {
+        name: "acme.api_key".to_owned(),
+        kind: LoginKind::Secret,
+        label: None,
+    }]);
+    let seam = Arc::new(seam);
+    let mut app = home(Arc::clone(&seam));
+    app.first_run_no_credential = true;
+
+    assert_eq!(slash_login(&mut app), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    for ch in "secret-value".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+
+    assert_eq!(seam.stores(), [("acme.api_key".to_owned(), None)]);
+    assert!(!app.first_run_no_credential);
+    assert!(app.config_view_open(), "manual login remains open");
+}
+
+#[test]
+fn stale_browser_save_and_failed_save_keep_first_run_flag() {
+    let seam = browser_seam();
+    let mut app = browser_login_app(&seam);
+    app.first_run_no_credential = true;
+    let start = start_login(&mut app);
+    let stored = crate::configure::Stored {
+        path: "credentials/codex/alice@example.com".to_owned(),
+        replaced: false,
+    };
+
+    assert_eq!(
+        app.on_login(
+            start.ticket.next(),
+            crate::login_worker::LoginStep::Done(Ok(stored)),
+        ),
+        None
+    );
+    assert!(app.first_run_no_credential, "a stale ticket saved nothing");
+
+    assert_eq!(
+        app.on_login(
+            start.ticket,
+            crate::login_worker::LoginStep::Done(Err(crate::configure::ConfigureError {
+                code: contract::ErrorCode::AuthenticationFailed,
+                message: "save failed".to_owned(),
+            })),
+        ),
+        None
+    );
+    assert!(app.first_run_no_credential, "a failed save clears nothing");
 }
 
 /// Opens `/login`, submits the key on the first row, and takes the

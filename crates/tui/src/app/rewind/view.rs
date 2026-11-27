@@ -394,7 +394,7 @@ pub(super) fn render(
         gutter_mark: ratatui::style::Style::default(),
         below,
         field: None,
-        footer: "↑↓ move · Enter open/send · Space summarise · Esc close".to_owned(),
+        footer: "↑↓ move · Enter open/send · Esc close".to_owned(),
     }
 }
 

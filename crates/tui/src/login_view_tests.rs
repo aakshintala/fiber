@@ -2838,9 +2838,11 @@ fn a_stored_key_queues_a_reviewer_read_not_an_end() {
         login.key(&Key::Enter, &ctx(&fake)),
         Act::Reviewer(name) if name == "acme"
     ));
+    assert!(login.stored());
     assert_eq!(fake.stores(), [("acme".to_owned(), None)]);
     // The panel stays until the app queues the read on its ticket.
     login.wait_reviewer(LoginTicket(1), "acme".to_owned());
+    assert!(login.stored());
     let screen = drawn(&login, 80, 24);
     assert!(
         screen.contains("Reading acme's reviewer models"),
@@ -2870,6 +2872,7 @@ fn first_run_secret_and_reviewer_saves_signal_success_only_at_last_save() {
     typed(&mut secret, &fake, "v1");
     assert!(matches!(secret.key(&Key::Enter, &ctx(&fake)), Act::Stay));
     assert!(secret.ended_successfully());
+    assert!(secret.stored());
 
     let mut browser = waiting(&fake, LoginTicket(1));
     browser.step(
@@ -3351,6 +3354,7 @@ fn without_a_preselection_no_row_opens_highlighted() {
     assert!(row.contains("m2"), "{row}");
     // A click highlights its row without saving; Enter saves it.
     login.click(Spot::Row(0), &ctx(&fake));
+    assert!(fake.reviewer_saves().is_empty());
     press(&mut login, &fake, &[Key::Enter]);
     assert_eq!(
         fake.reviewer_saves(),
@@ -3358,6 +3362,61 @@ fn without_a_preselection_no_row_opens_highlighted() {
     );
     let screen = drawn(&login, 80, 24);
     assert!(screen.contains("✓ Logged in to acme."), "{screen}");
+
+    // Clicking a different row moves the selection; Enter saves that row.
+    let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1", "m2"], Some("m1")));
+    login.click(Spot::Row(1), &ctx(&fake));
+    assert!(fake.reviewer_saves().is_empty());
+    press(&mut login, &fake, &[Key::Enter]);
+    assert_eq!(
+        fake.reviewer_saves(),
+        [("acme".to_owned(), "m2".to_owned())]
+    );
+}
+
+#[test]
+fn space_and_click_on_provider_rows_run_enter() {
+    let fake = fake_with(targets());
+    let mut key_space = Login::open_on(&ctx(&fake), "acme");
+    assert!(matches!(
+        key_space.key(&Key::Char(' '), &ctx(&fake)),
+        Act::Stay
+    ));
+    assert!(panel_open(&key_space));
+    assert!(drawn(&key_space, 80, 24).contains("Key for acme:"));
+
+    let fake = fake_with(targets());
+    let mut browser_space = Login::open_on(&ctx(&fake), "codex");
+    assert!(matches!(
+        browser_space.key(&Key::Char(' '), &ctx(&fake)),
+        Act::Login(name) if name == "codex"
+    ));
+
+    let fake = fake_with(targets());
+    let mut key_click = Login::open_on(&ctx(&fake), "acme");
+    assert!(matches!(
+        key_click.click(Spot::Row(key_click.selected), &ctx(&fake)),
+        Act::Stay
+    ));
+    assert!(panel_open(&key_click));
+    assert!(drawn(&key_click, 80, 24).contains("Key for acme:"));
+
+    let fake = fake_with(targets());
+    let mut browser_click = Login::open_on(&ctx(&fake), "codex");
+    assert!(matches!(
+        browser_click.click(Spot::Row(browser_click.selected), &ctx(&fake)),
+        Act::Login(name) if name == "codex"
+    ));
+}
+
+#[test]
+fn space_on_a_focused_reviewer_saves_it() {
+    let (fake, mut login) = key_choices("acme", LoginTicket(1), choices(&["m1", "m2"], Some("m1")));
+    assert!(matches!(login.key(&Key::Char(' '), &ctx(&fake)), Act::Stay));
+    assert_eq!(
+        fake.reviewer_saves(),
+        [("acme".to_owned(), "m1".to_owned())]
+    );
 }
 
 #[test]

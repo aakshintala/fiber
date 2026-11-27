@@ -1284,7 +1284,7 @@ fn walk(
         expected,
     };
     let mut kept = Map::new();
-    for (name, value) in map {
+    for (name, mut value) in map {
         path.push(name.clone());
         if let Some(key) = leaf(path) {
             if matches!(source, Source::Repository(_)) && !key.scope.repo() {
@@ -1316,8 +1316,8 @@ fn walk(
                             // ignored with a notice.
                             if matches!(source, Source::Repository(_))
                                 && matches!(key.kind, Kind::Role)
-                                && let Value::Object(object) = &value
-                                && object.contains_key("credential")
+                                && let Value::Object(object) = &mut value
+                                && object.remove("credential").is_some()
                             {
                                 // The acceptance names `roles."<name>".credential`,
                                 // but `path::display` quotes a segment only when it

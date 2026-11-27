@@ -805,7 +805,7 @@ fn a_layer_tag_and_a_boolean_keep_their_roles() {
 }
 
 /// ←→ moves between tabs and wraps from the last tab to the first
-/// and back (`docs/tui.md:1108-1109`, `/settings`).
+/// and back (`docs/tui.md`, "Swapped views").
 #[test]
 fn left_and_right_wrap_between_the_first_and_last_tabs() {
     let fake = Fake::new(rows());
@@ -2022,7 +2022,7 @@ fn ctrl_g_opens_the_focused_rows_file_and_the_global_one_for_a_default() {
 }
 
 /// ↑↓ move between rows and wrap from the last row to the first and
-/// back (`docs/tui.md:1123-1124`, `/settings`).
+/// back (`docs/tui.md`, "Swapped views").
 #[test]
 fn up_and_down_wrap_between_the_first_and_last_rows() {
     let fake = Fake::new(rows());
@@ -2065,7 +2065,7 @@ fn up_and_down_wrap_between_the_first_and_last_rows() {
 }
 
 /// The list sub-page wraps ↑↓ past either end while pages stay
-/// clamped (`docs/tui.md:666-667`, "Swapped views").
+/// clamped (`docs/tui.md`, "Swapped views").
 #[test]
 fn a_sub_page_wraps_up_and_down_past_either_end() {
     let fake = Fake::new(rows());
@@ -2090,7 +2090,7 @@ fn a_sub_page_wraps_up_and_down_past_either_end() {
 }
 
 /// The theme choices wrap ↑↓ past either end, and the preview
-/// follows the wrapped choice (`docs/tui.md:666-667`, "Swapped views").
+/// follows the wrapped choice (`docs/tui.md`, "Swapped views").
 #[test]
 fn the_theme_choices_wrap_up_and_down_past_either_end() {
     let fake = themed(rows());

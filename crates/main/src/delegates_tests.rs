@@ -2025,6 +2025,23 @@ fn a_repository_layer_role_credential_is_ignored() {
 }
 
 #[test]
+fn a_person_role_credential_survives_a_repository_model_member() {
+    let root = fakes::TempDir::new("fd-person-repo-role");
+    let (providers, config) = rig_loaded(
+        &root,
+        json!({"fast": {"model": "fiber:fake/m", "credential": "personal"}}),
+        true,
+        &["personal"],
+        Some(&json!({"fast": {"model": "fiber:fake/plain"}})),
+    );
+    let resolve = resolver(&providers, &config, "fake/m");
+    assert_eq!(
+        (resolve.credential)("fast"),
+        Ok(Some("personal".to_owned()))
+    );
+}
+
+#[test]
 fn the_catalogue_never_prints_a_role_label() {
     let object = rig(json!({"fast": {"model": "fiber:fake/plain", "credential": "work"}}));
     let string = rig(json!({"fast": "fiber:fake/plain"}));

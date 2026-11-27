@@ -196,6 +196,15 @@ touches, before any other.
 
 ## The pull request
 
+A pull request body and an issue body are written for a person reading the
+change. They carry no process: no tool, check or review refuses, blocks or
+files a finding because of what a body says or leaves out, and nobody edits a
+body only to satisfy one. Anything a merge depends on, such as a granted fix
+round or a passing gate, is recorded on the ticket's state or journal, never
+in a body. The one exception is the owner's break-glass declaration ("Break-glass
+merge"). The rules below say what a body tells its reader. A body that misses
+one is a weaker description, never a reason to hold a merge.
+
 The body says `Resolves #<ticket>` for an unsplit ticket or the last part
 of a split ticket. Earlier parts say `Part of #<ticket>`. A pull request that
 advances a ticket without resolving it, such as a diagnostic, says
@@ -204,9 +213,8 @@ not apply. A ticket worked as separate part tickets has each part's
 pull request name the parent as `Part of #<parent>`. The last part's
 orchestrator checks the parent's acceptance. When every criterion is met, that
 part's pull request says `Resolves #<parent>`. Otherwise the orchestrator posts
-on the parent what is left. Every pull request
-also says `Doc friction: none` or links each `needs-owner` issue it raised
-("When a doc should change").
+on the parent what is left. A pull request that raised a `needs-owner` issue
+links it ("When a doc should change").
 
 A pull request that resolves an issue labelled `bug` proves its fix with a
 red commit, then green. Its first commit, the red commit, holds the test that
@@ -268,7 +276,7 @@ removes the not-built entry. These test edits still count as a docs-only pull
 request.
 
 A doc pull request that states behaviour the binary does not yet have names
-its build ticket in the pull request body, as `Build ticket: #N`. When no
+its build ticket in the pull request body. When no
 ticket exists, the pull request files one. The build ticket's acceptance
 lists each such doc line with the test that proves it, at the level
 `docs/testing.md` names for that behaviour. The Spec review of the build
@@ -331,7 +339,11 @@ that no longer makes sense is closed and its work replanned.
 ## Merging
 
 A pull request opens as a draft and stays a draft until its review loop is
-done; marking it ready starts CI's full run (`docs/ci.md`). When `CI` is
+done. A draft runs the same jobs as a ready pull request, with mutation
+testing only once it carries the `mutants` label, and its verdict reports as
+`CI (draft)`. Marking it ready runs the selection again at the same head,
+reusing a same-head mutants pass, and reports the required `CI` check
+(`docs/ci.md`, "The merge gate"). When `CI` is
 green, the full run passed on the exact head, and every review finding is
 resolved, the orchestrator squash-merges the pull request, deletes its
 branch and checks the ticket closed.

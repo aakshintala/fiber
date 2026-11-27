@@ -277,6 +277,9 @@ fn output_from_returned(returned: Result<Option<Value>, Error>, owner: &str, nam
         Err(e @ Error::Timeout { .. }) => {
             return failed_output(failure(ErrorCode::Timeout, e.to_string()));
         }
+        Err(e @ (Error::Abandoned { .. } | Error::Stopped { .. })) => {
+            return failed_output(failure(ErrorCode::ExtensionUnavailable, e.to_string()));
+        }
         Err(e) => return failed_output(failure(ErrorCode::ToolError, e.to_string())),
     };
     output_from(value).unwrap_or_else(|why| failed_output_for(owner, name, &why))
