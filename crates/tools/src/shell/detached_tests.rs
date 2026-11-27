@@ -227,28 +227,6 @@ fn launch_streams_both_outputs_to_the_log_and_reports_the_child() {
 }
 
 #[test]
-fn launch_sets_the_session_id_after_scrubbing_the_environment() {
-    let dir = fakes::TempDir::new("fiber-detached-session-id");
-    let session_id = contract::SessionId("s_0123456789abcdef".into());
-    let started = super::launch_with_session(
-        dir.path(),
-        FIBER_PID,
-        super::super::shell_program(),
-        "printf '%s\\n' \"$FIBER_SESSION_ID\"",
-        dir.path(),
-        Some(&session_id),
-    )
-    .unwrap();
-    let _status = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv_or_fail(&started.done, "detached child exit")
-        .expect("child wait");
-    assert_eq!(
-        std::fs::read_to_string(started.log).unwrap(),
-        "s_0123456789abcdef\n"
-    );
-}
-
-#[test]
 fn launch_leaves_a_group_no_shutdown_list_holds() {
     let dir = fakes::TempDir::new("fiber-detached-survives");
     let ready = Ready::new(dir.path());

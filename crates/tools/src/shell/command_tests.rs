@@ -64,6 +64,39 @@ fn confined_child_receives_its_explicit_session_id() {
 }
 
 #[test]
+fn session_id_pair_names_the_session_variable() {
+    let id = contract::SessionId("s_0123456789abcdef".into());
+    assert_eq!(
+        super::session_id_pair(Some(&id)),
+        Some((
+            "FIBER_SESSION_ID".to_owned(),
+            "s_0123456789abcdef".to_owned()
+        ))
+    );
+    assert_eq!(super::session_id_pair(None), None);
+}
+
+#[test]
+fn set_session_id_sets_the_variable_only_when_present() {
+    use std::process::Command;
+    let id = contract::SessionId("s_0123456789abcdef".into());
+    let mut present = Command::new("/bin/sh");
+    super::set_session_id(&mut present, Some(&id));
+    let present_env: Vec<_> = present.get_envs().collect();
+    assert_eq!(present_env.len(), 1);
+    assert_eq!(
+        present_env[0],
+        (
+            std::ffi::OsStr::new("FIBER_SESSION_ID"),
+            Some(std::ffi::OsStr::new("s_0123456789abcdef"))
+        )
+    );
+    let mut absent = Command::new("/bin/sh");
+    super::set_session_id(&mut absent, None);
+    assert_eq!(absent.get_envs().count(), 0);
+}
+
+#[test]
 fn bump_advances_the_sequence() {
     let mut inner = Inner::default();
     bump(&mut inner);
@@ -1777,7 +1810,7 @@ fn a_successful_empty_listing_finishes_foreground_when_alive_probe_lags() {
             deny_read: Vec::new(),
             fiber_home: std::path::PathBuf::new(),
         };
-        let ran = super::execute_inner(
+        let ran = super::execute_inner_with_session(
             std::path::Path::new("/bin/sh"),
             "true",
             &work,
@@ -1791,6 +1824,7 @@ fn a_successful_empty_listing_finishes_foreground_when_alive_probe_lags() {
             None,
             &sandbox,
             &work,
+            None,
             None,
             always_alive,
             &ps,
@@ -2006,7 +2040,7 @@ fn cancel_or_timeout_during_member_listing_wins_before_transfer() {
                     deny_read: Vec::new(),
                     fiber_home: std::path::PathBuf::new(),
                 };
-                let ran = super::execute_inner(
+                let ran = super::execute_inner_with_session(
                     std::path::Path::new("/bin/sh"),
                     "true",
                     &work,
@@ -2020,6 +2054,7 @@ fn cancel_or_timeout_during_member_listing_wins_before_transfer() {
                     None,
                     &sandbox,
                     &work,
+                    None,
                     None,
                     always_alive,
                     &ps,
@@ -2317,7 +2352,7 @@ fn sandbox_install_failure_aborts_spawn_without_running() {
     let marker = work.join("marker");
     let (_home, sandbox) = sandbox_settings_for_test();
     let command = format!("touch {} && echo hi", marker.display());
-    let result = super::execute_inner(
+    let result = super::execute_inner_with_session(
         std::path::Path::new("/bin/sh"),
         &command,
         &work,
@@ -2331,6 +2366,7 @@ fn sandbox_install_failure_aborts_spawn_without_running() {
         None,
         &sandbox,
         &work,
+        None,
         None,
         always_alive,
         &ps,
