@@ -58,9 +58,11 @@ impl Setup {
         let root = fakes::TempDir::new("fa");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        let setup = Self { deadline, root };
-        write_home_config(&setup, &json!({"model_lists": {"models_dev": false}}));
-        setup
+        write(
+            &root.path().join("h/config.json"),
+            &json!({"model_lists": {"models_dev": false}}),
+        );
+        Self { deadline, root }
     }
 
     /// As [`Setup::provider`], with the model declaring the `low` and
@@ -240,36 +242,19 @@ fn write(file: &Path, value: &Value) {
 
 fn write_home_config(setup: &Setup, supplied: &Value) {
     let path = setup.home().join("config.json");
-    let mut config = match fs::read(&path) {
-        Ok(current) => serde_json::from_slice::<Value>(&current).unwrap(),
-        Err(error) => {
-            assert_eq!(
-                error.kind(),
-                std::io::ErrorKind::NotFound,
-                "reading home config {}",
-                path.display()
-            );
-            json!({})
-        }
-    }
-    .as_object()
-    .unwrap()
-    .clone();
-    for (key, value) in supplied.as_object().unwrap() {
-        config.insert(key.clone(), value.clone());
-    }
-    let models_dev = supplied
-        .get("model_lists")
-        .and_then(|model_lists| model_lists.get("models_dev"))
-        .cloned()
-        .unwrap_or(Value::Bool(false));
-    let mut model_lists = config
-        .remove("model_lists")
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
-    model_lists.insert("models_dev".to_owned(), models_dev);
-    config.insert("model_lists".to_owned(), Value::Object(model_lists));
-    write(&path, &Value::Object(config));
+    let mut config = serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap();
+    config
+        .as_object_mut()
+        .unwrap()
+        .extend(supplied.as_object().unwrap().clone());
+    config.as_object_mut().unwrap().insert(
+        "model_lists".to_owned(),
+        json!({"models_dev": supplied
+            .pointer("/model_lists/models_dev")
+            .cloned()
+            .unwrap_or(Value::Bool(false))}),
+    );
+    write(&path, &config);
 }
 
 /// A pseudo-terminal, opened through rustix's safe calls. The main side
