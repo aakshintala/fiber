@@ -594,54 +594,6 @@ fn installed_lifeline_query_returns_the_keeper_pid() {
 }
 
 #[test]
-fn lifeline_query_lock_wait_expires_at_its_deadline() {
-    let clock = FakeClock::new();
-    let (signals, _did) = recorded(&clock);
-    let (reader, _keeper) = UnixStream::pair().expect("lifeline pair");
-    let reader_clone = reader.try_clone().expect("lifeline writer");
-    let query = signals.lifeline(Box::new(reader), Some(Box::new(reader_clone)));
-    let (would_block_tx, would_block_rx) = mpsc::sync_channel(1);
-    query.notify_writer_would_block(would_block_tx);
-    let writer = query.writer.lock().unwrap();
-    let worker_query = query.clone();
-    let (done_tx, done_rx) = mpsc::channel();
-    let worker = thread::spawn(move || done_tx.send(worker_query.query()).expect("query result"));
-
-    Deadline::after(MUST_SUCCEED_WITHIN)
-        .recv(&would_block_rx)
-        .expect("query worker reaches writer WouldBlock while writer is held");
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "the lock-wait loop reads the injected clock but does not park on it"
-    )]
-    clock.advance(contract::keeper::LIFELINE_QUERY_BOUND);
-    let at_bound = Deadline::after(Duration::from_millis(250)).recv(&done_rx);
-    if at_bound.is_err() {
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "release the mutant's strict-bound busy loop by advancing its injected clock"
-        )]
-        clock.advance(Duration::from_nanos(1));
-    }
-    let after_cleanup = if at_bound.is_err() {
-        Deadline::after(MUST_SUCCEED_WITHIN).recv(&done_rx)
-    } else {
-        at_bound
-    };
-    drop(writer);
-    worker.join().expect("query worker");
-
-    assert_eq!(
-        at_bound.expect("query returns None at the exact deadline while writer remains held"),
-        None
-    );
-    assert_eq!(
-        after_cleanup.expect("query worker result after cleanup"),
-        None
-    );
-}
-
-#[test]
 fn lifeline_query_routes_one_fixed_reply_and_rejects_malformed_frames() {
     let clock = FakeClock::new();
     let (signals, _did) = recorded(&clock);

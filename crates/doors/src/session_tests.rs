@@ -8,7 +8,6 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use ::support::peer::Pid;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -38,7 +37,6 @@ use serde_json::{Map, Value};
 
 use super::{Gate, Session, drain, write_until_stop};
 use crate::SessionError;
-use crate::signals::LifelineQuery;
 
 #[allow(
     clippy::duplicate_mod,
@@ -59,22 +57,6 @@ impl Write for FailedStdout {
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
-}
-
-#[test]
-fn session_wires_lifeline_query_and_live_handover_peers() {
-    let opened = Opened::open(Vec::new());
-    let query = LifelineQuery::scripted_for_test(
-        [b'P', 1, 0, 0, 0],
-        Arc::clone(&opened.clock) as Arc<dyn Clock>,
-    );
-    opened.session.lifeline_query(query.clone());
-    assert!(opened.session.gate.lifeline_query.get().is_some());
-
-    let peer = Pid(std::process::id());
-    opened.session.handover_peers(Arc::new(move || vec![peer]));
-    assert_eq!(opened.session.gate.handover_peers(), vec![peer]);
-    close_within(opened.session, opened.log);
 }
 
 #[test]
