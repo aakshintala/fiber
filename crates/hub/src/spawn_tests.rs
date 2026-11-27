@@ -557,6 +557,10 @@ fn starter_with(exe: PathBuf, source: VariablesSource, root: &fakes::TempDir) ->
         Environments::ready(Environment {
             vars: vec![
                 (OsString::from("MARK"), OsString::from("start")),
+                (
+                    OsString::from("FIBER_SESSION_ID"),
+                    OsString::from("s_stale"),
+                ),
                 (OsString::from("FIBER_HOME"), OsString::from("/h")),
                 (OsString::from("PATH"), OsString::from("/usr/bin:/bin")),
                 (
@@ -639,6 +643,12 @@ fn start_runs_with_the_published_environment_and_the_flag() {
     let (args, env) = reported(&root);
     assert_eq!(args.last().map(String::as_str), Some("--login-shell"));
     assert_eq!(env, "start /h unset");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("session-id"))
+            .unwrap()
+            .trim(),
+        "s1"
+    );
 }
 
 #[test]
@@ -656,6 +666,12 @@ fn resume_runs_with_the_published_environment_and_the_flag() {
         "no credential argument without a label: {args:?}"
     );
     assert_eq!(env, "start /h unset");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("session-id"))
+            .unwrap()
+            .trim(),
+        "s1"
+    );
 }
 
 #[test]
@@ -720,6 +736,12 @@ fn rewind_runs_with_the_published_environment_and_the_flag() {
     assert_eq!(args.last().map(String::as_str), Some("--login-shell"));
     assert!(args.contains(&"--rewound-from=s0".to_owned()));
     assert_eq!(env, "start /h unset");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("session-id"))
+            .unwrap()
+            .trim(),
+        "s1"
+    );
 }
 
 #[test]

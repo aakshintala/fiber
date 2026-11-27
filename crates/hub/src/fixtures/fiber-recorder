@@ -6,5 +6,6 @@
 # environment can hold no `PATH`.
 printf '%s\n' "$@" > "$RECORD_DIR/args"
 printf '%s\n' "${MARK-unset} ${FIBER_HOME-unset} ${CARGO_MANIFEST_DIR-unset}" > "$RECORD_DIR/env"
+printf '%s\n' "${FIBER_SESSION_ID-unset}" > "$RECORD_DIR/session-id"
 printf '{"kind":"fiber_exited","ts":1,"schema_version":1,"payload":{"error":{"code":"io_failed","message":"recorded"}}}\n'
 exit 0

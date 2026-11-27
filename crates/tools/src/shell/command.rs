@@ -148,47 +148,6 @@ pub(crate) fn execute(
     sandbox_workspace: &Path,
     protection: Option<&ProtectedPaths>,
 ) -> Result<Ran, std::io::Error> {
-    execute_with_session(
-        program,
-        command,
-        workdir,
-        timeout,
-        clock,
-        cancel,
-        emit,
-        policy,
-        jobs,
-        spill,
-        matches,
-        sandbox_settings,
-        sandbox_workspace,
-        protection,
-        None,
-    )
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "spawn, the deadline, the move policy and the spill are one call"
-)]
-#[cfg(test)]
-pub(crate) fn execute_with_session(
-    program: &Path,
-    command: &str,
-    workdir: &Path,
-    timeout: Option<Duration>,
-    clock: &dyn Clock,
-    cancel: &dyn Cancel,
-    emit: &dyn Emit,
-    policy: MovePolicy,
-    jobs: Option<&dyn Jobs>,
-    spill: Option<SpillConfig>,
-    matches: Option<&Path>,
-    sandbox_settings: &super::sandbox::Settings,
-    sandbox_workspace: &Path,
-    protection: Option<&ProtectedPaths>,
-    session_id: Option<&contract::SessionId>,
-) -> Result<Ran, std::io::Error> {
     execute_inner_with_session(
         program,
         command,
@@ -204,7 +163,7 @@ pub(crate) fn execute_with_session(
         sandbox_settings,
         sandbox_workspace,
         protection,
-        session_id,
+        None,
         support::group::alive,
         Path::new("ps"),
         super::sandbox::install,
