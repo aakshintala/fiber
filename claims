@@ -701,3 +701,4 @@ crates/main/tests/providers/model_picker_keys.rs	fiber-4942	plan	2026-11-28T04:1
 scripts/check	fiber-4942	plan	2026-11-28T04:12:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4942-model-picker-keys-flake	
 docs/workflow.md	fiber-4942	plan	2026-11-28T04:12:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4942-model-picker-keys-flake	
 research/macos-file-readback/README.md	fiber-4934	plan	2026-11-28T04:13:16Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4934-macos-file-readback	
+crates/main/tests/tool_calls/tools.rs	fiber-4856	plan	2026-11-28T04:16:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
