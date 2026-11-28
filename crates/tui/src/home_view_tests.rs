@@ -1461,43 +1461,97 @@ fn the_box_sits_on_the_last_rows_above_the_foot() {
 fn the_foot_draws_bold_keys_dim_labels_centred_and_cut() {
     use ratatui::style::Modifier;
     let foot = "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit";
-    // Wide: the whole foot fits, centred, each key bold and the rest dim.
-    // The foot outgrew 160 columns with the archive part, then 200
-    // columns with the project part beside it, so the fits case renders
-    // wider still.
+    let draw = |width: u16| {
+        let app = home(width, 48);
+        let area = Rect::new(0, 0, width, 48);
+        let mut buf = Buffer::empty(area);
+        render(&app, area, &mut buf, None);
+        let frame = text(&buf);
+        let row = frame.lines().nth(47).expect("foot row").to_owned();
+        (buf, row)
+    };
+    let assert_rendered = |buf: &Buffer, row: &str, width: u16, expected: &str, keys: &[&str]| {
+        let start = (usize::from(width) - crate::format::width(expected)) / 2;
+        assert_eq!(row, format!("{}{}", " ".repeat(start), expected), "{width}");
+        assert!(!row.contains('…'), "{width}");
+        for key in keys {
+            for (at, _) in row.match_indices(key) {
+                let x = crate::format::width(&row[..at]);
+                for dx in 0..crate::format::width(key) {
+                    let cell = &buf[(u16::try_from(x + dx).expect("key x"), 47)];
+                    assert!(cell.modifier.contains(Modifier::BOLD), "{width}: {key}");
+                    assert!(!cell.modifier.contains(Modifier::DIM), "{width}: {key}");
+                }
+                let label = &buf[(
+                    u16::try_from(x + crate::format::width(key)).expect("label x"),
+                    47,
+                )];
+                assert!(
+                    label.modifier.contains(Modifier::DIM),
+                    "{width}: {key} label"
+                );
+                assert!(
+                    !label.modifier.contains(Modifier::BOLD),
+                    "{width}: {key} label"
+                );
+            }
+        }
+    };
+    let assert_fitted = |width: u16, expected: &str, keys: &[&str]| {
+        let (buf, row) = draw(width);
+        assert_rendered(&buf, &row, width, expected, keys);
+    };
 
-    let app = home(220, 48);
-    let area = Rect::new(0, 0, 220, 48);
+    // Below the guarantee, the complete logical line keeps the old left-cut behavior.
+    let (buf, row) = draw(79);
+    let cut: String = foot.chars().take(79).collect();
+    assert_eq!(row, cut);
+    assert!(!row.contains("F1 the key map"));
+    assert!(!row.contains("Ctrl+C twice to quit"));
+    assert!(buf[(0, 47)].modifier.contains(Modifier::BOLD));
+
+    // At and just above the guarantee, only the mandatory tail fits.
+    let mandatory = "F1 the key map · Ctrl+C twice to quit";
+    assert_fitted(80, mandatory, &["F1", "Ctrl+C"]);
+    assert_fitted(81, mandatory, &["F1", "Ctrl+C"]);
+    assert_fitted(
+        120,
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · F1 the key map · Ctrl+C twice to quit",
+        &["Enter", "↑↓", "F1", "Ctrl+C"],
+    );
+    assert_fitted(
+        200,
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit",
+        &["Enter", "↑↓", "Shift+↑↓", "Delete", "F1", "Ctrl+C"],
+    );
+    assert_fitted(
+        220,
+        foot,
+        &[
+            "Enter",
+            "↑↓",
+            "Shift+↑↓",
+            "Delete",
+            "Backspace",
+            "F1",
+            "Ctrl+C",
+        ],
+    );
+
+    let mut app = home(80, 48);
+    let mut user = serde_json::Map::new();
+    user.insert("key_map".to_owned(), serde_json::json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    let area = Rect::new(0, 0, 80, 48);
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
-    let frame = text(&buf);
-    let row = frame.lines().nth(47).expect("foot row");
-    assert!(row.contains(foot), "{row}");
-    let start = row.find("Enter").expect("foot starts");
-    assert_eq!(start, (220 - crate::format::width(foot)) / 2);
-    let y = 47u16;
-    for key in [
-        "Enter",
-        "↑↓",
-        "Shift+↑↓",
-        "Delete",
-        "Backspace",
-        "F1",
-        "Ctrl+C",
-    ] {
-        let at = row.find(key).unwrap_or_else(|| panic!("{key} shows"));
-        let x = u16::try_from(row[..at].chars().count()).expect("foot x");
-        for dx in 0..key.chars().count() {
-            let cell = &buf[(x + u16::try_from(dx).expect("key dx"), y)];
-            assert!(cell.modifier.contains(Modifier::BOLD), "{key}");
-            assert!(!cell.modifier.contains(Modifier::DIM), "{key}");
-        }
-    }
-    let label_at = start + "Enter".len();
-    let label_x = u16::try_from(row[..label_at].chars().count()).expect("label x");
-    let label_cell = &buf[(label_x, y)];
-    assert!(!label_cell.modifier.contains(Modifier::BOLD));
-    assert!(label_cell.modifier.contains(Modifier::DIM));
+    let row = text(&buf)
+        .lines()
+        .nth(47)
+        .expect("unbound foot row")
+        .to_owned();
+    assert_rendered(&buf, &row, 80, "Ctrl+C twice to quit", &["Ctrl+C"]);
+
     // Narrow: the foot is cut at the frame's edge, never wrapped.
     let app = home(40, 10);
     let area = Rect::new(0, 0, 40, 10);
