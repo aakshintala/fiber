@@ -10,7 +10,11 @@ use std::time::Duration;
 use contract::clock::Clock;
 use extensions::{Span, TuiVm};
 use serde_json::{Value, json};
-use tui::ext::{Decision, FailureKind, Load, Renderer, SessionCtx, SessionVersion, SlotSelection};
+use tui::ext::{
+    Decision, FailureKind, LayoutInput, Load, RawRect, Renderer, SessionCtx, SessionVersion,
+    SlotSelection,
+};
+use tui::layout::Region;
 use tui::{CallState, Failure, RawSpan, RendererInput as Input};
 
 pub(crate) struct Loader {
@@ -862,6 +866,59 @@ impl Renderer for Composite {
             Err(error) => Decision::Fail(Self::failure(candidate, extension, error)),
         }
     }
+    fn render_layout(
+        &self,
+        ctx: &SessionCtx,
+        input: &LayoutInput,
+        builtin: &dyn Fn(&LayoutInput) -> Vec<(Region, RawRect)>,
+    ) -> Decision<Vec<(Region, RawRect)>> {
+        let SlotSelection::Draw { extension } = self.fills_for(ctx, "layout") else {
+            return Decision::NotForSession {
+                extension: String::new(),
+                tui_version: String::new(),
+                half: SessionVersion::Unseen,
+            };
+        };
+        let Some(candidate) = self.candidates.get(&extension) else {
+            return Decision::NotForSession {
+                extension,
+                tui_version: String::new(),
+                half: SessionVersion::Unseen,
+            };
+        };
+        let value = input_value(&Input::Layout(input.clone()));
+        let built = |_: &Value, _width| {
+            builtin(input)
+                .into_iter()
+                .map(|(region, rect)| (region.name().to_owned(), rect))
+                .collect()
+        };
+        match candidate.vm.borrow_mut().call_layout(
+            ctx.session_id.as_ref().map(|id| id.0.as_str()),
+            &value,
+            input.width,
+            &built,
+        ) {
+            Ok(regions) => {
+                let parsed = regions
+                    .into_iter()
+                    .map(|(name, rect)| Region::from_name(&name).map(|region| (region, rect)))
+                    .collect::<Option<Vec<_>>>();
+                match parsed {
+                    Some(regions) => Decision::Draw {
+                        extension,
+                        lines: regions,
+                    },
+                    None => Decision::Fail(Failure {
+                        kind: FailureKind::HookFailed,
+                        extension,
+                        message: "layout output names an unknown region".to_owned(),
+                    }),
+                }
+            }
+            Err(error) => Decision::Fail(Self::failure(candidate, extension, error)),
+        }
+    }
     #[allow(
         clippy::too_many_arguments,
         reason = "the frame and its wall time travel with the draw context"
@@ -1229,6 +1286,13 @@ fn input_value(input: &Input<'_>) -> Value {
         Input::Notice(notice) => {
             json!({"code": notice.code, "text": notice.text, "flat": notice.flat})
         }
+        Input::Layout(layout) => json!({
+            "width": layout.width,
+            "height": layout.height,
+            "regions": layout.regions.iter().map(|region| region.name()).collect::<Vec<_>>(),
+            "flat": layout.flat,
+        }),
+        Input::Home(home) => home.value.clone(),
         Input::WorkingLine(line) => working_line_value(line),
         Input::SteeringQueue(queue) => steering_queue_value(queue),
         Input::StatusRows(rows) => status_rows_value(rows),

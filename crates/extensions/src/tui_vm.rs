@@ -367,6 +367,13 @@ pub struct RenderOut {
     pub continues: bool,
 }
 
+/// One raw region rectangle from the `layout` slot. The terminal checks
+/// these Lua integers against its dimensions before casting them.
+pub type LayoutRect = contract::LayoutRect;
+
+type LayoutRegions = Vec<(String, LayoutRect)>;
+type LayoutBuiltin<'a> = dyn Fn(&Value, u16) -> LayoutRegions + 'a;
+
 /// A whole-screen key binding's form (`docs/tui.md`, "Input and
 /// focus"): a `run` callback with its declared timeout, or an action
 /// with its optional variant. An action has no timeout.
@@ -1192,9 +1199,26 @@ impl TuiVm {
         width: u16,
         builtin: &dyn Fn(&Value, u16) -> Vec<Vec<Span>>,
     ) -> Result<Vec<Vec<Span>>, Error> {
-        self.invoke(slot, session_id, input, width, None, builtin)
+        let built =
+            |lua: &Lua, width| lines_to_lua(lua, &builtin(input, width)).map(mlua::Value::Table);
+        self.invoke(slot, session_id, input, width, None, &built)
             .and_then(|returned| render_out_from(&returned))
             .map(|out| out.lines)
+    }
+
+    /// Calls the `layout` renderer and decodes its map without coercing
+    /// Lua numbers: only integer-valued Lua numbers reach the terminal.
+    pub fn call_layout(
+        &mut self,
+        session_id: Option<&str>,
+        input: &Value,
+        width: u16,
+        builtin: &LayoutBuiltin<'_>,
+    ) -> Result<LayoutRegions, Error> {
+        let built =
+            |lua: &Lua, width| regions_to_lua(lua, &builtin(input, width)).map(mlua::Value::Table);
+        self.invoke("layout", session_id, input, width, None, &built)
+            .and_then(|returned| layout_out_from(&returned))
     }
 
     /// Calls the renderer of `slot` for `session_id` with `input`, an object,
@@ -1221,7 +1245,9 @@ impl TuiVm {
         now: u64,
         builtin: &dyn Fn(&Value, u16) -> Vec<Vec<Span>>,
     ) -> Result<RenderOut, Error> {
-        self.invoke(slot, session_id, input, width, Some((frame, now)), builtin)
+        let built =
+            |lua: &Lua, width| lines_to_lua(lua, &builtin(input, width)).map(mlua::Value::Table);
+        self.invoke(slot, session_id, input, width, Some((frame, now)), &built)
             .and_then(|returned| render_out_from(&returned))
     }
 
@@ -1237,7 +1263,7 @@ impl TuiVm {
         input: &Value,
         width: u16,
         frame_now: Option<(u64, u64)>,
-        builtin: &dyn Fn(&Value, u16) -> Vec<Vec<Span>>,
+        builtin: &dyn Fn(&Lua, u16) -> mlua::Result<mlua::Value>,
     ) -> Result<mlua::Value, Error> {
         if self.off {
             return Err(Error::TuiOff);
@@ -1278,7 +1304,7 @@ impl TuiVm {
         let globals = self.lua.globals();
         let result = self.lua.scope(|scope| {
             let host = scope.create_function(|lua, (_, wide): (mlua::Value, Option<u16>)| {
-                lines_to_lua(lua, &builtin(input, wide.unwrap_or(width)))
+                builtin(lua, wide.unwrap_or(width))
             })?;
             globals.raw_set("builtin", host)?;
             let thread = self.lua.create_thread(render)?;
@@ -1411,6 +1437,76 @@ fn render_out_from(returned: &mlua::Value) -> Result<RenderOut, Error> {
         lines: lines_from(&lines)?,
         continues,
     })
+}
+
+/// The `layout` renderer's exact region map, preserving raw Lua integer
+/// coordinates for the terminal's bounds checks.
+fn layout_out_from(returned: &mlua::Value) -> Result<Vec<(String, LayoutRect)>, Error> {
+    let mlua::Value::Table(table) = returned else {
+        return Err(shape("layout returns a map of region rectangles"));
+    };
+    let mut regions = Vec::new();
+    for pair in table.pairs::<mlua::Value, mlua::Value>() {
+        let (key, value) = pair.map_err(lua_error)?;
+        let mlua::Value::String(name) = key else {
+            return Err(shape("layout region names must be strings"));
+        };
+        let name = name
+            .to_str()
+            .map_err(|_| shape("layout region names must be valid UTF-8"))?
+            .to_string();
+        let mlua::Value::Table(rect) = value else {
+            return Err(shape(format!(
+                "layout region `{name}` must be a rectangle table"
+            )));
+        };
+        regions.push((name.clone(), layout_rect_from(&rect, &name)?));
+    }
+    Ok(regions)
+}
+
+/// Reads exactly the four integer fields of one rectangle.
+fn layout_rect_from(table: &Table, name: &str) -> Result<LayoutRect, Error> {
+    for pair in table.pairs::<mlua::Value, mlua::Value>() {
+        let (key, _) = pair.map_err(lua_error)?;
+        if !["x", "y", "width", "height"]
+            .iter()
+            .any(|field| is_key(&key, field))
+        {
+            return Err(shape(format!(
+                "layout region `{name}` holds only `x`, `y`, `width` and `height`"
+            )));
+        }
+    }
+    let integer = |field| {
+        let value: mlua::Value = table.raw_get(field).map_err(lua_error)?;
+        let mlua::Value::Integer(value) = value else {
+            return Err(shape(format!(
+                "`{field}` of layout region `{name}` must be a Lua integer"
+            )));
+        };
+        Ok(value)
+    };
+    Ok(LayoutRect {
+        x: integer("x")?,
+        y: integer("y")?,
+        width: integer("width")?,
+        height: integer("height")?,
+    })
+}
+
+/// `regions` as the map a layout renderer returns from `builtin`.
+fn regions_to_lua(lua: &Lua, regions: &[(String, LayoutRect)]) -> mlua::Result<Table> {
+    let out = lua.create_table()?;
+    for (name, rect) in regions {
+        let table = lua.create_table()?;
+        table.raw_set("x", rect.x)?;
+        table.raw_set("y", rect.y)?;
+        table.raw_set("width", rect.width)?;
+        table.raw_set("height", rect.height)?;
+        out.raw_set(name.as_str(), table)?;
+    }
+    Ok(out)
 }
 
 /// Whether `key` names the string `name`.

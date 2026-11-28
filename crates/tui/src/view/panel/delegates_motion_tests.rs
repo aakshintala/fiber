@@ -359,7 +359,7 @@ fn motion_tracks_only_visible_running_state_rows_at_each_offset() {
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .unwrap();
     let (_, span) = crate::view::panel::rows_and_delegates(&app, rect.width);
     let row = rect.y + 1 + u16::try_from(span.unwrap().start).unwrap();
@@ -389,7 +389,7 @@ fn motion_tracks_only_visible_running_state_rows_at_each_offset() {
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .unwrap();
     let (_, span) = crate::view::panel::rows_and_delegates(&app, rect.width);
     let row = rect.y + 1 + u16::try_from(span.unwrap().start).unwrap();

@@ -35,7 +35,7 @@ fn prompt_edge(row: &str, app: &App) -> bool {
     let left = app
         .chrome()
         .layout()
-        .map_or(0, |layout| usize::from(layout.column.x));
+        .map_or(0, |layout| usize::from(layout.column().x));
     let row = row.trim_end_matches(['█', '│', '┃']);
     let row = row
         .strip_prefix('⋮')
@@ -242,7 +242,7 @@ fn the_hidden_panel_keeps_its_status_line_inside_the_box() {
     let layout = hidden.chrome().layout().expect("a laid-out session");
     assert!(!layout.narrow);
     assert_eq!(hidden.narrow_fit(), None);
-    let lines = crate::view::status_rows::status(&hidden, layout.column.width).len();
+    let lines = crate::view::status_rows::status(&hidden, layout.column().width).len();
     assert_eq!(hidden.narrow_rows(hidden.below_rows()), 2 + lines);
     assert!(lines > 0, "the fixture keeps a status row to move");
 }
@@ -379,7 +379,7 @@ fn a_click_on_n_waiting_shows_the_rail() {
     assert!(
         app.chrome()
             .layout()
-            .and_then(|layout| layout.rail)
+            .and_then(|layout| layout.rail())
             .is_some()
     );
 }
@@ -392,13 +392,13 @@ fn a_click_on_n_waiting_where_the_rail_does_not_fit_clears_the_hide() {
     app.on_line(waiting(OTHER));
     app.on_key(Key::AltR, fakes::clock::FakeClock::new().now());
     app.on_click(TargetId::Panel(Spot::Waiting));
-    assert_eq!(app.chrome().layout().and_then(|layout| layout.rail), None);
+    assert_eq!(app.chrome().layout().and_then(|layout| layout.rail()), None);
     // The hide is cleared: grown, the rail returns instead of its grip.
     app.set_size(200, 40);
     assert!(
         app.chrome()
             .layout()
-            .and_then(|layout| layout.rail)
+            .and_then(|layout| layout.rail())
             .is_some()
     );
 }

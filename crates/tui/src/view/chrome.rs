@@ -27,7 +27,7 @@ use ratatui::style::Style;
 /// the column's full rect; its rows inset past the gutter where they
 /// draw.
 pub(super) fn draw(layout: &Layout, buf: &mut Buffer) {
-    if let Some(rail) = layout.rail {
+    if let Some(rail) = layout.rail() {
         crate::surface::draw_slab(
             buf,
             rail,
@@ -43,7 +43,7 @@ pub(super) fn draw(layout: &Layout, buf: &mut Buffer) {
     if let Some(at) = layout.grip {
         grip(buf, at.x, at, false);
     }
-    if let Some(panel) = layout.panel {
+    if let Some(panel) = layout.panel() {
         crate::surface::draw_slab(
             buf,
             panel,

@@ -125,7 +125,7 @@ fn the_wheel_over_the_panel_scrolls_it_in_the_loop() {
         .app
         .chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .unwrap_or_else(|| panic!("a panel"));
     feed(&mut lp, vec![wheel(panel.x + 5, panel.y + 10)]);
     assert_eq!(lp.app.panel_state().scroll(), 3);

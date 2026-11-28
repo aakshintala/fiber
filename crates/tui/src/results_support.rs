@@ -1,6 +1,6 @@
-//! Scaffolding shared by the search results tests (`docs/tui.md`,
-//! "Search"): an attached app with a running turn, a reply, and the
-//! injected clock's now.
+//! Scaffolding shared by search results and chrome tests (`docs/tui.md`,
+//! "Search" and "Layout"): an attached app, a reply, and the injected
+//! clock's now, plus shared layout fixtures.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -11,6 +11,51 @@ use serde_json::{Value, json};
 
 use crate::app::App;
 use crate::link::Line;
+
+/// The shared rail, conversation, input and panel layout used by chrome tests.
+pub(crate) fn four_region_layout(
+    conversation_height: i64,
+) -> Vec<(crate::layout::Region, crate::ext::RawRect)> {
+    [
+        (
+            crate::layout::Region::Rail,
+            crate::ext::RawRect {
+                x: 0,
+                y: 0,
+                width: 20,
+                height: 40,
+            },
+        ),
+        (
+            crate::layout::Region::Conversation,
+            crate::ext::RawRect {
+                x: 30,
+                y: 0,
+                width: 100,
+                height: conversation_height,
+            },
+        ),
+        (
+            crate::layout::Region::InputBox,
+            crate::ext::RawRect {
+                x: 30,
+                y: 35,
+                width: 100,
+                height: 5,
+            },
+        ),
+        (
+            crate::layout::Region::Panel,
+            crate::ext::RawRect {
+                x: 140,
+                y: 0,
+                width: 20,
+                height: 40,
+            },
+        ),
+    ]
+    .into()
+}
 
 /// The session the scaffolding attaches to.
 pub(crate) const SESSION: &str = "s_aaaaaaaaaaaaaaaa";

@@ -28,7 +28,7 @@ pub(crate) struct Chrome {
     panel_hidden: bool,
     /// ⌥R hid the rail: it stays hidden until shown.
     rail_hidden: bool,
-    /// The session screen's regions; `None` on home or below the floor.
+    /// The session screen's split and the placed rectangles for its latest frame.
     layout: Option<Layout>,
     /// The floor line, while the screen is below the floor.
     floor: Option<String>,
@@ -76,22 +76,29 @@ impl Chrome {
     ) -> bool {
         self.show_rail();
         Self::layout_for(width, height, home, false, self.panel_hidden)
-            .is_some_and(|layout| layout.rail.is_none() && layout.panel.is_some())
+            .is_some_and(|layout| layout.rail().is_none() && layout.panel().is_some())
     }
 
-    /// Lays a `width` by `height` screen out, returning whether the
-    /// regions moved. The rail is wanted unless the person hid it; a
-    /// rail the width sheds leaves its grip.
-    fn lay_out(&mut self, width: u16, height: u16, home: HomeState) -> bool {
-        let before = self.layout;
+    /// Lays a `width` by `height` screen out. The rail is wanted unless
+    /// the person hid it; a rail the width sheds leaves its grip.
+    fn lay_out(&mut self, width: u16, height: u16, home: HomeState) {
         self.floor = layout::floor_line(width, height);
         self.layout = Self::layout_for(width, height, home, self.rail_hidden, self.panel_hidden);
-        self.layout != before
     }
 
-    /// The session screen's regions.
+    /// The session screen's split and placed regions for the latest settled frame.
     pub(crate) fn layout(&self) -> Option<Layout> {
         self.layout
+    }
+
+    /// The split and placed region map for the latest settled frame.
+    pub(crate) fn drawn_layout(&self) -> Option<Layout> {
+        self.layout
+    }
+
+    /// Stores the placed layout used for drawing and hit-testing.
+    fn place(&mut self, layout: Option<Layout>) {
+        self.layout = layout;
     }
 
     /// The one line a screen below the floor shows in place of
@@ -104,7 +111,8 @@ impl Chrome {
     /// layout. The conversation's rows wrap one column narrower, leaving
     /// the last column to the scroll bar.
     pub(crate) fn column_width(&self, screen: u16) -> u16 {
-        self.layout.map_or(screen, |layout| layout.column.width)
+        self.drawn_layout()
+            .map_or(screen, |layout| layout.column().width)
     }
 
     /// The gutter the conversation's rows keep on their left: one blank
@@ -120,9 +128,12 @@ impl Chrome {
 
     /// Where the panel and the rail are drawn.
     pub(crate) fn regions(&self) -> Regions {
+        let regions = self
+            .layout
+            .map_or_else(crate::layout::RegionMap::default, Layout::regions);
         Regions {
-            panel: self.layout.and_then(|layout| layout.panel),
-            rail: self.layout.and_then(|layout| layout.rail),
+            panel: regions.get(crate::layout::Region::Panel),
+            rail: regions.get(crate::layout::Region::Rail),
         }
     }
 }
@@ -211,6 +222,7 @@ impl App {
     /// frame. Where the panel and the rail are is recorded when they
     /// move.
     pub(super) fn relayout(&mut self) {
+        let regions_before = self.chrome.regions();
         let home = HomeState {
             shares: Shares {
                 rail: self.home.launch.rail_share,
@@ -218,9 +230,10 @@ impl App {
             },
             on_home: self.on_home(),
         };
-        let moved = self
-            .chrome
+        self.chrome
             .lay_out(self.screen.width(), self.screen.height(), home);
+        let placement = crate::view::placement(self);
+        self.chrome.place(placement);
         let width = crate::view::scroll_bar::text_width(
             self.column_width().saturating_sub(self.chrome.gutter()),
         );
@@ -239,8 +252,9 @@ impl App {
             }
         }
         self.rewrap_call_view();
-        if moved {
-            self.set_regions(self.chrome.regions());
+        let regions = self.chrome.regions();
+        if regions != regions_before {
+            self.set_regions(regions);
         }
         self.sync_rail();
     }

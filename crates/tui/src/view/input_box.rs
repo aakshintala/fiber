@@ -795,13 +795,13 @@ fn caret_cell(area: Rect, below: u16, rows: &[String], row: usize, col: u16) -> 
 
 /// The input box's shown rows, the draft row they start at, and the
 /// cursor's row in them and column: the draft wrapped past the stripe
-/// and gap, at most [`App::input_height`] rows, scrolled so the cursor's
+/// and gap, at most [`App::input_height_at`] rows, scrolled so the cursor's
 /// row shows.
 pub(super) fn rows(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
+    let height = app.input_height_at(width);
     let width = surface::inset(width);
     let draft = app.input();
     let (row, col) = draft.cursor(width);
-    let height = app.input_height();
     let top = row.saturating_add(1).saturating_sub(height);
     let mut rows: Vec<String> = draft
         .rows(width)

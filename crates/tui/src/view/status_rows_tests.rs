@@ -540,7 +540,7 @@ fn the_waiting_target_covers_only_its_segment() {
     assert_eq!(waiting.len(), 1);
     // The rail's grip takes column 0 and the draw one more, so the row
     // starts in column 1.
-    let column = app.chrome().layout().expect("a layout").column;
+    let column = app.chrome().layout().expect("a layout").column();
     assert_eq!(
         waiting[0],
         Rect::new(

@@ -3,6 +3,8 @@
 
 use super::super::{App, Effect, Target};
 use super::header;
+use crate::ext::Renderer;
+use crate::ext::tests::{SlotRenderer, SlotScript};
 use crate::home::Launch;
 use crate::keys::Key;
 use crate::link::Line;
@@ -12,6 +14,7 @@ use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -129,9 +132,9 @@ fn type_draft(app: &mut App, text: &str) {
 fn the_seeded_home_lays_the_column_out_beside_the_rail_and_panel() {
     let app = attached(160, 40);
     let layout = app.chrome().layout().expect("a layout");
-    assert_eq!(layout.rail, Some(Rect::new(0, 0, 24, 40)));
-    assert_eq!(layout.column, Rect::new(24, 0, 102, 40));
-    assert_eq!(layout.panel, Some(Rect::new(126, 0, 34, 40)));
+    assert_eq!(layout.rail(), Some(Rect::new(0, 0, 24, 40)));
+    assert_eq!(layout.column(), Rect::new(24, 0, 102, 40));
+    assert_eq!(layout.panel(), Some(Rect::new(126, 0, 34, 40)));
     assert_eq!(app.chrome().floor_line(), None);
     assert_eq!(app.column_width(), 102);
     // No header row: the input box's input row, status row, and rule with
@@ -165,14 +168,35 @@ fn on_home_there_is_no_layout() {
 fn attached_at_160_the_column_is_the_screen_less_the_rail_and_panel() {
     let app = attached(160, 40);
     let layout = app.chrome().layout().expect("a layout");
-    assert_eq!(layout.rail, Some(Rect::new(0, 0, 24, 40)));
-    assert_eq!(layout.column, Rect::new(24, 0, 102, 40));
-    assert_eq!(layout.panel, Some(Rect::new(126, 0, 34, 40)));
+    assert_eq!(layout.rail(), Some(Rect::new(0, 0, 24, 40)));
+    assert_eq!(layout.column(), Rect::new(24, 0, 102, 40));
+    assert_eq!(layout.panel(), Some(Rect::new(126, 0, 34, 40)));
     assert_eq!(app.column_width(), 102);
-    assert_eq!(app.chrome().regions().panel, layout.panel);
-    assert_eq!(app.regions.panel, layout.panel);
+    assert_eq!(app.chrome().regions().panel, layout.panel());
+    assert_eq!(app.regions.panel, layout.panel());
     // The input box's row with its edges, rule and status row.
     assert_eq!(app.conversation_height(), 35);
+}
+
+#[test]
+fn relayout_records_extension_placed_rail_and_panel_regions() {
+    let mut app = attached(160, 40);
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["layout"],
+        SlotScript::Replace(Vec::new()),
+    ));
+    *renderer.layout.borrow_mut() = Some(crate::results_support::four_region_layout(28));
+
+    app.use_renderer(renderer as Rc<dyn Renderer>);
+
+    assert_eq!(app.chrome().regions().rail, Some(Rect::new(0, 0, 20, 40)));
+    assert_eq!(
+        app.chrome().regions().panel,
+        Some(Rect::new(140, 0, 20, 40))
+    );
+    assert_eq!(app.regions.rail, Some(Rect::new(0, 0, 20, 40)));
+    assert_eq!(app.regions.panel, Some(Rect::new(140, 0, 20, 40)));
+    assert_eq!(app.conversation_area_height(), 28);
 }
 
 #[test]
@@ -209,7 +233,10 @@ fn alt_p_hides_and_shows_the_panel_and_rewraps() {
     wide.on_line(turn_started(&long));
     let shown = total(&app);
     app.on_key(Key::AltP, now);
-    assert_eq!(app.chrome().layout().and_then(|layout| layout.panel), None);
+    assert_eq!(
+        app.chrome().layout().and_then(|layout| layout.panel()),
+        None
+    );
     assert_eq!(app.chrome().regions().panel, None);
     assert_eq!(app.regions.panel, None);
     assert_eq!(app.column_width(), 136);
@@ -408,7 +435,7 @@ fn up_and_down_move_through_a_draft_wrapped_at_the_column_width() {
     assert_eq!(app.input().cursor(app.draft_width()).0, 0);
     app.on_key(Key::Down, now);
     assert_eq!(app.input().cursor(app.draft_width()).0, 1);
-    assert_eq!(app.input_height(), 2);
+    assert_eq!(app.input_height_at(app.column_width()), 2);
 }
 
 #[test]
@@ -448,26 +475,26 @@ fn the_rail_is_drawn_beside_every_session() {
     let mut app = attached(160, 40);
     app.on_line(status(SESSION, "one"));
     let layout = app.chrome().layout().expect("a layout");
-    assert_eq!(layout.rail, Some(Rect::new(0, 0, 24, 40)));
-    assert_eq!(app.regions.rail, layout.rail);
+    assert_eq!(layout.rail(), Some(Rect::new(0, 0, 24, 40)));
+    assert_eq!(app.regions.rail, layout.rail());
     assert_eq!(app.column_width(), 102);
     assert!(app.take_saves().is_empty());
     // A second live session changes nothing.
     app.on_line(status("s_bbbbbbbbbbbbbbbb", "two"));
     let layout = app.chrome().layout().expect("a layout");
-    assert_eq!(layout.rail, Some(Rect::new(0, 0, 24, 40)));
+    assert_eq!(layout.rail(), Some(Rect::new(0, 0, 24, 40)));
     assert!(app.take_saves().is_empty());
     // Narrower, the rail hides for width and leaves its grip, saving
     // nothing.
     app.set_size(130, 40);
     let layout = app.chrome().layout().expect("a layout");
-    assert_eq!(layout.rail, None);
+    assert_eq!(layout.rail(), None);
     assert_eq!(layout.grip, Some(Rect::new(0, 0, 1, 40)));
     assert!(app.take_saves().is_empty());
     // Wider, it returns, still saving nothing.
     app.set_size(160, 40);
     let layout = app.chrome().layout().expect("a layout");
-    assert_eq!(layout.rail, Some(Rect::new(0, 0, 24, 40)));
+    assert_eq!(layout.rail(), Some(Rect::new(0, 0, 24, 40)));
     assert!(app.take_saves().is_empty());
 }
 
@@ -486,7 +513,7 @@ fn a_crashed_card_only_screen_draws_the_rail() {
     }));
     // No live session is left, and the rail still draws.
     let layout = app.chrome().layout().expect("a layout");
-    assert_eq!(layout.rail, Some(Rect::new(0, 0, 24, 40)));
+    assert_eq!(layout.rail(), Some(Rect::new(0, 0, 24, 40)));
     assert!(app.take_saves().is_empty());
 }
 
@@ -499,7 +526,7 @@ fn a_launch_with_the_rail_hidden_starts_on_its_grip_and_saves_nothing() {
     app.attach(contract::SessionId(SESSION.to_owned()));
     app.set_size(160, 40);
     let layout = app.chrome().layout().expect("a layout");
-    assert_eq!(layout.rail, None);
+    assert_eq!(layout.rail(), None);
     assert_eq!(layout.grip, Some(Rect::new(0, 0, 1, 40)));
     assert!(app.take_saves().is_empty());
 }
@@ -564,9 +591,9 @@ fn the_draft_wraps_at_the_inset_width() {
     for _ in 0..54 {
         app.on_key(Key::Char('d'), now);
     }
-    assert_eq!(app.input_height(), 1);
+    assert_eq!(app.input_height_at(app.column_width()), 1);
     app.on_key(Key::Char('d'), now);
-    assert_eq!(app.input_height(), 2);
+    assert_eq!(app.input_height_at(app.column_width()), 2);
 }
 
 /// Clicking the working directory or the permission mode opens the

@@ -404,7 +404,7 @@ fn hide_rail(app: &mut App) {
     assert!(
         app.chrome()
             .layout()
-            .is_some_and(|layout| layout.rail.is_none())
+            .is_some_and(|layout| layout.rail().is_none())
     );
 }
 
@@ -1488,7 +1488,7 @@ fn draw_targets(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .unwrap_or_else(|| panic!("a panel rect"));
     let area = Rect::new(0, 0, rect.width, rect.height);
     let mut buf = Buffer::empty(area);
@@ -1520,7 +1520,7 @@ fn widget_rows_are_cut_at_the_text_width() {
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .unwrap_or_else(|| panic!("a panel rect"));
     let text = usize::from(rect.width).saturating_sub(4);
     fold_widget(&mut app, "plan", "tasks", &["x".repeat(text + 10).as_str()]);
@@ -2000,7 +2000,7 @@ fn no_color_drawn(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .unwrap_or_else(|| panic!("a panel rect"));
     let area = Rect::new(0, 0, rect.width, rect.height);
     let mut buf = Buffer::empty(area);
@@ -2023,7 +2023,7 @@ fn no_color_boxes_a_sidebar_card_and_keeps_targets_inside() {
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .expect("a panel rect");
     // The Session card's fifteen rows and the blank row, then the
     // widget card: its top edge on row 17, two text rows, its bottom

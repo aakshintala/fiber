@@ -2821,7 +2821,7 @@ fn delegate_spot() -> (Loop<TestBackend>, (u16, u16)) {
         .app
         .chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .unwrap_or_else(|| panic!("a panel"));
     let row = shown(&lp)
         .lines()

@@ -495,7 +495,7 @@ pub(crate) fn kept(app: &App, width: u16) -> usize {
 fn lines_live(app: &App) -> bool {
     app.chrome()
         .layout()
-        .is_some_and(|layout| layout.panel.is_none())
+        .is_some_and(|layout| layout.panel().is_none())
 }
 
 /// Every changed file in the order the built-in ranks them: the Changed

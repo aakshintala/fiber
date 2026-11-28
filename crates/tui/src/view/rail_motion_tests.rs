@@ -87,7 +87,7 @@ fn rail(app: &App) -> Buffer {
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.rail)
+        .and_then(|layout| layout.rail())
         .unwrap_or_else(|| panic!("a rail"));
     let area = Rect::new(0, 0, rect.width, rect.height);
     let mut buf = Buffer::empty(area);

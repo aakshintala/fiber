@@ -7,10 +7,12 @@ use std::time::{Duration, Instant};
 
 use super::anim::{AnimKey, effective_interval};
 use super::spans::{self, FittedLine};
-use super::{Decision, Failure, FailureKind, Input};
+use super::{Decision, Failure, FailureKind, Input, LayoutInput, RawRect};
+use crate::layout::{Region, RegionMap};
 use crate::mouse::Target;
 use crate::rows::Join;
 use crate::turn::Row;
+use ratatui::layout::Rect;
 
 /// An extension click target's opaque identity: the interned
 /// (session, extension, slot, click id) tuple's key. Copy so targets
@@ -183,6 +185,8 @@ struct Pending {
 #[derive(Debug)]
 pub(crate) struct Cache {
     entries: Mutex<HashMap<EntryKey, Arc<Vec<FittedLine>>>>,
+    /// Validated layout maps, keyed by the complete slot input.
+    layout_entries: Mutex<HashMap<EntryKey, RegionMap>>,
     /// Closed draws by input and width, with the frame they drew at and
     /// whether they continue: a count's frame-0 result, promoted by the
     /// paint that follows it at the same width.
@@ -246,6 +250,7 @@ impl Default for Cache {
     fn default() -> Self {
         Self {
             entries: Mutex::default(),
+            layout_entries: Mutex::default(),
             closed: Mutex::default(),
             failed: Arc::default(),
             pending: Arc::default(),
@@ -264,6 +269,7 @@ impl Cache {
     pub(crate) fn scratch_sharing_pending(&self) -> Self {
         Self {
             entries: Mutex::default(),
+            layout_entries: Mutex::default(),
             closed: Mutex::default(),
             failed: Arc::clone(&self.failed),
             pending: Arc::clone(&self.pending),
@@ -328,6 +334,67 @@ impl Cache {
                                 kind: FailureKind::HookFailed,
                                 extension: actual,
                                 message: error.to_string(),
+                            },
+                        );
+                        None
+                    }
+                }
+            }
+            Decision::Fail(failure) => {
+                if failure.extension == extension {
+                    self.fail(key, failure);
+                }
+                None
+            }
+            Decision::NotForSession { .. } => None,
+        }
+    }
+
+    /// The validated result of the selected layout renderer, memoizing
+    /// both a good map and a failure for its complete input.
+    pub(crate) fn layout_regions(
+        &self,
+        page: PageKey,
+        extension: &str,
+        half: Option<String>,
+        input: &LayoutInput,
+        call: impl FnOnce() -> Decision<Vec<(Region, RawRect)>>,
+    ) -> Option<RegionMap> {
+        let key = (
+            page,
+            "layout".to_owned(),
+            input.key("layout"),
+            extension.to_owned(),
+            half,
+        );
+        if support::lock(&self.failed).contains(&key) {
+            return None;
+        }
+        let entry = (key.clone(), None, input.width);
+        if let Some(hit) = support::lock(&self.layout_entries).get(&entry).copied() {
+            return Some(hit);
+        }
+        crate::work::add(|work| work.renderer_calls += 1);
+        match call() {
+            Decision::Draw {
+                extension: actual,
+                lines: regions,
+            } => {
+                if actual != extension {
+                    return None;
+                }
+                match validate_layout(input, &regions) {
+                    Ok(regions) => {
+                        support::lock(&self.layout_entries).insert(entry, regions);
+                        Some(regions)
+                    }
+                    Err(message) => {
+                        self.fail(
+                            key,
+                            Failure {
+                                kind: FailureKind::HookFailed,
+                                extension: actual,
+                                message,
                             },
                         );
                         None
@@ -963,6 +1030,7 @@ impl Cache {
     /// Only displayed owners may prune shared failures for this exact page.
     pub(crate) fn drop_page(&self, page: PageKey) {
         support::lock(&self.entries).retain(|key, _| key.0.0 != page);
+        support::lock(&self.layout_entries).retain(|key, _| key.0.0 != page);
         support::lock(&self.closed).retain(|key, _| key.0.0 != page);
         // Animation counters, entries and pending recounts drop with the
         // page: a returning item restarts at frame 0.
@@ -1056,6 +1124,7 @@ impl Cache {
         // A width change keeps the frame counter, the last time, the line
         // count and every still and stopped marker: only rendered entries go.
         support::lock(&self.entries).clear();
+        support::lock(&self.layout_entries).clear();
         support::lock(&self.closed).clear();
         support::lock(&self.anim).entries.clear();
     }
@@ -1245,6 +1314,78 @@ impl Cache {
     }
 }
 
+/// Validates a layout extension's whole map before any rectangle is used.
+fn validate_layout(
+    input: &LayoutInput,
+    regions: &[(Region, RawRect)],
+) -> Result<RegionMap, String> {
+    let expected: HashSet<Region> = input.regions.iter().copied().collect();
+    if expected.len() != input.regions.len() {
+        return Err("the built-in layout input contains duplicate region names".to_owned());
+    }
+    if regions.len() != input.regions.len() {
+        return Err("layout output must name every shown region exactly once".to_owned());
+    }
+    let mut seen = HashSet::new();
+    let mut placed: Vec<(Rect, u64, u64)> = Vec::with_capacity(regions.len());
+    let mut map = RegionMap::default();
+    for (region, raw) in regions {
+        let name = region.name();
+        if !expected.contains(region) || !seen.insert(*region) {
+            return Err(format!(
+                "layout output does not match the shown region set at `{name}`"
+            ));
+        }
+        if raw.x < 0 || raw.y < 0 || raw.width < 1 || raw.height < 1 {
+            return Err(format!(
+                "layout region `{name}` must be at least 1x1 and in bounds"
+            ));
+        }
+        let x =
+            u64::try_from(raw.x).map_err(|_| format!("layout region `{name}` has an invalid x"))?;
+        let y =
+            u64::try_from(raw.y).map_err(|_| format!("layout region `{name}` has an invalid y"))?;
+        let width = u64::try_from(raw.width)
+            .map_err(|_| format!("layout region `{name}` has an invalid width"))?;
+        let height = u64::try_from(raw.height)
+            .map_err(|_| format!("layout region `{name}` has an invalid height"))?;
+        let right = x
+            .checked_add(width)
+            .ok_or_else(|| format!("layout region `{name}` overflows its horizontal end"))?;
+        let bottom = y
+            .checked_add(height)
+            .ok_or_else(|| format!("layout region `{name}` overflows its vertical end"))?;
+        if right > u64::from(input.width) || bottom > u64::from(input.height) {
+            return Err(format!(
+                "layout region `{name}` is outside the terminal bounds"
+            ));
+        }
+        for (prior, prior_right, prior_bottom) in &placed {
+            let prior_x = u64::from(prior.x);
+            let prior_y = u64::from(prior.y);
+            if x < *prior_right && prior_x < right && y < *prior_bottom && prior_y < bottom {
+                return Err(format!(
+                    "layout regions `{name}` and another region overlap"
+                ));
+            }
+        }
+        let rect = Rect::new(
+            u16::try_from(x).map_err(|_| format!("layout region `{name}` has an invalid x"))?,
+            u16::try_from(y).map_err(|_| format!("layout region `{name}` has an invalid y"))?,
+            u16::try_from(width)
+                .map_err(|_| format!("layout region `{name}` has an invalid width"))?,
+            u16::try_from(height)
+                .map_err(|_| format!("layout region `{name}` has an invalid height"))?,
+        );
+        placed.push((rect, right, bottom));
+        map.set(*region, Some(rect));
+    }
+    if seen.len() != expected.len() {
+        return Err("layout output omits a shown region".to_owned());
+    }
+    Ok(map)
+}
+
 /// The entry key and flat flag for `input` in `slot`: the same key
 /// [`Cache::lines`] files entries under, without the width.
 fn key_of(input: &Input<'_>, slot: &str) -> (u64, bool) {
@@ -1260,6 +1401,8 @@ fn key_of(input: &Input<'_>, slot: &str) -> (u64, bool) {
         Input::CompactionBand(band) => (band.key(slot), band.flat),
         Input::ErrorLine(line) => (line.key(slot), line.flat),
         Input::Notice(notice) => (notice.key(slot), notice.flat),
+        Input::Layout(layout) => (layout.key(slot), layout.flat),
+        Input::Home(home) => (home.key(slot), home.flat),
         Input::WorkingLine(line) => (line.key(slot), line.flat),
         Input::SteeringQueue(queue) => (queue.key(slot), queue.flat),
         Input::StatusRows(rows) => (rows.key(slot), rows.flat),

@@ -5,11 +5,13 @@
 use super::super::{App, Effect};
 use crate::app::panel::Spot;
 use crate::app::testkit::{self, SESSION, attached};
+use crate::ext::tests::{SlotRenderer, SlotScript};
 use crate::ext::{Decision, KeyOutcome, Renderer, SessionCtx};
+use crate::home::Launch;
 use crate::keys::{Button, Mouse, MouseKind};
 use crate::mouse::{Pointer, Target as Hit, TargetId};
 use contract::SessionId;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -134,6 +136,31 @@ fn click_at(
     let mut pointer = Pointer::default();
     app.on_mouse_inner(&press, targets, &mut pointer, true, now);
     app.on_mouse_inner(&release, targets, &mut pointer, true, now)
+}
+
+#[test]
+fn extension_layout_uses_its_conversation_rect_for_mouse_hit_testing() {
+    let mut app = attached(160, 40);
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".into(),
+            git: false,
+        },
+        rail_share: 15.0,
+        panel_share: 21.0,
+        ..Default::default()
+    });
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["layout"],
+        SlotScript::Replace(Vec::new()),
+    ));
+    *renderer.layout.borrow_mut() = Some(crate::results_support::four_region_layout(35));
+    app.use_renderer(renderer as Rc<dyn Renderer>);
+
+    assert!(app.over_conversation(Position::new(31, 10)));
+    // Column 25 held the conversation before the layout replacement.
+    assert!(!app.over_conversation(Position::new(25, 10)));
 }
 
 #[test]

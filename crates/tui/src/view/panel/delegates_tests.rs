@@ -113,7 +113,7 @@ fn fold_delegates(app: &mut App, n: usize) {
 fn panel_width(app: &App) -> u16 {
     app.chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .unwrap_or_else(|| panic!("a panel rect"))
         .width
 }
@@ -153,7 +153,7 @@ fn draw_targets(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .unwrap_or_else(|| panic!("a panel rect"));
     let area = Rect::new(0, 0, rect.width, rect.height);
     let mut buf = Buffer::empty(area);
@@ -390,7 +390,7 @@ fn scroll_card(app: &mut App, steps: usize) {
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .unwrap_or_else(|| panic!("a panel rect"));
     for _ in 0..steps {
         app.on_wheel(&crate::keys::Mouse {
@@ -452,7 +452,7 @@ fn finished_fold_keeps_running_first_and_exposes_every_finished_entry_by_scrolli
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .unwrap();
     for _ in 0..8 {
         app.on_wheel(&crate::keys::Mouse {

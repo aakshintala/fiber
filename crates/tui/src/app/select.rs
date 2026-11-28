@@ -609,7 +609,14 @@ impl App {
     /// column, as now.
     pub(crate) fn conversation_area(&self) -> Rect {
         let screen = Rect::new(0, 0, self.screen.width(), self.screen.height());
-        let raw = self.chrome.layout().map_or(screen, |layout| layout.column);
+        let raw = crate::view::placement(self).map_or_else(
+            || {
+                self.chrome
+                    .layout()
+                    .map_or(screen, |layout| layout.column())
+            },
+            |placement| placement.conversation(self),
+        );
         let area = crate::layout::past_gutter(raw, self.chrome.gutter());
         let height = u16::try_from(self.conversation_height()).unwrap_or(u16::MAX);
         // The item view's header takes the conversation's top rows: a

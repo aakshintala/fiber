@@ -11,6 +11,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::layout::Region;
+
 pub(crate) mod cache;
 
 pub mod anim;
@@ -20,11 +22,11 @@ pub(crate) mod input;
 
 pub use input::{
     AnswerDisposition, Answers, BranchName, CallState, Card, CardPrompt, ChangedFile, ChangedFiles,
-    CompactionBand, Delegate, DelegatesCard, ErrorLine, GroupLine, Input, Job, JobsCard,
-    LedgerResult, LedgerRow, Notice, Prompt, PromptImage, QueuedImage, Quota, ReplyText, RowError,
-    SessionCard, SessionContext, Spend, StatusRows, Steer, SteeringMessage, SteeringQueue,
-    ThinkingLine, TurnAnswerPart, TurnAnswers, TurnAside, TurnBand, TurnBandState, TurnCall,
-    TurnCallResult, TurnCard, TurnCardState, TurnEnded, TurnEntry, TurnError, TurnFailed,
+    CompactionBand, Delegate, DelegatesCard, ErrorLine, GroupLine, HomeInput, Input, Job, JobsCard,
+    LayoutInput, LedgerResult, LedgerRow, Notice, Prompt, PromptImage, QueuedImage, Quota,
+    ReplyText, RowError, SessionCard, SessionContext, Spend, StatusRows, Steer, SteeringMessage,
+    SteeringQueue, ThinkingLine, TurnAnswerPart, TurnAnswers, TurnAside, TurnBand, TurnBandState,
+    TurnCall, TurnCallResult, TurnCard, TurnCardState, TurnEnded, TurnEntry, TurnError, TurnFailed,
     TurnGroup, TurnGroupState, TurnOrphan, TurnSection, TurnSizes, TurnStreaming, TurnThought,
     WidgetCard, WorkingLine, WorkingRetry,
 };
@@ -179,15 +181,15 @@ pub struct Failure {
     pub message: String,
 }
 
-/// A render result carrying the actual extension's identity.
+/// A renderer result carrying the actual extension's identity and output.
 #[derive(Debug)]
-pub enum Decision {
-    /// Validatable lines from the selected extension.
+pub enum Decision<T = Vec<Vec<RawSpan>>> {
+    /// Validatable output from the selected extension.
     Draw {
         /// The extension that drew.
         extension: String,
-        /// Its lines.
-        lines: Vec<Vec<RawSpan>>,
+        /// The extension's payload: rendered lines or placed regions.
+        lines: T,
     },
     /// A defensive fallback when the session does not match.
     NotForSession {
@@ -201,6 +203,9 @@ pub enum Decision {
     /// A typed callback failure.
     Fail(Failure),
 }
+
+/// One Lua-provided rectangle before the terminal validates and casts it.
+pub type RawRect = contract::LayoutRect;
 
 /// Builds terminal-thread renderers from current local files.
 pub trait Load: Send + Sync {
@@ -275,6 +280,20 @@ pub trait Renderer: std::fmt::Debug {
         width: u16,
         builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
     ) -> Decision;
+    /// The `layout` slot's region map. Its builtin returns the terminal's
+    /// complete built-in map, never lines.
+    fn render_layout(
+        &self,
+        _ctx: &SessionCtx,
+        _input: &LayoutInput,
+        _builtin: &dyn Fn(&LayoutInput) -> Vec<(Region, RawRect)>,
+    ) -> Decision<Vec<(Region, RawRect)>> {
+        Decision::NotForSession {
+            extension: String::new(),
+            tui_version: String::new(),
+            half: SessionVersion::Unseen,
+        }
+    }
     /// The slot's effective animation interval for the winning
     /// extension, if it animates (`docs/tui.md`, "Animation"). Still
     /// slots answer none, and keep the cached `render` path. The winner
@@ -425,6 +444,33 @@ impl Bound {
             self.cache.queue_notice(queued);
         }
         fitted
+    }
+
+    /// The bound renderer's complete layout region map, or `None` to use
+    /// the built-in map. Invalid results fail atomically and are memoized.
+    pub(crate) fn layout_regions(
+        &self,
+        input: &LayoutInput,
+        builtin: &[(Region, RawRect)],
+    ) -> Option<crate::layout::RegionMap> {
+        let renderer = self.handle.get()?;
+        let selected = renderer.fills_for(&self.ctx, "layout");
+        for queued in renderer.take_pending() {
+            self.cache.queue_notice(queued);
+        }
+        let SlotSelection::Draw { extension } = selected else {
+            return None;
+        };
+        let half = renderer.half(&self.ctx, &extension);
+        let regions = self
+            .cache
+            .layout_regions(self.page.clone(), &extension, half, input, || {
+                renderer.render_layout(&self.ctx, input, &|_| builtin.to_vec())
+            });
+        for queued in renderer.take_pending() {
+            self.cache.queue_notice(queued);
+        }
+        regions
     }
 
     /// The bound renderer's chrome `slot` lines for `mode`: `None`
