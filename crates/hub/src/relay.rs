@@ -1369,7 +1369,9 @@ fn replay_history(
                     lines: vec![],
                 });
                 match result {
-                    Ok(result) => crate::connection::accept_result(writer, hub, id, result),
+                    Ok(result) => {
+                        let _ = crate::connection::accept_result(writer, hub, id, result);
+                    }
                     Err(_) => refuse(&ErrorCode::LogCorrupt, &cannot_replay(session)),
                 }
                 return;
@@ -1401,7 +1403,9 @@ fn replay_history(
         .filter(|line| line.seq.is_some_and(|seq| seq.0 <= to))
         .collect();
     match serde_json::to_value(&contract::events::CommandResult::History { lines }) {
-        Ok(result) => crate::connection::accept_result(writer, hub, id, result),
+        Ok(result) => {
+            let _ = crate::connection::accept_result(writer, hub, id, result);
+        }
         Err(_) => refuse(&ErrorCode::LogCorrupt, &cannot_replay(session)),
     }
 }

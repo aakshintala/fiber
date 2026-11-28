@@ -973,7 +973,9 @@ pub(crate) fn answer(
     got: Result<Option<Value>, Refused>,
 ) {
     match got {
-        Ok(Some(result)) => accept_result(writer, hub, id, result),
+        Ok(Some(result)) => {
+            let _ = accept_result(writer, hub, id, result);
+        }
         Ok(None) => {
             let payload = Map::from_iter([("command_id".to_owned(), Value::String(id.0.clone()))]);
             send_line(writer, hub, HubEventKind::CommandAccepted, payload);

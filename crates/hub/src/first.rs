@@ -121,6 +121,10 @@ pub(crate) fn later(
     held: Held,
     first: Arc<First>,
 ) -> io::Result<()> {
+    #[cfg(test)]
+    if hub.fail_first_later.swap(false, Ordering::SeqCst) {
+        return Err(io::Error::other("the test refused hub-first-prompt"));
+    }
     let hub = Arc::clone(hub);
     let relays = Arc::clone(relays);
     thread::Builder::new()

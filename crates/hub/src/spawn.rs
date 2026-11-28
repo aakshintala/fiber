@@ -250,15 +250,16 @@ fn spawn(id: &SessionId, mut command: Command) -> std::io::Result<Box<dyn Starte
     let reading = support::lock(&DRAIN_READING)
         .take_if(|(wanted, _)| *wanted == *id)
         .map(|(_, sender)| sender);
-    let shared: Arc<(Mutex<State>, Condvar)> = Arc::new((
-        Mutex::new(State {
-            exited: false,
-            failure: None,
-            #[cfg(test)]
-            reading,
-        }),
-        Condvar::new(),
-    ));
+    #[cfg(test)]
+    let mut initial_state = State::default();
+    #[cfg(not(test))]
+    let initial_state = State::default();
+    #[cfg(test)]
+    {
+        initial_state.reading = reading;
+    }
+    let shared: Arc<(Mutex<State>, Condvar)> =
+        Arc::new((Mutex::new(initial_state), Condvar::new()));
     let child = Arc::new(Mutex::new(child));
     let watch = Arc::clone(&shared);
     match thread::Builder::new().name("hub-drain".to_owned()).spawn({
@@ -299,10 +300,15 @@ struct Spawned {
     state: Arc<(Mutex<State>, Condvar)>,
 }
 
+#[derive(Default)]
 struct State {
     exited: bool,
     /// The last line on stdout, when it parsed as a `fiber_exited` verdict.
     failure: Option<Failure>,
+    /// The exact final line when it has the strict pre-session shape.
+    pre_session_line: Option<String>,
+    /// A one-shot observer registered before the drain settles.
+    pre_session_watch: Option<Box<dyn FnOnce(String) + Send>>,
     /// Tests only: fired by the drain with no lock held just before its
     /// first read.
     #[cfg(test)]
@@ -321,6 +327,21 @@ impl Started for Spawned {
             retry_after_ms: None,
             provider: None,
         }))
+    }
+
+    fn watch_pre_session_exit(&self, callback: Box<dyn FnOnce(String) + Send>) {
+        let (callback, line) = {
+            let mut state = support::lock(&self.state.0);
+            if state.exited {
+                (Some(callback), state.pre_session_line.take())
+            } else {
+                state.pre_session_watch = Some(callback);
+                return;
+            }
+        };
+        if let (Some(callback), Some(line)) = (callback, line) {
+            callback(line);
+        }
     }
 
     fn kill(&self) {
@@ -355,13 +376,13 @@ impl Started for Spawned {
 /// read, so `kill` returns while the drain still holds the pipe open.
 fn drain(child: &Arc<Mutex<Child>>, shared: &Arc<(Mutex<State>, Condvar)>) {
     let stdout = support::lock(child).stdout.take();
+    let mut last = String::new();
     if let Some(stdout) = stdout {
         #[cfg(test)]
         if let Some(reading) = support::lock(&shared.0).reading.take() {
             reading.send(()).unwrap_or(());
         }
         let mut read = BufReader::new(stdout);
-        let mut last = String::new();
         let mut buf = String::new();
         loop {
             buf.clear();
@@ -379,11 +400,40 @@ fn drain(child: &Arc<Mutex<Child>>, shared: &Arc<(Mutex<State>, Condvar)>) {
             support::lock(&shared.0).failure = Some(failure);
         }
     }
+    let pre_session_line = strict_pre_session_line(&last);
     match support::lock(child).wait() {
         Ok(_) | Err(_) => {}
     }
-    support::lock(&shared.0).exited = true;
+    let callback = {
+        let mut state = support::lock(&shared.0);
+        state.pre_session_line = pre_session_line;
+        state.exited = true;
+        state
+            .pre_session_watch
+            .take()
+            .and_then(|callback| state.pre_session_line.take().map(|line| (callback, line)))
+    };
     shared.1.notify_all();
+    if let Some((callback, line)) = callback {
+        callback(line);
+    }
+}
+
+/// Whether the line is exactly the pre-session wire shape, retaining its bytes.
+fn strict_pre_session_line(line: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    let object = value.as_object()?;
+    if object.len() != 3
+        || object.get("schema_version")?.as_u64()? != u64::from(contract::SCHEMA_VERSION)
+    {
+        return None;
+    }
+    let payload = object.get("payload")?.as_object()?;
+    if payload.len() != 2 {
+        return None;
+    }
+    let _: contract::PreSessionExit = serde_json::from_value(value).ok()?;
+    Some(line.to_owned())
 }
 
 /// The `code` and `message` of a `fiber_exited` line's `payload.error`.

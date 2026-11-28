@@ -19,6 +19,7 @@ use std::time::Duration;
 use contract::events::VariablesSource;
 use contract::{ErrorCode, SessionId};
 use fakes::Deadline;
+use serde_json::Value;
 
 use super::*;
 use crate::testkit::await_true;
@@ -26,6 +27,7 @@ use crate::{Environment, Environments, Started, Starter};
 
 /// One named deadline per wait: the drain finishes before it.
 const DRAIN_DEADLINE: Duration = Duration::from_secs(10);
+const WAIT: Duration = DRAIN_DEADLINE;
 
 fn exited_line(code: &str, message: &str) -> String {
     serde_json::json!({
@@ -35,6 +37,14 @@ fn exited_line(code: &str, message: &str) -> String {
         "payload": {"error": {"code": code, "message": message}},
     })
     .to_string()
+}
+
+fn pre_session_exit_line() -> String {
+    serde_json::to_string(&contract::PreSessionExit::new(
+        1,
+        crate::fake::failure(ErrorCode::IoFailed, "recorded"),
+    ))
+    .unwrap()
 }
 
 /// A child printing `lines` on stdout, then exiting 0.
@@ -60,14 +70,8 @@ type Drained = (Arc<Mutex<Child>>, Arc<(Mutex<State>, Condvar)>);
 
 #[track_caller]
 fn drained(child: Child) -> Drained {
-    let state: Arc<(Mutex<State>, Condvar)> = Arc::new((
-        Mutex::new(State {
-            exited: false,
-            failure: None,
-            reading: None,
-        }),
-        Condvar::new(),
-    ));
+    let state: Arc<(Mutex<State>, Condvar)> =
+        Arc::new((Mutex::new(State::default()), Condvar::new()));
     let child = Arc::new(Mutex::new(child));
     // `drain` blocks reading stdout to EOF and reaping the child: a wait,
     // so the test receives it with a wall-clock deadline.
@@ -83,7 +87,7 @@ fn drained(child: Child) -> Drained {
             }
         })
         .unwrap();
-    Deadline::after(DRAIN_DEADLINE)
+    Deadline::after(WAIT)
         .recv(&done_rx)
         .expect("drain finishes before its deadline");
     (child, state)
@@ -98,18 +102,91 @@ fn exited_is_none_while_the_session_runs() {
     let spawned = Spawned {
         id: SessionId("s_0123456789abcdef".to_owned()),
         child: Arc::new(Mutex::new(printing(&[]))),
-        state: Arc::new((
-            Mutex::new(State {
-                exited: false,
-                failure: None,
-                reading: None,
-            }),
-            Condvar::new(),
-        )),
+        state: Arc::new((Mutex::new(State::default()), Condvar::new())),
     };
     assert!(spawned.exited().is_none());
     // Reap the only child this test made: it printed nothing and exited.
     support::lock(&spawned.child).wait().unwrap();
+}
+
+#[test]
+fn pre_session_exit_candidate_requires_the_exact_pre_session_shape() {
+    let valid = pre_session_exit_line();
+    assert_eq!(strict_pre_session_line(&valid), Some(valid.clone()));
+    for marker in ["session_id", "ts", "seq"] {
+        let mut value: Value = serde_json::from_str(&valid).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert(marker.to_owned(), Value::Null);
+        assert_eq!(
+            strict_pre_session_line(&value.to_string()),
+            None,
+            "{marker}"
+        );
+    }
+    for (key, value) in [
+        ("kind", serde_json::json!("other")),
+        ("schema_version", serde_json::json!(99)),
+    ] {
+        let mut altered: Value = serde_json::from_str(&valid).unwrap();
+        altered[key] = value;
+        assert_eq!(strict_pre_session_line(&altered.to_string()), None, "{key}");
+    }
+    let mut value: Value = serde_json::from_str(&valid).unwrap();
+    value["payload"]["future"] = Value::Null;
+    assert_eq!(strict_pre_session_line(&value.to_string()), None);
+}
+
+#[test]
+fn pre_session_callback_runs_once_when_registered_before_reap() {
+    let line = pre_session_exit_line();
+    let child = Arc::new(Mutex::new(printing(std::slice::from_ref(&line))));
+    let state = Arc::new((Mutex::new(State::default()), Condvar::new()));
+    let spawned = Spawned {
+        id: SessionId("s_0123456789abcdef".to_owned()),
+        child: Arc::clone(&child),
+        state: Arc::clone(&state),
+    };
+    let (sent, received) = mpsc::channel();
+    spawned.watch_pre_session_exit(Box::new(move |line| {
+        sent.send(line).unwrap_or(());
+    }));
+    drain(&child, &state);
+    assert_eq!(
+        Deadline::after(WAIT) // Bounded wait for child drain completion.
+            .recv_or_fail(&received, "the registered pre-session verdict"),
+        format!("{line}\n")
+    );
+    assert!(support::lock(&state.0).pre_session_line.is_none());
+}
+
+#[test]
+fn pre_session_callback_runs_once_when_registered_after_reap() {
+    let line = pre_session_exit_line();
+    let (child, state) = drained(printing(std::slice::from_ref(&line)));
+    let spawned = Spawned {
+        id: SessionId("s_0123456789abcdef".to_owned()),
+        child,
+        state,
+    };
+    let (sent, received) = mpsc::channel();
+    spawned.watch_pre_session_exit(Box::new(move |line| {
+        sent.send(line).unwrap_or(());
+    }));
+    assert_eq!(
+        Deadline::after(WAIT) // Bounded wait for child drain completion.
+            .recv_or_fail(&received, "the stored pre-session verdict"),
+        format!("{line}\n")
+    );
+    let (duplicate, duplicates) = mpsc::channel();
+    spawned.watch_pre_session_exit(Box::new(move |line| {
+        duplicate.send(line).unwrap_or(());
+    }));
+    assert!(matches!(
+        duplicates.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
 }
 
 #[test]
@@ -338,7 +415,7 @@ fn exit_of(started: Box<dyn Started>) -> Failure {
         .unwrap();
     // `wait_exited` blocks: a wait, so the test receives it with a
     // wall-clock deadline.
-    Deadline::after(DRAIN_DEADLINE)
+    Deadline::after(WAIT)
         .recv(&done_rx)
         .expect("the session exits before its deadline")
         .expect("the session exits before its deadline")
@@ -358,14 +435,8 @@ fn wait_exited_blocks_until_the_child_exits() {
         .spawn()
         .unwrap();
     let mut stdin = child.stdin.take().unwrap();
-    let state: Arc<(Mutex<State>, Condvar)> = Arc::new((
-        Mutex::new(State {
-            exited: false,
-            failure: None,
-            reading: None,
-        }),
-        Condvar::new(),
-    ));
+    let state: Arc<(Mutex<State>, Condvar)> =
+        Arc::new((Mutex::new(State::default()), Condvar::new()));
     let child = Arc::new(Mutex::new(child));
     thread::Builder::new()
         .name("hub-test-drain".to_owned())
@@ -389,7 +460,7 @@ fn wait_exited_blocks_until_the_child_exits() {
             done_tx.send(spawned.wait_exited()).unwrap_or(());
         })
         .unwrap();
-    Deadline::after(DRAIN_DEADLINE)
+    Deadline::after(WAIT)
         .recv(&started_rx)
         .expect("the waiter reports before it waits");
     // The child still holds stdin, so the waiter must still be blocked:
@@ -402,7 +473,7 @@ fn wait_exited_blocks_until_the_child_exits() {
     );
     std::io::Write::write_all(&mut stdin, b"go\n").unwrap();
     drop(stdin);
-    let failure = Deadline::after(DRAIN_DEADLINE)
+    let failure = Deadline::after(WAIT)
         .recv(&done_rx)
         .expect("the session exits before its deadline")
         .expect("the session exits before its deadline");
@@ -424,7 +495,7 @@ fn kill_returns_while_the_drain_still_holds_the_pipe_open() {
     let spawned = spawn(&id, command).expect("cat spawns");
     // The drain fires just before its first read, the pipe still open:
     // a `kill` that waited on the drain's lock would hang here.
-    Deadline::after(DRAIN_DEADLINE)
+    Deadline::after(WAIT)
         .recv(&reading_rx)
         .expect("the drain reaches its first read");
     // `kill` returns while the drain still holds the pipe: received
@@ -439,7 +510,7 @@ fn kill_returns_while_the_drain_still_holds_the_pipe_open() {
             killed_tx.send(spawned).unwrap_or(());
         })
         .unwrap();
-    let spawned = Deadline::after(DRAIN_DEADLINE)
+    let spawned = Deadline::after(WAIT)
         .recv(&killed_rx)
         .expect("kill returns while the drain reads");
     // The kill ends `cat`: the drain sees EOF, reaps, and notifies.

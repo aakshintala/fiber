@@ -10,13 +10,14 @@ use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use contract::commands::hub::PruneExpect;
 use contract::shapes::Failure;
 use contract::{ErrorCode, SessionId};
+use fakes::Deadline;
 use serde_json::Value;
 use support::lock;
 
@@ -91,6 +92,7 @@ pub(crate) struct FakeStarter {
     exit_on_close: bool,
     /// Each `kill` call's session, in order.
     killed: Arc<Mutex<Vec<SessionId>>>,
+    controlled_exit: Option<Arc<ControlledExit>>,
 }
 
 /// Every line the fake sessions received, and a wake for each new one.
@@ -156,6 +158,67 @@ impl FakeStarter {
     /// a process that lost the session to another that bound it does.
     pub(crate) fn bind_and_exit(home: &Path, failure: Failure) -> Self {
         Self::new(home, true, Some(failure), None)
+    }
+
+    /// Binds, then waits for the test to release the configured raw exit line.
+    pub(crate) fn bind_then_exit(home: &Path, line: String) -> (Self, BindThenExit) {
+        let (bound_tx, bound_rx) = mpsc::channel();
+        let controlled = Arc::new(ControlledExit {
+            state: Mutex::new(ControlledExitState {
+                released: false,
+                callback: None,
+            }),
+            line,
+            bound: bound_tx,
+        });
+        (
+            Self::new(home, true, None, None).with_controlled_exit(Arc::clone(&controlled)),
+            BindThenExit {
+                bound: bound_rx,
+                controlled,
+            },
+        )
+    }
+
+    pub(crate) fn bind_then_exit_with_handshake(
+        home: &Path,
+        line: String,
+        handshake: Handshake,
+    ) -> (Self, BindThenExit) {
+        let (starter, exit) = Self::bind_then_exit(home, line);
+        *lock(&starter.handshake) = Some(handshake);
+        (starter, exit)
+    }
+
+    pub(crate) fn bind_then_exit_rejecting_subscribe(
+        home: &Path,
+        line: String,
+    ) -> (Self, BindThenExit) {
+        let (mut starter, exit) = Self::bind_then_exit(home, line);
+        starter.closing = Closing::Every;
+        (starter, exit)
+    }
+
+    pub(crate) fn exited_before_rejected_subscribe(home: &Path, line: String) -> Self {
+        let (starter, exit) = Self::bind_then_exit_rejecting_subscribe(home, line);
+        lock(&exit.controlled.state).released = true;
+        starter
+    }
+
+    pub(crate) fn exited_before_first_later_failure(home: &Path, line: String) -> Self {
+        let (starter, exit) = Self::bind_then_exit(home, line);
+        lock(&exit.controlled.state).released = true;
+        *lock(&starter.handshake) = Some(Handshake {
+            accept: true,
+            code: Default::default(),
+            message: String::new(),
+        });
+        starter
+    }
+
+    fn with_controlled_exit(mut self, controlled: Arc<ControlledExit>) -> Self {
+        self.controlled_exit = Some(controlled);
+        self
     }
 
     /// Binds `run/<id>` on `resume`, after its first `held` calls each
@@ -229,6 +292,7 @@ impl FakeStarter {
             strict: false,
             exit_on_close: false,
             killed: Arc::new(Mutex::new(Vec::new())),
+            controlled_exit: None,
         }
     }
 
@@ -332,6 +396,9 @@ impl FakeStarter {
                 .map_err(|error| refused(&run, &error))?;
             let socket = run.join(&id.0);
             let listener = UnixListener::bind(&socket).map_err(|error| refused(&socket, &error))?;
+            if let Some(controlled) = &self.controlled_exit {
+                let _sent = controlled.bound.send(());
+            }
             let received = Arc::clone(&self.received);
             let accepted = Arc::clone(&self.accepted);
             let handshake = Arc::clone(&self.handshake);
@@ -360,6 +427,7 @@ impl FakeStarter {
             exited: self.exited.clone(),
             id: id.clone(),
             killed: Arc::clone(&self.killed),
+            controlled_exit: self.controlled_exit.clone(),
         }))
     }
 }
@@ -410,6 +478,7 @@ impl Starter for FakeStarter {
                     )),
                     id: id.clone(),
                     killed: Arc::clone(&self.killed),
+                    controlled_exit: None,
                 }));
             }
         }
@@ -425,6 +494,7 @@ struct FakeStarted {
     exited: Option<Failure>,
     id: SessionId,
     killed: Arc<Mutex<Vec<SessionId>>>,
+    controlled_exit: Option<Arc<ControlledExit>>,
 }
 
 impl Started for FakeStarted {
@@ -432,8 +502,74 @@ impl Started for FakeStarted {
         self.exited.clone()
     }
 
+    fn watch_pre_session_exit(&self, callback: Box<dyn FnOnce(String) + Send>) {
+        if let Some(controlled) = &self.controlled_exit {
+            controlled.watch(callback);
+        }
+    }
+
     fn kill(&self) {
         lock(&self.killed).push(self.id.clone());
+    }
+}
+
+struct ControlledExit {
+    state: Mutex<ControlledExitState>,
+    line: String,
+    bound: mpsc::Sender<()>,
+}
+
+impl std::fmt::Debug for ControlledExit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ControlledExit")
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Default)]
+struct ControlledExitState {
+    released: bool,
+    callback: Option<Box<dyn FnOnce(String) + Send>>,
+}
+
+/// Controls a fake whose socket is bound until the test releases its exit.
+pub(crate) struct BindThenExit {
+    bound: mpsc::Receiver<()>,
+    controlled: Arc<ControlledExit>,
+}
+
+impl BindThenExit {
+    pub(crate) fn wait_bound(&self, deadline: &Deadline) -> bool {
+        deadline.recv(&self.bound).is_ok()
+    }
+
+    pub(crate) fn release(&self) {
+        let callback = {
+            let mut state = lock(&self.controlled.state);
+            state.released = true;
+            state.callback.take()
+        };
+        if let Some(callback) = callback {
+            callback(self.controlled.line.clone());
+        }
+    }
+}
+
+impl ControlledExit {
+    fn watch(&self, callback: Box<dyn FnOnce(String) + Send>) {
+        let call_now = {
+            let mut state = lock(&self.state);
+            if state.released {
+                true
+            } else {
+                state.callback = Some(callback);
+                return;
+            }
+        };
+        if call_now {
+            callback(self.line.clone());
+        }
     }
 }
 
