@@ -9,15 +9,17 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use fakes::MUST_SUCCEED_WITHIN;
-use std::io::{BufRead, BufReader, Write};
+use fakes::{Deadline, MUST_SUCCEED_WITHIN};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 
 use serde_json::{Value, json};
 
 use super::ack::Verdict;
 use super::*;
-use fakes::Deadline;
+fn jsonl(lines: &[Value]) -> String {
+    lines.iter().map(|line| format!("{line}\n")).collect()
+}
 
 #[test]
 fn opening_a_keeper_socket_starts_one_resume_and_writes_nothing_to_it() {
@@ -819,6 +821,32 @@ fn start_relay_thread(
     relays: std::sync::Arc<std::sync::Mutex<Relays>>,
     kept: Kept,
 ) -> std::thread::JoinHandle<()> {
+    start_relay_thread_with_replayed(
+        session,
+        epoch,
+        reader,
+        hub,
+        writer,
+        relays,
+        kept,
+        Replayed::default(),
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the test stages the relay's independently owned state"
+)]
+fn start_relay_thread_with_replayed(
+    session: &'static str,
+    epoch: u64,
+    reader: UnixStream,
+    hub: std::sync::Arc<crate::connection::Hub>,
+    writer: std::sync::Arc<std::sync::Mutex<UnixStream>>,
+    relays: std::sync::Arc<std::sync::Mutex<Relays>>,
+    kept: Kept,
+    replayed: Replayed,
+) -> std::thread::JoinHandle<()> {
     let (order, gone) = {
         let held = crate::connection::lock(&relays);
         (held.order.clone(), held.rejoin.closed_flag())
@@ -830,7 +858,7 @@ fn start_relay_thread(
                 RelayThread {
                     reopen: None,
                     epoch,
-                    replayed: Replayed::default(),
+                    replayed,
                     kept,
                     order,
                     gone,
@@ -843,6 +871,471 @@ fn start_relay_thread(
             );
         })
         .unwrap()
+}
+
+#[test]
+fn exited_delegate_eof_replays_missing_suffix() {
+    use std::sync::{Arc, Mutex, mpsc};
+
+    const SID: &str = "s_aaaaaaaaaaaaaaaa";
+    const PARENT: &str = "s_bbbbbbbbbbbbbbbb";
+    const JOB: &str = "j_open";
+
+    #[derive(Clone, Copy)]
+    enum Exit {
+        Clean,
+        Crash,
+    }
+
+    #[derive(Clone, Copy)]
+    enum LogTail {
+        Complete,
+        Short,
+        Gap,
+        Unreadable,
+    }
+
+    fn event(kind: &str, seq: u64, session: &str, payload: Value) -> Value {
+        json!({
+            "kind": kind,
+            "seq": seq,
+            "session_id": session,
+            "ts": seq + 1,
+            "schema_version": contract::SCHEMA_VERSION,
+            "payload": payload,
+        })
+    }
+
+    struct Case<'a> {
+        name: &'a str,
+        level: &'a str,
+        boundary: Option<u64>,
+        prefix_through: Option<u64>,
+        log_tail: LogTail,
+        exit: Exit,
+        replayed_ack: bool,
+        connection_gone: bool,
+        expected_seqs: &'a [u64],
+        expect_stream_closed: bool,
+    }
+
+    fn run_case(case: Case<'_>) {
+        use std::io::Read;
+        use std::time::Duration;
+
+        let (held, home) = crate::testkit::with_run("relay-eof-tail");
+        let workspace = home.join("w");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let parent_dir = home.join("projects/-w/sessions").join(PARENT);
+        std::fs::create_dir_all(&parent_dir).unwrap();
+        let parent_events = [
+            event(
+                "session_started",
+                0,
+                PARENT,
+                json!({"workspace": workspace.to_string_lossy()}),
+            ),
+            event("job_started", 1, PARENT, json!({"job_id": JOB})),
+        ];
+        std::fs::write(parent_dir.join("events.jsonl"), jsonl(&parent_events)).unwrap();
+
+        let delegate_dir = home.join("projects/-w/sessions").join(SID);
+        std::fs::create_dir_all(&delegate_dir).unwrap();
+        let parent = json!({"session_id": PARENT, "delegate_id": JOB});
+        let mut fold = vec![event(
+            "session_started",
+            0,
+            SID,
+            json!({"workspace": workspace.to_string_lossy(), "parent": parent}),
+        )];
+        for seq in 1..=4 {
+            let kind = if seq == 4 && matches!(case.exit, Exit::Clean) {
+                "fiber_exited"
+            } else {
+                "text_completed"
+            };
+            fold.push(event(
+                kind,
+                seq,
+                SID,
+                json!({"text": format!("fold {seq}")}),
+            ));
+        }
+        let log_contents = match case.log_tail {
+            LogTail::Complete => jsonl(&fold),
+            LogTail::Short => jsonl(&fold.iter().take(3).cloned().collect::<Vec<_>>()),
+            LogTail::Gap => {
+                let mut lines: Vec<_> = fold.iter().take(2).cloned().collect();
+                lines.push(event("text_completed", 3, SID, json!({"text": "fold 3"})));
+                lines.push(event("text_completed", 4, SID, json!({"text": "fold 4"})));
+                jsonl(&lines)
+            }
+            LogTail::Unreadable => format!(
+                "{}{{not json}}\n",
+                jsonl(&fold.iter().take(3).cloned().collect::<Vec<_>>())
+            ),
+        };
+        std::fs::write(delegate_dir.join("events.jsonl"), log_contents).unwrap();
+        if matches!(case.exit, Exit::Crash) {
+            std::fs::write(home.join("run").join(SID), "not a socket").unwrap();
+        }
+
+        let hub = Arc::new(hub(&held));
+        let relays = Arc::new(Mutex::new(Relays::default()));
+        let subscribe = json!({
+            "id": "c_sub",
+            "command": "subscribe",
+            "args": {"level": case.level},
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let replayed = Replayed::default();
+        if case.replayed_ack {
+            crate::connection::lock(&replayed).push("c_sub".to_owned());
+            crate::connection::lock(&relays)
+                .subscribed
+                .push((SID.to_owned(), subscribe.clone()));
+        }
+        let kept: Kept = Arc::new(Mutex::new(if case.replayed_ack {
+            Vec::new()
+        } else {
+            vec![("c_sub".to_owned(), subscribe.clone(), CommandState::Written)]
+        }));
+        let (session, mut session_peer) = UnixStream::pair().unwrap();
+        let (session_writer, _session_writer_peer) = UnixStream::pair().unwrap();
+        let epoch = {
+            let mut held = crate::connection::lock(&relays);
+            let epoch = held.mint();
+            held.entries.push(Relay {
+                session: SID.to_owned(),
+                epoch,
+                writer: session_writer,
+                kept: Arc::clone(&kept),
+                replayed: Arc::clone(&replayed),
+                thread: None,
+                retiring: None,
+                target: RelayTarget::LiveUnreadable,
+            });
+            epoch
+        };
+        let order = crate::connection::lock(&relays).order.clone();
+        if !case.replayed_ack {
+            crate::retire::enqueue_new(
+                &order,
+                SID,
+                &CommandId("c_sub".to_owned()),
+                &json!({
+                    "id": "c_sub", "command": "subscribe", "args": {"level": case.level}
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            );
+            crate::retire::report(
+                &order,
+                &CommandId("c_sub".to_owned()),
+                CommandState::Written,
+            );
+        }
+
+        let (paused_tx, paused_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *crate::connection::lock(&order.before_read) = Some(Box::new(move || {
+            paused_tx.send(()).unwrap_or(());
+            Deadline::after(MUST_SUCCEED_WITHIN)
+                .recv_or_fail(&release_rx, "the EOF-tail test to release the relay");
+        }));
+        let (client_writer, client_peer) = UnixStream::pair().unwrap();
+        client_peer
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let client_writer = Arc::new(Mutex::new(client_writer));
+        if case.connection_gone {
+            crate::connection::lock(&relays).rejoin.close();
+        }
+        let thread = start_relay_thread_with_replayed(
+            SID,
+            epoch,
+            session,
+            Arc::clone(&hub),
+            Arc::clone(&client_writer),
+            Arc::clone(&relays),
+            kept,
+            replayed,
+        );
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&paused_rx, "the relay to park before its session read");
+
+        let mut accepted = json!({
+            "kind": "command_accepted",
+            "payload": {"command_id": "c_sub", "result": {}},
+        });
+        if let Some(boundary) = case.boundary {
+            accepted["payload"]["result"]["last_seq"] = json!(boundary);
+        }
+        session_peer
+            .write_all(format!("{accepted}\n").as_bytes())
+            .unwrap();
+        if let Some(last) = case.prefix_through {
+            for line in fold.iter().take_while(|line| {
+                line.get("seq")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|seq| seq <= last)
+            }) {
+                session_peer
+                    .write_all(format!("{line}\n").as_bytes())
+                    .unwrap();
+            }
+        }
+        session_peer.flush().unwrap();
+        drop(session_peer);
+        release_tx.send(()).unwrap();
+        join_within_deadline(thread);
+        drop(client_writer);
+
+        let mut read = BufReader::new(client_peer);
+        let mut output = String::new();
+        read.read_to_string(&mut output).unwrap();
+        let lines: Vec<Value> = output
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            lines.iter().any(|line| line["kind"] == "command_accepted"),
+            !case.replayed_ack,
+            "{}: a replayed acknowledgement stays muted: {lines:?}",
+            case.name
+        );
+        let seqs: Vec<u64> = lines
+            .iter()
+            .filter_map(|line| line.get("seq").and_then(Value::as_u64))
+            .collect();
+        assert_eq!(
+            seqs, case.expected_seqs,
+            "{}: forward the prefix and only the missing suffix through last_seq",
+            case.name
+        );
+        assert_eq!(
+            lines.iter().any(|line| line["kind"] == "stream_closed"),
+            case.expect_stream_closed,
+            "{}: stream_closed follows only a failed required-range read: {lines:?}",
+            case.name
+        );
+        assert_eq!(
+            crate::connection::lock(&relays).subscription(SID).is_some(),
+            !case.expect_stream_closed,
+            "{}: only a failed required-range read drops the accepted subscription",
+            case.name
+        );
+    }
+
+    run_case(Case {
+        name: "clean exit",
+        level: "full",
+        boundary: Some(4),
+        prefix_through: Some(1),
+        log_tail: LogTail::Complete,
+        exit: Exit::Clean,
+        replayed_ack: false,
+        connection_gone: false,
+        expected_seqs: &[0, 1, 2, 3, 4],
+        expect_stream_closed: false,
+    });
+    run_case(Case {
+        name: "crash",
+        level: "full",
+        boundary: Some(4),
+        prefix_through: Some(1),
+        log_tail: LogTail::Complete,
+        exit: Exit::Crash,
+        replayed_ack: false,
+        connection_gone: false,
+        expected_seqs: &[0, 1, 2, 3, 4],
+        expect_stream_closed: false,
+    });
+    run_case(Case {
+        name: "replayed full-subscribe acknowledgement",
+        level: "full",
+        boundary: Some(4),
+        prefix_through: Some(1),
+        log_tail: LogTail::Complete,
+        exit: Exit::Crash,
+        replayed_ack: true,
+        connection_gone: false,
+        expected_seqs: &[0, 1, 2, 3, 4],
+        expect_stream_closed: false,
+    });
+    run_case(Case {
+        name: "unreadable log after a readable suffix",
+        level: "full",
+        boundary: Some(4),
+        prefix_through: Some(1),
+        log_tail: LogTail::Unreadable,
+        exit: Exit::Crash,
+        replayed_ack: false,
+        connection_gone: false,
+        expected_seqs: &[0, 1, 2],
+        expect_stream_closed: true,
+    });
+    run_case(Case {
+        name: "short log before the accepted boundary",
+        level: "full",
+        boundary: Some(4),
+        prefix_through: Some(1),
+        log_tail: LogTail::Short,
+        exit: Exit::Crash,
+        replayed_ack: false,
+        connection_gone: false,
+        expected_seqs: &[0, 1, 2],
+        expect_stream_closed: true,
+    });
+    run_case(Case {
+        name: "connection already closed",
+        level: "full",
+        boundary: Some(4),
+        prefix_through: Some(1),
+        log_tail: LogTail::Short,
+        exit: Exit::Crash,
+        replayed_ack: false,
+        connection_gone: true,
+        expected_seqs: &[0, 1],
+        expect_stream_closed: false,
+    });
+    run_case(Case {
+        name: "log skips a required sequence",
+        level: "full",
+        boundary: Some(4),
+        prefix_through: Some(1),
+        log_tail: LogTail::Gap,
+        exit: Exit::Crash,
+        replayed_ack: false,
+        connection_gone: false,
+        expected_seqs: &[0, 1],
+        expect_stream_closed: true,
+    });
+    run_case(Case {
+        name: "summary has no boundary",
+        level: "summary",
+        boundary: None,
+        prefix_through: None,
+        log_tail: LogTail::Complete,
+        exit: Exit::Clean,
+        replayed_ack: false,
+        connection_gone: false,
+        expected_seqs: &[],
+        expect_stream_closed: false,
+    });
+    run_case(Case {
+        name: "full acknowledgement has no boundary",
+        level: "full",
+        boundary: None,
+        prefix_through: Some(0),
+        log_tail: LogTail::Complete,
+        exit: Exit::Clean,
+        replayed_ack: false,
+        connection_gone: false,
+        expected_seqs: &[0],
+        expect_stream_closed: false,
+    });
+    run_case(Case {
+        name: "boundary already forwarded",
+        level: "full",
+        boundary: Some(2),
+        prefix_through: Some(2),
+        log_tail: LogTail::Complete,
+        exit: Exit::Clean,
+        replayed_ack: false,
+        connection_gone: false,
+        expected_seqs: &[0, 1, 2],
+        expect_stream_closed: false,
+    });
+    run_case(Case {
+        name: "forwarded sequence is beyond the boundary",
+        level: "full",
+        boundary: Some(2),
+        prefix_through: Some(3),
+        log_tail: LogTail::Complete,
+        exit: Exit::Clean,
+        replayed_ack: false,
+        connection_gone: false,
+        expected_seqs: &[0, 1, 2, 3],
+        expect_stream_closed: false,
+    });
+}
+
+#[test]
+fn exited_fold_stops_a_corrupt_segment_at_its_to_boundary() {
+    const ROOT: &str = "s_cccccccccccccccc";
+    const CHILD: &str = "s_dddddddddddddddd";
+    const TO: u64 = 2;
+
+    let (_held, home) = crate::testkit::with_run("exited-fold-corrupt-to-boundary");
+    let workspace = home.join("w");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let root_dir = home.join("projects/-w/sessions").join(ROOT);
+    let child_dir = home.join("projects/-w/sessions").join(CHILD);
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::create_dir_all(&child_dir).unwrap();
+
+    let root_lines: Vec<String> = (0..=4)
+        .map(|seq| {
+            if seq == 0 {
+                gone_line(
+                    ROOT,
+                    seq,
+                    "session_started",
+                    json!({"workspace": workspace.to_string_lossy()}),
+                )
+            } else {
+                gone_line(
+                    ROOT,
+                    seq,
+                    "text_completed",
+                    json!({"text": format!("root {seq}")}),
+                )
+            }
+        })
+        .collect();
+    let root_log = root_dir.join("events.jsonl");
+    std::fs::write(&root_log, format!("{}\n", root_lines[0])).unwrap();
+    let child_started = gone_line(
+        CHILD,
+        0,
+        "session_started",
+        json!({
+            "workspace": workspace.to_string_lossy(),
+            "forked_from": {"session_id": ROOT, "seq": TO},
+        }),
+    );
+    std::fs::write(child_dir.join("events.jsonl"), format!("{child_started}\n")).unwrap();
+
+    // Prime the per-segment offset cache while the ancestor is short of
+    // `to`; its cached read remains corrupt after the readable tail arrives.
+    let segments = log::history(&child_dir).unwrap();
+    let ancestor = segments.first().expect("the root segment is present");
+    assert_eq!(ancestor.to, Some(contract::Seq(TO)));
+    assert!(
+        ancestor.lines(0).is_err(),
+        "the ancestor is short of its boundary"
+    );
+
+    let mut append = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&root_log)
+        .unwrap();
+    for line in &root_lines[1..] {
+        writeln!(append, "{line}").unwrap();
+    }
+
+    let folded = exited_fold(&child_dir);
+    let expected: Vec<contract::Envelope> = root_lines
+        .iter()
+        .take(usize::try_from(TO + 1).unwrap())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(folded.lines, expected, "the fallback ends exactly at `to`");
+    assert_eq!(folded.error, Some(ErrorCode::LogCorrupt));
 }
 
 #[test]
@@ -959,6 +1452,149 @@ fn a_rejected_subscribe_settles_to_nothing() {
         .is_none()
     );
     assert!(kept.lock().unwrap().is_empty(), "the rejection is consumed");
+}
+
+#[test]
+fn a_subscribe_that_fails_to_parse_keeps_the_level_and_clients_count() {
+    use std::sync::{Arc, Mutex, mpsc};
+
+    const SID: &str = "s_aaaaaaaaaaaaaaaa";
+    let held = fakes::TempDir::new("malformed-subscribe");
+    let hub = Arc::new(hub(&held));
+    let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+    let current = json!({"id":"c_1", "command":"subscribe", "args":{"level":"summary"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let malformed = json!({
+        "id":"c_2", "command":"subscribe", "args":{"level":"full", "extra":1}
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    assert_eq!(
+        subscribe_level(&malformed),
+        None,
+        "unknown args reject the level parse"
+    );
+
+    let (session, mut fake_session) = UnixStream::pair().unwrap();
+    fake_session
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+        .unwrap();
+    let session_writer = session.try_clone().unwrap();
+    let (client_writer, client_reader) = UnixStream::pair().unwrap();
+    client_reader
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+        .unwrap();
+    let client_writer = Arc::new(Mutex::new(client_writer));
+    let kept: Kept = Arc::new(Mutex::new(Vec::new()));
+    let replayed = Replayed::default();
+    let (release_live_tx, release_live_rx) = mpsc::channel();
+    let (live_done_tx, live_done_rx) = mpsc::channel();
+    let live_thread = std::thread::Builder::new()
+        .name("hub-relay-live-marker".to_owned())
+        .spawn(move || {
+            if release_live_rx.recv().is_ok() {
+                live_done_tx.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    let epoch = {
+        let mut held = crate::connection::lock(&relays);
+        let epoch = held.mint();
+        held.subscribed.push((SID.to_owned(), current.clone()));
+        held.entries.push(Relay {
+            session: SID.to_owned(),
+            epoch,
+            writer: session_writer,
+            kept: Arc::clone(&kept),
+            replayed: Arc::clone(&replayed),
+            thread: Some(live_thread),
+            retiring: None,
+            target: RelayTarget::LiveUnreadable,
+        });
+        epoch
+    };
+
+    let mut status = crate::fake::status("n", "/w", "idle", None);
+    status["clients"] = json!(0);
+    fake_session
+        .write_all(crate::fake::status_line(SID, &status).as_bytes())
+        .unwrap();
+    let id = CommandId("c_2".to_owned());
+    route(
+        &id,
+        SID,
+        malformed.clone(),
+        &hub,
+        &client_writer,
+        &relays,
+        None,
+        false,
+        None,
+    );
+    let mut sent = String::new();
+    BufReader::new(fake_session.try_clone().unwrap())
+        .read_line(&mut sent)
+        .unwrap();
+    let sent: Value = serde_json::from_str(sent.trim_end()).unwrap();
+    assert_eq!(sent["args"], json!({"level":"full", "extra":1}));
+
+    release_live_tx.send(()).unwrap();
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&live_done_rx, "the relay liveness marker");
+    let relay_thread = start_relay_thread(
+        SID,
+        epoch,
+        session,
+        Arc::clone(&hub),
+        Arc::clone(&client_writer),
+        Arc::clone(&relays),
+        kept,
+    );
+    let rejected = json!({
+        "kind":"command_rejected",
+        "payload":{"command_id":"c_2", "code":"invalid_arguments", "message":"m"}
+    });
+    fake_session
+        .write_all(format!("{rejected}\n").as_bytes())
+        .unwrap();
+    drop(fake_session);
+    join_within_deadline(relay_thread);
+    drop(client_writer);
+
+    let mut output = String::new();
+    BufReader::new(client_reader)
+        .read_to_string(&mut output)
+        .unwrap();
+    let lines: Vec<Value> = output
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let statuses: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["kind"] == "session_status")
+        .collect();
+    assert_eq!(statuses.len(), 1, "the existing status remains: {lines:?}");
+    assert_eq!(statuses[0]["payload"]["clients"], 0);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        0,
+        "a rejected full subscribe adds no counted client: {lines:?}"
+    );
+    assert!(lines.iter().any(|line| {
+        line["kind"] == "command_rejected"
+            && line["payload"]["command_id"] == "c_2"
+            && line["payload"]["code"] == "invalid_arguments"
+    }));
+    assert_eq!(
+        crate::connection::lock(&relays).subscription(SID),
+        Some(current),
+        "the rejected subscribe leaves the summary level kept"
+    );
 }
 
 /// `docs/invocation.md`, "What the hub speaks": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.

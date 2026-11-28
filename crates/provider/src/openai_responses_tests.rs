@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use contract::events::CacheLifetime;
-use contract::provider::{Delta, ModelRequest, Reply, ReplyAction};
+use contract::provider::{Delta, ModelRequest, Reply, ReplyAction, ToolDefinition};
 use contract::shapes::Tokens;
 use serde_json::{Value, json};
 
@@ -36,6 +36,28 @@ fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
         .iter()
         .find(|(n, _)| n == name)
         .map(|(_, v)| v.as_str())
+}
+
+#[test]
+fn empty_properties_schema_is_sent_as_an_object_with_strict_true() {
+    let mut request = request();
+    request.tools.push(ToolDefinition {
+        name: "lua_empty".into(),
+        description: "No arguments.".into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+        }),
+        deferred: false,
+        hosted: None,
+    });
+    let body: Value =
+        serde_json::from_slice(&Responses::new(Endpoint::default()).request(&request).body)
+            .unwrap();
+    assert_eq!(body["tools"][0]["parameters"]["properties"], json!({}));
+    assert_eq!(body["tools"][0]["strict"], json!(true));
 }
 
 #[test]

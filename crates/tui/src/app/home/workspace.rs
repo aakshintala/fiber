@@ -9,7 +9,7 @@ use serde_json::{Map, Value};
 use super::super::{App, Effect, Sent, Waiting, hub_line};
 use super::typed::{Resolved, Typed};
 use super::{Home, typed};
-use crate::home::PickerScreen;
+use crate::home::{CompletionId, PickerScreen};
 use crate::keys::Key;
 use crate::remote::Chip;
 use contract::CommandId;
@@ -666,6 +666,20 @@ impl App {
             self.choose_workspace(workspace);
         }
         Effect::None
+    }
+
+    /// Clicks a typed completion using its rendered name identity. The
+    /// link-up guard matches Enter; an identity no longer unique in the
+    /// current completion list is inert.
+    pub(super) fn pick_completion(&mut self, identity: CompletionId) -> Effect {
+        let Some(picker) = self.home.chooser.picker.as_mut() else {
+            return Effect::None;
+        };
+        if !picker.typing() || !self.outbox.is_up() || !picker.typed.focus_completion_for(identity)
+        {
+            return Effect::None;
+        }
+        self.enter_picker().unwrap_or(Effect::None)
     }
 
     /// Flips the new worktree switch.

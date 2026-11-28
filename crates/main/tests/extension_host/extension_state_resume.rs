@@ -267,7 +267,7 @@ fn live_rewind_and_its_resume_use_the_same_parent_point_seed() {
         .0
         - 1;
     let hub = Arc::new(Mutex::new(None));
-    let (client, _) = support::connect_hub(&setup, &hub);
+    let (client, _) = support::connect_detached_hub(&setup, &hub);
     let guard =
         support::SessionGuard::arm(setup.deadline, &setup.workspace().display().to_string());
     client.send(&hub_command(
@@ -310,7 +310,7 @@ fn live_rewind_and_its_resume_use_the_same_parent_point_seed() {
     });
     drop(client);
     guard.wait_gone();
-    hub.lock().unwrap().take().unwrap().kill_and_wait();
+    hub.lock().unwrap().take().unwrap().stop();
     assert_eq!(seen(&setup, &child), "at point");
     ask(&setup, &child);
     assert_eq!(seen(&setup, &child), "at point");

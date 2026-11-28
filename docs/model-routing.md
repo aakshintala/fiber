@@ -236,7 +236,9 @@ Measured on `claude-sonnet-5-5` against api.anthropic.com
   `tool_use`. Fiber continues a paused reply as `docs/loop.md`, "A reply paused
   by a hosted tool", says.
 - More than 20 tools with `strict: true` returned 400, "The maximum number of
-  strict tools supported is 20" (measured October 1, 2026).
+  strict tools supported is 20" (measured October 1, 2026). When Fiber has more
+  than 20 fitting tools, it sends only the first 20 in name order with
+  `strict: true`; later tools in that order have `strict: false`.
 - `thinking: {type: "enabled", budget_tokens: 1024}` with `max_tokens: 2048`
   returned 200 on `claude-haiku-4-5` through OpenRouter's native Messages
   endpoint (`research/reasoning-resume`, September 27, 2026), while `enabled`

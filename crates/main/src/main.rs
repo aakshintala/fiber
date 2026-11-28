@@ -829,6 +829,12 @@ fn feedback(
             let mut out = io::stdout().lock();
             writeln!(out, "{}", done.path.display()).unwrap_or(());
             writeln!(out, "{}", done.link).unwrap_or(());
+            // Only a fallback link needs the file: a full-report link
+            // already carries everything but the diagnostics
+            // (`docs/user/reporting.md`, "Reporting a problem").
+            if done.attach {
+                writeln!(out, "{}", contract::feedback::ATTACH_INSTRUCTION).unwrap_or(());
+            }
             0
         }
         Err(error) => fail(error.into()),

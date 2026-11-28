@@ -163,7 +163,7 @@ impl Layout {
 /// Starts the hub, one client and a session guard per workspace: the
 /// caller runs the turns in any of the workspaces.
 struct Hubbed {
-    hub: Arc<Mutex<Option<HubProc>>>,
+    hub: Arc<Mutex<Option<DetachedHub>>>,
     client: Option<Socket>,
     guards: Vec<SessionGuard>,
     home: PathBuf,
@@ -173,18 +173,17 @@ struct Hubbed {
 /// Reaps `hub_proc` with its real deadline, then panics with `injected`
 /// when set: the holder test forces the cleanup-failure branch without
 /// racing a zero deadline's hub and watchdog waits.
-fn cleanup_hub(hub_proc: HubProc, injected: Option<String>) -> std::process::ExitStatus {
-    let status = hub_proc.kill_and_wait();
+fn cleanup_hub(mut hub_proc: DetachedHub, injected: Option<String>) {
+    hub_proc.stop();
     if let Some(message) = injected {
         panic!("{message}");
     }
-    status
 }
 
 impl Hubbed {
     fn new(setup: &Setup, workspaces: &[PathBuf]) -> Self {
         let hub = Arc::new(Mutex::new(None));
-        let (client, hello) = connect_hub(setup, &hub);
+        let (client, hello) = connect_detached_hub(setup, &hub);
         assert_eq!(hello["kind"], "hub_hello");
         let guards = workspaces
             .iter()
@@ -330,11 +329,7 @@ impl Hubbed {
                 panic!("{message}");
             }
         }
-        hub.lock()
-            .unwrap()
-            .take()
-            .expect("the hub ran")
-            .kill_and_wait();
+        hub.lock().unwrap().take().expect("the hub ran").stop();
     }
 }
 

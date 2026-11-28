@@ -3001,3 +3001,33 @@ fn recv_answer_skips_a_leading_status_and_keeps_it_for_the_next_recv() {
     let other = recv(&client, "the kept other answer");
     assert_eq!(other["payload"]["command_id"], "c_other");
 }
+
+#[test]
+fn stop_leaves_no_live_process_in_the_group() {
+    use ::support::peer::{KernelProcessRead, Pid, walk_ancestors};
+
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let root = fakes::TempDir::under(&std::env::temp_dir(), "fiber-detached-hub");
+    let marker = root.path().join("hub-process-marker");
+    fs::write(&marker, "").unwrap();
+    let marker_text = marker.to_string_lossy().into_owned();
+    let mut serve = Command::new("/usr/bin/tail");
+    serve.args(["-f", &marker_text]);
+    let mut hub = DetachedHub::spawn_command(deadline, &mut serve);
+    let group = hub.group;
+    let hub_pid = hub.hub_pid;
+    let target = walk_ancestors(Pid(hub_pid), &KernelProcessRead, |_| true)
+        .expect("the detached hub ancestry is complete");
+    let caller_pid = Pid(std::process::id());
+    assert!(
+        !target.matched_pids.contains(&caller_pid),
+        "the test process is in the detached hub ancestry: {:?}",
+        target.matched_pids
+    );
+
+    hub.stop();
+    assert!(
+        !group_has_live_members(group),
+        "the hub group still has a live process ({group})"
+    );
+}

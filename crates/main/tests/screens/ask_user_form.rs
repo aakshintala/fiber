@@ -75,7 +75,7 @@ struct Hubbed {
     session: String,
     server: ProviderServer,
     guard: SessionGuard,
-    hub: Arc<Mutex<Option<HubProc>>>,
+    hub: Arc<Mutex<Option<DetachedHub>>>,
     workspace: String,
     setup: Setup,
 }
@@ -86,11 +86,11 @@ impl Hubbed {
         let server = ProviderServer::start([ask_user(questions), hello()]).unwrap();
         setup.provider(&server);
         let hub = Arc::new(Mutex::new(None));
-        let (a, _) = connect_hub(&setup, &hub);
+        let (a, _) = connect_detached_hub(&setup, &hub);
         let workspace = setup.workspace().to_string_lossy().into_owned();
         let guard = SessionGuard::arm(setup.deadline, &workspace);
         let session = start_session(&a, &workspace, "ask-me");
-        let (b, _) = connect_hub(&setup, &hub);
+        let (b, _) = connect_detached_hub(&setup, &hub);
         let hubbed = Self {
             a,
             b,
@@ -173,8 +173,8 @@ impl Hubbed {
         } = self;
         guard.wait_gone();
         drop((a, b));
-        if let Some(running) = hub.lock().unwrap().take() {
-            running.kill_and_wait();
+        if let Some(mut running) = hub.lock().unwrap().take() {
+            running.stop();
         }
     }
 }
@@ -642,7 +642,7 @@ fn a_session_idle_on_a_form_exits_suspended_and_a_reply_through_the_hub_resumes_
     // on the form.
     idle(&setup, Some(2000));
     let hub = Arc::new(Mutex::new(None));
-    let (a, _) = connect_hub(&setup, &hub);
+    let (a, _) = connect_detached_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start_session(&a, &workspace, "ask-me");
@@ -749,8 +749,8 @@ fn a_session_idle_on_a_form_exits_suspended_and_a_reply_through_the_hub_resumes_
             "fiber_exited",
         ]
     );
-    if let Some(running) = hub.lock().unwrap().take() {
-        running.kill_and_wait();
+    if let Some(mut running) = hub.lock().unwrap().take() {
+        running.stop();
     }
 }
 

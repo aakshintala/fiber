@@ -108,6 +108,37 @@ fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<HubProc>>>, shell: Option<&
     Socket::from(deadline, connected.0)
 }
 
+fn connect_detached_hub_with_shell(
+    setup: &Setup,
+    hub: &Arc<Mutex<Option<DetachedHub>>>,
+    shell: Option<&Path>,
+) -> Socket {
+    let mut serve = setup.fiber(&["hub", "serve"]);
+    serve.env("HUB_ONLY", "1");
+    if fakes::check_run().is_none() {
+        serve.env("FIBER_CHECK_RUN", TEST_NONCE);
+    }
+    if let Some(shell) = shell {
+        serve.env("SHELL", shell);
+    }
+    let (client, hello) = connect_hub_started(
+        setup,
+        hub,
+        HubConnect {
+            serve,
+            wait: setup.deadline.left(),
+            bound: setup.deadline,
+            name: "detached hub",
+            stretched: false,
+            start: DetachedHub::spawn_command,
+            report: detached_hub_start_report,
+            marker: std::marker::PhantomData,
+        },
+    );
+    assert_eq!(hello["kind"], "hub_hello");
+    client
+}
+
 /// The log of session `id`, wherever its project is.
 fn session_log(setup: &Setup, id: &str) -> Vec<Value> {
     let projects = setup.home().join("projects");
@@ -179,8 +210,8 @@ fn a_session_runs_with_the_login_shell_capture() {
     setup.provider(&server);
     let other_home = setup.root.path().join("other-home");
     let fake = FakeShell::new(&success_body(&other_home));
-    let hub = Arc::new(Mutex::new(None));
-    let client = connect_hub(&setup, &hub, Some(&fake.shell));
+    let hub = Arc::new(Mutex::new(None::<DetachedHub>));
+    let client = connect_detached_hub_with_shell(&setup, &hub, Some(&fake.shell));
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start_session(&client, &workspace, PROMPT);
@@ -259,7 +290,16 @@ fn a_session_runs_with_the_login_shell_capture() {
         }
         thread::yield_now();
     }
-    finish(&hub, guard, client, &session, &sub);
+    client.send(&format!(
+        "{{\"id\":\"c_close\",\"session_id\":\"{session}\",\"command\":\"close\"}}"
+    ));
+    until_after(&client, &sub, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    drop(client);
+    support::finish_detached(guard, || {
+        hub.lock().unwrap().take().expect("the hub ran").stop();
+    });
 }
 
 #[test]

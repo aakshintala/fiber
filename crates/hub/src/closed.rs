@@ -72,7 +72,7 @@ pub(crate) fn on_end(
 /// of `fiber_exited`, `rewound` or `moved`, and `run/<session>` accepts a
 /// connection, dropped at once without a line. File checks first, so no
 /// connection is opened for an exited, rewound or moved session.
-fn running(hub: &Hub, session: &str) -> bool {
+pub(crate) fn running(hub: &Hub, session: &str) -> bool {
     let id = SessionId(session.to_owned());
     !crate::resume::exited(&hub.home, &id)
         && crate::rewind::continued(&hub.home, &id).is_none()

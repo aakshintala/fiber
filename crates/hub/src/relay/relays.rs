@@ -182,11 +182,8 @@ impl Relays {
         if line.get("command").and_then(Value::as_str) != Some("subscribe") {
             return None;
         }
-        let full = line
-            .get("args")
-            .and_then(|args| args.get("level"))
-            .and_then(Value::as_str)
-            == Some("full");
+        let full = super::subscribe_level(&line) == Some(contract::commands::SubscribeLevel::Full);
+
         keep_subscription(self, session, line);
         if !full {
             return None;

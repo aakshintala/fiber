@@ -261,13 +261,87 @@ fn keep(value: &LuaValue) -> Result<Bound, String> {
         .ok_or_else(|| "`keep`: `head` plus `tail` is too large".to_owned())
 }
 
+#[derive(Clone, Copy)]
+enum SchemaPosition {
+    Map,
+    Single,
+    Array,
+}
+
+// The one closed list of schema positions, grouped by how their values are walked.
+const SCHEMA_POSITIONS: &[(&str, SchemaPosition)] = &[
+    ("properties", SchemaPosition::Map),
+    ("patternProperties", SchemaPosition::Map),
+    ("$defs", SchemaPosition::Map),
+    ("definitions", SchemaPosition::Map),
+    ("dependentSchemas", SchemaPosition::Map),
+    ("items", SchemaPosition::Single),
+    ("additionalItems", SchemaPosition::Single),
+    ("additionalProperties", SchemaPosition::Single),
+    ("unevaluatedItems", SchemaPosition::Single),
+    ("unevaluatedProperties", SchemaPosition::Single),
+    ("propertyNames", SchemaPosition::Single),
+    ("contains", SchemaPosition::Single),
+    ("contentSchema", SchemaPosition::Single),
+    ("not", SchemaPosition::Single),
+    ("if", SchemaPosition::Single),
+    ("then", SchemaPosition::Single),
+    ("else", SchemaPosition::Single),
+    ("allOf", SchemaPosition::Array),
+    ("anyOf", SchemaPosition::Array),
+    ("oneOf", SchemaPosition::Array),
+    ("prefixItems", SchemaPosition::Array),
+];
+
+fn normalize_empty_array(value: &mut Value) {
+    if value.as_array().is_some_and(Vec::is_empty) {
+        *value = Value::Object(serde_json::Map::new());
+    }
+}
+
+/// Normalize empty arrays only at schema map and single-schema positions; schema
+/// array containers keep `[]`, and data keywords are untouched (see
+/// `docs/extensions.md`, "Registering").
+fn normalize_schema_positions(schema: &mut Value) {
+    normalize_empty_array(schema);
+    let Value::Object(object) = schema else {
+        return;
+    };
+    for (keyword, value) in object {
+        match SCHEMA_POSITIONS
+            .iter()
+            .find(|(name, _)| *name == keyword)
+            .map(|(_, kind)| kind)
+        {
+            Some(SchemaPosition::Map) => {
+                normalize_empty_array(value);
+                if let Value::Object(map) = value {
+                    for child in map.values_mut() {
+                        normalize_schema_positions(child);
+                    }
+                }
+            }
+            Some(SchemaPosition::Single) => normalize_schema_positions(value),
+            Some(SchemaPosition::Array) => {
+                if let Value::Array(items) = value {
+                    for item in items {
+                        normalize_schema_positions(item);
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+}
+
 /// A tool's `input_schema`: a table that reads as a JSON object whose `type`
 /// is `object`.
 fn schema(value: &LuaValue) -> Result<Value, String> {
-    let schema = host::to_json(value).map_err(|e| format!("`input_schema`: {e}"))?;
+    let mut schema = host::to_json(value).map_err(|e| format!("`input_schema`: {e}"))?;
     if schema.get("type").and_then(Value::as_str) != Some("object") {
         return Err("`input_schema` must be a JSON object whose `type` is `object`".to_owned());
     }
+    normalize_schema_positions(&mut schema);
     Ok(schema)
 }
 

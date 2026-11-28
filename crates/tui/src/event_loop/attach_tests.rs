@@ -2031,13 +2031,24 @@ fn stream_endings_close_only_the_named_pass_and_disconnect_clears_all() {
     let (mut lp, _, _, _) = opened();
     let session = lp.app.session().unwrap().clone();
     let other = contract::SessionId("s_bbbbbbbbbbbbbbbb".into());
-    for kind in ["stream_closed", "session_left"] {
-        opening(&mut lp.app, 9000);
-        lp.app.on_line(stream_event(kind, &other, None));
-        assert!(lp.app.pass_open());
-        lp.app.on_line(stream_event(kind, &session, None));
-        assert!(!lp.app.pass_open());
-    }
+    opening(&mut lp.app, 9000);
+    lp.app.on_line(stream_event("stream_closed", &other, None));
+    assert!(lp.app.pass_open());
+    lp.app
+        .on_line(stream_event("stream_closed", &session, None));
+    assert!(!lp.app.pass_open());
+    opening(&mut lp.app, 9000);
+    lp.app
+        .on_line(stream_event("stream_reopened", &other, Some(9000)));
+    let mut other_boundary = replay(9000);
+    other_boundary.session_id = other.clone();
+    lp.app.on_line(Line::Session(other_boundary));
+    assert!(
+        lp.app.pass_open(),
+        "another session's boundary leaves this pass open"
+    );
+    lp.app.on_line(stream_event("session_left", &session, None));
+    assert!(!lp.app.pass_open(), "the top-level session ends its pass");
     lp.app
         .on_line(stream_event("stream_reopened", &session, Some(9000)));
     assert!(lp.app.pass_open());
@@ -2046,8 +2057,10 @@ fn stream_endings_close_only_the_named_pass_and_disconnect_clears_all() {
     lp.app
         .on_line(stream_event("stream_closed", &session, None));
     assert!(lp.app.pass_open(), "the delegate session's pass remains");
-    lp.app.on_line(stream_event("session_left", &other, None));
-    assert!(!lp.app.pass_open(), "a delegate crash ends its pass too");
+    let mut other_boundary = replay(9001);
+    other_boundary.session_id = other.clone();
+    lp.app.on_line(Line::Session(other_boundary));
+    assert!(!lp.app.pass_open(), "the delegate boundary ends its pass");
     lp.app
         .on_line(stream_event("stream_reopened", &session, Some(9002)));
     lp.app
@@ -2154,7 +2167,7 @@ fn select_report(app: &mut crate::app::App, kind: crate::keys::MouseKind, col: u
 }
 
 #[test]
-fn an_open_delegate_item_pass_ends_on_the_delegates_session_left() {
+fn an_open_delegate_item_pass_ends_on_the_delegates_last_seq() {
     use crate::app::items::testkit;
     let mut app = testkit::home();
     testkit::opened(&mut app);
@@ -2173,11 +2186,9 @@ fn an_open_delegate_item_pass_ends_on_the_delegates_session_left() {
         app.pass_open(),
         "the item subscribe is consumed only after opening its pass"
     );
-    app.on_line(stream_event(
-        "session_left",
-        &contract::SessionId(testkit::DELEGATE_A.into()),
-        None,
-    ));
+    let mut boundary = replay(9000);
+    boundary.session_id = contract::SessionId(testkit::DELEGATE_A.into());
+    app.on_line(Line::Session(boundary));
     assert!(!app.pass_open());
 }
 

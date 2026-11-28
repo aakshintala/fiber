@@ -157,7 +157,7 @@ pub(crate) fn exited_delegate(home: &Path, session: &SessionId) -> bool {
 /// The parent session and job the log's `session_started` names, when both
 /// are strings: the delegate's identity for the resume-window check. A log
 /// whose history cannot be read names none.
-fn delegate_job(dir: &Path) -> Option<(SessionId, JobId)> {
+pub(crate) fn delegate_job(dir: &Path) -> Option<(SessionId, JobId)> {
     let segments = log::history(dir).ok()?;
     let started = segments.first()?.range(0, 1).ok()?;
     let first = started.first()?;

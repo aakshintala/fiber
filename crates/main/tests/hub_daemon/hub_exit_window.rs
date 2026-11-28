@@ -24,8 +24,8 @@ use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::pty::Run as PtyRun;
 use support::{
-    HubProc, SessionGuard, Setup, Socket, bounded, connect_hub, run_to_exit, subscribe_as, until,
-    until_after, until_replayed,
+    DetachedHub, SessionGuard, Setup, Socket, bounded, connect_detached_hub, run_to_exit,
+    subscribe_as, until, until_after, until_replayed,
 };
 
 /// A session that has run one turn and exited, and a hub that resumes it.
@@ -33,7 +33,7 @@ struct World {
     guard: Option<SessionGuard>,
     setup: Setup,
     id: String,
-    hub: Arc<Mutex<Option<HubProc>>>,
+    hub: Arc<Mutex<Option<DetachedHub>>>,
     // Held so the provider outlives the test.
     _server: ProviderServer,
 }
@@ -64,7 +64,7 @@ impl World {
     }
 
     fn client(&self) -> Socket {
-        connect_hub(&self.setup, &self.hub).0.pumped()
+        connect_detached_hub(&self.setup, &self.hub).0.pumped()
     }
 
     /// The path of the receipt `import` reads first.
@@ -290,8 +290,8 @@ impl World {
             self.close_and_wait_exit(missing_log_is_expected);
         }
         let hub = self.hub.lock().unwrap().take();
-        if let Some(hub) = hub {
-            hub.kill_and_wait();
+        if let Some(mut hub) = hub {
+            hub.stop();
         }
         if let Some(guard) = self.guard.take() {
             guard.wait_gone();
@@ -315,8 +315,8 @@ impl World {
             }
         }
         let hub = self.hub.lock().unwrap().take();
-        if let Some(hub) = hub {
-            hub.kill_and_wait();
+        if let Some(mut hub) = hub {
+            hub.stop();
         }
         if let Some(guard) = self.guard.take() {
             let waited =
@@ -335,10 +335,10 @@ impl Drop for World {
     /// the workspace. A test that reached `finish` has taken both.
     fn drop(&mut self) {
         let hub = self.hub.lock().ok().and_then(|mut hub| hub.take());
-        if let Some(hub) = hub {
+        if let Some(mut hub) = hub {
             // A panic here, while a test's own panic unwinds, would abort.
             let killed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                hub.kill_and_wait();
+                hub.stop();
             }));
             drop(killed);
         }

@@ -981,6 +981,165 @@ impl HubProc {
     }
 }
 
+/// A hub started below a short-lived shell, so its process tree no longer
+/// shares the test process's session ancestry after the shell exits.
+pub(crate) struct DetachedHub {
+    pub(crate) group: u32,
+    pub(crate) hub_pid: u32,
+    deadline: Deadline,
+    watchdog: Option<Watchdog>,
+    stopped: bool,
+}
+
+impl DetachedHub {
+    /// Starts `serve` in a new process group through a shell that exits after
+    /// recording the hub pid. The shell backgrounds the command without job
+    /// control, keeping it in the shell's group, then is reaped here.
+    pub(crate) fn spawn_command(deadline: Deadline, serve: &mut Command) -> Self {
+        let pidfile_dir = fakes::TempDir::under(&std::env::temp_dir(), "fiber-detached-hub");
+        let pidfile = pidfile_dir.path().join("hub.pid");
+        let mut shell = Command::new("/bin/sh");
+        shell
+            .env_clear()
+            .arg("-c")
+            .arg("\"$@\" & echo $! > \"$0\"")
+            .arg(&pidfile)
+            .arg(serve.get_program())
+            .args(serve.get_args())
+            .process_group(0);
+        if let Some(dir) = serve.get_current_dir() {
+            shell.current_dir(dir);
+        }
+        for (key, value) in serve.get_envs() {
+            if let Some(value) = value {
+                shell.env(key, value);
+            } else {
+                shell.env_remove(key);
+            }
+        }
+        let mut child = shell
+            .spawn()
+            .unwrap_or_else(|error| panic!("could not start detached hub shell: {error}"));
+        let group = child.id();
+        let watchdog = Watchdog::group(group);
+        let (done, exited) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait()).unwrap_or(()));
+        match deadline.recv(&exited) {
+            Ok(Ok(status)) if status.success() => {}
+            Ok(Ok(status)) => panic!("detached hub shell exited with {status}"),
+            Ok(Err(error)) => panic!("could not reap detached hub shell {group}: {error}"),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                match fakes::kill_group(group, "KILL") {
+                    Ok(true) => {}
+                    Ok(false) if !fakes::group_alive(group) => {}
+                    Ok(false) => panic!("could not kill detached hub shell group {group}"),
+                    Err(error) => {
+                        panic!("could not kill detached hub shell group {group}: {error}")
+                    }
+                }
+                panic!("waited past the deadline for detached hub shell {group} to exit");
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("detached hub shell {group} wait ended without a result")
+            }
+        }
+        let hub_pid = fs::read_to_string(&pidfile)
+            .unwrap_or_else(|error| {
+                panic!("could not read detached hub pidfile {pidfile:?}: {error}")
+            })
+            .trim()
+            .parse::<u32>()
+            .unwrap_or_else(|error| panic!("invalid detached hub pidfile {pidfile:?}: {error}"));
+        assert!(hub_pid > 1, "detached hub pid {hub_pid} is not signalable");
+        assert_eq!(
+            process_group_id(hub_pid),
+            group,
+            "detached hub {hub_pid} did not remain in shell process group {group}"
+        );
+        Self {
+            group,
+            hub_pid,
+            deadline,
+            watchdog: Some(watchdog),
+            stopped: false,
+        }
+    }
+
+    /// Terminates the group's members and proves no live member remains.
+    #[track_caller]
+    pub(crate) fn stop(&mut self) {
+        if self.stopped {
+            return;
+        }
+        let cleanup = self.deadline.cleanup_phase();
+        // If TERM does not remove the group, the bounded exit wait below
+        // escalates to KILL and reports a group that remains alive.
+        fakes::kill_group(self.group, "TERM").unwrap_or_else(|error| {
+            panic!(
+                "could not send TERM to detached hub group {}: {error}",
+                self.group
+            )
+        });
+        let grace = cleanup.within(cleanup.left() / 4);
+        if !fakes::group_empties(self.group, grace) {
+            // If KILL does not remove the group, report the live members
+            // after the cleanup deadline.
+            fakes::kill_group(self.group, "KILL").unwrap_or_else(|error| {
+                panic!(
+                    "could not send KILL to detached hub group {}: {error}",
+                    self.group
+                )
+            });
+            assert!(
+                fakes::group_empties(self.group, cleanup),
+                "process group {} still has a live member at the cleanup deadline",
+                self.group
+            );
+        }
+        if let Some(watchdog) = self.watchdog.take() {
+            watchdog.stand_down(cleanup);
+        }
+        self.stopped = true;
+    }
+}
+
+impl Drop for DetachedHub {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn group_has_live_members(group: u32) -> bool {
+    fs::read_dir("/proc")
+        .unwrap_or_else(|error| panic!("could not scan /proc for process group {group}: {error}"))
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().to_string_lossy().parse::<u32>().ok())
+        .any(|pid| {
+            fs::read_to_string(format!("/proc/{pid}/stat"))
+                .ok()
+                .and_then(|stat| {
+                    let fields = stat
+                        .rsplit_once(')')?
+                        .1
+                        .split_whitespace()
+                        .collect::<Vec<_>>();
+                    Some(fields.first()? != &"Z" && fields.get(2)?.parse::<u32>().ok()? == group)
+                })
+                .unwrap_or(false)
+        })
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn group_has_live_members(group: u32) -> bool {
+    fakes::group_alive(group)
+}
+
+fn process_group_id(pid: u32) -> u32 {
+    let pid = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap()).unwrap();
+    u32::try_from(rustix::process::getpgid(Some(pid)).unwrap().as_raw_pid()).unwrap()
+}
+
 /// `fiber ask` with its stdout kept drained and its stderr kept for a failure.
 pub(crate) struct Running {
     pub(crate) child: Child,
@@ -1728,12 +1887,150 @@ fn hub_start_report(setup: &Setup, hub: &Mutex<Option<HubProc>>) -> String {
     )
 }
 
+/// Reports whether a detached hub's process group still has a live member.
+pub(crate) fn detached_hub_start_report(
+    _setup: &Setup,
+    hub: &Mutex<Option<DetachedHub>>,
+) -> String {
+    match hub
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+    {
+        Some(hub) if group_has_live_members(hub.group) => {
+            format!("process group {} still has a live member", hub.group)
+        }
+        Some(hub) => format!("process group {} has no live members", hub.group),
+        None => "was not started".to_owned(),
+    }
+}
+
 /// Connects to the hub through `doors::hub::connect`, starting
 /// `fiber hub serve` when none runs. The starter records the hub for the
 /// caller to kill and wait. Returns the client and the `hub_hello`.
 #[track_caller]
 pub(crate) fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<HubProc>>>) -> (Socket, Value) {
     connect_hub_within(setup, hub, setup.deadline.left())
+}
+
+pub(crate) struct HubConnect<T, Start, Report> {
+    pub(crate) serve: Command,
+    pub(crate) wait: Duration,
+    pub(crate) bound: Deadline,
+    pub(crate) name: &'static str,
+    pub(crate) stretched: bool,
+    pub(crate) start: Start,
+    pub(crate) report: Report,
+    pub(crate) marker: std::marker::PhantomData<fn() -> T>,
+}
+
+/// Connects to a hub through `doors::hub::connect`, starting it when none
+/// runs. `start` owns the hub-specific spawn operation; `report` describes
+/// the hub if startup or the handshake fails.
+#[track_caller]
+pub(crate) fn connect_hub_started<T: Send + 'static, Start, Report>(
+    setup: &Setup,
+    hub: &Arc<Mutex<Option<T>>>,
+    config: HubConnect<T, Start, Report>,
+) -> (Socket, Value)
+where
+    Start: FnMut(Deadline, &mut Command) -> T + Send + 'static,
+    Report: Fn(&Setup, &Mutex<Option<T>>) -> String,
+{
+    let HubConnect {
+        mut serve,
+        wait,
+        bound,
+        name,
+        stretched,
+        mut start,
+        report,
+        ..
+    } = config;
+    let slot = Arc::clone(hub);
+    let deadline = setup.deadline;
+    let home = setup.home();
+    let (done, connected) = mpsc::channel();
+    thread::spawn(move || {
+        let mut spawn = move || {
+            *slot.lock().unwrap() = Some(start(deadline, &mut serve));
+            Ok(())
+        };
+        let result = if stretched {
+            let clock = StretchedClock {
+                anchor: SystemClock.now(),
+                scale: u32::try_from(wait.as_millis() / doors::hub::CONNECT_DEADLINE.as_millis())
+                    .unwrap_or(1)
+                    .max(1),
+            };
+            doors::hub::connect(&home, &mut spawn, &clock)
+        } else {
+            doors::hub::connect(&home, &mut spawn, &SystemClock)
+        };
+        done.send(result).unwrap();
+    });
+    let connected = match bound.recv(&connected) {
+        Ok(Ok(connected)) => connected,
+        Ok(Err(error)) => panic!(
+            "hub connect failed with {error} waiting for the {name} to start and say hub_hello: the hub {}",
+            report(setup, hub)
+        ),
+        Err(mpsc::RecvTimeoutError::Timeout) => panic!(
+            "waited {wait:?} for the {name} to start and say hub_hello: the hub {}",
+            report(setup, hub)
+        ),
+        Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
+            "the {name} connect thread ended without a result: the hub {}",
+            report(setup, hub)
+        ),
+    };
+    let hello = serde_json::to_value(&connected.1).unwrap();
+    (Socket::from(deadline, connected.0), hello)
+}
+
+/// Connects to a hub whose parent shell is reaped as soon as it starts the hub.
+#[track_caller]
+pub(crate) fn connect_detached_hub(
+    setup: &Setup,
+    hub: &Arc<Mutex<Option<DetachedHub>>>,
+) -> (Socket, Value) {
+    let serve = setup.fiber(&["hub", "serve"]);
+    connect_detached_hub_started(setup, hub, serve, true)
+}
+
+/// Connects to a detached hub using a caller-configured `serve` command.
+#[track_caller]
+pub(crate) fn connect_detached_hub_with_serve(
+    setup: &Setup,
+    hub: &Arc<Mutex<Option<DetachedHub>>>,
+    serve: Command,
+    stretched: bool,
+) -> Socket {
+    let (client, hello) = connect_detached_hub_started(setup, hub, serve, stretched);
+    assert_eq!(hello["kind"], "hub_hello");
+    client
+}
+
+fn connect_detached_hub_started(
+    setup: &Setup,
+    hub: &Arc<Mutex<Option<DetachedHub>>>,
+    serve: Command,
+    stretched: bool,
+) -> (Socket, Value) {
+    connect_hub_started(
+        setup,
+        hub,
+        HubConnect {
+            serve,
+            wait: setup.deadline.left(),
+            bound: setup.deadline,
+            name: "detached hub",
+            stretched,
+            start: DetachedHub::spawn_command,
+            report: detached_hub_start_report,
+            marker: std::marker::PhantomData,
+        },
+    )
 }
 
 /// The process clock running `scale` times slower, so the product's 5 s
@@ -1780,42 +2077,21 @@ pub(crate) fn connect_hub_within(
     hub: &Arc<Mutex<Option<HubProc>>>,
     wait: Duration,
 ) -> (Socket, Value) {
-    let slot = Arc::clone(hub);
-    let deadline = setup.deadline;
-    let mut serve = setup.fiber(&["hub", "serve"]);
-    let home = setup.home();
-    let (done, connected) = mpsc::channel();
-    thread::spawn(move || {
-        let mut start = move || {
-            *slot.lock().unwrap() = Some(HubProc::spawn_command(deadline, &mut serve));
-            Ok(())
-        };
-        let clock = StretchedClock {
-            anchor: SystemClock.now(),
-            scale: u32::try_from(wait.as_millis() / doors::hub::CONNECT_DEADLINE.as_millis())
-                .unwrap_or(1)
-                .max(1),
-        };
-        done.send(doors::hub::connect(&home, &mut start, &clock))
-            .unwrap();
-    });
-    let connected = match Deadline::after(wait).recv(&connected) {
-        Ok(Ok(connected)) => connected,
-        Ok(Err(error)) => panic!(
-            "hub connect failed with {error} waiting for the hub to start and say hub_hello: the hub {}",
-            hub_start_report(setup, hub)
-        ),
-        Err(mpsc::RecvTimeoutError::Timeout) => panic!(
-            "waited {wait:?} for the hub to start and say hub_hello: the hub {}",
-            hub_start_report(setup, hub)
-        ),
-        Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
-            "the hub connect thread ended without a result: the hub {}",
-            hub_start_report(setup, hub)
-        ),
-    };
-    let hello = serde_json::to_value(&connected.1).unwrap();
-    (Socket::from(deadline, connected.0), hello)
+    let serve = setup.fiber(&["hub", "serve"]);
+    connect_hub_started(
+        setup,
+        hub,
+        HubConnect {
+            serve,
+            wait,
+            bound: setup.deadline.within(wait),
+            name: "hub",
+            stretched: true,
+            start: HubProc::spawn_command,
+            report: hub_start_report,
+            marker: std::marker::PhantomData,
+        },
+    )
 }
 
 impl Socket {
@@ -1874,6 +2150,14 @@ impl Socket {
         self.pump = Some(Mutex::new(pump));
         self
     }
+}
+
+pub(crate) fn finish_detached<F>(guard: SessionGuard, stop: F)
+where
+    F: FnOnce(),
+{
+    stop();
+    guard.wait_gone();
 }
 
 /// Guards every session the hub starts in `workspace`: each carries the

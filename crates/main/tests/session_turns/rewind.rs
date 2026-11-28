@@ -109,7 +109,7 @@ fn turn_starts(lines: &[Value]) -> Vec<u64> {
 /// Starts the hub, the session guard and one client: the caller runs the
 /// turns.
 struct Hubbed {
-    hub: Arc<Mutex<Option<HubProc>>>,
+    hub: Arc<Mutex<Option<DetachedHub>>>,
     client: Option<Socket>,
     workspace: String,
     guard: SessionGuard,
@@ -118,7 +118,7 @@ struct Hubbed {
 impl Hubbed {
     fn new(setup: &Setup) -> Self {
         let hub = Arc::new(Mutex::new(None));
-        let (client, hello) = connect_hub(setup, &hub);
+        let (client, hello) = connect_detached_hub(setup, &hub);
         assert_eq!(hello["kind"], "hub_hello");
         let workspace = setup.workspace().to_string_lossy().into_owned();
         let guard = SessionGuard::arm(setup.deadline, &workspace);
@@ -193,11 +193,7 @@ impl Hubbed {
     fn finish(self) {
         let Self { hub, guard, .. } = self;
         guard.wait_gone();
-        hub.lock()
-            .unwrap()
-            .take()
-            .expect("the hub ran")
-            .kill_and_wait();
+        hub.lock().unwrap().take().expect("the hub ran").stop();
     }
 }
 
@@ -987,7 +983,7 @@ fn the_feed_starts_a_rewind_no_client_relayed() {
     // session, so only the feed can start the next session. Its status
     // for the old session proves the feed follows it.
     let hub = Arc::clone(&hubbed.hub);
-    let (watcher, _) = connect_hub(&setup, &hub);
+    let (watcher, _) = connect_detached_hub(&setup, &hub);
     watcher.send(&command("c4_watch", None, "feed", json!({})));
     until(&watcher, "the feed following the session", |line| {
         line["kind"] == "session_status" && line["session_id"] == old
@@ -1285,7 +1281,7 @@ fn a_rewind_keeps_the_person_name_and_its_pin() {
     );
     // The listing follows the feed's `run/` scan: wait for the new
     // session's feed entry before listing it, as the feed test does.
-    let (watcher, _) = connect_hub(&setup, &hubbed.hub);
+    let (watcher, _) = connect_detached_hub(&setup, &hubbed.hub);
     watcher.send(&command("n1_watch", None, "feed", json!({})));
     until(&watcher, "the new session's feed entry", |line| {
         line["kind"] == "session_status" && line["session_id"] == next

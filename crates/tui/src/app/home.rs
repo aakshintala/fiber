@@ -1508,6 +1508,7 @@ impl App {
             Spot::Model => self.open_model_picker(crate::model_picker::Mode::Choose),
             Spot::Thinking => self.open_thinking(),
             Spot::Pick(at) => self.pick(at),
+            Spot::PickCompletion(identity) => self.pick_completion(identity),
             Spot::Blocker(index) => {
                 if self.home.blocker_keys.get(index).copied().unwrap_or(false) {
                     self.open_config_view(super::ConfigView::Login)
@@ -1718,6 +1719,7 @@ impl App {
             | Spot::Model
             | Spot::Thinking
             | Spot::Pick(_)
+            | Spot::PickCompletion(_)
             | Spot::Blocker(_)
             | Spot::Keep
             | Spot::Question

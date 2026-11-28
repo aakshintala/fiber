@@ -119,8 +119,8 @@ fn context(file: &PathBuf) -> String {
 
 /// A started hub session with its direct socket subscribed: the model
 /// loads the skill, then calls the save, then says it is done.
-fn begin(setup: &Setup, hub: &Arc<Mutex<Option<HubProc>>>) -> (Socket, String, SessionGuard) {
-    let (client, _) = connect_hub(setup, hub);
+fn begin(setup: &Setup, hub: &Arc<Mutex<Option<DetachedHub>>>) -> (Socket, String, SessionGuard) {
+    let (client, _) = connect_detached_hub(setup, hub);
     let workspace = setup.workspace().to_str().unwrap().to_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start_session(&client, &workspace, "set up my reviewer notes");
@@ -175,14 +175,14 @@ fn skill_loaded(setup: &Setup, session: &str) -> bool {
 /// The hub, the session's log, and every session gone.
 fn finish(
     setup: &Setup,
-    hub: &Arc<Mutex<Option<HubProc>>>,
+    hub: &Arc<Mutex<Option<DetachedHub>>>,
     session: &str,
     direct: Socket,
     guard: SessionGuard,
 ) {
     drop(direct);
-    let hub = hub.lock().unwrap().take().expect("the starter ran");
-    hub.kill_and_wait();
+    let mut hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.stop();
     let closer = Socket::connect(setup.deadline, &setup.session_socket(session));
     close_session(&closer);
     drop(closer);
@@ -311,7 +311,7 @@ fn an_exited_confirm_resumes_asking_nothing_and_rejects_yes_as_stale() {
     );
 
     let hub = Arc::new(Mutex::new(None));
-    let (client, _) = connect_hub(&setup, &hub);
+    let (client, _) = connect_detached_hub(&setup, &hub);
     let workspace = setup.workspace().to_str().unwrap().to_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start_session(&client, &workspace, "set up my reviewer notes");
@@ -392,7 +392,7 @@ fn an_exited_confirm_resumes_asking_nothing_and_rejects_yes_as_stale() {
             && line.get("session_id") == Some(&Value::String(session.clone()))
     });
     drop(client);
-    let hub = hub.lock().unwrap().take().expect("the starter ran");
-    hub.kill_and_wait();
+    let mut hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.stop();
     guard.wait_gone();
 }

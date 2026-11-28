@@ -42,6 +42,7 @@ const FOLDED: &[EventKind] = &[
     EventKind::JobStarted,
     EventKind::JobCompleted,
     EventKind::DelegateStarted,
+    EventKind::DelegateFinished,
     EventKind::Rewound,
     EventKind::OpeningMessage,
     EventKind::SkillsResent,
@@ -78,6 +79,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         credential: None,
         thinking: None,
         settings: None,
+        parent_runs: HashMap::new(),
         window: (0, 0),
         end: 0,
         seed: Carry::default(),
@@ -182,7 +184,9 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
     }
     // Every request the own segment left open belongs to an earlier process.
     resumed.exit.carry();
-    resumed.orphans = pass.orphans.finish();
+    let (orphans, parent_runs) = pass.orphans.finish();
+    resumed.orphans = orphans;
+    resumed.parent_runs = parent_runs;
     resumed.delegate_sessions = pass.delegate_sessions;
     resumed.end = end;
     Ok(resumed)

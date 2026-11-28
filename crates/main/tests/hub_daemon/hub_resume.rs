@@ -224,11 +224,8 @@ impl Drop for Hub {
     /// never panics.
     fn drop(&mut self) {
         drop(fakes::kill_group(self.group, "KILL"));
-        support::kill_matching_detached(&self.workspace);
         if let Some(mut child) = self.child.take() {
             let (done, reaped) = mpsc::channel();
-            // A thread that cannot start drops `done`, so the receive below
-            // returns at once.
             match thread::Builder::new().spawn(move || match done.send(child.wait()) {
                 Ok(()) | Err(_) => {}
             }) {
@@ -238,6 +235,7 @@ impl Drop for Hub {
                 Ok(_) | Err(_) => {}
             }
         }
+        support::kill_matching_detached(&self.workspace);
     }
 }
 
@@ -316,6 +314,16 @@ fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<Hub>>>) -> Socket {
     });
     let (stream, _hello) = connected.unwrap();
     Socket::from(deadline, stream)
+}
+
+fn connect_detached_hub(setup: &Setup, hub: &Arc<Mutex<Option<support::DetachedHub>>>) -> Socket {
+    let client = support::connect_detached_hub_with_serve(
+        setup,
+        hub,
+        setup.fiber_in_workspace(&["hub", "serve"]),
+        false,
+    );
+    Socket::from(setup.deadline, client.write.into_inner().unwrap())
 }
 
 fn command(id: &str, session: &str, command: &str, args: Value) -> Value {
@@ -484,8 +492,10 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
     assert_eq!(code, Some(0));
     let id = lines[0]["session_id"].as_str().unwrap().to_owned();
 
-    let hub = Arc::new(Mutex::new(None));
-    let client = connect_hub(&setup, &hub);
+    let workspace = setup.workspace_text();
+    let sessions = Watchdog::matching(&workspace);
+    let hub = Arc::new(Mutex::new(None::<support::DetachedHub>));
+    let client = connect_detached_hub(&setup, &hub);
     client.send(&subscribe_line("c_sub", &id));
     let replay = until_hub(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
@@ -513,7 +523,7 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
     );
 
     // A second client finds the session running and attaches.
-    let second = connect_hub(&setup, &hub);
+    let second = connect_detached_hub(&setup, &hub);
     second.send(&subscribe_line("c_sub2", &id));
     until_hub(&second, "the second subscribe", |line| {
         acknowledges(line, "c_sub2")
@@ -539,7 +549,10 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
         "{log}"
     );
     assert!(!log.contains(&setup.workspace_text()), "{log}");
-    hub.lock().unwrap().take().expect("the hub ran").finish();
+    hub.lock().unwrap().take().expect("the hub ran").stop();
+    fakes::try_matching_exits(&workspace, setup.deadline)
+        .unwrap_or_else(|err| panic!("waited until the deadline for every session to exit: {err}"));
+    sessions.stand_down(setup.deadline.cleanup_phase());
 }
 
 #[test]

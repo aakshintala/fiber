@@ -12,7 +12,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use contract::feedback::{FrameShape, RING_DEPTH, ShapeColor, ShapeKind};
+use contract::feedback::{ATTACH_INSTRUCTION, FrameShape, RING_DEPTH, ShapeColor, ShapeKind};
 use contract::shapes::Failure;
 use contract::{ErrorCode, SessionId, clock};
 use doors::failure;
@@ -132,21 +132,53 @@ fn title(description: &str) -> String {
     }
 }
 
-/// The new-issue link for the report. At most 2000 characters: at or
-/// under it the body carries the full report, over it the body carries
-/// the description with the line saying to attach the file instead. The
-/// title is always carried.
-fn issue_link(title: &str, report: &str, description: &str) -> String {
+/// The new-issue link for the report, with whether it fell back to the
+/// description. At most 2000 characters: at or under it the body carries
+/// the full report, over it the body carries the description, clipped
+/// only as needed to fit, with the line saying to attach the file
+/// instead. The title is always carried.
+fn issue_link(title: &str, report: &str, description: &str) -> (String, bool) {
     const BASE: &str = "https://github.com/aakshintala/fiber/issues/new";
     const LIMIT: usize = 2000;
+    let tail = format!("\n\n{ATTACH_INSTRUCTION}");
     let full = format!("{BASE}?title={}&body={}", encode(title), encode(report));
     if full.len() <= LIMIT {
-        return full;
+        return (full, false);
     }
-    let fallback = format!(
-        "{description}\n\nThe full report was too long for a link: attach the report file."
-    );
-    format!("{BASE}?title={}&body={}", encode(title), encode(&fallback))
+    let head = format!("{BASE}?title={}&body=", encode(title));
+    // The encoded description's room: the whole URL stays within the
+    // cap, so a short description rides whole and only an overlong one
+    // is cut.
+    let budget = LIMIT.saturating_sub(head.len() + encode(&tail).len());
+    let kept = clip_description(description, budget);
+    let fallback = format!("{kept}{tail}");
+    let link = format!("{head}{}", encode(&fallback));
+    debug_assert!(link.len() <= LIMIT);
+    (link, true)
+}
+
+/// The longest leading part of `description` whose encoding fits
+/// `budget`, with whether anything was cut: a kept whole description
+/// rides unchanged, and a cut one ends with `…`. The cut lands on a
+/// character boundary, so no UTF-8 sequence or `%XX` escape splits.
+fn clip_description(description: &str, budget: usize) -> String {
+    if encode(description).len() <= budget {
+        return description.to_owned();
+    }
+    const MARKER: &str = "…";
+    let marker_len = encode(MARKER).len();
+    let mut kept = String::new();
+    let mut used = 0usize;
+    for ch in description.chars() {
+        let width = encode(&ch.to_string()).len();
+        if used + width + marker_len > budget {
+            break;
+        }
+        used += width;
+        kept.push(ch);
+    }
+    kept.push_str(MARKER);
+    kept
 }
 
 /// One `%XX` query component: UTF-8 bytes, leaving only the unreserved
@@ -569,7 +601,7 @@ pub fn write(
         description,
         &doctor,
     );
-    let link = issue_link(&title(description), &report, description);
+    let (link, attach) = issue_link(&title(description), &report, description);
     let report = format!(
         "{report}\n{}{}",
         (ctx.diagnostics)(session),
@@ -591,5 +623,5 @@ pub fn write(
         drop(std::fs::remove_file(&path));
         return Err(FeedbackError::Write { path, source });
     }
-    Ok(contract::feedback::FeedbackDone { path, link })
+    Ok(contract::feedback::FeedbackDone { path, link, attach })
 }

@@ -4213,7 +4213,7 @@ fn a_detached_start_is_not_owed_an_orphaned_end() {
         start_time: Some(99),
         kind: Some(contract::events::JobKind::Detached),
     }));
-    assert!(orphans.finish().is_empty());
+    assert!(orphans.finish().0.is_empty());
 }
 
 #[test]
@@ -4238,7 +4238,7 @@ fn a_restarted_job_is_owed_another_orphaned_end() {
     // A `job_started` reopens its job: the run it starts is owed its own
     // orphaned end.
     orphans.fold(&started());
-    let done = orphans.finish();
+    let done = orphans.finish().0;
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].job_id.0, JOB);
     assert_eq!(done[0].error.as_ref().unwrap().code, ErrorCode::Orphaned);
@@ -4265,7 +4265,7 @@ fn a_job_completed_after_its_restart_owes_nothing() {
     orphans.fold(&Event::JobCompleted(failed(JOB)));
     orphans.fold(&started());
     orphans.fold(&Event::JobCompleted(failed(JOB)));
-    assert!(orphans.finish().is_empty());
+    assert!(orphans.finish().0.is_empty());
 }
 
 #[test]
@@ -4294,7 +4294,7 @@ fn a_rewound_line_settles_no_job() {
     let mut orphans = super::Orphans::default();
     orphans.fold(&started);
     orphans.fold(&rewound);
-    let done = orphans.finish();
+    let done = orphans.finish().0;
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].job_id.0, JOB);
     assert_eq!(done[0].error.as_ref().unwrap().code, ErrorCode::Orphaned);

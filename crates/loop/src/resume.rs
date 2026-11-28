@@ -79,6 +79,7 @@ pub struct Resumed {
     /// the last `model_changed`'s `after` when it came later. `None` when
     /// the log holds neither.
     pub(crate) settings: Option<ModelSettings>,
+    pub(crate) parent_runs: HashMap<JobId, crate::jobs::ParentRun>,
     /// The window's start, as a position in the chain: the segment and
     /// the `seq` the window starts at: the latest `turn_started` of the
     /// latest completed compaction's turn, before that compaction; the chain's
@@ -358,12 +359,12 @@ impl Loop {
     /// one, and the folds a new loop builds from nothing are restored. The
     /// window is the only part of the log read here, up to the line count
     /// the pass saw, so lines written since (`fiber_started` and the
-    /// like) are not in it. The only lines written settle each job a crash
-    /// left running: one `job_completed` marked `orphaned`, or the settled
-    /// `delegate_finished` and `job_completed` pair for a delegate whose
-    /// own log holds its exit. `session_started`
-    /// is the first line's, and `seq` carries on. Everything a new loop
-    /// runs on rides [`crate::Session`].
+    /// like) are not in it. Resume computes the settlement, usage backfill and
+    /// recorded model settings but writes none of them: the run's first step
+    /// writes settled orphan outcomes, then missing usage copies, then a
+    /// possible `model_changed`, after builder-installed hooks are available.
+    /// `session_started` is the first line's, and `seq` carries on. Everything
+    /// a new loop runs on rides [`crate::Session`].
     pub fn resume(session: Session, resumed: Resumed) -> Result<Self, Error> {
         let mut session = session;
         let Resumed {
@@ -379,6 +380,7 @@ impl Loop {
             consecutive,
             reviewed,
             orphans,
+            parent_runs,
             delegate_sessions,
             thinking,
             offers,
@@ -485,25 +487,23 @@ impl Loop {
             },
         )?;
         resumed.kept = kept;
-        let backfill = resumed.prepare_backfill(&delegate_sessions, &orphans)?;
-        // Each orphan settled from its delegate's own log, before any
-        // line this resume writes; what the settle cannot match keeps the
-        // orphaned completion.
-        let settled =
-            resumed.settle_orphans(&delegate_sessions, &orphans, settle_finish.as_ref())?;
-        resumed.mark_orphans(settled)?;
-        // The backfill's missing copies, after the orphaned `job_completed`
-        // lines and before `resumed_label` or any new turn write.
-        for (session, lines) in backfill {
-            for line in lines {
-                resumed.copy_usage(&session, line)?;
-            }
-        }
-        // After any orphaned `job_completed` lines, before the first
-        // `preamble_built`: a resume that switches the credential label
-        // records it as a switch does (`docs/events.md`,
-        // "`model_changed`").
-        resumed.resumed_label(settings)?;
+        let (settled, backfill) = {
+            let settled = resumed.settle_orphans(
+                &delegate_sessions,
+                &orphans,
+                &parent_runs,
+                settle_finish.as_ref(),
+            )?;
+            (
+                settled,
+                resumed.prepare_backfill(&delegate_sessions, &orphans)?,
+            )
+        };
+        resumed.staged_orphans = crate::jobs::StagedTail {
+            settled,
+            backfill,
+            settings,
+        };
         Ok(resumed)
     }
 }
@@ -661,6 +661,7 @@ impl Loop {
         &self,
         sessions: &HashMap<JobId, SessionId>,
         orphans: &[JobCompleted],
+        parent_runs: &HashMap<JobId, crate::jobs::ParentRun>,
         finish: Option<&contract::jobs::FinishWorktree>,
     ) -> Result<Vec<OrphanEnd>, Error> {
         let mut settled = Vec::with_capacity(orphans.len());
@@ -669,6 +670,11 @@ impl Loop {
                 settled.push(OrphanEnd::Orphaned(orphan.clone()));
                 continue;
             };
+            let Some(parent_run) = parent_runs.get(&orphan.job_id) else {
+                settled.push(OrphanEnd::Orphaned(orphan.clone()));
+                continue;
+            };
+            let started = parent_run.started.clone();
             let Some(home) = self.log.dir().parent() else {
                 settled.push(OrphanEnd::Orphaned(orphan.clone()));
                 continue;
@@ -679,12 +685,10 @@ impl Loop {
                 continue;
             }
             let lines = self.final_usage(&dir)?;
-            let Some(exited) = Self::settle_exit(&lines) else {
+            let Some(exited) = Self::settle_exit(&lines, parent_run.count) else {
                 settled.push(OrphanEnd::Orphaned(orphan.clone()));
                 continue;
             };
-            // No delivery hook runs on a settle, so the file holds the
-            // message as the delegate wrote it.
             let mut finished = exited.delegate_finished(&orphan.job_id);
             // A resumed run reports only; its session process owns removal
             // (crates/doors/src/isolation.rs:190).
@@ -701,12 +705,12 @@ impl Loop {
                     .to_string_lossy()
                     .into_owned(),
             );
-            crate::deliveries::write_final_file(&mut finished, false);
-            let finished = crate::delegated::bounded(&self.log, finished);
-            settled.push(OrphanEnd::Settled(
-                finished,
-                Box::new(settle_completed(orphan, &exited)),
-            ));
+            let completed = Box::new(settle_completed(orphan, &exited));
+            if parent_run.finished {
+                settled.push(OrphanEnd::FinishedAlready(completed));
+            } else {
+                settled.push(OrphanEnd::SettledForDelivery(finished, completed, started));
+            }
         }
         Ok(settled)
     }
@@ -724,25 +728,25 @@ impl Loop {
         }
     }
 
-    /// The delegate log's latest run's exit: the `fiber_exited` after its
-    /// last `fiber_started`, or `None` when the latest run wrote none. The
-    /// match is by run, never by file position: an exit from an earlier run
-    /// never settles the job, while a log with no `fiber_started` reads as
-    /// one run throughout. A torn tail reads as its good prefix, as
-    /// [`final_usage`] does, so an exit before the tear still settles.
-    fn settle_exit(lines: &[Envelope]) -> Option<FiberExited> {
+    /// The delegate log's current run's exit: the `fiber_exited` after its
+    /// last `fiber_started`, provided the number of starts equals the
+    /// parent's current `job_started` count. A mismatch or missing exit
+    /// leaves the job orphaned. A torn tail reads as its good prefix.
+    fn settle_exit(lines: &[Envelope], expected_starts: usize) -> Option<FiberExited> {
+        let mut starts = 0;
         let mut exit = None;
         for line in lines {
             let Ok(Some(event)) = Event::from_envelope(line) else {
                 continue;
             };
             if matches!(event, Event::FiberStarted(_)) {
+                starts += 1;
                 exit = None;
             } else if let Event::FiberExited(exited) = event {
                 exit = Some(exited);
             }
         }
-        exit
+        (starts == expected_starts).then_some(exit).flatten()
     }
 }
 
