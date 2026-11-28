@@ -11,8 +11,8 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use crate::tui_vm::{
-    CommandRejection, FocusRejection, KeyBinding, KeyForm, KeyRejection, RenderOut, SLOT_NAMES,
-    SLOT_PREFIXES, Span, TuiCommand, TuiVm,
+    CommandRejection, FocusRejection, KeyBinding, KeyForm, KeyRejection, LayoutRect, RenderOut,
+    SLOT_NAMES, SLOT_PREFIXES, Span, TuiCommand, TuiVm,
 };
 use crate::{Error, ErrorCode};
 
@@ -542,6 +542,74 @@ fn builtin_returns_the_supplied_lines() {
             span("in"),
         ]]
     );
+}
+
+#[test]
+fn layout_builtin_returns_a_region_map() {
+    let (_, mut vm) = vm(
+        "fiber.slot('layout', { timeout = 100, render = function(input,width) return builtin(input,width) end })",
+    );
+    let builtin = |_: &Value, width| {
+        vec![(
+            "conversation".to_owned(),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: i64::from(width),
+                height: 8,
+            },
+        )]
+    };
+    let regions = vm
+        .call_layout(Some("s1"), &json!({"height": 8}), 12, &builtin)
+        .unwrap();
+    assert_eq!(
+        regions,
+        vec![(
+            "conversation".to_owned(),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 12,
+                height: 8,
+            },
+        )]
+    );
+}
+
+#[test]
+fn layout_decode_requires_lua_integers_and_exact_rectangle_fields() {
+    let (_, mut float) = vm(
+        "fiber.slot('layout', { timeout = 100, render = function() return {conversation={x=1.0,y=0,width=2,height=3}} end })",
+    );
+    let error = float
+        .call_layout(Some("s1"), &json!({}), 10, &|_, _| Vec::new())
+        .unwrap_err();
+    assert!(matches!(error, Error::TuiShape(ref message) if message.contains("Lua integer")));
+
+    let (_, mut missing) = vm(
+        "fiber.slot('layout', { timeout = 100, render = function() return {conversation={y=0,width=2,height=3}} end })",
+    );
+    assert!(matches!(
+        missing.call_layout(Some("s1"), &json!({}), 10, &|_, _| Vec::new()),
+        Err(Error::TuiShape(message)) if message.contains("`x`")
+    ));
+
+    let (_, mut extra) = vm(
+        "fiber.slot('layout', { timeout = 100, render = function() return {conversation={x=0,y=0,width=2,height=3,other=1}} end })",
+    );
+    assert!(matches!(
+        extra.call_layout(Some("s1"), &json!({}), 10, &|_, _| Vec::new()),
+        Err(Error::TuiShape(message)) if message.contains("only `x`, `y`, `width` and `height`")
+    ));
+
+    let (_, mut non_string_key) = vm(
+        "fiber.slot('layout', { timeout = 100, render = function() return {[1]={x=0,y=0,width=2,height=3}} end })",
+    );
+    assert!(matches!(
+        non_string_key.call_layout(Some("s1"), &json!({}), 10, &|_, _| Vec::new()),
+        Err(Error::TuiShape(message)) if message.contains("region names must be strings")
+    ));
 }
 
 #[test]

@@ -1568,7 +1568,7 @@ fn panel_text(app: &App) -> String {
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .unwrap_or_else(|| panic!("a panel rect"));
     let area = ratatui::layout::Rect::new(0, 0, rect.width, rect.height);
     let mut buf = ratatui::buffer::Buffer::empty(area);

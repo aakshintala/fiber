@@ -363,6 +363,261 @@ pub(crate) struct HomeScreen {
     pub(crate) logo: crate::graphics::logo::Shown,
 }
 
+impl HomeScreen {
+    /// The source table the home renderer receives. The logo's protocol
+    /// choice and the live row's elapsed `since` string stay out; exited
+    /// rows carry their source timestamp. Changes to rendered elapsed text
+    /// invalidate cached built-in lines.
+    pub(crate) fn renderer_input(&self, flat: bool, wall: u64) -> crate::ext::HomeInput {
+        use serde_json::{Map, Value, json};
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut cache_fingerprint = DefaultHasher::new();
+        for line in &self.list {
+            match line {
+                ListLine::Live { since, .. } => since.hash(&mut cache_fingerprint),
+                ListLine::Exited { since, .. } => since
+                    .map(|since| crate::view::rail::elapsed(since, wall))
+                    .hash(&mut cache_fingerprint),
+                ListLine::Head { .. }
+                | ListLine::ExitedHead { .. }
+                | ListLine::More { .. }
+                | ListLine::ArchivedHead { .. } => {}
+            }
+        }
+        let cache_fingerprint = cache_fingerprint.finish();
+        let counts: Vec<Value> = self
+            .header
+            .counts
+            .iter()
+            .map(|(role, text)| json!({"role": role.name(), "text": text}))
+            .collect();
+        let mut header = Map::new();
+        header.insert("counts".into(), json!(counts));
+        if let Some(spend) = &self.header.spend {
+            header.insert("spend".into(), json!(spend));
+        }
+        let chips: Vec<Value> = self
+            .chips
+            .iter()
+            .map(|chip| {
+                let mut value = Map::new();
+                value.insert("text".into(), json!(chip.text));
+                value.insert("dim".into(), json!(chip.dim));
+                value.insert("session_mark".into(), json!(chip.session_mark));
+                if let Some(spot) = chip.spot.and_then(spot_name) {
+                    value.insert("spot".into(), json!(spot));
+                }
+                Value::Object(value)
+            })
+            .collect();
+        let list: Vec<Value> = self.list.iter().map(list_line_value).collect();
+        let picker = self.picker.as_ref().map(|picker| {
+            let mut value = Map::new();
+            value.insert("escapes".into(), json!(picker.escapes));
+            value.insert("recents".into(), json!(picker.recents));
+            if let Some(focus) = picker.focus {
+                value.insert("focus".into(), json!(focus));
+            }
+            if let Some(typed) = &picker.typed {
+                value.insert(
+                    "typed".into(),
+                    json!({
+                        "text": typed.text,
+                        "completions": typed.completions,
+                        "missing": typed.missing,
+                    }),
+                );
+            }
+            Value::Object(value)
+        });
+        let foot_spans = crate::ext::spans::from_ratatui(&self.foot.spans);
+        let foot_spans: Vec<Value> = foot_spans.iter().map(home_span_value).collect();
+        let mut value = Map::new();
+        value.insert("version".into(), json!(self.version));
+        value.insert("glyph".into(), json!(self.glyph));
+        value.insert("header".into(), Value::Object(header));
+        value.insert("chips".into(), json!(chips));
+        value.insert("list".into(), json!(list));
+        value.insert("empty".into(), json!(self.empty));
+        value.insert("blockers".into(), json!(self.blockers));
+        value.insert("blocker_keys".into(), json!(self.blocker_keys));
+        value.insert(
+            "foot".into(),
+            json!({"text": self.foot.to_string(), "spans": foot_spans}),
+        );
+        value.insert("placeholder".into(), json!(self.placeholder));
+        value.insert("flat".into(), json!(flat));
+        if let Some(picker) = picker {
+            value.insert("picker".into(), picker);
+        }
+        if let Some(question) = &self.question {
+            value.insert("question".into(), json!(question));
+            value.insert("question_import".into(), json!(self.question_import));
+            value.insert("question_scroll".into(), json!(self.question_scroll));
+        }
+        crate::ext::HomeInput {
+            value: Value::Object(value),
+            flat,
+            cache_fingerprint,
+        }
+    }
+}
+
+/// One home list line, with the source fields its built-in draws.
+fn list_line_value(line: &ListLine) -> serde_json::Value {
+    use serde_json::{Map, Value, json};
+
+    let mut value = Map::new();
+    match line {
+        ListLine::Head {
+            start,
+            name,
+            live,
+            spend,
+            waiting,
+        } => {
+            value.insert("kind".into(), json!("head"));
+            value.insert("name".into(), json!(name));
+            value.insert("live".into(), json!(live));
+            value.insert("spend".into(), json!(spend));
+            value.insert("waiting".into(), json!(waiting));
+            if let Some(start) = start {
+                value.insert("start".into(), json!(start));
+            }
+        }
+        ListLine::Live {
+            key,
+            number,
+            glyph,
+            name,
+            word,
+            tone,
+            since: _,
+            stop,
+            id,
+            turns,
+            branch,
+            spend,
+            context,
+            wait,
+        } => {
+            value.insert("kind".into(), json!("live"));
+            value.insert("key".into(), json!(key));
+            value.insert("glyph".into(), json!(glyph));
+            value.insert("name".into(), json!(name));
+            value.insert("word".into(), json!(word));
+            value.insert("tone".into(), json!(tone.name()));
+            value.insert("stop".into(), json!(stop));
+            value.insert("id".into(), json!(id));
+            value.insert("spend".into(), json!(spend));
+            if let Some(number) = number {
+                value.insert("number".into(), json!(number));
+            }
+            if let Some(turns) = turns {
+                value.insert("turns".into(), json!(turns));
+            }
+            if let Some(branch) = branch {
+                value.insert("branch".into(), json!(branch));
+            }
+            if let Some(context) = context {
+                value.insert("context".into(), json!(context));
+            }
+            if let Some(wait) = wait {
+                value.insert("wait".into(), json!(wait));
+            }
+        }
+        ListLine::ExitedHead { count } => {
+            value.insert("kind".into(), json!("exited_head"));
+            value.insert("count".into(), json!(count));
+        }
+        ListLine::Exited {
+            key,
+            stop,
+            glyph,
+            name,
+            id,
+            turns,
+            spend,
+            since,
+        } => {
+            value.insert("kind".into(), json!("exited"));
+            value.insert("key".into(), json!(key));
+            value.insert("stop".into(), json!(stop));
+            value.insert("glyph".into(), json!(glyph));
+            value.insert("name".into(), json!(name));
+            value.insert("id".into(), json!(id));
+            value.insert("spend".into(), json!(spend));
+            if let Some(turns) = turns {
+                value.insert("turns".into(), json!(turns));
+            }
+            if let Some(since) = since {
+                value.insert("since".into(), json!(since));
+            }
+        }
+        ListLine::More { key, count } => {
+            value.insert("kind".into(), json!("more"));
+            value.insert("key".into(), json!(key));
+            value.insert("count".into(), json!(count));
+        }
+        ListLine::ArchivedHead { key, count } => {
+            value.insert("kind".into(), json!("archived_head"));
+            value.insert("key".into(), json!(key));
+            value.insert("count".into(), json!(count));
+        }
+    }
+    Value::Object(value)
+}
+
+/// The source line's named style spans, without nulls for absent roles.
+fn home_span_value(span: &crate::ext::RawSpan) -> serde_json::Value {
+    use serde_json::{Map, Value, json};
+
+    let mut value = Map::new();
+    value.insert("text".into(), json!(span.text));
+    if let Some(fg) = &span.fg {
+        value.insert("fg".into(), json!(fg));
+    }
+    if let Some(bg) = &span.bg {
+        value.insert("bg".into(), json!(bg));
+    }
+    for (name, present) in [
+        ("bold", span.bold),
+        ("dim", span.dim),
+        ("italic", span.italic),
+        ("underline", span.underline),
+    ] {
+        if present {
+            value.insert(name.into(), Value::Bool(true));
+        }
+    }
+    Value::Object(value)
+}
+
+/// The stable name the home input gives a chip's existing focus/click spot.
+fn spot_name(spot: Spot) -> Option<&'static str> {
+    match spot {
+        Spot::Workspace => Some("workspace"),
+        Spot::Worktree => Some("worktree"),
+        Spot::Model => Some("model"),
+        Spot::Thinking => Some("thinking"),
+        Spot::Entry(_)
+        | Spot::Stop(_)
+        | Spot::Start(_)
+        | Spot::More(_)
+        | Spot::Archived(_)
+        | Spot::Blocker(_)
+        | Spot::Pick(_)
+        | Spot::PickCompletion(_)
+        | Spot::Quit(_)
+        | Spot::Clear(_)
+        | Spot::HooksOffer(_)
+        | Spot::Keep
+        | Spot::Question => None,
+    }
+}
+
 /// The header's nonzero state counts in display order.
 pub(crate) struct Header {
     pub(crate) counts: Vec<(crate::theme::Role, String)>,
@@ -407,7 +662,7 @@ pub(crate) enum ListLine {
         id: String,
         turns: Option<u64>,
         spend: String,
-        age: Option<String>,
+        since: Option<u64>,
     },
     More {
         key: u64,

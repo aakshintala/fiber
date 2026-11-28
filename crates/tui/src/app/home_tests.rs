@@ -5,7 +5,7 @@ use super::{App, Effect};
 use crate::app::Waiting;
 use crate::app::outbox::RecentAsk;
 use crate::app::testkit::{SENDER, hello, home_with, sender_status};
-use crate::home::{Launch, ListLine, Spot};
+use crate::home::{Chip, Header, Launch, ListLine, PickerScreen, Spot, TypedScreen};
 use crate::keys::{Edit, Key};
 use crate::keys::{Mouse, MouseKind};
 use crate::link::Line;
@@ -59,6 +59,85 @@ fn review() -> Line {
         .cloned()
         .unwrap_or_default(),
     })
+}
+
+#[test]
+fn home_renderer_input_projects_source_values_without_terminal_state() {
+    let app = home_with(80, 24, launch());
+    let mut screen = app.home_screen().unwrap();
+
+    let initial = screen.renderer_input(false, 0).value;
+    assert!(initial.get("picker").is_none());
+    assert!(initial.get("question").is_none());
+    assert!(initial["header"].get("spend").is_none());
+
+    screen.header = Header {
+        counts: vec![(crate::theme::Role::Muted, "2 idle".into())],
+        spend: Some("$3.00".into()),
+    };
+    screen.chips = vec![Chip {
+        spot: Some(Spot::Workspace),
+        dim: false,
+        text: "[/w]".into(),
+        session_mark: false,
+    }];
+    screen.list = vec![ListLine::Live {
+        key: 7,
+        number: Some(2),
+        glyph: "⠋".into(),
+        name: "worker".into(),
+        word: "working",
+        tone: crate::theme::Role::Muted,
+        since: "must not reach Lua".into(),
+        stop: true,
+        id: "s_123".into(),
+        turns: Some(4),
+        branch: Some("main".into()),
+        spend: "$1.00".into(),
+        context: Some(50),
+        wait: None,
+    }];
+    screen.picker = Some(PickerScreen {
+        escapes: true,
+        recents: vec!["/recent".into()],
+        focus: None,
+        typed: Some(TypedScreen {
+            text: "/rec".into(),
+            completions: vec!["/recent".into()],
+            missing: false,
+        }),
+    });
+    screen.question = Some("delete worker?".into());
+    screen.question_import = true;
+    screen.question_scroll = 3;
+    screen.logo = crate::graphics::logo::Shown::Kitty;
+
+    let input = screen.renderer_input(true, 0);
+    let value = &input.value;
+    assert!(input.flat);
+    assert_eq!(value["flat"], true);
+    assert_eq!(
+        value["header"]["counts"][0],
+        json!({"role":"muted", "text":"2 idle"})
+    );
+    assert_eq!(value["header"]["spend"], "$3.00");
+    assert_eq!(value["chips"][0]["spot"], "workspace");
+    assert_eq!(value["list"][0]["number"], 2);
+    assert!(value["list"][0].get("age").is_none());
+    assert!(value["list"][0].get("since").is_none());
+    assert!(value.get("logo").is_none());
+    assert!(value["picker"].get("focus").is_none());
+    assert_eq!(value["picker"]["typed"]["text"], "/rec");
+    assert_eq!(value["question_import"], true);
+    assert_eq!(value["question_scroll"], 3);
+    let original_key = input.key("home");
+    let ListLine::Live { since, .. } = &mut screen.list[0] else {
+        panic!("the renderer input has one live row")
+    };
+    *since = "a later elapsed value".into();
+    let refreshed = screen.renderer_input(true, 0);
+    assert_eq!(refreshed.value, input.value);
+    assert_ne!(refreshed.key("home"), original_key);
 }
 
 #[test]

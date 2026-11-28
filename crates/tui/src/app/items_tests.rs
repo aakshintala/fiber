@@ -1585,7 +1585,7 @@ fn clicking_the_first_drawn_row_with_the_card_scrolled_opens_the_second_delegate
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .unwrap_or_else(|| panic!("a panel"));
     let area = ratatui::layout::Rect::new(0, 0, rect.width, rect.height);
     let mut buf = ratatui::buffer::Buffer::empty(area);
@@ -2249,9 +2249,9 @@ fn wheel_at_the_item_content_edge_stops_at_its_last_row() {
     tall_transcript(&mut app);
     app.jump(1);
     let layout = app.chrome().layout().expect("the attached layout");
-    let x = layout.column.x.saturating_add(layout.column.width / 2);
+    let x = layout.column().x.saturating_add(layout.column().width / 2);
     let last_y = layout
-        .column
+        .column()
         .y
         .saturating_add(u16::try_from(app.conversation_area_height()).unwrap_or(u16::MAX))
         .saturating_sub(1);

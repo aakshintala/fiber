@@ -62,7 +62,7 @@ impl App {
     /// and replaces a drag whose release never came. The pages rewrap at
     /// the new column width before the frame.
     fn press_edge(&mut self, col: u16) {
-        self.drag.drag = self.chrome.layout().and_then(|layout| {
+        self.drag.drag = self.chrome.drawn_layout().and_then(|layout| {
             let edge = layout::edge_at(&layout, col)?;
             let before = match edge {
                 Edge::Rail | Edge::Grip => self.home.launch.rail_share,
@@ -86,7 +86,7 @@ impl App {
         let Some(edge) = self.drag.drag.map(|drag| drag.edge) else {
             return;
         };
-        let Some(layout) = self.chrome.layout() else {
+        let Some(layout) = self.chrome.drawn_layout() else {
             return;
         };
         let screen = self.screen.width();
@@ -168,7 +168,7 @@ impl App {
         if self.drag.drag.is_some() {
             return true;
         }
-        let Some(layout) = self.chrome.layout() else {
+        let Some(layout) = self.chrome.drawn_layout() else {
             return false;
         };
         at.is_some_and(|(col, _)| layout::edge_at(&layout, col).is_some())

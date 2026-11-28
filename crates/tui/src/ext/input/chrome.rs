@@ -9,8 +9,99 @@ use std::hash::{Hash, Hasher};
 use contract::ErrorCode;
 use contract::events::{Outcome, QuotaInfo};
 use contract::shapes::Usage;
+use serde_json::Value;
 
 use super::slots::{PromptImage, hash_images};
+use crate::layout::Region;
+
+/// The layout slot's complete input: terminal size, shown built-in
+/// regions and whether the screen reader drops styles.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayoutInput {
+    /// The terminal width in cells.
+    pub width: u16,
+    /// The terminal height in cells.
+    pub height: u16,
+    /// The shown built-in region names, in stable order.
+    pub regions: Vec<Region>,
+    /// The screen reader drops every style from returned spans.
+    pub flat: bool,
+    /// Changes to built-in placement invalidate `builtin()` results without
+    /// adding terminal state to the extension's input table.
+    pub(crate) cache_fingerprint: u64,
+}
+
+impl LayoutInput {
+    /// Creates the public layout input with no built-in placement fingerprint.
+    pub fn new(width: u16, height: u16, regions: Vec<Region>, flat: bool) -> Self {
+        Self {
+            width,
+            height,
+            regions,
+            flat,
+            cache_fingerprint: 0,
+        }
+    }
+
+    /// Includes the built-in map in cache identity without exposing it as input.
+    pub(crate) fn fingerprint_builtin(&mut self, regions: &[(Region, crate::ext::RawRect)]) {
+        let mut key = DefaultHasher::new();
+        for (name, rect) in regions {
+            name.hash(&mut key);
+            rect.x.hash(&mut key);
+            rect.y.hash(&mut key);
+            rect.width.hash(&mut key);
+            rect.height.hash(&mut key);
+        }
+        self.cache_fingerprint = key.finish();
+    }
+
+    /// The cache key over the slot and every field.
+    pub(crate) fn key(&self, slot: &str) -> u64 {
+        let mut key = DefaultHasher::new();
+        slot.hash(&mut key);
+        self.width.hash(&mut key);
+        self.height.hash(&mut key);
+        self.regions.hash(&mut key);
+        self.flat.hash(&mut key);
+        self.cache_fingerprint.hash(&mut key);
+        key.finish()
+    }
+}
+
+/// Home's source data, already projected to the documented renderer table.
+#[derive(Debug, Clone)]
+pub struct HomeInput {
+    /// The table sent to Lua, including `flat`; inapplicable fields are
+    /// absent rather than null.
+    pub value: Value,
+    /// Whether the screen reader drops every style from returned spans.
+    pub flat: bool,
+    /// Changes to terminal-owned rendered fields invalidate `builtin()`
+    /// output without exposing those fields in the input table.
+    pub(crate) cache_fingerprint: u64,
+}
+
+impl HomeInput {
+    /// Creates a projected home input without terminal-owned cache state.
+    pub fn new(value: Value, flat: bool) -> Self {
+        Self {
+            value,
+            flat,
+            cache_fingerprint: 0,
+        }
+    }
+
+    /// The cache key over the slot, projected values and built-in output state.
+    pub(crate) fn key(&self, slot: &str) -> u64 {
+        let mut key = DefaultHasher::new();
+        slot.hash(&mut key);
+        self.value.to_string().hash(&mut key);
+        self.flat.hash(&mut key);
+        self.cache_fingerprint.hash(&mut key);
+        key.finish()
+    }
+}
 
 /// The working line: how long the turn runs, or its wait to retry.
 #[derive(Debug, Clone)]

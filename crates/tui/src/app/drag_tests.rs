@@ -151,7 +151,7 @@ fn a_press_on_the_rail_edge_starts_a_drag() {
     assert_eq!(
         app.chrome()
             .layout()
-            .and_then(|layout| layout.rail)
+            .and_then(|layout| layout.rail())
             .map(|rail| rail.width),
         Some(30)
     );
@@ -202,7 +202,7 @@ fn dragging_follows_the_pointer_as_a_share() {
     app.on_drag(&press(29, 20));
     app.on_drag(&drag(30, 20));
     let layout = app.chrome().layout().expect("a layout");
-    assert_eq!(layout.rail.map(|rail| rail.width), Some(31));
+    assert_eq!(layout.rail().map(|rail| rail.width), Some(31));
     assert_eq!(app.dragging(), Some((Edge::Rail, 15.5)));
 }
 
@@ -214,7 +214,7 @@ fn the_rail_stops_at_its_ceiling_and_where_the_conversation_keeps_84() {
     assert_eq!(
         app.chrome()
             .layout()
-            .and_then(|layout| layout.rail)
+            .and_then(|layout| layout.rail())
             .map(|rail| rail.width),
         Some(48)
     );
@@ -222,7 +222,7 @@ fn the_rail_stops_at_its_ceiling_and_where_the_conversation_keeps_84() {
     assert_eq!(
         app.chrome()
             .layout()
-            .and_then(|layout| layout.rail)
+            .and_then(|layout| layout.rail())
             .map(|rail| rail.width),
         Some(24)
     );
@@ -231,7 +231,7 @@ fn the_rail_stops_at_its_ceiling_and_where_the_conversation_keeps_84() {
     assert_eq!(
         app.chrome()
             .layout()
-            .and_then(|layout| layout.rail)
+            .and_then(|layout| layout.rail())
             .map(|rail| rail.width),
         Some(42)
     );
@@ -245,7 +245,7 @@ fn the_panel_stops_at_its_floor_and_ceiling() {
     assert_eq!(
         app.chrome()
             .layout()
-            .and_then(|layout| layout.panel)
+            .and_then(|layout| layout.panel())
             .map(|panel| panel.width),
         Some(30)
     );
@@ -253,7 +253,7 @@ fn the_panel_stops_at_its_floor_and_ceiling() {
     let edge = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .map(|panel| panel.x)
         .expect("a panel");
     assert_eq!(edge, 340);
@@ -262,7 +262,7 @@ fn the_panel_stops_at_its_floor_and_ceiling() {
     assert_eq!(
         app.chrome()
             .layout()
-            .and_then(|layout| layout.panel)
+            .and_then(|layout| layout.panel())
             .map(|panel| panel.width),
         Some(60)
     );
@@ -277,7 +277,7 @@ fn a_rail_dragged_below_22_hides_on_release_and_keeps_its_share() {
     assert_eq!(app.dragging(), Some((Edge::Rail, 10.5)));
     app.on_drag(&release());
     let layout = app.chrome().layout().expect("a layout");
-    assert_eq!((layout.rail, layout.grip.is_some()), (None, true));
+    assert_eq!((layout.rail(), layout.grip.is_some()), (None, true));
     assert_eq!(shares(&app), (15.0, 21.0));
     // Hiding the rail below its floor is person-caused: it saves off.
     assert_eq!(
@@ -289,7 +289,7 @@ fn a_rail_dragged_below_22_hides_on_release_and_keeps_its_share() {
     assert_eq!(
         app.chrome()
             .layout()
-            .and_then(|layout| layout.rail)
+            .and_then(|layout| layout.rail())
             .map(|rail| rail.width),
         Some(30)
     );
@@ -308,7 +308,7 @@ fn a_rail_dragged_to_exactly_22_stays() {
     assert_eq!(
         app.chrome()
             .layout()
-            .and_then(|layout| layout.rail)
+            .and_then(|layout| layout.rail())
             .map(|rail| rail.width),
         Some(22)
     );
@@ -324,7 +324,7 @@ fn a_rail_dragged_to_23_stays() {
     assert_eq!(
         app.chrome()
             .layout()
-            .and_then(|layout| layout.rail)
+            .and_then(|layout| layout.rail())
             .map(|rail| rail.width),
         Some(23)
     );
@@ -349,12 +349,12 @@ fn dragging_the_grip_out_shows_the_rail() {
     // A grip below the floor draws no pill.
     assert_eq!(app.dragging(), None);
     app.on_drag(&drag(20, 20));
-    assert_eq!(app.chrome().layout().and_then(|layout| layout.rail), None);
+    assert_eq!(app.chrome().layout().and_then(|layout| layout.rail()), None);
     app.on_drag(&drag(21, 20));
     assert_eq!(
         app.chrome()
             .layout()
-            .and_then(|layout| layout.rail)
+            .and_then(|layout| layout.rail())
             .map(|rail| rail.width),
         Some(22)
     );
@@ -365,7 +365,7 @@ fn dragging_the_grip_out_shows_the_rail() {
     assert_eq!(
         app.chrome()
             .layout()
-            .and_then(|layout| layout.rail)
+            .and_then(|layout| layout.rail())
             .map(|rail| rail.width),
         Some(31)
     );
@@ -390,14 +390,14 @@ fn a_grip_shown_rail_released_below_the_floor_hides_and_saves_false_last() {
     assert!(
         app.chrome()
             .layout()
-            .and_then(|layout| layout.rail)
+            .and_then(|layout| layout.rail())
             .is_some()
     );
     // Back below the floor the release hides it again, saving off last.
     app.on_drag(&drag(20, 20));
     app.on_drag(&release());
     let layout = app.chrome().layout().expect("a layout");
-    assert_eq!((layout.rail, layout.grip.is_some()), (None, true));
+    assert_eq!((layout.rail(), layout.grip.is_some()), (None, true));
     assert_eq!(
         app.take_saves(),
         vec![
@@ -412,11 +412,14 @@ fn a_grip_shown_rail_released_below_the_floor_hides_and_saves_false_last() {
 fn dragging_the_grip_out_where_both_do_not_fit_hides_the_panel() {
     let mut app = two(130, 40);
     let layout = app.chrome().layout().expect("a layout");
-    assert_eq!((layout.rail, layout.panel.is_some()), (None, true));
+    assert_eq!((layout.rail(), layout.panel().is_some()), (None, true));
     app.on_drag(&press(0, 20));
     app.on_drag(&drag(21, 20));
     // Showing the rail hides the panel, as ⌥P does, and saves on.
-    assert_eq!(app.chrome().layout().and_then(|layout| layout.panel), None);
+    assert_eq!(
+        app.chrome().layout().and_then(|layout| layout.panel()),
+        None
+    );
     assert_eq!(
         app.take_saves(),
         vec![("tui.rail.shown", "true".to_owned())]
@@ -424,7 +427,7 @@ fn dragging_the_grip_out_where_both_do_not_fit_hides_the_panel() {
     // ⌥P brings the panel back and the rail sheds.
     app.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
     let layout = app.chrome().layout().expect("a layout");
-    assert_eq!((layout.rail, layout.panel.is_some()), (None, true));
+    assert_eq!((layout.rail(), layout.panel().is_some()), (None, true));
     assert!(layout.grip.is_some());
 }
 
@@ -436,7 +439,7 @@ fn the_grip_cannot_show_a_rail_with_no_room() {
     app.on_drag(&press(0, 20));
     app.on_drag(&drag(40, 20));
     let layout = app.chrome().layout().expect("a layout");
-    assert_eq!((layout.rail, layout.panel), (None, None));
+    assert_eq!((layout.rail(), layout.panel()), (None, None));
     assert_eq!(shares(&app), (15.0, 21.0));
     assert!(app.take_saves().is_empty());
 }
@@ -449,7 +452,7 @@ fn releasing_the_grip_short_of_the_floor_changes_nothing() {
     app.on_drag(&drag(20, 20));
     app.on_drag(&release());
     let layout = app.chrome().layout().expect("a layout");
-    assert_eq!((layout.rail, layout.grip.is_some()), (None, true));
+    assert_eq!((layout.rail(), layout.grip.is_some()), (None, true));
     assert_eq!(shares(&app), (15.0, 21.0));
     // Only the ⌥R hide saved; the short grip drag queued nothing.
     assert_eq!(

@@ -2,8 +2,181 @@
 use super::*;
 use fakes::clock::FakeClock;
 use tui::ext::{
-    AnswerDisposition, KeyOutcome, LedgerResult, TuiCommand, TurnCardState, TurnGroupState,
+    AnswerDisposition, Decision, HomeInput, KeyOutcome, LayoutInput, LedgerResult, RawRect,
+    RawSpan, TuiCommand, TurnCardState, TurnGroupState,
 };
+use tui::layout::Region;
+
+#[test]
+fn home_input_is_forwarded_as_its_exact_projected_table() {
+    let expected = json!({
+        "version": "0.1.0",
+        "glyph": "⌇",
+        "header": {"counts": [{"role": "muted", "text": "2 idle"}]},
+        "chips": [],
+        "list": [],
+        "empty": true,
+        "blockers": [],
+        "blocker_keys": [],
+        "foot": {"text": "help", "spans": [{"text": "help"}]},
+        "placeholder": true,
+        "flat": true,
+    });
+    let input = Input::Home(HomeInput::new(expected.clone(), true));
+    assert_eq!(input_value(&input), expected);
+}
+
+#[test]
+fn home_slot_receives_home_source_and_can_call_builtin() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "home",
+        None,
+        Some(concat!(
+            "fiber.slot('home',{timeout=100,render=function(input,width)\n",
+            " assert(input.flat and input.version == '0.1.0')\n",
+            " assert(input.logo == nil and input.question == nil)\n",
+            " assert(input.list[1].since == nil and input.list[1].name == 'worker')\n",
+            " local lines = builtin(input,width-1)\n",
+            " lines[1][1].text = lines[1][1].text .. '|' .. input.version\n",
+            " return lines\n",
+            "end})",
+        )),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty());
+    let input = Input::Home(HomeInput::new(
+        json!({
+            "version": "0.1.0",
+            "glyph": "⌇",
+            "header": {"counts": []},
+            "chips": [],
+            "list": [{"kind": "live", "name": "worker"}],
+            "empty": false,
+            "blockers": [],
+            "blocker_keys": [],
+            "foot": {"text": "", "spans": []},
+            "placeholder": false,
+            "flat": true,
+        }),
+        true,
+    ));
+    let decision = renderer.render(&ctx(None), "home", &input, 20, &|_, width| {
+        assert_eq!(width, 19);
+        vec![vec![RawSpan {
+            text: "built in".into(),
+            ..RawSpan::default()
+        }]]
+    });
+    let Decision::Draw { lines, .. } = decision else {
+        panic!("the home slot draws its built-in lines: {decision:?}")
+    };
+    assert_eq!(lines[0][0].text, "built in|0.1.0");
+}
+
+#[test]
+fn layout_input_projects_only_size_shown_regions_and_flat() {
+    let input = Input::Layout(LayoutInput::new(
+        160,
+        40,
+        vec![Region::Rail, Region::Conversation, Region::Panel],
+        true,
+    ));
+    assert_eq!(
+        input_value(&input),
+        json!({
+            "width": 160,
+            "height": 40,
+            "regions": ["rail", "conversation", "panel"],
+            "flat": true,
+        })
+    );
+}
+
+#[test]
+fn layout_slot_reads_its_input_and_builtin_returns_a_region_map() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "layout",
+        None,
+        Some(concat!(
+            "fiber.slot('layout',{timeout=100,render=function(input,width)\n",
+            " assert(input.width == 160 and input.height == 40 and width == 160)\n",
+            " assert(input.flat == true and #input.regions == 2)\n",
+            " assert(input.regions[1] == 'conversation' and input.regions[2] == 'panel')\n",
+            " return builtin(input,width)\n",
+            "end})",
+        )),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty());
+    let input = LayoutInput::new(160, 40, vec![Region::Conversation, Region::Panel], true);
+    let built = vec![
+        (
+            Region::Conversation,
+            RawRect {
+                x: 0,
+                y: 0,
+                width: 120,
+                height: 40,
+            },
+        ),
+        (
+            Region::Panel,
+            RawRect {
+                x: 120,
+                y: 0,
+                width: 40,
+                height: 40,
+            },
+        ),
+    ];
+    let Decision::Draw { lines: regions, .. } =
+        renderer.render_layout(&ctx(None), &input, &|_| built.clone())
+    else {
+        panic!("the compatible layout slot draws")
+    };
+    let mut actual = regions;
+    actual.sort_by_key(|left| left.0);
+    let mut expected = built;
+    expected.sort_by_key(|left| left.0);
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn layout_slot_rejects_unknown_lua_region_names_as_failure() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "layout",
+        None,
+        Some(concat!(
+            "fiber.slot('layout',{timeout=100,render=function(input,width)\n",
+            " return {other={x=0,y=0,width=160,height=40}}\n",
+            "end})",
+        )),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "load notices: {notices:?}");
+    let input = LayoutInput::new(160, 40, vec![Region::Conversation], true);
+    let decision = renderer.render_layout(&ctx(None), &input, &|_| {
+        vec![(
+            Region::Conversation,
+            RawRect {
+                x: 0,
+                y: 0,
+                width: 160,
+                height: 40,
+            },
+        )]
+    });
+    assert!(
+        matches!(decision, Decision::Fail(_)),
+        "unexpected decision: {decision:?}"
+    );
+}
 
 #[test]
 fn turn_card_message_entries_serialize_all_message_fields() {

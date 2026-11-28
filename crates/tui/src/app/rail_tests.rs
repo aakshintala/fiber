@@ -1751,12 +1751,12 @@ fn a_resolved_request_ends_the_wait() {
 
 /// The rail rect, while drawn.
 fn rail_rect(app: &App) -> Option<ratatui::layout::Rect> {
-    app.chrome().layout().and_then(|layout| layout.rail)
+    app.chrome().layout().and_then(|layout| layout.rail())
 }
 
 /// The panel rect, while drawn.
 fn panel_rect(app: &App) -> Option<ratatui::layout::Rect> {
-    app.chrome().layout().and_then(|layout| layout.panel)
+    app.chrome().layout().and_then(|layout| layout.panel())
 }
 
 /// Types `text` into the draft.

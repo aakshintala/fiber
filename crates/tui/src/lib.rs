@@ -42,7 +42,7 @@ mod jigs;
 mod keymap;
 mod keys;
 mod keyset;
-mod layout;
+pub mod layout;
 mod link;
 mod local_time;
 mod logical;
@@ -70,7 +70,7 @@ mod rebind;
 mod release_notes;
 mod remote;
 #[cfg(test)]
-mod results_support;
+pub(crate) mod results_support;
 mod retry;
 mod rows;
 mod rules_view;

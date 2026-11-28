@@ -5,13 +5,361 @@ use std::cell::Cell;
 use std::sync::Arc;
 
 use super::{Cache, PageKey};
-use crate::ext::{Decision, FailureKind};
+use crate::ext::{Decision, FailureKind, HomeInput, Input, LayoutInput, RawRect};
+use crate::layout::Region;
 
 fn page(index: usize) -> PageKey {
     PageKey {
         session: contract::SessionId("s".into()),
         index,
     }
+}
+
+fn layout_input(width: u16, height: u16, regions: &[&str], flat: bool) -> LayoutInput {
+    LayoutInput::new(
+        width,
+        height,
+        regions
+            .iter()
+            .map(|name| Region::from_name(name).expect("known test region"))
+            .collect(),
+        flat,
+    )
+}
+
+fn raw_rect(x: i64, y: i64, width: i64, height: i64) -> RawRect {
+    RawRect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+#[test]
+fn home_cache_keys_projected_values_flat_and_width() {
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let base = Input::Home(HomeInput {
+        value: serde_json::json!({"version": "1", "flat": false}),
+        flat: false,
+        cache_fingerprint: 0,
+    });
+    let draw = |input: &Input<'_>, width| {
+        cache.lines(PageKey::home(), "home", "test", None, input, width, || {
+            decision(|| {
+                calls.set(calls.get().saturating_add(1));
+                Ok(vec![vec![raw("home")]])
+            })
+        })
+    };
+    assert!(draw(&base, 20).is_some());
+    assert!(draw(&base, 20).is_some());
+    let changed_source = Input::Home(HomeInput {
+        value: serde_json::json!({"version": "2", "flat": false}),
+        flat: false,
+        cache_fingerprint: 0,
+    });
+    assert!(draw(&changed_source, 20).is_some());
+    let changed_flat = Input::Home(HomeInput {
+        value: serde_json::json!({"version": "1", "flat": true}),
+        flat: true,
+        cache_fingerprint: 0,
+    });
+    assert!(draw(&changed_flat, 20).is_some());
+    let changed_builtin = Input::Home(HomeInput {
+        value: serde_json::json!({"version": "1", "flat": false}),
+        flat: false,
+        cache_fingerprint: 1,
+    });
+    assert!(draw(&changed_builtin, 20).is_some());
+    assert!(draw(&base, 21).is_some());
+    assert_eq!(calls.get(), 5); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+}
+
+#[test]
+fn failed_home_render_is_cached_by_its_projected_input() {
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let input = Input::Home(HomeInput {
+        value: serde_json::json!({"version": "1", "flat": false}),
+        flat: false,
+        cache_fingerprint: 0,
+    });
+    let draw = || {
+        cache.lines(PageKey::home(), "home", "test", None, &input, 20, || {
+            decision(|| {
+                calls.set(calls.get().saturating_add(1));
+                Err(failed("test", "home failed"))
+            })
+        })
+    };
+    assert!(draw().is_none());
+    assert!(draw().is_none());
+    assert_eq!(calls.get(), 1); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+}
+
+#[test]
+fn layout_cache_keys_width_height_shown_regions_and_flat() {
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let draw = |input: &LayoutInput, regions: Vec<(Region, RawRect)>| {
+        cache.layout_regions(page(0), "test", None, input, || {
+            calls.set(calls.get().saturating_add(1));
+            Decision::Draw {
+                extension: "test".into(),
+                lines: regions,
+            }
+        })
+    };
+    let conversation = vec![(Region::Conversation, raw_rect(0, 0, 4, 3))];
+    let first = layout_input(10, 8, &["conversation"], false);
+    let first_map = draw(&first, conversation.clone()).expect("a valid map");
+    assert_eq!(draw(&first, conversation.clone()), Some(first_map));
+    let taller = layout_input(10, 9, &["conversation"], false);
+    assert_eq!(draw(&taller, conversation.clone()), Some(first_map));
+    let wider = layout_input(11, 8, &["conversation"], false);
+    assert_eq!(draw(&wider, conversation.clone()), Some(first_map));
+    let flat = layout_input(10, 8, &["conversation"], true);
+    assert_eq!(draw(&flat, conversation.clone()), Some(first_map));
+    let mut changed_builtin = first.clone();
+    changed_builtin.fingerprint_builtin(&[(Region::Conversation, raw_rect(0, 0, 4, 4))]);
+    assert_eq!(
+        draw(&changed_builtin, conversation.clone()),
+        Some(first_map)
+    );
+    let two_regions = layout_input(10, 8, &["conversation", "panel"], false);
+    let two = vec![
+        (Region::Conversation, raw_rect(0, 0, 4, 3)),
+        (Region::Panel, raw_rect(4, 0, 6, 3)),
+    ];
+    assert!(draw(&two_regions, two).is_some());
+    assert_eq!(calls.get(), 6); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+}
+
+#[test]
+// `docs/tui.md`, "How a TUI extension runs": renderer calls follow cache misses.
+fn layout_regions_counts_renderer_calls_only_on_cache_misses() {
+    let cache = Cache::default();
+    let input = layout_input(10, 8, &["conversation"], false);
+    let draw = || {
+        cache.layout_regions(page(0), "test", None, &input, || Decision::Draw {
+            extension: "test".into(),
+            lines: vec![(Region::Conversation, raw_rect(0, 0, 4, 3))],
+        })
+    };
+
+    crate::work::take();
+    assert!(draw().is_some());
+    assert_eq!(crate::work::take().renderer_calls, 1); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+    assert!(draw().is_some());
+    assert_eq!(crate::work::take().renderer_calls, 0); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+}
+
+#[test]
+fn dropping_a_page_removes_only_its_layout_cache_entry() {
+    let cache = Cache::default();
+    let input = layout_input(10, 8, &["conversation"], false);
+    let calls = Cell::new(0usize);
+    let draw = |page| {
+        cache.layout_regions(page, "test", None, &input, || {
+            calls.set(calls.get().saturating_add(1));
+            Decision::Draw {
+                extension: "test".into(),
+                lines: vec![(Region::Conversation, raw_rect(0, 0, 4, 3))],
+            }
+        })
+    };
+
+    assert!(draw(page(0)).is_some());
+    assert_eq!(calls.get(), 1); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+    assert!(draw(page(1)).is_some());
+    assert_eq!(calls.get(), 2); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+    assert!(draw(page(0)).is_some());
+    assert_eq!(calls.get(), 2); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+    assert!(draw(page(1)).is_some());
+    assert_eq!(calls.get(), 2); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+
+    cache.drop_page(page(0));
+    assert!(draw(page(0)).is_some());
+    assert_eq!(calls.get(), 3); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+    assert!(draw(page(1)).is_some());
+    assert_eq!(calls.get(), 3); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+}
+
+#[test]
+fn invalid_layout_maps_fail_atomically_and_cache_the_failure() {
+    let input = layout_input(10, 5, &["rail", "conversation", "panel"], false);
+    let invalid = [
+        // Missing a shown region.
+        vec![
+            (Region::Rail, raw_rect(0, 0, 2, 5)),
+            (Region::Rail, raw_rect(2, 0, 6, 5)),
+        ],
+        // Unknown name rather than the required panel.
+        vec![
+            (Region::Rail, raw_rect(0, 0, 2, 5)),
+            (Region::Rail, raw_rect(2, 0, 6, 5)),
+            (Region::Panel, raw_rect(8, 0, 2, 5)),
+        ],
+        // Out of bounds, overlapping, zero-sized, negative and overflowing.
+        vec![
+            (Region::Rail, raw_rect(0, 0, 2, 5)),
+            (Region::Rail, raw_rect(2, 0, 6, 5)),
+            (Region::Conversation, raw_rect(8, 0, 3, 5)),
+        ],
+        vec![
+            (Region::Conversation, raw_rect(0, 0, 2, 5)),
+            (Region::Conversation, raw_rect(1, 0, 7, 5)),
+            (Region::Conversation, raw_rect(8, 0, 2, 5)),
+        ],
+        vec![
+            (Region::Conversation, raw_rect(0, 0, 2, 5)),
+            (Region::Conversation, raw_rect(2, 0, 6, 5)),
+            (Region::Panel, raw_rect(8, 0, 0, 5)),
+        ],
+        vec![
+            (Region::Panel, raw_rect(-1, 0, 2, 5)),
+            (Region::Panel, raw_rect(2, 0, 6, 5)),
+            (Region::Panel, raw_rect(8, 0, 2, 5)),
+        ],
+        vec![
+            (Region::Panel, raw_rect(0, 0, 2, 5)),
+            (Region::Panel, raw_rect(2, 0, 6, 5)),
+            (Region::Panel, raw_rect(i64::MAX, 0, 1, 5)),
+        ],
+    ];
+    for (index, regions) in invalid.into_iter().enumerate() {
+        let cache = Cache::default();
+        let calls = Cell::new(0usize);
+        let draw = || {
+            cache.layout_regions(page(0), "test", None, &input, || {
+                calls.set(calls.get().saturating_add(1));
+                Decision::Draw {
+                    extension: "test".into(),
+                    lines: regions.clone(),
+                }
+            })
+        };
+        assert_eq!(draw(), None, "invalid map {index} must fall back whole");
+        assert_eq!(draw(), None, "a cached failure still falls back whole");
+        assert_eq!(calls.get(), 1, "a cached failure does not call Lua again"); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+        assert_eq!(cache.take_failures().len(), 1); // `docs/tui.md`, "The slots": invalid layout output raises one notice.
+        assert!(cache.take_failures().is_empty());
+    }
+}
+
+#[test]
+fn layout_regions_accepts_edge_touching_rectangles_on_each_axis() {
+    let cache = Cache::default();
+    for (label, prior, current) in [
+        ("horizontal", raw_rect(5, 0, 1, 2), raw_rect(4, 0, 1, 2)),
+        ("vertical", raw_rect(0, 5, 2, 1), raw_rect(0, 4, 2, 1)),
+    ] {
+        let input = layout_input(10, 10, &["conversation", "panel"], false);
+        let map = cache.layout_regions(page(0), "test", None, &input, || Decision::Draw {
+            extension: "test".into(),
+            lines: vec![(Region::Conversation, prior), (Region::Panel, current)],
+        });
+        assert!(map.is_some(), "{label} edge-touching rectangles are valid");
+        cache.drop_page(page(0));
+    }
+}
+
+#[test]
+fn layout_rejects_rectangles_negative_on_both_axes() {
+    let cache = Cache::default();
+    let input = layout_input(10, 5, &["conversation"], false);
+    let result = cache.layout_regions(page(0), "test", None, &input, || Decision::Draw {
+        extension: "test".into(),
+        lines: vec![(Region::Conversation, raw_rect(-1, -1, 1, 1))],
+    });
+
+    assert!(
+        result.is_none(),
+        "a map with negative coordinates is rejected"
+    );
+}
+
+#[test]
+fn layout_rejects_negative_x_with_nonnegative_y() {
+    let cache = Cache::default();
+    let input = layout_input(10, 5, &["conversation"], false);
+    let result = cache.layout_regions(page(0), "test", None, &input, || Decision::Draw {
+        extension: "test".into(),
+        lines: vec![(Region::Conversation, raw_rect(-1, 0, 1, 1))],
+    });
+
+    assert!(result.is_none(), "a map with negative x is rejected");
+    let failures = cache.take_failures();
+    assert_eq!(failures.len(), 1); // `docs/tui.md`, "The slots": invalid layout output raises one notice.
+    assert_eq!(
+        failures[0].1.message,
+        "layout region `conversation` must be at least 1x1 and in bounds"
+    );
+}
+
+#[test]
+fn layout_regions_rejects_overlapping_rectangles_on_each_axis() {
+    for (label, prior, current) in [
+        ("horizontal", raw_rect(5, 0, 1, 2), raw_rect(4, 0, 2, 2)),
+        ("vertical", raw_rect(0, 5, 2, 1), raw_rect(0, 4, 2, 2)),
+    ] {
+        let cache = Cache::default();
+        let input = layout_input(10, 10, &["conversation", "panel"], false);
+        assert_eq!(
+            cache.layout_regions(page(0), "test", None, &input, || {
+                Decision::Draw {
+                    extension: "test".into(),
+                    lines: vec![(Region::Conversation, prior), (Region::Panel, current)],
+                }
+            }),
+            None,
+            "{label} overlapping rectangles must be rejected"
+        );
+    }
+}
+
+#[test]
+fn each_invalid_layout_rectangle_dimension_is_rejected() {
+    let input = layout_input(10, 5, &["conversation"], false);
+    for (label, rect) in [
+        ("negative x", raw_rect(-1, 0, 1, 1)),
+        ("negative y", raw_rect(0, -1, 1, 1)),
+        ("zero width", raw_rect(0, 0, 0, 1)),
+        ("zero height", raw_rect(0, 0, 1, 0)),
+    ] {
+        let cache = Cache::default();
+        assert_eq!(
+            cache.layout_regions(page(0), "test", None, &input, || {
+                Decision::Draw {
+                    extension: "test".into(),
+                    lines: vec![(Region::Conversation, rect)],
+                }
+            }),
+            None,
+            "{label} must reject the otherwise valid map"
+        );
+    }
+}
+
+#[test]
+fn failed_layout_decision_is_cached_and_reported_once_for_builtin_fallback() {
+    let cache = Cache::default();
+    let input = layout_input(10, 5, &["conversation"], false);
+    let calls = Cell::new(0usize);
+    let draw = || {
+        cache.layout_regions(page(0), "test", None, &input, || {
+            calls.set(calls.get().saturating_add(1));
+            Decision::Fail(failed("test", "unknown layout region"))
+        })
+    };
+
+    assert_eq!(draw(), None);
+    assert_eq!(draw(), None);
+    assert_eq!(calls.get(), 1); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
+    assert_eq!(cache.take_failures().len(), 1); // `docs/tui.md`, "The slots": invalid layout output raises one notice.
+    assert!(cache.take_failures().is_empty());
 }
 
 #[test]
@@ -43,8 +391,8 @@ fn decision(call: impl FnOnce() -> Result<Vec<Vec<RawSpan>>, Failure>) -> Decisi
 
 use crate::ext::{
     AnswerDisposition, BranchName, CallState, Card, CardPrompt, ChangedFile, ChangedFiles, Context,
-    Delegate, DelegatesCard, Failure, Input, InputStatus, Job, JobsCard, LedgerResult, LedgerRow,
-    Prompt, PromptImage, Quota, RawSpan, ReplyText, SessionCard, SessionContext, Spend, StatusRows,
+    Delegate, DelegatesCard, Failure, InputStatus, Job, JobsCard, LedgerResult, LedgerRow, Prompt,
+    PromptImage, Quota, RawSpan, ReplyText, SessionCard, SessionContext, Spend, StatusRows,
     SteeringMessage, SteeringQueue, ThinkingLine, TurnCard, TurnCardState, TurnEnded, WidgetCard,
     WorkingLine, WorkingRetry,
 };

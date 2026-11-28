@@ -48,12 +48,17 @@ impl App {
     /// it.
     pub(crate) fn narrow_fit(&self) -> Option<Fit> {
         let layout = self.chrome.layout().filter(|layout| layout.narrow)?;
-        let width = layout.column.width;
+        let width = layout.column().width;
         let height = usize::from(self.screen.height());
         let widgets = crate::view::status_rows::widget(self, width).len();
         let delegates = crate::view::status_rows::delegates(self, width).len();
         let status = crate::view::status_rows::status(self, width).len();
-        Some(fit(height, self.below_rows() + widgets, delegates, status))
+        Some(fit(
+            height,
+            self.below_rows_at(width) + widgets,
+            delegates,
+            status,
+        ))
     }
 
     /// The rows below the conversation past `base`: the input box's own
@@ -64,12 +69,17 @@ impl App {
     /// fit. Zero with no layout to draw them in
     /// (`docs/tui.md`, "The input box", "The narrow layout").
     pub(super) fn narrow_rows(&self, base: usize) -> usize {
+        self.narrow_rows_at(base, self.column_width())
+    }
+
+    /// The narrow layout's rows at a specific built-in column width.
+    pub(crate) fn narrow_rows_at(&self, base: usize, width: u16) -> usize {
         // The rule and the status row sit inside the input box's slab,
         // under its draft, whenever the box itself draws. The box draws
         // without a layout too; only the floor line replaces it, and the
         // approval panel takes its place.
         let chrome = usize::from(
-            self.panel().is_none()
+            self.panel_at(width).is_none()
                 && self.home_screen().is_none()
                 && self.chrome().floor_line().is_none(),
         ) * 2;
@@ -79,10 +89,9 @@ impl App {
         if !layout.narrow {
             // Wide with the panel hidden draws the status line inside
             // the box; with the panel shown its count is zero.
-            return chrome + crate::view::status_rows::count(self, layout.column.width);
+            return chrome + crate::view::status_rows::count(self, width);
         }
         let height = usize::from(self.screen.height());
-        let width = layout.column.width;
         let widgets = crate::view::status_rows::widget(self, width).len();
         let delegates = crate::view::status_rows::delegates(self, width).len();
         let status = crate::view::status_rows::status(self, width).len();

@@ -92,6 +92,140 @@ fn focus_style(buf: &mut Buffer, rect: Rect) {
 /// shows on every theme and with no colour.
 pub(crate) const FOCUS_STYLE: Style = Style::new().add_modifier(Modifier::REVERSED);
 
+impl crate::layout::Layout {
+    /// The visible conversation text area, after its bottom overlay.
+    pub(crate) fn conversation(self, app: &App) -> Rect {
+        let regions = self.regions();
+        let Some(conversation) = regions.get(crate::layout::Region::Conversation) else {
+            return Rect::default();
+        };
+        let overlay = to_u16(
+            app.conversation_overlay_rows(conversation.width, usize::from(conversation.height)),
+        );
+        Self::conversation_body(regions, overlay)
+    }
+
+    /// The conversation region's visible rows, after its bottom overlay.
+    fn conversation_body(regions: crate::layout::RegionMap, overlay: u16) -> Rect {
+        let Some(conversation) = regions.get(crate::layout::Region::Conversation) else {
+            return Rect::default();
+        };
+        Rect::new(
+            conversation.x,
+            conversation.y,
+            conversation.width,
+            conversation.height.saturating_sub(overlay),
+        )
+    }
+}
+
+/// Places the session screen's six built-in regions from the split and
+/// the rows each built-in renderer reserves. `regions.conversation`
+/// includes its notice rows, badge and hint; `conversation` leaves them
+/// out for text drawing and hit-testing.
+pub(crate) fn placement(app: &App) -> Option<crate::layout::Layout> {
+    let split = app.chrome().layout()?;
+    let (width, height) = app.screen_size();
+    let area = Rect::new(0, 0, width, height);
+    let built = placement_from_split(app, area, split);
+    let builtin: Vec<(crate::layout::Region, crate::ext::RawRect)> = built
+        .regions()
+        .shown()
+        .map(|(region, rect)| {
+            (
+                region,
+                crate::ext::RawRect {
+                    x: i64::from(rect.x),
+                    y: i64::from(rect.y),
+                    width: i64::from(rect.width),
+                    height: i64::from(rect.height),
+                },
+            )
+        })
+        .collect();
+    let mut input = crate::ext::LayoutInput::new(
+        area.width,
+        area.height,
+        builtin.iter().map(|(region, _)| *region).collect(),
+        app.pages().ext.flat,
+    );
+    input.fingerprint_builtin(&builtin);
+    let bound = notice_rows::frame_bound(app);
+    let replacement = bound.layout_regions(&input, &builtin);
+    Some(built.with_regions(replacement.unwrap_or(built.regions())))
+}
+
+fn placement_from_split(
+    app: &App,
+    area: Rect,
+    split: crate::layout::Layout,
+) -> crate::layout::Layout {
+    let width = split.split_column.width;
+    let room = usize::from(area.height);
+    let panel = app.panel_at(width);
+    let reserved_input = panel.as_ref().map_or_else(
+        || crate::surface::edged(app.input_height_at(width), room),
+        |panel| request::height(panel, width, room),
+    );
+    let input = if panel.is_none() && app.unwritable().is_some() {
+        room.min(1)
+    } else {
+        reserved_input
+    };
+    let below = app.below_rows_at(width);
+    let narrow_fit = app.narrow_fit();
+    let delegates = narrow_fit.map_or(0, |fit| fit.delegates);
+    let narrow = if app.unwritable().is_some() {
+        let widgets = if narrow_fit.is_some() {
+            status_rows::widget(app, width).len()
+        } else {
+            0
+        };
+        widgets.saturating_add(delegates)
+    } else {
+        app.narrow_rows_at(below, width)
+    };
+    let queue = steering_queue::count(app, width);
+    let working = working_line::count(app, width);
+    let input = input.saturating_add(narrow.saturating_sub(delegates));
+    let steering = queue.saturating_add(delegates);
+    let mut bottom = area.bottom();
+    let take = |bottom: &mut u16, rows: usize| {
+        let height = to_u16(rows).min(bottom.saturating_sub(area.y));
+        *bottom = bottom.saturating_sub(height);
+        Rect::new(split.split_column.x, *bottom, width, height)
+    };
+    let input_box = take(&mut bottom, input);
+    let steering_queue = take(&mut bottom, steering);
+    let working_line = take(&mut bottom, working);
+    let conversation = Rect::new(
+        split.split_column.x,
+        area.y,
+        width,
+        bottom.saturating_sub(area.y),
+    );
+    let mut map = crate::layout::RegionMap::default();
+    map.set(crate::layout::Region::Rail, split.rail);
+    map.set(
+        crate::layout::Region::Conversation,
+        (conversation.height > 0).then_some(conversation),
+    );
+    map.set(
+        crate::layout::Region::WorkingLine,
+        (working_line.height > 0).then_some(working_line),
+    );
+    map.set(
+        crate::layout::Region::SteeringQueue,
+        (steering_queue.height > 0).then_some(steering_queue),
+    );
+    map.set(
+        crate::layout::Region::InputBox,
+        (input_box.height > 0).then_some(input_box),
+    );
+    map.set(crate::layout::Region::Panel, split.panel);
+    split.with_regions(map)
+}
+
 /// Paints the hover tint under `hover`'s target, then the focus style on
 /// the focused target, so focus wins the cells they share. A focused link
 /// keeps the `surface_raised` look the marks pass paints, with its hint
@@ -162,17 +296,23 @@ pub(crate) fn frame_of(app: &App, surface: Surface) -> Rect {
     let (width, height) = app.screen_size();
     let screen = Rect::new(0, 0, width, height);
     let swapped = app.swapped_view_open();
-    let column = app.chrome().layout().map_or(screen, |layout| layout.column);
+    let column = app
+        .chrome()
+        .drawn_layout()
+        .map_or(screen, |layout| layout.column());
+    let conversation = placement(app).map(|layout| layout.conversation(app));
     let area = match (app.home_screen(), surface) {
         (_, Surface::DeleteQuestion) => column,
         (Some(home), Surface::Notice) if !swapped => notice_rows_area(app, &home, screen),
         (Some(_), _) => screen,
-        (None, Surface::Notice) => Rect::new(
-            column.x,
-            column.y,
-            column.width,
-            u16::try_from(app.conversation_height()).unwrap_or(u16::MAX),
-        ),
+        (None, Surface::Notice) => conversation.unwrap_or_else(|| {
+            Rect::new(
+                column.x,
+                column.y,
+                column.width,
+                u16::try_from(app.conversation_height()).unwrap_or(u16::MAX),
+            )
+        }),
         (None, _) => column,
     };
     if let Surface::Notice = surface {
@@ -393,43 +533,57 @@ fn render_frame(
     if let Some(screen) = app.home_screen() {
         return home::render(app, &screen, area, buf, pointer);
     }
-    let area = match app.chrome().layout() {
-        Some(layout) => {
-            chrome::draw(&layout, buf);
-            layout.column
-        }
-        None => area,
-    };
+    let base_layout = app.chrome().layout();
+    let fallback = crate::layout::Layout::bare(area);
+    let placement = placement(app)
+        .unwrap_or_else(|| placement_from_split(app, area, base_layout.unwrap_or(fallback)));
+    let layout = placement;
+    if base_layout.is_some() {
+        chrome::draw(&layout, buf);
+    }
+    let area = layout.column();
+    let regions = layout.regions();
     let mut targets = Vec::new();
-    if let Some(rect) = app.chrome().layout().and_then(|layout| layout.panel) {
+    if let Some(rect) = regions.get(crate::layout::Region::Panel) {
         panel::draw(app, rect, buf, &mut targets);
     }
-    if let Some(rect) = app.chrome().layout().and_then(|layout| layout.rail) {
+    if let Some(rect) = regions.get(crate::layout::Region::Rail) {
         rail::draw(app, rect, buf, pointer, &mut targets);
     }
-    let mut bottom = area.bottom();
-    // The input box's top-edge row, once it draws; the `/` and `@`
-    // overlay sits above it. The input box draws the rule, the row and
-    // the lines, owning the bottom accounting below them.
-    let mut box_top = bottom;
-    if let Some(panel) = app.panel() {
-        bottom = request::draw_noted(app, &panel, area, bottom, buf, &mut targets);
+    let input_area = regions
+        .get(crate::layout::Region::InputBox)
+        .unwrap_or_default();
+    let mut box_top = input_area.bottom();
+    if !input_area.is_empty() {
+        let mut bottom = input_area.bottom();
+        if let Some(panel) = app.panel_at(input_area.width) {
+            bottom = request::draw_noted(app, &panel, input_area, bottom, buf, &mut targets);
+        } else {
+            box_top = input_box::draw(app, input_area, &mut bottom, buf, &mut targets);
+        }
+        status_rows::draw_widget(app, input_area, buf, &mut bottom, &mut targets);
     }
-    if app.panel().is_none() {
-        box_top = input_box::draw(app, area, &mut bottom, buf, &mut targets);
+    // The steering queue and narrow-layout delegate rows share one
+    // placement; the newest queue row is lowest.
+    if let Some(queue_area) = regions.get(crate::layout::Region::SteeringQueue) {
+        let mut bottom = queue_area.bottom();
+        steering_queue::draw(app, queue_area, &mut bottom, buf, &mut targets);
+        status_rows::draw_delegates(app, queue_area, buf, &mut bottom, &mut targets);
     }
-    status_rows::draw_widget(app, area, buf, &mut bottom, &mut targets);
-    // The steering queue sits above the input box, its newest row lowest;
-    // a row a `steer` sent ends in a ✕ that drops it.
-    steering_queue::draw(app, area, &mut bottom, buf, &mut targets);
-    status_rows::draw_delegates(app, area, buf, &mut bottom, &mut targets);
-    banner::draw(app, area, buf, &mut bottom);
-    working_line::draw(app, area, buf, &mut bottom, &mut targets);
-    // The notice rows sit directly above the working line, oldest first
-    // (`docs/tui.md`, "Notices").
+    if let Some(working_area) = regions.get(crate::layout::Region::WorkingLine) {
+        let mut bottom = working_area.bottom();
+        banner::draw(app, working_area, buf, &mut bottom);
+        working_line::draw(app, working_area, buf, &mut bottom, &mut targets);
+    }
+    let conversation_region = regions
+        .get(crate::layout::Region::Conversation)
+        .unwrap_or_default();
+    let mut bottom = conversation_region.bottom();
+    // The notice rows, badge and hint sit at the bottom of the
+    // conversation region, above its visible text rows.
     painted.extend(notice_rows::draw(
         app,
-        area,
+        conversation_region,
         buf,
         &mut bottom,
         &mut targets,
@@ -437,7 +591,7 @@ fn render_frame(
     ));
     if let Some(rect) = app
         .badge()
-        .and_then(|badge| put_spans(buf, area, &mut bottom, badge_spans(&badge)))
+        .and_then(|badge| put_spans(buf, conversation_region, &mut bottom, badge_spans(&badge)))
     {
         targets.push(Target {
             id: TargetId::Badge,
@@ -445,10 +599,20 @@ fn render_frame(
         });
     }
     if app.hint() {
-        put(buf, area, &mut bottom, &app.hint_text(), Style::default());
+        put(
+            buf,
+            conversation_region,
+            &mut bottom,
+            &app.hint_text(),
+            Style::default(),
+        );
     }
-    let rows = bottom.saturating_sub(area.y);
-    let conversation = Rect::new(area.x, area.y, area.width, rows);
+    let conversation = Rect::new(
+        conversation_region.x,
+        conversation_region.y,
+        conversation_region.width,
+        bottom.saturating_sub(conversation_region.y),
+    );
     match app.keymap_top() {
         Some(_) => {
             let slab = key_map::draw(app, conversation, buf, &mut targets);
@@ -690,16 +854,24 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
     if app.unwritable().is_some() {
         return None;
     }
-    let area = app.chrome().layout().map_or(area, |layout| layout.column);
+    let placement = placement(app);
+    let area = app
+        .chrome()
+        .drawn_layout()
+        .map_or(area, |layout| layout.column());
     if app.focused().is_some() {
         return None;
     }
     // A shown panel wins over the offer: the panel takes the keys, so a
     // form's caret takes the cursor.
-    if let Some(panel) = app.panel() {
-        // The approval draws from the column's bottom: no status line
-        // draws under it, so the caret shares that bottom.
-        return request::caret(&panel, area, area.bottom());
+    // The approval takes the input-box region and its bottom; no status
+    // line draws under it.
+    let input_area = match placement {
+        Some(layout) => layout.regions().get(crate::layout::Region::InputBox)?,
+        None => area,
+    };
+    if let Some(panel) = app.panel_at(input_area.width) {
+        return request::caret(&panel, input_area, input_area.bottom());
     }
     // The offer hides the draft's cursor while it swaps in for the
     // conversation.
@@ -714,17 +886,27 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
             None
         } else {
             // The bar draws in the conversation, past the gutter.
+            let conversation = placement.map_or(area, |layout| layout.conversation(app));
             marks::bar_cursor(
                 &bar,
-                crate::layout::past_gutter(area, app.chrome().gutter()),
+                crate::layout::past_gutter(conversation, app.chrome().gutter()),
             )
         };
     }
-    let (below, col) = input_box::cursor_row(app, area.width, usize::from(area.height));
-    // The box sits on the column's bottom with the kept status lines
-    // inside it, so the caret counts up from there.
-    let y = area.bottom().checked_sub(below).filter(|y| *y >= area.y)?;
-    let x = area.x.saturating_add(col.min(area.width.saturating_sub(1)));
+    let input_area = match placement {
+        Some(layout) => layout.regions().get(crate::layout::Region::InputBox)?,
+        None => area,
+    };
+    let (below, col) = input_box::cursor_row(app, input_area.width, usize::from(input_area.height));
+    // The box sits on its placed region's bottom with the kept status
+    // lines inside it, so the caret counts up from there.
+    let y = input_area
+        .bottom()
+        .checked_sub(below)
+        .filter(|y| *y >= input_area.y)?;
+    let x = input_area
+        .x
+        .saturating_add(col.min(input_area.width.saturating_sub(1)));
     Some(Position::new(x, y))
 }
 

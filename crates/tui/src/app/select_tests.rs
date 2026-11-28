@@ -574,8 +574,8 @@ fn presses_outside_the_area_click_while_drags_select() {
     reply(&mut app, "a_m", "hello there");
     done(&mut app);
     let layout = app.chrome().layout().expect("the layout applies");
-    let rail = layout.rail.expect("a rail at 160 columns");
-    let panel = layout.panel.expect("a panel at 160 columns");
+    let rail = layout.rail().expect("a rail at 160 columns");
+    let panel = layout.panel().expect("a panel at 160 columns");
     press(&mut app, (rail.x, 30));
     assert_eq!(app.select.span(), None, "the rail");
     // Below the last card row no note covers the cell, so even a drag
@@ -591,7 +591,7 @@ fn presses_outside_the_area_click_while_drags_select() {
         "a drag from the panel"
     );
     assert_eq!(
-        tried(&mut app, (layout.column.x + 1, layout.column.y)),
+        tried(&mut app, (layout.column().x + 1, layout.column().y)),
         None,
         "the blank row above the bottom-aligned turn"
     );
@@ -793,6 +793,7 @@ fn esc_with_an_approval_open_puts_it_aside_before_the_selection() {
     let mut app = replied(40, 12, "hello there");
     let at = find(&app, "hello");
     select(&mut app, at, right(at, 4));
+    let column_width = app.column_width();
     app.on_line(line(
         "permission_requested",
         json!({"request_id": "r_1", "effects": ["executes"], "reversible": true,
@@ -800,6 +801,11 @@ fn esc_with_an_approval_open_puts_it_aside_before_the_selection() {
         Some("a_1"),
         None,
     ));
+    assert_eq!(
+        app.column_width(),
+        column_width,
+        "approval keeps the conversation column width"
+    );
     assert!(app.panel().is_some());
     app.on_key(Key::Esc, now());
     assert!(app.panel().is_none());

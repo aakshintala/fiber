@@ -29,6 +29,10 @@ pub enum Input<'a> {
     ErrorLine(ErrorLine<'a>),
     /// One notice, wherever the built-in draws one.
     Notice(Notice<'a>),
+    /// The six built-in session regions the layout slot may place.
+    Layout(LayoutInput),
+    /// Home's projected source values, without logo protocol state.
+    Home(HomeInput),
     /// The working line: how long the turn runs, or its wait to retry.
     WorkingLine(WorkingLine),
     /// The queued steering messages, oldest first.
@@ -46,9 +50,9 @@ mod slots;
 mod turn;
 
 pub use chrome::{
-    BranchName, Card, ChangedFile, ChangedFiles, Context, Delegate, DelegatesCard, InputStatus,
-    Job, JobsCard, QueuedImage, Quota, SessionCard, SessionContext, Spend, StatusRows,
-    SteeringMessage, SteeringQueue, WidgetCard, WorkingLine, WorkingRetry,
+    BranchName, Card, ChangedFile, ChangedFiles, Context, Delegate, DelegatesCard, HomeInput,
+    InputStatus, Job, JobsCard, LayoutInput, QueuedImage, Quota, SessionCard, SessionContext,
+    Spend, StatusRows, SteeringMessage, SteeringQueue, WidgetCard, WorkingLine, WorkingRetry,
 };
 
 pub use slots::{

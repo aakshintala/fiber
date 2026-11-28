@@ -837,6 +837,38 @@ fn keys_feed_into_the_draft() {
 }
 
 #[test]
+fn conversation_overlay_rows_only_count_badge_and_hint_when_they_fit() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    app.set_size(60, 12);
+    app.attach(contract::SessionId(S_A.to_owned()));
+    app.on_line(session_line(
+        S_A,
+        "repository_code_offered",
+        serde_json::json!({"request_id": "r_1", "items": [{"kind": "mcp_server",
+            "name": "a", "hash": "h", "required": false, "summary": "MCP server: a"}]}),
+        None,
+    ));
+    app.on_key(Key::Esc, now);
+    assert!(app.badge().is_some());
+    app.push_notice(contract::ErrorCode::IoFailed, "notice".to_owned());
+    let width = app.column_width();
+    let bound = crate::view::notice_rows::frame_bound(&app);
+    let notices = app.notices.visible_drawn(&bound, width);
+
+    // With no room after notices, the badge cannot take a row.
+    assert_eq!(app.conversation_overlay_rows(width, notices), notices);
+
+    app.on_key(Key::CtrlC, now);
+    assert!(app.hint());
+    // One row after notices fits the badge but leaves none for the hint.
+    assert_eq!(
+        app.conversation_overlay_rows(width, notices + 1),
+        notices + 1
+    );
+}
+
+#[test]
 fn the_conversation_gives_up_a_row_each_for_input_hint_and_steering() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = app();
@@ -1547,33 +1579,33 @@ fn the_input_box_grows_to_a_third_of_the_screen() {
     let mut app = app();
     app.set_size(60, 12);
     app.attach(contract::SessionId(S_A.to_owned()));
-    assert_eq!(app.input_height(), 1);
+    assert_eq!(app.input_height_at(app.column_width()), 1);
     assert_eq!(app.conversation_height(), 7);
     for _ in 0..2 {
         app.on_edit(Edit::ShiftEnter);
     }
-    assert_eq!(app.input_height(), 3);
+    assert_eq!(app.input_height_at(app.column_width()), 3);
     assert_eq!(app.conversation_height(), 5);
     for _ in 0..5 {
         app.on_edit(Edit::ShiftEnter);
     }
     // 12 / 3 rows at most.
-    assert_eq!(app.input_height(), 4);
+    assert_eq!(app.input_height_at(app.column_width()), 4);
     assert_eq!(app.conversation_height(), 4);
     app.set_size(60, 14);
-    assert_eq!(app.input_height(), 4);
+    assert_eq!(app.input_height_at(app.column_width()), 4);
     app.set_size(60, 15);
-    assert_eq!(app.input_height(), 5);
+    assert_eq!(app.input_height_at(app.column_width()), 5);
     // A screen under 3 rows still shows one.
     app.set_size(60, 2);
-    assert_eq!(app.input_height(), 1);
+    assert_eq!(app.input_height_at(app.column_width()), 1);
     // Wrapped rows count.
     let mut app = self::app();
     app.set_size(10, 12);
     for _ in 0..9 {
         app.on_key(Key::Char('x'), now);
     }
-    assert_eq!(app.input_height(), 2);
+    assert_eq!(app.input_height_at(app.column_width()), 2);
 }
 
 #[test]

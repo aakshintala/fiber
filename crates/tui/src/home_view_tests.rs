@@ -3,6 +3,8 @@
 use super::super::{cursor, render, text};
 use super::picker::{TypedRow, typed_body};
 use crate::app::{App, Effect, QUIT_HINT};
+use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+use crate::ext::{FailureKind, Renderer};
 use crate::home::{Launch, ListLine, Spot};
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -13,6 +15,96 @@ use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use std::path::PathBuf;
+use std::rc::Rc;
+
+#[test]
+fn home_line_builders_preserve_padding_alignment_and_cut_boundaries() {
+    let app = home(80, 24);
+    let screen = app.home_screen().expect("home screen");
+    let empty = super::home_lines(&screen, 80, 0);
+    for (line, text) in empty.iter().zip([
+        "No sessions yet.",
+        "Type below and press Enter to start one.",
+    ]) {
+        assert_eq!(
+            line[0].text,
+            " ".repeat(if text == "No sessions yet." { 32 } else { 20 })
+        );
+        assert!(!line[0].dim);
+        assert_eq!(line[1].text, text);
+        assert!(line[1].dim);
+    }
+    for width in [16, 38, 3, 8] {
+        let lines = super::home_lines(&screen, width, 0);
+        for (line, text) in lines.iter().zip([
+            "No sessions yet.",
+            "Type below and press Enter to start one.",
+        ]) {
+            assert_eq!(line.last().unwrap().text, text, "width {width}");
+            assert!(line.last().unwrap().dim, "width {width}");
+            let text_width = u16::try_from(crate::format::width(text)).unwrap();
+            assert_eq!(
+                line.len(),
+                if width <= text_width { 1 } else { 2 },
+                "width {width}"
+            );
+        }
+    }
+
+    let row = super::ListRow {
+        left: vec![ratatui::text::Span::raw("left")],
+        right: vec![ratatui::text::Span::raw("right")],
+        spot: None,
+        stop: false,
+        plus: None,
+    };
+    let aligned = super::home_row_line(&row, 12);
+    assert_eq!(aligned.spans[0].content, "left");
+    assert_eq!(aligned.spans[1].content, "   ");
+    assert_eq!(aligned.spans[2].content, "right");
+    let no_gap = super::home_row_line(&row, 9);
+    assert_eq!(no_gap.text, "leftright");
+    assert_eq!(no_gap.spans.len(), 2);
+    let stop = super::ListRow { stop: true, ..row };
+    let reserved = super::home_row_line(&stop, 12);
+    assert_eq!(reserved.text, "left right");
+
+    let spans = [
+        ratatui::text::Span::raw("abc"),
+        ratatui::text::Span::raw("de"),
+    ];
+    assert!(super::cut_home_spans(&spans, 0).is_empty());
+    let exact_then_next = super::cut_home_spans(&spans, 4);
+    assert_eq!(
+        exact_then_next
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<Vec<_>>(),
+        ["abc", "d"]
+    );
+    let partial = super::cut_home_spans(&spans, 2);
+    assert_eq!(
+        partial
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<Vec<_>>(),
+        ["ab"]
+    );
+    let dropped = [ratatui::text::Span::raw(""), ratatui::text::Span::raw("x")];
+    let kept = super::cut_home_spans(&dropped, 1);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].content, "x");
+}
+
+#[test]
+fn wide_grapheme_at_boundary_stops_later_spans() {
+    let spans = [
+        ratatui::text::Span::raw("界"),
+        ratatui::text::Span::raw("later"),
+    ];
+
+    assert!(super::cut_home_spans(&spans, 1).is_empty());
+}
 
 #[test]
 fn remote_home_draws_an_unset_dim_chip_and_non_escaping_footer() {
@@ -118,6 +210,395 @@ fn screen(app: &App, width: u16, height: u16) -> String {
 fn home_only(app: &App, area: Rect, buf: &mut Buffer) -> Vec<crate::mouse::Target> {
     let screen = app.home_screen().expect("home draws");
     super::render(app, &screen, area, buf, None).0
+}
+
+#[test]
+fn home_input_serializes_footer_span_text_and_only_present_styles() {
+    let mut app = home(80, 24);
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["home"],
+        SlotScript::Replace(vec![vec![raw("probe")]]),
+    ));
+    app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    home_only(&app, area, &mut buf);
+    let input = &renderer.home_inputs.borrow()[0];
+    let spans = input["foot"]["spans"].as_array().expect("footer spans");
+    assert_eq!(
+        spans
+            .iter()
+            .map(|span| span["text"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "Enter",
+            " opens the focused session, or starts one from the box",
+            " · ",
+            "↑↓",
+            " move",
+            " · ",
+            "Shift+↑↓",
+            " project",
+            " · ",
+            "Delete",
+            " stops a live one, deletes an exited one",
+            " · ",
+            "Backspace",
+            " archives an exited one",
+            " · ",
+            "F1",
+            " the key map",
+            " · ",
+            "Ctrl+C",
+            " twice to quit",
+        ]
+    );
+    for (span, bold) in spans.iter().zip([
+        true, false, false, true, false, false, true, false, false, true, false, false, true,
+        false, false, true, false, false, true, false,
+    ]) {
+        assert_eq!(
+            span.get("bold").and_then(serde_json::Value::as_bool),
+            bold.then_some(true)
+        );
+        assert_eq!(
+            span.get("dim").and_then(serde_json::Value::as_bool),
+            (!bold).then_some(true)
+        );
+        for absent in ["fg", "bg", "italic", "underline"] {
+            assert!(span.get(absent).is_none(), "{span}");
+        }
+    }
+}
+
+#[test]
+fn home_slot_replaces_list_lines_and_preserves_targets_and_focus() {
+    let mut app = focus_home();
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::Up, now);
+    app.on_key(Key::Up, now);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut before = Buffer::empty(area);
+    let before_targets = home_only(&app, area, &mut before);
+    let focused = app.focused().expect("first list row focused");
+    assert!(before_targets.iter().any(|target| target.id == focused));
+
+    let line_count = super::home_lines(
+        &app.home_screen().expect("home screen"),
+        area.width,
+        app.rail_state().wall(),
+    )
+    .len();
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["home"],
+        SlotScript::Replace(vec![vec![raw("extension home list")]; line_count]),
+    ));
+    app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+    let mut after = Buffer::empty(area);
+    let after_targets = home_only(&app, area, &mut after);
+
+    assert_eq!(after_targets, before_targets);
+    assert!(text(&after).contains("extension home list"));
+    let focused_row = after_targets
+        .iter()
+        .find(|target| target.id == focused)
+        .unwrap();
+    assert_eq!(
+        after[(focused_row.rect.x, focused_row.rect.y)].bg,
+        crate::theme::Role::Selection.color()
+    );
+    let input = &renderer.home_inputs.borrow()[0];
+    assert_eq!(input["flat"], false);
+    assert!(input.get("logo").is_none());
+    assert!(
+        input["list"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|line| line.get("since").is_none())
+    );
+}
+
+#[test]
+fn draw_home_replacement_bounds_clip_area_rows() {
+    let app = home(80, 24);
+    let screen = app.home_screen().expect("home screen");
+    let area = Rect::new(0, 0, 80, 12);
+    let mut placed = super::layout(&app, &screen, area);
+    placed.list_top = 8;
+    placed.list_end = 16;
+    let mut buf = Buffer::filled(Rect::new(0, 0, 80, 24), ratatui::buffer::Cell::new("~"));
+    super::draw_home_replacement(&app, &screen, &placed, area, &mut buf, &[], &[], 0, 8);
+    for y in 8..12 {
+        assert_eq!(buf[(placed.x, y)].symbol(), " ", "area row {y}");
+        assert_eq!(
+            buf[(placed.x + placed.width - 1, y)].symbol(),
+            " ",
+            "area row {y}"
+        );
+    }
+    for y in 12..16 {
+        assert_eq!(buf[(placed.x, y)].symbol(), "~", "outside area row {y}");
+        assert_eq!(
+            buf[(placed.x + placed.width - 1, y)].symbol(),
+            "~",
+            "outside area row {y}"
+        );
+    }
+}
+
+#[test]
+fn draw_home_replacement_centers_empty_home() {
+    let app = home(80, 24);
+    let screen = app.home_screen().expect("home screen");
+    let area = Rect::new(0, 0, 80, 12);
+    let mut placed = super::layout(&app, &screen, area);
+    placed.list_top = 2;
+    placed.list_end = 12;
+    let lines = ["r00", "r01"].map(|label| crate::ext::spans::FittedLine {
+        line: ratatui::text::Line::raw(label),
+        links: Vec::new(),
+        pad: 0,
+        anim: None,
+        click_raw: Vec::new(),
+        clicks: Vec::new(),
+    });
+    let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+    super::draw_home_replacement(&app, &screen, &placed, area, &mut buf, &[], &lines, 0, 10);
+    assert_eq!(text(&buf).lines().nth(6).unwrap().trim(), "r00");
+    assert_eq!(text(&buf).lines().nth(7).unwrap().trim(), "r01");
+}
+
+#[test]
+fn draw_home_replacement_stops_at_both_bounds() {
+    for (list_top, list_end) in [(2, 8), (6, 20)] {
+        let app = home_with_live_rows(80, 24, 3);
+        let screen = app.home_screen().expect("home screen");
+        let area = Rect::new(0, 0, 80, 12);
+        let mut placed = super::layout(&app, &screen, area);
+        placed.list_top = list_top;
+        placed.list_end = list_end;
+        let lines: Vec<_> = (0..10)
+            .map(|index| crate::ext::spans::FittedLine {
+                line: ratatui::text::Line::raw(format!("r{index:02}")),
+                links: Vec::new(),
+                pad: 0,
+                anim: None,
+                click_raw: Vec::new(),
+                clicks: Vec::new(),
+            })
+            .collect();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        super::draw_home_replacement(&app, &screen, &placed, area, &mut buf, &[], &lines, 0, 10);
+        let drawn = text(&buf);
+        for index in 0..6 {
+            assert!(
+                drawn
+                    .lines()
+                    .nth(usize::from(list_top) + index)
+                    .unwrap()
+                    .contains(&format!("r{index:02}"))
+            );
+        }
+        for index in 6..10 {
+            assert!(
+                !drawn.contains(&format!("r{index:02}")),
+                "list_top={list_top}, list_end={list_end}: {drawn}"
+            );
+        }
+    }
+}
+
+#[test]
+fn draw_home_replacement_copy_reads_dragged_line() {
+    let mut app = home_with_live_rows(80, 24, 1);
+    let area = Rect::new(0, 0, 80, 24);
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["home"],
+        SlotScript::Replace(vec![vec![raw("alpha")]]),
+    ));
+    app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+    let mut buf = Buffer::empty(area);
+    let targets = home_only(&app, area, &mut buf);
+    let row = u16::try_from(
+        text(&buf)
+            .lines()
+            .position(|line| line.contains("alpha"))
+            .unwrap(),
+    )
+    .unwrap();
+    let x = u16::try_from(
+        text(&buf)
+            .lines()
+            .nth(usize::from(row))
+            .unwrap()
+            .find("alpha")
+            .unwrap(),
+    )
+    .unwrap();
+    let mut select = |kind, col| app.on_select(&crate::keys::Mouse { kind, col, row }, &targets);
+    assert_eq!(
+        select(crate::keys::MouseKind::Press(crate::keys::Button::Left), x),
+        Effect::None
+    );
+    assert_eq!(
+        select(
+            crate::keys::MouseKind::Drag(crate::keys::Button::Left),
+            x + 4
+        ),
+        Effect::None
+    );
+    let release = select(crate::keys::MouseKind::Release, x + 4);
+    if release == Effect::None {
+        panic!(
+            "Release returned None; app.home_screen(): {:?}; targets under (x,row): {:?}",
+            app.home_screen()
+                .map(|screen| crate::home::home_test_rows(&screen)),
+            targets
+                .iter()
+                .map(|target| (target.rect.x, target.rect.y))
+                .collect::<Vec<_>>()
+        );
+    }
+    assert_eq!(release, Effect::Copy("alpha".to_owned()));
+}
+
+#[test]
+fn draw_home_replacement_selection_styles_focused_entry_only() {
+    let mut app = home_with_live_rows(80, 24, 3);
+    let area = Rect::new(0, 0, 80, 24);
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["home"],
+        SlotScript::Replace(vec![vec![raw("replacement")]; 3]),
+    ));
+    app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+    let mut first = Buffer::empty(area);
+    let first_targets = home_only(&app, area, &mut first);
+    app.drawn(&first_targets);
+    app.on_key(Key::Up, fakes::clock::FakeClock::new().now());
+    let screen = app.home_screen().expect("home screen");
+    let k = crate::home::home_test_rows(&screen)
+        .last()
+        .expect("last entry key")
+        .0;
+    let focused = app.focused();
+    assert_eq!(focused, Some(crate::mouse::TargetId::Home(Spot::Entry(k))));
+    let mut buf = Buffer::empty(area);
+    let targets = home_only(&app, area, &mut buf);
+    let entries: Vec<_> = targets
+        .iter()
+        .filter(|target| matches!(target.id, crate::mouse::TargetId::Home(Spot::Entry(_))))
+        .collect();
+    let focused = focused.expect("last entry focused");
+    let focused_row = entries
+        .iter()
+        .find(|target| target.id == focused)
+        .expect("focused entry target")
+        .rect
+        .y;
+    assert_eq!(
+        buf[(
+            entries
+                .iter()
+                .find(|target| target.id == focused)
+                .unwrap()
+                .rect
+                .x,
+            focused_row
+        )]
+            .bg,
+        crate::theme::Role::Selection.color()
+    );
+    for entry in entries.iter().filter(|target| target.id != focused) {
+        assert_ne!(
+            buf[(entry.rect.x, entry.rect.y)].bg,
+            crate::theme::Role::Selection.color()
+        );
+    }
+}
+
+#[test]
+fn home_slot_replacement_keeps_scrolled_lines_aligned_with_targets() {
+    let mut app = home_with_live_rows(80, 24, 12);
+    let area = Rect::new(0, 0, 80, 24);
+    let screen = app.home_screen().expect("home screen");
+    let lines = super::home_lines(&screen, area.width, app.rail_state().wall());
+    let rows = super::list_rows(&screen, app.rail_state().wall());
+    assert_eq!(lines.len(), rows.len()); // `docs/tui.md`, "The slots", "Home": return the same number of lines as `builtin(input, width)`.
+
+    let (window, max_scroll) = super::list_window(&app, &screen, area);
+    assert!(max_scroll > 1, "fixture must scroll the list");
+    let start = 2.min(max_scroll);
+    app.set_home_list_scroll(start);
+
+    let mut before = Buffer::empty(area);
+    let before_targets = home_only(&app, area, &mut before);
+    assert_eq!(app.home_list_scroll(), start);
+
+    let replacement = lines
+        .iter()
+        .enumerate()
+        .map(|(index, _)| vec![raw(&format!("extension row {index:02}"))])
+        .collect();
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["home"],
+        SlotScript::Replace(replacement),
+    ));
+    app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+    let mut after = Buffer::empty(area);
+    let after_targets = home_only(&app, area, &mut after);
+
+    assert_eq!(after_targets, before_targets);
+    let drawn = text(&after);
+    let visible = usize::from(window.height).min(lines.len().saturating_sub(start));
+    for offset in 0..visible {
+        let index = start + offset;
+        let y = window.y + u16::try_from(offset).unwrap();
+        let line = drawn.lines().nth(usize::from(y)).unwrap();
+        assert!(
+            line.contains(&format!("extension row {index:02}")),
+            "line {index} should draw at its built-in row {y}:\n{drawn}"
+        );
+        if let Some(spot) = rows[index].spot {
+            let id = crate::mouse::TargetId::Home(spot);
+            assert!(
+                before_targets
+                    .iter()
+                    .any(|target| target.id == id && target.rect.y == y),
+                "built-in target {id:?} should occupy replacement row {index} at {y}"
+            );
+            assert!(
+                after_targets
+                    .iter()
+                    .any(|target| target.id == id && target.rect.y == y),
+                "replacement should preserve target {id:?} on row {index} at {y}"
+            );
+        }
+    }
+}
+
+#[test]
+fn home_slot_failure_and_empty_output_keep_the_builtin_list() {
+    for script in [
+        SlotScript::Fail {
+            kind: FailureKind::HookFailed,
+            message: "home failed".into(),
+        },
+        SlotScript::Replace(Vec::new()),
+    ] {
+        let mut app = home_with_live_rows(80, 24, 1);
+        let area = Rect::new(0, 0, 80, 24);
+        let renderer = Rc::new(SlotRenderer::filling(&["home"], script));
+        app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+        let mut buf = Buffer::empty(area);
+        home_only(&app, area, &mut buf);
+        let drawn = text(&buf);
+        assert!(drawn.contains("session"), "built-in row remains:\n{drawn}");
+        assert!(
+            !drawn.contains("extension home list"),
+            "no partial replacement:\n{drawn}"
+        );
+    }
 }
 
 /// Home with `count` live sessions in one project.
@@ -1363,6 +1844,68 @@ fn an_exited_row_shows_id_turns_spend_and_age() {
         serde_json::json!({"sessions":[exited]}),
     ));
     assert!(screen(&app, 160, 48).contains("s_7f20aa · 5 turns · $1.10 · 3h ago"));
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["home"],
+        SlotScript::Decorate {
+            badge: Vec::new(),
+            trim: 0,
+        },
+    ));
+    app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+    let _ = screen(&app, 160, 48);
+    let input = &renderer.home_inputs.borrow()[0];
+    let row = input["list"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "exited")
+        .unwrap();
+    assert_eq!(row["since"], 0);
+    assert!(row.get("age").is_none());
+    let before = app
+        .home_screen()
+        .unwrap()
+        .renderer_input(false, app.rail_state().wall())
+        .cache_fingerprint;
+    app.set_wall(14_400_000);
+    let after = app
+        .home_screen()
+        .unwrap()
+        .renderer_input(false, app.rail_state().wall())
+        .cache_fingerprint;
+    assert_ne!(before, after);
+}
+
+#[test]
+fn an_exited_row_without_status_omits_since_from_home_input() {
+    let mut app = home(160, 48);
+    let outgoing = app.on_line(hello());
+    let recent_id = serde_json::from_str::<serde_json::Value>(&outgoing[1]).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let exited = recent_row("s_no_status", "no status", "exited");
+    app.on_line(accepted(
+        &recent_id,
+        serde_json::json!({"sessions":[exited]}),
+    ));
+    let renderer = Rc::new(SlotRenderer::filling(
+        &["home"],
+        SlotScript::Decorate {
+            badge: Vec::new(),
+            trim: 0,
+        },
+    ));
+    app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
+    let _ = screen(&app, 160, 48);
+    let inputs = renderer.home_inputs.borrow();
+    let row = inputs[0]["list"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "exited")
+        .unwrap();
+    assert!(row.get("since").is_none());
 }
 
 #[test]

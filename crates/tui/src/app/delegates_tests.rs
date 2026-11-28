@@ -92,7 +92,7 @@ fn big_widget(app: &mut App) {
 fn panel(app: &App) -> Rect {
     app.chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .unwrap_or_else(|| panic!("a panel rect"))
 }
 

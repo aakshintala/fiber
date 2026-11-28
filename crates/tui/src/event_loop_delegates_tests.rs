@@ -173,7 +173,7 @@ fn a_delegate_is_subscribed_drawn_and_scrolled_in_the_loop() {
         .app
         .chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .unwrap_or_else(|| panic!("a panel"));
     let (rows, span) = crate::view::panel::rows_and_delegates(&lp.app, panel.width);
     let height = usize::from(panel.height.saturating_sub(1));

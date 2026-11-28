@@ -805,7 +805,7 @@ fn the_wheel_over_the_transcript_scrolls_it() {
     assert_eq!(app.top(), None);
     // The header's first drawn row: the conversation column's top-left
     // cell, whatever chrome surrounds it.
-    let column = app.chrome().layout().expect("a layout").column;
+    let column = app.chrome().layout().expect("a layout").column();
     app.on_wheel(&Mouse {
         kind: MouseKind::WheelUp,
         col: column.x,
@@ -840,7 +840,7 @@ fn a_drag_selection_starts_at_the_transcript_first_row() {
     let body_y = app
         .chrome()
         .layout()
-        .map(|layout| layout.column.y)
+        .map(|layout| layout.column().y)
         .unwrap_or(0);
     let header = u16::try_from(crate::view::item::ITEM_HEADER_ROWS).unwrap_or(u16::MAX);
     assert_eq!(app.conversation_area().y, body_y.saturating_add(header));
@@ -917,16 +917,16 @@ fn the_transcript_keeps_the_gutter() {
         })
         .expect("the transcript reply row");
     let tint = buf
-        .cell((layout.column.x.saturating_add(1), y))
+        .cell((layout.column().x.saturating_add(1), y))
         .map(|cell| cell.bg)
         .unwrap_or(Color::Reset);
     assert_ne!(tint, Color::Reset);
     assert_eq!(
-        buf.cell((layout.column.x, y)).map(|cell| cell.bg),
+        buf.cell((layout.column().x, y)).map(|cell| cell.bg),
         Some(Color::Reset)
     );
     assert_eq!(
-        buf.cell((layout.column.x.saturating_add(1), y))
+        buf.cell((layout.column().x.saturating_add(1), y))
             .map(|cell| cell.bg),
         Some(tint)
     );

@@ -4,7 +4,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 
 use super::{FOCUS_STYLE, completions, lift_hover, logo};
 use crate::app::App;
@@ -212,7 +212,9 @@ pub(crate) fn notice_rows_area(app: &App, screen: &HomeScreen, area: Rect) -> Re
 pub(crate) fn list_window(app: &App, screen: &HomeScreen, area: Rect) -> (Rect, usize) {
     let placed = layout(app, screen, area);
     let tall = placed.list_end.saturating_sub(placed.list_top);
-    let max = list_rows(screen).len().saturating_sub(usize::from(tall));
+    let max = list_rows(screen, app.rail_state().wall())
+        .len()
+        .saturating_sub(usize::from(tall));
     (
         Rect::new(placed.x, placed.list_top, placed.width, tall),
         max,
@@ -227,7 +229,7 @@ struct ListRow {
     plus: Option<(u64, u16)>,
 }
 
-fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
+fn list_rows(screen: &HomeScreen, wall: u64) -> Vec<ListRow> {
     let dim = Style::new().add_modifier(Modifier::DIM);
     let mut rows = Vec::new();
     for line in &screen.list {
@@ -327,7 +329,7 @@ fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
                 id,
                 turns,
                 spend,
-                age,
+                since,
             } => {
                 row.spot = Some(Spot::Entry(*key));
                 row.stop = *stop;
@@ -338,8 +340,8 @@ fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
                     segments.push(crate::format::count(*turns, "turn", "turns"));
                 }
                 segments.push(spend.clone());
-                if let Some(age) = age {
-                    segments.push(age.clone());
+                if let Some(since) = since {
+                    segments.push(format!("{} ago", crate::view::rail::elapsed(*since, wall)));
                 }
                 row.right.push(Span::styled(segments.join(" · "), dim));
             }
@@ -359,6 +361,94 @@ fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
     rows
 }
 
+const EMPTY_HOME_LINES: [&str; 2] = [
+    "No sessions yet.",
+    "Type below and press Enter to start one.",
+];
+
+/// One horizontally centred empty-state line in its list width.
+fn empty_home_line(text: &str, width: u16) -> (u16, Vec<Span<'static>>) {
+    let x = width.saturating_sub(to_u16(crate::format::width(text))) / 2;
+    let mut spans = Vec::new();
+    if x != 0 {
+        spans.push(Span::raw(" ".repeat(usize::from(x))));
+    }
+    spans.push(Span::styled(
+        text.to_owned(),
+        Style::new().add_modifier(Modifier::DIM),
+    ));
+    (x, spans)
+}
+
+/// The home slot's built-in list lines, independent of the height of the
+/// window that later clips them.
+fn home_lines(screen: &HomeScreen, width: u16, wall: u64) -> Vec<Vec<crate::ext::RawSpan>> {
+    if screen.empty {
+        return EMPTY_HOME_LINES
+            .into_iter()
+            .map(|text| {
+                let (_, spans) = empty_home_line(text, width);
+                crate::ext::spans::from_ratatui(&spans)
+            })
+            .collect();
+    }
+    list_rows(screen, wall)
+        .iter()
+        .map(|row| crate::ext::spans::from_ratatui(&home_row_line(row, width).spans))
+        .collect()
+}
+
+struct BuiltHomeLine {
+    spans: Vec<Span<'static>>,
+    text: String,
+}
+
+/// The built-in list row's aligned and cut spans, and its copyable text.
+fn home_row_line(row: &ListRow, width: u16) -> BuiltHomeLine {
+    let body = width.saturating_sub(if row.stop { 2 } else { 0 });
+    let right_width = to_u16(Line::from(row.right.clone()).width()).min(body);
+    let left_width = body.saturating_sub(right_width);
+    let mut spans = cut_home_spans(&row.left, left_width);
+    let left_text: String = spans.iter().map(|span| span.content.as_ref()).collect();
+    let left_used = crate::format::width(&left_text);
+    let gap = usize::from(left_width).saturating_sub(left_used);
+    if gap != 0 {
+        spans.push(Span::raw(" ".repeat(gap)));
+    }
+    let right = cut_home_spans(&row.right, right_width);
+    let right_text: String = right.iter().map(|span| span.content.as_ref()).collect();
+    let mut text = left_text;
+    if !right_text.is_empty() {
+        text.push_str(&" ".repeat(gap));
+        text.push_str(&right_text);
+    }
+    spans.extend(right);
+    BuiltHomeLine { spans, text }
+}
+
+/// The home row's spans, cut to `width` without losing their theme roles.
+fn cut_home_spans(spans: &[Span<'_>], width: u16) -> Vec<Span<'static>> {
+    let mut remaining = usize::from(width);
+    let mut kept = Vec::new();
+    for span in spans {
+        if remaining == 0 {
+            break;
+        }
+        let source = span.content.to_string();
+        let source_width = crate::format::width(&source);
+        let text = cut(&source, remaining);
+        let used = crate::format::width(&text);
+        if !text.is_empty() {
+            kept.push(Span::styled(text, span.style));
+            remaining = remaining.saturating_sub(used);
+        }
+        if used < source_width {
+            break;
+        }
+    }
+    kept
+}
+
 // The `at + height > end` pull keeps an entry fully inside its window:
 // with `at >= start` and `at + height == end` the pull recomputes the
 // same `start`, so `>=` is equivalent and no test can catch it.
@@ -370,9 +460,10 @@ fn draw_list(
     area: Rect,
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
-) {
+    replacement: bool,
+) -> (usize, usize) {
     let capacity = usize::from(placed.list_end.saturating_sub(placed.list_top));
-    let rows = list_rows(screen);
+    let rows = list_rows(screen, app.rail_state().wall());
     let max = rows.len().saturating_sub(capacity);
     let focused = app.focused().and_then(|target| {
         let TargetId::Home(spot) = target else {
@@ -402,20 +493,14 @@ fn draw_list(
         let y = placed
             .list_top
             .saturating_add(to_u16(capacity.saturating_sub(2) / 2));
-        for (i, text) in [
-            "No sessions yet.",
-            "Type below and press Enter to start one.",
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        for (i, text) in EMPTY_HOME_LINES.into_iter().enumerate() {
             let y = y.saturating_add(to_u16(i));
             if y < placed.list_end {
+                let (x, _) = empty_home_line(text, placed.width);
                 put(
                     buf,
                     area,
-                    area.x
-                        .saturating_add(area.width.saturating_sub(to_u16(width(text))) / 2),
+                    area.x.saturating_add(x),
                     y,
                     text,
                     area.width,
@@ -427,27 +512,13 @@ fn draw_list(
     for (at, row) in rows.iter().skip(start).take(capacity).enumerate() {
         let y = placed.list_top.saturating_add(to_u16(at));
         let body = placed.width.saturating_sub(if row.stop { 2 } else { 0 });
-        let right = ratatui::text::Line::from(row.right.clone());
-        let right_width = to_u16(right.width()).min(body);
-        let right_x = placed.x.saturating_add(body.saturating_sub(right_width));
-        let left = ratatui::text::Line::from(row.left.clone());
-        buf.set_line(placed.x, y, &left, body.saturating_sub(right_width));
-        buf.set_line(right_x, y, &right, right_width);
-        // A session row reads as one line: the left spans, then the
-        // right spans at their drawn offset. The ✕ is a button and the
+        let built = home_row_line(row, placed.width);
+        buf.set_line(placed.x, y, &Line::from(built.spans), body);
+        // A session row reads as one line. The ✕ is a button and the
         // focus bar a highlight; neither is copyable text.
         {
-            let left_shown = body.saturating_sub(right_width);
-            let left_text: String = row.left.iter().map(|span| span.content.as_ref()).collect();
-            let mut text = cut(&left_text, usize::from(left_shown));
-            let right_text: String = row.right.iter().map(|span| span.content.as_ref()).collect();
-            if !right_text.is_empty() {
-                let gap =
-                    usize::from(right_x.saturating_sub(placed.x)).saturating_sub(width(&text));
-                text.push_str(&" ".repeat(gap));
-                text.push_str(&cut(&right_text, usize::from(right_width)));
-            }
-            if !text.is_empty() {
+            let text = built.text;
+            if !text.is_empty() && !replacement {
                 let end = placed.x.saturating_add(to_u16(width(&text)));
                 app.note_surface(crate::app::NotedSurface {
                     surface: crate::app::SurfaceId::Home,
@@ -478,7 +549,7 @@ fn draw_list(
                     rect: Rect::new(placed.x, y, entry_width, 1),
                 });
             }
-            if row.spot == focused {
+            if row.spot == focused && !replacement {
                 buf.set_style(
                     Rect::new(placed.x, y, placed.width, 1),
                     Style::new().bg(Role::Selection.color()),
@@ -487,7 +558,9 @@ fn draw_list(
             if let Spot::Entry(key) = spot {
                 if row.stop {
                     let x = area.right().saturating_sub(1);
-                    put(buf, area, x, y, "✕", 1, Style::default());
+                    if !replacement {
+                        put(buf, area, x, y, "✕", 1, Style::default());
+                    }
                     targets.push(Target {
                         id: TargetId::Home(Spot::Stop(key)),
                         rect: Rect::new(x, y, 1, 1),
@@ -505,6 +578,115 @@ fn draw_list(
                 id: TargetId::Home(Spot::Start(key)),
                 rect: Rect::new(placed.x.saturating_add(offset), y, 1, 1),
             });
+        }
+    }
+    (start, capacity)
+}
+
+/// Replaces the visible Home list lines while keeping the terminal's
+/// original target rows, focus and copy mapping.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the draw needs the app, screen, placement, buffer, targets and fitted result"
+)]
+fn draw_home_replacement(
+    app: &App,
+    screen: &HomeScreen,
+    placed: &Placed,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &[Target],
+    lines: &[crate::ext::spans::FittedLine],
+    start: usize,
+    capacity: usize,
+) {
+    let blank = " ".repeat(usize::from(placed.width));
+    for at in 0..capacity {
+        let y = placed.list_top.saturating_add(to_u16(at));
+        if y < area.bottom() {
+            buf.set_stringn(
+                placed.x,
+                y,
+                &blank,
+                usize::from(placed.width),
+                Style::default(),
+            );
+        }
+    }
+
+    let (offset, top, take) = if screen.empty {
+        let take = lines.len().min(capacity);
+        (
+            0,
+            placed
+                .list_top
+                .saturating_add(to_u16(capacity.saturating_sub(take) / 2)),
+            take,
+        )
+    } else {
+        (start, placed.list_top, capacity)
+    };
+    let mut noted = Vec::new();
+    for (at, line) in lines.iter().skip(offset).take(take).enumerate() {
+        let y = top.saturating_add(to_u16(at));
+        if y >= placed.list_end || y >= area.bottom() {
+            break;
+        }
+        buf.set_line(placed.x, y, &line.line, placed.width);
+        let text_width = placed.width.saturating_sub(line.pad);
+        let text = cut(&line.line.to_string(), usize::from(text_width));
+        if !text.is_empty() {
+            noted.push(crate::app::SpanRow {
+                y,
+                x: placed.x,
+                end: placed.x.saturating_add(to_u16(width(&text))),
+                text,
+                join: crate::rows::Join::Break,
+            });
+        }
+    }
+    app.note_surface(crate::app::NotedSurface {
+        surface: crate::app::SurfaceId::Home,
+        rows: noted,
+    });
+    let list_area = Rect::new(placed.x, placed.list_top, placed.width, to_u16(capacity));
+    for rect in app.selection_cells(crate::app::SurfaceId::Home, list_area) {
+        buf.set_style(
+            rect.intersection(area),
+            crate::view::marks::selection_style(),
+        );
+    }
+    // The stop mark belongs to the terminal, not the returned line, so
+    // it keeps its existing target and stays visible over replacement text.
+    for target in targets {
+        if matches!(target.id, TargetId::Home(Spot::Stop(_))) {
+            put(
+                buf,
+                area,
+                target.rect.x,
+                target.rect.y,
+                "✕",
+                1,
+                Style::default(),
+            );
+        }
+    }
+    let focused = app.focused().and_then(|target| {
+        if let TargetId::Home(spot) = target {
+            spot.list_stop()
+        } else {
+            None
+        }
+    });
+    if let Some(focused) = focused {
+        for target in targets
+            .iter()
+            .filter(|target| target.id == TargetId::Home(focused))
+        {
+            buf.set_style(
+                Rect::new(placed.x, target.rect.y, placed.width, 1),
+                Style::new().bg(Role::Selection.color()),
+            );
         }
     }
 }
@@ -796,7 +978,33 @@ pub(super) fn render(
         }
         chip_x = chip_x.saturating_add(wide);
     }
-    draw_list(app, screen, &placed, area, buf, &mut targets);
+    let bound = super::notice_rows::frame_bound(app);
+    let wall = app.rail_state().wall();
+    let input = crate::ext::Input::Home(screen.renderer_input(bound.flat, wall));
+    let builtin = |_: &crate::ext::Input<'_>, width| home_lines(screen, width, wall);
+    let replacement = bound
+        .slot_lines(
+            crate::ext::SlotDraw::Paint,
+            "home",
+            &input,
+            area.width,
+            &builtin,
+        )
+        .filter(|lines| !lines.is_empty());
+    let (start, capacity) = draw_list(
+        app,
+        screen,
+        &placed,
+        area,
+        buf,
+        &mut targets,
+        replacement.is_some(),
+    );
+    if let Some(lines) = &replacement {
+        draw_home_replacement(
+            app, screen, &placed, area, buf, &targets, lines, start, capacity,
+        );
+    }
     // The workspace picker is an overlay centred over home: the title,
     // one row per recent workspace with the selection barred, and what
     // the mouse does (`docs/tui.md`, "Home", "Look", "Overlays"). It

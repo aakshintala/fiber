@@ -18,6 +18,28 @@ use std::path::PathBuf;
 const WIDTH: u16 = 60;
 const HEIGHT: u16 = 12;
 
+#[test]
+fn zero_height_regions_are_absent_from_placement() {
+    let app = empty();
+    let area = Rect::new(0, 0, 60, 0);
+    let split = crate::layout::Layout::bare(area);
+
+    let placement = super::placement_from_split(&app, area, split);
+
+    assert!(
+        placement
+            .regions()
+            .get(crate::layout::Region::Conversation)
+            .is_none()
+    );
+    assert!(
+        placement
+            .regions()
+            .get(crate::layout::Region::InputBox)
+            .is_none()
+    );
+}
+
 /// Renders `app` on a 60x12 screen as text, rows trimmed of trailing spaces.
 fn screen(app: &App) -> String {
     let area = Rect::new(0, 0, WIDTH, HEIGHT);
