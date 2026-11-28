@@ -609,6 +609,7 @@ fn spot_name(spot: Spot) -> Option<&'static str> {
         | Spot::Archived(_)
         | Spot::Blocker(_)
         | Spot::Pick(_)
+        | Spot::PickCompletion(_)
         | Spot::Quit(_)
         | Spot::Clear(_)
         | Spot::HooksOffer(_)
