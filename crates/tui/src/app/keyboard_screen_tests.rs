@@ -695,6 +695,10 @@ fn keys_screen_click_selects_a_row_and_closes_on_the_cross() {
     assert!(app.keys_screen_open());
     let frame = app.keys_frame(24).expect("the screen is open");
     assert_eq!(frame.list.selected(), at);
+    let before = app.keys().clone();
+    assert_eq!(tap(&mut app, "z"), Effect::None);
+    assert_eq!(app.keys(), &before);
+    assert!(app.keys_screen_open());
     assert_eq!(app.keys_screen_click(Spot::Close), Effect::None);
     assert!(!app.keys_screen_open());
 }

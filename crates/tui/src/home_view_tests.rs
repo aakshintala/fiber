@@ -4273,10 +4273,11 @@ fn the_cursor_hides_while_typing_a_path() {
     assert_eq!(super::cursor(&app, &screen, area), None);
 }
 
-/// While typing, only the recent rows take clicks, by their index into
-/// the recents: completion, typed, blank and header rows give no target.
+/// While typing, recent rows take clicks by their index into the
+/// recents; completions use name-derived identities, while typed,
+/// missing, blank and header rows have no target.
 #[test]
-fn clicking_a_recent_while_typing_chooses_it() {
+fn clicking_a_completion_while_typing_chooses_it() {
     let (mut app, sent) = typing(80, 24, "/repo/f");
     answer(&mut app, &sent[1].0, &["fiber"], "/repo/");
     let area = Rect::new(0, 0, 80, 24);
@@ -4295,12 +4296,61 @@ fn clicking_a_recent_while_typing_chooses_it() {
     picks.sort();
     // The two recents, and nothing else.
     assert_eq!(picks, vec![0, 1]);
-    app.on_click(crate::mouse::TargetId::Home(Spot::Pick(1)));
+    // Dispatch the actual rendered completion target while the picker is open.
+    let target = targets
+        .iter()
+        .find(|target| {
+            matches!(
+                target.id,
+                crate::mouse::TargetId::Home(Spot::PickCompletion(_))
+            )
+        })
+        .expect("completion click target");
+    assert_eq!(
+        target.id,
+        crate::mouse::TargetId::Home(Spot::PickCompletion(crate::home::CompletionId::for_name(
+            "fiber"
+        )))
+    );
+    app.on_click(target.id);
     assert!(
         app.home_screen()
             .is_some_and(|screen| screen.picker.is_none())
     );
-    assert_eq!(app.workspace(), Some(PathBuf::from("/repo0")));
+    assert_eq!(app.workspace(), Some(PathBuf::from("/repo/fiber")));
+}
+
+#[test]
+fn stale_rendered_completion_target_does_not_choose_another_row() {
+    let (mut app, sent) = typing(80, 24, "/repo/a");
+    answer(&mut app, &sent[1].0, &["acorn", "apple"], "/repo/");
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = home_only(&app, area, &mut buf);
+    let target = targets
+        .iter()
+        .find(|target| {
+            target.id
+                == crate::mouse::TargetId::Home(Spot::PickCompletion(
+                    crate::home::CompletionId::for_name("acorn"),
+                ))
+        })
+        .expect("rendered acorn completion target");
+
+    type_path(&mut app, "p");
+    let typed = app
+        .home_screen()
+        .and_then(|screen| screen.picker)
+        .and_then(|picker| picker.typed)
+        .expect("typed picker remains open");
+    assert_eq!(typed.completions, ["apple"]);
+    app.on_click(target.id);
+
+    assert!(
+        app.home_screen()
+            .is_some_and(|screen| screen.picker.is_some())
+    );
+    assert_eq!(app.workspace(), Some(PathBuf::from("/w")));
 }
 
 /// Home drawn and painted without colour, with its targets.

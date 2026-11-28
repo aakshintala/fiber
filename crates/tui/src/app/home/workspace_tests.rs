@@ -264,6 +264,23 @@ fn chips(app: &App) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Draws home and returns the rendered target for `name`.
+fn rendered_completion_target(app: &App, name: &str) -> crate::mouse::TargetId {
+    let identity = crate::home::CompletionId::for_name(name);
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buffer = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(app, area, &mut buffer, None)
+        .into_iter()
+        .find(|target| {
+            matches!(
+                target.id,
+                crate::mouse::TargetId::Home(Spot::PickCompletion(found)) if found == identity
+            )
+        })
+        .map(|target| target.id)
+        .expect("rendered completion target")
+}
+
 /// Answers the `directories` request `id` with `names` at `path`.
 fn answer(app: &mut App, id: &str, names: &[&str], path: &str) {
     app.on_line(accepted(id, json!({"directories": names, "path": path})));
@@ -524,6 +541,78 @@ fn non_typing_picker_up_wraps_from_first_and_middle_recent() {
     assert_eq!(focused(&app), Some("/one".to_owned()));
     assert_eq!(key(&mut app, Key::Up), Effect::None);
     assert_eq!(focused(&app), Some("/w".to_owned()));
+}
+
+#[test]
+fn space_in_the_focused_picker_stays_typed_text() {
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    type_path(&mut app, "/a1");
+    assert_eq!(key(&mut app, Key::Char(' ')), Effect::None);
+    assert_eq!(typed_text(&app), Some("/a1 ".to_owned()));
+    assert!(picker_open(&app));
+    assert!(chips(&app).contains(&"[w]".to_owned()));
+}
+
+#[test]
+fn clicking_a_typed_completion_chooses_it_when_connected() {
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    let sent = type_path(&mut app, "/a");
+    answer(&mut app, &sent[0].0, &["a1", "a2"], "/");
+    let target = rendered_completion_target(&app, "a2");
+    assert_eq!(app.on_click(target), Effect::None);
+    assert!(!picker_open(&app));
+    assert!(chips(&app).contains(&"[a2]".to_owned()));
+
+    let mut entered = home_with(80, 24, launch());
+    open(&mut entered);
+    let sent = type_path(&mut entered, "/a");
+    answer(&mut entered, &sent[0].0, &["a1", "a2"], "/");
+    assert_eq!(key(&mut entered, Key::Down), Effect::None);
+    assert_eq!(key(&mut entered, Key::Enter), Effect::None);
+    assert_eq!(chips(&app), chips(&entered));
+}
+
+#[test]
+fn stale_or_disconnected_completion_clicks_do_nothing() {
+    let mut disconnected = home_with(80, 24, launch());
+    open(&mut disconnected);
+    let sent = type_path(&mut disconnected, "/a");
+    answer(&mut disconnected, &sent[0].0, &["a1", "a2"], "/");
+    assert_eq!(focused(&disconnected), Some("a1".to_owned()));
+    let other_completion = rendered_completion_target(&disconnected, "a2");
+    disconnected.outbox.link = crate::app::outbox::Link::Down;
+    assert_eq!(disconnected.on_click(other_completion), Effect::None);
+    assert_eq!(focused(&disconnected), Some("a1".to_owned()));
+
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    let sent = type_path(&mut app, "/a");
+    answer(&mut app, &sent[0].0, &["a1", "ab2"], "/");
+    let stale = rendered_completion_target(&app, "a1");
+    type_path(&mut app, "b");
+    assert_eq!(app.on_click(stale), Effect::None);
+    assert!(picker_open(&app));
+    assert!(chips(&app).contains(&"[w]".to_owned()));
+
+    let current = rendered_completion_target(&app, "ab2");
+    app.outbox.link = crate::app::outbox::Link::Down;
+    assert_eq!(app.on_click(current), Effect::None);
+    assert!(picker_open(&app));
+    assert!(chips(&app).contains(&"[w]".to_owned()));
+}
+
+#[test]
+fn ambiguous_completion_clicks_do_nothing() {
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    let sent = type_path(&mut app, "/a");
+    answer(&mut app, &sent[0].0, &["a1", "a1"], "/");
+    let target = rendered_completion_target(&app, "a1");
+    assert_eq!(app.on_click(target), Effect::None);
+    assert!(picker_open(&app));
+    assert!(chips(&app).contains(&"[w]".to_owned()));
 }
 
 #[test]

@@ -9,13 +9,24 @@ use contract::{Envelope, SessionId};
 use ratatui::text::Line;
 use serde_json::Value;
 
+/// A workspace-picker completion's name-derived identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CompletionId(u64);
+
+impl CompletionId {
+    /// The same name always gives the same completion identity.
+    pub(crate) fn for_name(name: &str) -> Self {
+        Self(u64::try_from(crate::turn::target_id(name)).unwrap_or(u64::MAX))
+    }
+}
+
 /// A click target on home: one row's line, by the key [`Sessions`]
 /// gave it when it first appeared, its ✕ in the last column, the scope
 /// toggle heading the list, the workspace chip opening the workspace
 /// picker, the new worktree switch, the model chip opening the model
 /// picker, the thinking chip opening it at the model's thinking chips,
-/// one picker row by its index in the current picker list, one
-/// quit choice while the quit question is open, the delete question's
+/// one recent row by its index or one typed completion by identity,
+/// one quit choice while the quit question is open, the delete question's
 /// ✕, and the delete frame itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Spot {
@@ -46,8 +57,10 @@ pub(crate) enum Spot {
     Thinking,
     /// A first-run blocker line with a credential fix.
     Blocker(usize),
-    /// A picker row, by its index in the current picker list.
+    /// A picker row, by its index in the current recent list.
     Pick(usize),
+    /// A typed completion, by a stable name-derived identity.
+    PickCompletion(CompletionId),
     /// A quit choice while the quit question is open: clicking it does
     /// what its key does.
     Quit(QuitChoice),
@@ -80,6 +93,7 @@ impl Spot {
             | Spot::Model
             | Spot::Thinking
             | Spot::Pick(_)
+            | Spot::PickCompletion(_)
             | Spot::Blocker(_)
             | Spot::Quit(_)
             | Spot::Clear(_)
@@ -100,6 +114,7 @@ impl Spot {
             | Spot::More(_)
             | Spot::Archived(_)
             | Spot::Pick(_)
+            | Spot::PickCompletion(_)
             | Spot::Blocker(_)
             | Spot::Keep
             | Spot::Question
