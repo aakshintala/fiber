@@ -335,3 +335,4 @@ crates/main/tests/session_turns/from_session.rs	fiber-5038	plan	2026-11-28T07:49
 crates/main/tests/support/mod.rs	fiber-5038	plan	2026-11-28T07:49:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/tool_calls/driver_shell_sent.rs	fiber-5038	plan	2026-11-28T07:49:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/commands/archive.rs	fiber-5043	plan	2026-11-28T08:15:36Z	roundhouse-7010-plus-1:/home/aakshintala	
+crates/main/tests/extension_host/extension_state_resume.rs	fiber-5038	plan	2026-11-28T10:10:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
