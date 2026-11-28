@@ -861,3 +861,4 @@ crates/tui/src/snapshots/tui__view__home__tests__quit_prompt_on_home.snap	fiber-
 crates/tui/src/view/snapshots/tui__view__quit__tests__close_all_at_width_40.snap	fiber-4639	plan	2026-11-28T00:30:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/snapshots/tui__view__quit__tests__close_all_on_home.snap	fiber-4639	plan	2026-11-28T00:30:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/snapshots/tui__view__quit__tests__quit_on_home.snap	fiber-4639	plan	2026-11-28T00:30:10Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/hub_daemon/support_helpers.rs	fiber-4954	plan	2026-11-28T00:35:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	5026
