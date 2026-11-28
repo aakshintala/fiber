@@ -59,7 +59,7 @@ fn fit_home_foot(parts: &[HomeFootPart], max_width: u16) -> Line<'static> {
             break;
         }
     }
-    retained.extend(mandatory.into_iter().map(|part| part.clone()));
+    retained.extend(mandatory.into_iter().cloned());
     crate::home::home_foot(&retained)
 }
 
