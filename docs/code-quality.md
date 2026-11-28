@@ -241,6 +241,10 @@ Only what no tool can:
 - every lint allow, `unsafe` block and mutation-test exemption gives a reason
   that holds
 - comments explain why, where the code would surprise a careful reader
+- a citation of a doc in code, a comment or a test names the file in
+  backticks and a quoted heading, as `` `docs/<file>.md`, "<heading>" ``,
+  never a line number, which goes stale on the next edit above it
+  (`docs/ci.md`, "The docs check")
 - a fix sits where the wrong value is made, not where it is noticed, and the
   same mistake elsewhere is fixed in the same pull request
 - no struct whose fields can contradict each other (see "Types")
