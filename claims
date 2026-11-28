@@ -463,7 +463,6 @@ crates/main/tests/support/hub_start.rs	fiber-3738	plan	2026-11-28T02:21:04Z	roun
 crates/support/src/deadline.rs	fiber-3738	plan	2026-11-28T02:21:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-3738	
 crates/tui/src/app.rs	fiber-4584	plan	2026-11-28T02:41:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/event_loop.rs	fiber-4584	plan	2026-11-28T02:41:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/main/tests/providers/credential_signals.rs	fiber-5001	plan	2026-11-28T03:08:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/databricks.rs	fiber-4901	plan	2026-11-28T03:56:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/screens/snapshots/screens__journeys__image_paste_pasted.snap:36-36	fiber-4639	plan	2026-11-28T03:58:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4639-home-foot-hint-narrow	
 crates/tui/src/app/home.rs:200-203	fiber-4639	plan	2026-11-28T03:58:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4639-home-foot-hint-narrow	
