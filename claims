@@ -566,7 +566,6 @@ crates/main/tests/tool_calls/tools.rs:1173-1174	fiber-4954	plan	2026-11-28T02:45
 crates/main/tests/tool_calls/tools.rs:1275-1275	fiber-4954	plan	2026-11-28T02:45:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4954-outer-session-tests	
 crates/main/tests/providers/credential_signals.rs	fiber-5001	plan	2026-11-28T03:08:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/databricks.rs	fiber-4901	plan	2026-11-28T03:56:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-research/macos-file-readback/README.md	fiber-4934	plan	2026-11-28T03:57:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4934-macos-file-readback	
 crates/main/tests/screens/snapshots/screens__journeys__image_paste_pasted.snap:36-36	fiber-4639	plan	2026-11-28T03:58:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4639-home-foot-hint-narrow	
 crates/tui/src/app/home.rs:200-203	fiber-4639	plan	2026-11-28T03:58:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4639-home-foot-hint-narrow	
 crates/tui/src/app/home.rs:211-212	fiber-4639	plan	2026-11-28T03:58:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-4639-home-foot-hint-narrow	
@@ -701,3 +700,4 @@ docs/tui.md:71-72	fiber-4639	plan	2026-11-28T03:58:58Z	roundhouse-7010-plus-1:/s
 crates/main/tests/providers/model_picker_keys.rs	fiber-4942	plan	2026-11-28T04:12:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4942-model-picker-keys-flake	
 scripts/check	fiber-4942	plan	2026-11-28T04:12:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4942-model-picker-keys-flake	
 docs/workflow.md	fiber-4942	plan	2026-11-28T04:12:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4942-model-picker-keys-flake	
+research/macos-file-readback/README.md	fiber-4934	plan	2026-11-28T04:13:16Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4934-macos-file-readback	
