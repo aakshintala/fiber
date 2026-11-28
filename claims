@@ -590,7 +590,6 @@ crates/tui/src/app/commands_tests.rs:1898-1899	fiber-4976	plan	2026-11-27T23:45:
 crates/tui/src/event_loop_tests.rs:3947-3948	fiber-4976	plan	2026-11-27T23:45:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4976-feedback-draft-and-link	
 crates/tui/src/feedback_tests.rs:48-49	fiber-4976	plan	2026-11-27T23:45:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4976-feedback-draft-and-link	
 docs/tui.md:2613-2613	fiber-4976	plan	2026-11-27T23:45:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4976-feedback-draft-and-link	
-crates/main/tests/screens/journeys.rs	fiber-5011	plan	2026-11-27T23:47:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/lib.rs:146-147	fiber-688	plan	2026-11-27T23:54:46Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-688-part6	
 crates/extensions/src/tui_vm.rs:369-370	fiber-688	plan	2026-11-27T23:54:46Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-688-part6	
 crates/extensions/src/tui_vm.rs:1195-1195	fiber-688	plan	2026-11-27T23:54:46Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-688-part6	
