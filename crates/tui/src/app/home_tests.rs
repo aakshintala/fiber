@@ -5325,6 +5325,7 @@ fn foot(app: &App) -> String {
         .map(|screen| {
             screen
                 .foot
+                .line()
                 .spans
                 .iter()
                 .map(|span| span.content.as_ref())
@@ -5426,8 +5427,8 @@ fn the_foot_names_the_default_keys() {
 fn the_foot_bolds_each_key_and_dims_the_rest() {
     let app = home_with(80, 24, launch());
     let screen = app.home_screen().expect("home draws");
-    let bold: Vec<String> = screen
-        .foot
+    let foot_line = screen.foot.line();
+    let bold: Vec<String> = foot_line
         .spans
         .iter()
         .filter(|span| {
@@ -5451,7 +5452,7 @@ fn the_foot_bolds_each_key_and_dims_the_rest() {
         ]
     );
 
-    for span in &screen.foot.spans {
+    for span in &foot_line.spans {
         if bold.contains(&span.content.to_string()) {
             assert!(
                 !span
@@ -5495,8 +5496,8 @@ fn the_foot_uses_rebound_labels_in_their_slots() {
         "Ctrl+O opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · x stops a live one, deletes an exited one · Backspace archives an exited one · F2 the key map · Ctrl+C twice to quit"
     );
     let screen = app.home_screen().expect("home draws");
-    let bold: Vec<String> = screen
-        .foot
+    let foot_line = screen.foot.line();
+    let bold: Vec<String> = foot_line
         .spans
         .iter()
         .filter(|span| {
@@ -5641,8 +5642,9 @@ fn the_foot_shows_the_plain_quit_hint_while_armed() {
     let now = fakes::clock::FakeClock::new().now();
     app.on_key(Key::CtrlC, now);
     let screen = app.home_screen().expect("home draws");
-    assert_eq!(screen.foot.spans.len(), 1);
-    let span = &screen.foot.spans[0];
+    let foot_line = screen.foot.line();
+    assert_eq!(foot_line.spans.len(), 1);
+    let span = &foot_line.spans[0];
     assert_eq!(span.content.as_ref(), crate::app::QUIT_HINT);
     assert!(
         !span
@@ -5831,9 +5833,9 @@ fn the_back_hint_bolds_the_key_and_dims_the_rest() {
     linked(&mut app);
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     let screen = app.home_screen().expect("home draws");
+    let foot_line = screen.foot.line();
     let span = |content: &str| {
-        screen
-            .foot
+        foot_line
             .spans
             .iter()
             .find(|span| span.content.as_ref() == content)

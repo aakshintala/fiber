@@ -197,7 +197,7 @@ fn hint_back(spans: &mut Vec<Span<'static>>, esc: Option<&str>) {
     ));
 }
 
-type HomeFootPart = (Option<Span<'static>>, ratatui::text::Line<'static>, bool);
+use crate::home::{Foot, HomeFootPart};
 
 /// Adds one complete hint part, retaining its separator as a styled span.
 fn push_home_foot_part(
@@ -205,9 +205,7 @@ fn push_home_foot_part(
     line: ratatui::text::Line<'static>,
     mandatory: bool,
 ) {
-    let separator =
-        (!parts.is_empty()).then(|| Span::styled(" · ", Style::new().add_modifier(Modifier::DIM)));
-    parts.push((separator, line, mandatory));
+    parts.push(HomeFootPart { line, mandatory });
 }
 
 /// Adds one complete key and label, with its separator stored separately.
@@ -261,18 +259,6 @@ fn home_foot_parts(
     }
     push_home_foot_key(&mut parts, "Ctrl+C", "twice to quit", true);
     parts
-}
-
-/// The complete logical hint, retaining all parts and their original styles.
-fn home_foot(parts: &[HomeFootPart]) -> ratatui::text::Line<'static> {
-    let mut spans = Vec::new();
-    for (separator, part, _) in parts {
-        if let Some(separator) = separator {
-            spans.push(separator.clone());
-        }
-        spans.extend(part.spans.iter().cloned());
-    }
-    ratatui::text::Line::from(spans)
 }
 
 impl App {
@@ -613,10 +599,12 @@ impl App {
                 self.keys().first_label("close_or_interrupt"),
             ))
         };
-        let foot = foot_parts
-            .as_deref()
-            .map(home_foot)
-            .unwrap_or_else(|| ratatui::text::Line::from(self.hint_text()));
+        let foot = if let Some(parts) = foot_parts {
+            let line = crate::home::home_foot(&parts);
+            Foot::Parts { line, parts }
+        } else {
+            Foot::Text(ratatui::text::Line::from(self.hint_text()))
+        };
         Some(HomeScreen {
             header,
             list,
@@ -692,7 +680,6 @@ impl App {
             blockers: home.blockers.clone(),
             blocker_keys: home.blocker_keys.clone(),
             foot,
-            foot_parts,
             question,
             question_import: matches!(home.questions.prompt(), Some(Prompt::Import)),
             question_scroll,

@@ -1463,6 +1463,45 @@ fn the_box_sits_on_the_last_rows_above_the_foot() {
 }
 
 #[test]
+fn home_foot_fits_parts_at_the_exact_separator_boundary() {
+    let parts = vec![
+        crate::home::HomeFootPart {
+            line: ratatui::text::Line::from("a"),
+            mandatory: false,
+        },
+        crate::home::HomeFootPart {
+            line: ratatui::text::Line::from("b"),
+            mandatory: true,
+        },
+        crate::home::HomeFootPart {
+            line: ratatui::text::Line::from("c"),
+            mandatory: true,
+        },
+    ];
+    assert_eq!(super::fit_home_foot(&parts, 5).to_string(), "b · c");
+    assert_eq!(super::fit_home_foot(&parts, 9).to_string(), "a · b · c");
+}
+
+#[test]
+fn home_render_returns_its_mouse_target_and_exact_animation_keys() {
+    let app = home(160, 48);
+    let area = Rect::new(0, 0, 160, 48);
+    let mut buf = Buffer::empty(area);
+    let screen = app.home_screen().expect("home draws");
+    let (targets, animation_keys) = super::render(&app, &screen, area, &mut buf, None);
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == crate::mouse::TargetId::Home(Spot::Workspace)),
+        "home renders its workspace mouse target"
+    );
+    assert!(
+        animation_keys.is_empty(),
+        "static home has no animation keys"
+    );
+}
+
+#[test]
 fn the_foot_draws_bold_keys_dim_labels_centred_and_cut() {
     use ratatui::style::Modifier;
     let foot = "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit";

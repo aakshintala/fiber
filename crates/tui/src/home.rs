@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use contract::commands::SubscribeLevel;
 use contract::events::{SessionState, SessionStatus, WaitingKind};
 use contract::{Envelope, SessionId};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use serde_json::Value;
 
@@ -305,6 +306,54 @@ pub(crate) struct Chip {
     pub(crate) session_mark: bool,
 }
 
+/// One ordered Home hint part; separators are supplied by the shared joiner.
+#[derive(Clone)]
+pub(crate) struct HomeFootPart {
+    pub(crate) line: Line<'static>,
+    pub(crate) mandatory: bool,
+}
+
+/// Joins ordered parts with the shared dim separator, retaining key styles.
+pub(crate) fn home_foot(parts: &[HomeFootPart]) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (index, part) in parts.iter().enumerate() {
+        if index > 0 {
+            spans.push(ratatui::text::Span::styled(
+                " · ",
+                Style::new().add_modifier(Modifier::DIM),
+            ));
+        }
+        spans.extend(part.line.spans.iter().cloned());
+    }
+    Line::from(spans)
+}
+
+/// The home foot is either the trim-able key hint or a standalone prompt.
+pub(crate) enum Foot {
+    Parts {
+        line: Line<'static>,
+        parts: Vec<HomeFootPart>,
+    },
+    Text(Line<'static>),
+}
+
+impl Foot {
+    pub(crate) fn line(&self) -> Line<'static> {
+        match self {
+            Self::Parts { line, .. } | Self::Text(line) => line.clone(),
+        }
+    }
+}
+
+impl std::ops::Deref for Foot {
+    type Target = Line<'static>;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Parts { line, .. } | Self::Text(line) => line,
+        }
+    }
+}
 /// What home draws, built by [`crate::app::App::home_screen`].
 pub(crate) struct HomeScreen {
     /// Fiber's version, for the logo.
@@ -327,12 +376,8 @@ pub(crate) struct HomeScreen {
     /// The workspace picker above the box: its current recents,
     /// the focused row, and the typed path once a key opens its row.
     pub(crate) picker: Option<PickerScreen>,
-    /// The foot hint, or the quit hint while Ctrl+C is armed: each
-    /// key bold, its label and every joiner dim.
-    pub(crate) foot: Line<'static>,
-    /// Ordered Home hint parts: separator, styled key and label, and mandatory status.
-    /// `None` leaves an armed Ctrl+C quit hint outside width trimming.
-    pub(crate) foot_parts: Option<Vec<(Option<ratatui::text::Span<'static>>, Line<'static>, bool)>>,
+    /// The foot hint: key parts are trim-able; prompt text stands alone.
+    pub(crate) foot: Foot,
     /// The delete question, unwrapped: the frame wraps its head naming
     /// the session and everything `--cascade` adds, and its body
     /// scrolls past the frame.

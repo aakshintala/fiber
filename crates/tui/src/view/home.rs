@@ -12,7 +12,7 @@ use crate::app::Surface;
 use crate::completion_rows::Rows;
 use crate::format::{cut, width, wrap};
 use crate::graphics::logo::{COLS, ROWS, Shown};
-use crate::home::{HomeScreen, ListLine, Spot};
+use crate::home::{Foot, HomeFootPart, HomeScreen, ListLine, Spot};
 use crate::mouse::{self, Target, TargetId};
 use crate::text::to_u16;
 use crate::theme::{Role, style};
@@ -31,60 +31,36 @@ const PLACEHOLDER: &str = "› /? for shortcuts";
 const MIN_BOX: usize = 2;
 const MAX_BOX: usize = 8;
 
-type HomeFootPart = (Option<Span<'static>>, Line<'static>, bool);
-
-fn foot_separator_width(separator: Option<&Span<'static>>) -> usize {
-    separator.map_or(0, |separator| width(separator.content.as_ref()))
-}
-
 fn home_foot_width(parts: &[&HomeFootPart]) -> usize {
-    let mut width = 0;
+    let mut total = 0;
     for (index, part) in parts.iter().enumerate() {
         if index > 0 {
-            width += foot_separator_width(part.0.as_ref());
+            total += width(" · ");
         }
-        width += part.1.width();
+        total += part.line.width();
     }
-    width
-}
-
-fn home_foot_line(parts: &[&HomeFootPart]) -> Line<'static> {
-    let mut spans = Vec::new();
-    for (index, part) in parts.iter().enumerate() {
-        if index > 0
-            && let Some(separator) = part.0.as_ref()
-        {
-            spans.push(separator.clone());
-        }
-        spans.extend(part.1.spans.iter().cloned());
-    }
-    Line::from(spans)
+    total
 }
 
 fn fit_home_foot(parts: &[HomeFootPart], max_width: u16) -> Line<'static> {
-    let mandatory: Vec<&HomeFootPart> = parts.iter().filter(|part| part.2).collect();
+    let mandatory: Vec<&HomeFootPart> = parts.iter().filter(|part| part.mandatory).collect();
     let mandatory_width = home_foot_width(&mandatory);
-    let mandatory_separator_width = mandatory
-        .first()
-        .map_or(0, |part| foot_separator_width(part.0.as_ref()));
-    let mut retained = Vec::new();
+    let mut retained: Vec<HomeFootPart> = Vec::new();
     let mut retained_width = 0;
-    for part in parts.iter().filter(|part| !part.2) {
-        let separator_width = if retained.is_empty() {
-            0
-        } else {
-            foot_separator_width(part.0.as_ref())
-        };
-        let next_width = retained_width + separator_width + part.1.width();
+    for part in parts.iter().filter(|part| !part.mandatory) {
+        let separator_width = usize::from(!retained.is_empty()) * width(" · ");
+        let next_width = retained_width + separator_width + part.line.width();
+        let mandatory_separator_width =
+            usize::from(!retained.is_empty() || !mandatory.is_empty()) * width(" · ");
         if next_width + mandatory_width + mandatory_separator_width <= usize::from(max_width) {
-            retained.push(part);
+            retained.push(part.clone());
             retained_width = next_width;
         } else {
             break;
         }
     }
-    retained.extend(mandatory.iter().copied());
-    home_foot_line(&retained)
+    retained.extend(mandatory.into_iter().map(|part| part.clone()));
+    crate::home::home_foot(&retained)
 }
 
 /// Where home's rows draw.
@@ -911,14 +887,15 @@ pub(super) fn render(
     // At 80 columns, keep the mandatory tail and whole leading parts; below it,
     // preserve the original left-cut path.
     let trimmed_foot = if area.width >= 80 {
-        screen
-            .foot_parts
-            .as_ref()
-            .map(|parts| fit_home_foot(parts, area.width))
+        match &screen.foot {
+            Foot::Parts { parts, .. } => Some(fit_home_foot(parts, area.width)),
+            Foot::Text(_) => None,
+        }
     } else {
         None
     };
-    let foot = trimmed_foot.as_ref().unwrap_or(&screen.foot);
+    let fallback_foot = screen.foot.line();
+    let foot = trimmed_foot.as_ref().unwrap_or(&fallback_foot);
     if placed.foot >= area.y {
         let at = if foot.width() <= usize::from(area.width) {
             area.x
