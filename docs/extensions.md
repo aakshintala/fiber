@@ -330,6 +330,10 @@ including `start` and `end`, fails registration with a message naming it. A conf
 neither gets it, a `notice` names both, and configuration can leave one out
 (`extensions."<name>".tools.disabled`, `docs/configuration.md`).
 
+In a tool's `input_schema`, an empty table in a schema position becomes
+`{}`; schema array containers keep `[]`. Values under `enum`, `const`,
+`default` and `examples` are sent as written.
+
 A search backend's `run` takes one table, `{ query }` with
 `allowed_domains` or `blocked_domains` when the call gave one, and returns
 a list of `{ title, url, snippet }` results, every field a string. An empty
@@ -440,8 +444,8 @@ json.decode(str [, { lenient }]) / json.encode(value)   -- JSON, host-provided (
   `spec` carries the delegate tool's keys (`description`, `prompt`,
   `model`, and the optional `isolation`, `workspace` and `timeout_ms`),
   as a JSON object: an empty table becomes `{}`, which the service
-  refuses as missing `description` and `prompt` (`invalid_arguments`);
-  a non-empty list raises the string
+  refuses as missing `description` and `prompt` (`invalid_arguments`).
+  A non-empty list raises the string
   `host.delegate: `spec` must be a table of named arguments` before the
   call yields; a value `to_json` refuses raises the string
   `host.delegate: `spec` json: <reason>` before the call yields.
