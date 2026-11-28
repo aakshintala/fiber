@@ -124,13 +124,16 @@ fn connect_detached_hub_with_shell(
     let (client, hello) = connect_hub_started(
         setup,
         hub,
-        serve,
-        setup.deadline.left(),
-        setup.deadline,
-        "detached hub",
-        false,
-        DetachedHub::spawn_command,
-        |_, hub| detached_hub_start_report(hub),
+        HubConnect {
+            serve,
+            wait: setup.deadline.left(),
+            bound: setup.deadline,
+            name: "detached hub",
+            stretched: false,
+            start: DetachedHub::spawn_command,
+            report: detached_hub_start_report,
+            marker: std::marker::PhantomData,
+        },
     );
     assert_eq!(hello["kind"], "hub_hello");
     client

@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 use support::{
     Running, SessionGuard, Setup, Socket, close_session, close_subscribed_session,
     connect_detached_hub, connect_hub, expired, function_call, hello, recv_answer, session_dir,
-    start_session, subscribe_direct, until, until_after, until_replayed,
+    start_session, stream, subscribe_direct, until, until_after, until_replayed,
 };
 
 #[track_caller]

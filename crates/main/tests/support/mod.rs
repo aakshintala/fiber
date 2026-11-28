@@ -1931,7 +1931,10 @@ fn hub_start_report(setup: &Setup, hub: &Mutex<Option<HubProc>>) -> String {
 }
 
 /// Reports whether a detached hub's process group still has a live member.
-pub(crate) fn detached_hub_start_report(hub: &Mutex<Option<DetachedHub>>) -> String {
+pub(crate) fn detached_hub_start_report(
+    _setup: &Setup,
+    hub: &Mutex<Option<DetachedHub>>,
+) -> String {
     match hub
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1953,21 +1956,40 @@ pub(crate) fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<HubProc>>>) -> (
     connect_hub_within(setup, hub, setup.deadline.left())
 }
 
-/// Connects to a hub through `doors::hub::connect`, starting `fiber hub
-/// serve` when none runs. `start` owns the hub-specific spawn operation;
-/// `report` describes the hub if startup or the handshake fails.
+pub(crate) struct HubConnect<T, Start, Report> {
+    pub(crate) serve: Command,
+    pub(crate) wait: Duration,
+    pub(crate) bound: Deadline,
+    pub(crate) name: &'static str,
+    pub(crate) stretched: bool,
+    pub(crate) start: Start,
+    pub(crate) report: Report,
+    pub(crate) marker: std::marker::PhantomData<fn() -> T>,
+}
+
+/// Connects to a hub through `doors::hub::connect`, starting it when none
+/// runs. `start` owns the hub-specific spawn operation; `report` describes
+/// the hub if startup or the handshake fails.
 #[track_caller]
-pub(crate) fn connect_hub_started<T: Send + 'static>(
+pub(crate) fn connect_hub_started<T: Send + 'static, Start, Report>(
     setup: &Setup,
     hub: &Arc<Mutex<Option<T>>>,
-    mut serve: Command,
-    wait: Duration,
-    bound: Deadline,
-    name: &str,
-    stretched: bool,
-    mut start: impl FnMut(Deadline, &mut Command) -> T + Send + 'static,
-    report: impl Fn(&Setup, &Mutex<Option<T>>) -> String,
-) -> (Socket, Value) {
+    config: HubConnect<T, Start, Report>,
+) -> (Socket, Value)
+where
+    Start: FnMut(Deadline, &mut Command) -> T + Send + 'static,
+    Report: Fn(&Setup, &Mutex<Option<T>>) -> String,
+{
+    let HubConnect {
+        mut serve,
+        wait,
+        bound,
+        name,
+        stretched,
+        mut start,
+        report,
+        ..
+    } = config;
     let slot = Arc::clone(hub);
     let deadline = setup.deadline;
     let home = setup.home();
@@ -2019,13 +2041,16 @@ pub(crate) fn connect_detached_hub(
     connect_hub_started(
         setup,
         hub,
-        serve,
-        setup.deadline.left(),
-        setup.deadline,
-        "detached hub",
-        true,
-        DetachedHub::spawn_command,
-        |_, hub| detached_hub_start_report(hub),
+        HubConnect {
+            serve,
+            wait: setup.deadline.left(),
+            bound: setup.deadline,
+            name: "detached hub",
+            stretched: true,
+            start: DetachedHub::spawn_command,
+            report: detached_hub_start_report,
+            marker: std::marker::PhantomData,
+        },
     )
 }
 
@@ -2079,13 +2104,16 @@ pub(crate) fn connect_hub_within(
     connect_hub_started(
         setup,
         hub,
-        serve,
-        wait,
-        Deadline::after(WAIT),
-        "hub",
-        true,
-        HubProc::spawn_command,
-        |setup, hub| hub_start_report(setup, hub),
+        HubConnect {
+            serve,
+            wait,
+            bound: Deadline::after(WAIT),
+            name: "hub",
+            stretched: true,
+            start: HubProc::spawn_command,
+            report: hub_start_report,
+            marker: std::marker::PhantomData,
+        },
     )
 }
 

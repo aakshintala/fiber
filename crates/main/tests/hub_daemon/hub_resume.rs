@@ -236,10 +236,10 @@ impl Hub {
         fakes::try_matching_exits(&self.workspace, self.deadline).unwrap_or_else(|err| {
             panic!("waited until the deadline for every session to exit: {err}")
         });
-        if matches!(&self.process, HubProcess::Child(_)) {
-            if let Some(watchdog) = self.watchdog.take() {
-                watchdog.stand_down(self.deadline.cleanup_phase());
-            }
+        if matches!(&self.process, HubProcess::Child(_))
+            && let Some(watchdog) = self.watchdog.take()
+        {
+            watchdog.stand_down(self.deadline.cleanup_phase());
         }
         if let Some(watchdog) = self.sessions.take() {
             watchdog.stand_down(self.deadline.cleanup_phase());
