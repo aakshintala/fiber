@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::sync::Arc;
 
 use super::{Cache, PageKey};
-use crate::ext::{Decision, FailureKind, HomeInput, Input, LayoutDecision, LayoutInput, RawRect};
+use crate::ext::{Decision, FailureKind, HomeInput, Input, LayoutInput, RawRect};
 use crate::layout::Region;
 
 fn page(index: usize) -> PageKey {
@@ -106,9 +106,9 @@ fn layout_cache_keys_width_height_shown_regions_and_flat() {
     let draw = |input: &LayoutInput, regions: Vec<(Region, RawRect)>| {
         cache.layout_regions(page(0), "test", None, input, || {
             calls.set(calls.get().saturating_add(1));
-            LayoutDecision::Draw {
+            Decision::Draw {
                 extension: "test".into(),
-                regions,
+                lines: regions,
             }
         })
     };
@@ -143,9 +143,9 @@ fn layout_regions_counts_renderer_calls_only_on_cache_misses() {
     let cache = Cache::default();
     let input = layout_input(10, 8, &["conversation"], false);
     let draw = || {
-        cache.layout_regions(page(0), "test", None, &input, || LayoutDecision::Draw {
+        cache.layout_regions(page(0), "test", None, &input, || Decision::Draw {
             extension: "test".into(),
-            regions: vec![(Region::Conversation, raw_rect(0, 0, 4, 3))],
+            lines: vec![(Region::Conversation, raw_rect(0, 0, 4, 3))],
         })
     };
 
@@ -164,9 +164,9 @@ fn dropping_a_page_removes_only_its_layout_cache_entry() {
     let draw = |page| {
         cache.layout_regions(page, "test", None, &input, || {
             calls.set(calls.get().saturating_add(1));
-            LayoutDecision::Draw {
+            Decision::Draw {
                 extension: "test".into(),
-                regions: vec![(Region::Conversation, raw_rect(0, 0, 4, 3))],
+                lines: vec![(Region::Conversation, raw_rect(0, 0, 4, 3))],
             }
         })
     };
@@ -235,17 +235,16 @@ fn invalid_layout_maps_fail_atomically_and_cache_the_failure() {
         let draw = || {
             cache.layout_regions(page(0), "test", None, &input, || {
                 calls.set(calls.get().saturating_add(1));
-                LayoutDecision::Draw {
+                Decision::Draw {
                     extension: "test".into(),
-                    regions: regions.clone(),
+                    lines: regions.clone(),
                 }
             })
         };
         assert_eq!(draw(), None, "invalid map {index} must fall back whole");
         assert_eq!(draw(), None, "a cached failure still falls back whole");
         assert_eq!(calls.get(), 1, "a cached failure does not call Lua again"); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
-        // `docs/tui.md`, "The slots": a failed extension produces one failure notice.
-        assert_eq!(cache.take_failures().len(), 1);
+        assert_eq!(cache.take_failures().len(), 1); // `docs/tui.md`, "The slots": invalid layout output raises one notice.
         assert!(cache.take_failures().is_empty());
     }
 }
@@ -258,9 +257,9 @@ fn layout_regions_accepts_edge_touching_rectangles_on_each_axis() {
         ("vertical", raw_rect(0, 5, 2, 1), raw_rect(0, 4, 2, 1)),
     ] {
         let input = layout_input(10, 10, &["conversation", "panel"], false);
-        let map = cache.layout_regions(page(0), "test", None, &input, || LayoutDecision::Draw {
+        let map = cache.layout_regions(page(0), "test", None, &input, || Decision::Draw {
             extension: "test".into(),
-            regions: vec![(Region::Conversation, prior), (Region::Panel, current)],
+            lines: vec![(Region::Conversation, prior), (Region::Panel, current)],
         });
         assert!(map.is_some(), "{label} edge-touching rectangles are valid");
         cache.drop_page(page(0));
@@ -271,9 +270,9 @@ fn layout_regions_accepts_edge_touching_rectangles_on_each_axis() {
 fn layout_rejects_rectangles_negative_on_both_axes() {
     let cache = Cache::default();
     let input = layout_input(10, 5, &["conversation"], false);
-    let result = cache.layout_regions(page(0), "test", None, &input, || LayoutDecision::Draw {
+    let result = cache.layout_regions(page(0), "test", None, &input, || Decision::Draw {
         extension: "test".into(),
-        regions: vec![(Region::Conversation, raw_rect(-1, -1, 1, 1))],
+        lines: vec![(Region::Conversation, raw_rect(-1, -1, 1, 1))],
     });
 
     assert!(
@@ -286,15 +285,14 @@ fn layout_rejects_rectangles_negative_on_both_axes() {
 fn layout_rejects_negative_x_with_nonnegative_y() {
     let cache = Cache::default();
     let input = layout_input(10, 5, &["conversation"], false);
-    let result = cache.layout_regions(page(0), "test", None, &input, || LayoutDecision::Draw {
+    let result = cache.layout_regions(page(0), "test", None, &input, || Decision::Draw {
         extension: "test".into(),
-        regions: vec![(Region::Conversation, raw_rect(-1, 0, 1, 1))],
+        lines: vec![(Region::Conversation, raw_rect(-1, 0, 1, 1))],
     });
 
     assert!(result.is_none(), "a map with negative x is rejected");
     let failures = cache.take_failures();
-    // `docs/tui.md`, "The slots": one failure and notice are reported.
-    assert_eq!(failures.len(), 1);
+    assert_eq!(failures.len(), 1); // `docs/tui.md`, "The slots": invalid layout output raises one notice.
     assert_eq!(
         failures[0].1.message,
         "layout region `conversation` must be at least 1x1 and in bounds"
@@ -311,9 +309,9 @@ fn layout_regions_rejects_overlapping_rectangles_on_each_axis() {
         let input = layout_input(10, 10, &["conversation", "panel"], false);
         assert_eq!(
             cache.layout_regions(page(0), "test", None, &input, || {
-                LayoutDecision::Draw {
+                Decision::Draw {
                     extension: "test".into(),
-                    regions: vec![(Region::Conversation, prior), (Region::Panel, current)],
+                    lines: vec![(Region::Conversation, prior), (Region::Panel, current)],
                 }
             }),
             None,
@@ -334,9 +332,9 @@ fn each_invalid_layout_rectangle_dimension_is_rejected() {
         let cache = Cache::default();
         assert_eq!(
             cache.layout_regions(page(0), "test", None, &input, || {
-                LayoutDecision::Draw {
+                Decision::Draw {
                     extension: "test".into(),
-                    regions: vec![(Region::Conversation, rect)],
+                    lines: vec![(Region::Conversation, rect)],
                 }
             }),
             None,
@@ -353,15 +351,14 @@ fn failed_layout_decision_is_cached_and_reported_once_for_builtin_fallback() {
     let draw = || {
         cache.layout_regions(page(0), "test", None, &input, || {
             calls.set(calls.get().saturating_add(1));
-            LayoutDecision::Fail(failed("test", "unknown layout region"))
+            Decision::Fail(failed("test", "unknown layout region"))
         })
     };
 
     assert_eq!(draw(), None);
     assert_eq!(draw(), None);
     assert_eq!(calls.get(), 1); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
-    // `docs/tui.md`, "The slots": a cached failure is noticed once.
-    assert_eq!(cache.take_failures().len(), 1);
+    assert_eq!(cache.take_failures().len(), 1); // `docs/tui.md`, "The slots": invalid layout output raises one notice.
     assert!(cache.take_failures().is_empty());
 }
 

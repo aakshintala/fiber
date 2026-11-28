@@ -850,7 +850,7 @@ fn no_color_wraps_a_full_width_draft_inside_the_sides() {
     let column = typed(40, 12, "")
         .chrome()
         .layout()
-        .map_or(Rect::new(0, 0, 40, 12), |layout| layout.column);
+        .map_or(Rect::new(0, 0, 40, 12), |layout| layout.column());
     let area = Rect::new(column.x, 0, column.width, 12);
     let inner = usize::from(crate::surface::inset(area.width));
     let digits = |n: usize| -> String {
@@ -1457,7 +1457,7 @@ fn the_status_row_holds_both_sides_with_a_dim_joiner() {
     let column = app
         .chrome()
         .layout()
-        .map(|layout| layout.column)
+        .map(|layout| layout.column())
         .expect("a column");
     let left = "/w/fiber  │  auto";
     let right = "test/model high  │  ctx ▆▆▆▆▆▆▆▆ 268.0k · 26%";
@@ -1498,7 +1498,7 @@ fn the_rule_sits_above_the_row_in_rule() {
     let column = app
         .chrome()
         .layout()
-        .map(|layout| layout.column)
+        .map(|layout| layout.column())
         .expect("a column");
     let start = column.x.saturating_add(1);
     let end = column.right().saturating_sub(1);
@@ -1518,7 +1518,7 @@ fn row_cells(buf: &Buffer, app: &App, y: u16) -> String {
     let column = app
         .chrome()
         .layout()
-        .map(|layout| layout.column)
+        .map(|layout| layout.column())
         .expect("a column");
     let start = usize::from(column.x.saturating_add(1));
     let end = usize::from(column.right().saturating_sub(1));
@@ -1544,7 +1544,7 @@ fn the_working_directory_is_cut_from_the_left_first() {
     let column = probe
         .chrome()
         .layout()
-        .map(|layout| layout.column)
+        .map(|layout| layout.column())
         .expect("a column");
     assert_eq!((column.x, column.width), (1, 99));
     let avail = usize::from(column.width) - 2;
@@ -1596,7 +1596,7 @@ fn the_left_side_is_cut_at_its_right_end() {
         let column = app
             .chrome()
             .layout()
-            .map(|layout| layout.column)
+            .map(|layout| layout.column())
             .expect("a column");
         assert_eq!((column.x, column.width), (1, width), "screen {screen}");
         let area = Rect::new(0, 0, screen, 30);
@@ -1642,7 +1642,7 @@ fn the_right_side_is_cut_only_when_the_slab_is_narrower() {
         let column = app
             .chrome()
             .layout()
-            .map(|layout| layout.column)
+            .map(|layout| layout.column())
             .expect("a column");
         assert_eq!((column.x, column.width), (1, width), "screen {screen}");
         let area = Rect::new(0, 0, screen, 30);
@@ -1687,7 +1687,7 @@ fn narrow_slabs_pin_the_fill_boundaries() {
         let avail = usize::from(
             app.chrome()
                 .layout()
-                .map(|layout| layout.column.width)
+                .map(|layout| layout.column().width)
                 .expect("a column"),
         ) - 2;
         assert_eq!(crate::format::width(&row), avail, "{row:?} at {screen}");
@@ -1756,7 +1756,7 @@ fn a_wide_slab_keeps_the_working_directory() {
     let avail = usize::from(
         app.chrome()
             .layout()
-            .map(|layout| layout.column.width)
+            .map(|layout| layout.column().width)
             .expect("a column"),
     ) - 2;
     assert!(row.contains("fiber"), "{row:?}");
@@ -1803,7 +1803,7 @@ fn the_sides_keep_two_columns_across_widths() {
         let avail = usize::from(
             app.chrome()
                 .layout()
-                .map(|layout| layout.column.width)
+                .map(|layout| layout.column().width)
                 .expect("a column"),
         ) - 2;
         assert!(
@@ -2012,7 +2012,7 @@ fn input_status_replacement_keeps_a_whole_row_session_status_target() {
     let column = app
         .chrome()
         .layout()
-        .map(|layout| layout.column)
+        .map(|layout| layout.column())
         .expect("a column");
     let status: Vec<Rect> = targets
         .iter()

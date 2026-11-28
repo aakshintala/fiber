@@ -101,7 +101,7 @@ fn draw(app: &App, width: u16, height: u16) -> (Buffer, usize) {
 fn placement_shares_split_geometry_and_vertical_regions() {
     let app = app(160, 40, false);
     let placement = super::super::placement(&app).expect("the attached screen has a placement");
-    let regions = placement.regions;
+    let regions = placement.regions();
     assert_eq!(
         regions.get(crate::layout::Region::Rail),
         Some(Rect::new(0, 0, 24, 40))
@@ -137,15 +137,15 @@ fn extension_layout_places_the_same_regions_that_chrome_draws() {
 
     let placement = crate::view::placement(&app).expect("placed after install");
     assert_eq!(
-        placement.regions.get(crate::layout::Region::Rail),
+        placement.regions().get(crate::layout::Region::Rail),
         Some(Rect::new(0, 0, 20, 40))
     );
     assert_eq!(
-        placement.regions.get(crate::layout::Region::Conversation),
+        placement.regions().get(crate::layout::Region::Conversation),
         Some(Rect::new(30, 0, 100, 35))
     );
     assert_eq!(
-        placement.regions.get(crate::layout::Region::Panel),
+        placement.regions().get(crate::layout::Region::Panel),
         Some(Rect::new(140, 0, 20, 40))
     );
     assert_eq!(
@@ -194,11 +194,11 @@ fn placement_row_counts_ignore_the_previous_extension_column_width() {
     let area = Rect::new(0, 0, 160, 40);
     let split = app.chrome().layout().expect("attached split");
     assert_ne!(
-        crate::view::steering_queue::count(&app, split.column.width),
+        crate::view::steering_queue::count(&app, split.column().width),
         crate::view::steering_queue::count(&app, 30),
     );
     let before = super::super::placement_from_split(&app, area, split);
-    let builtin = before.regions;
+    let builtin = before.regions();
     let conversation = builtin
         .get(crate::layout::Region::Conversation)
         .expect("conversation region");
@@ -241,7 +241,7 @@ fn invalid_extension_layout_falls_back_whole_and_notices_once() {
     let area = Rect::new(0, 0, 160, 40);
     let builtin = crate::view::placement(&app)
         .expect("the attached screen has a placement")
-        .regions;
+        .regions();
     let renderer = Rc::new(SlotRenderer::filling(
         &["layout"],
         SlotScript::Replace(Vec::new()),
@@ -287,7 +287,7 @@ fn invalid_extension_layout_falls_back_whole_and_notices_once() {
     app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
 
     let placed = crate::view::placement(&app).expect("fallback placement");
-    assert_eq!(placed.regions, builtin);
+    assert_eq!(placed.regions(), builtin);
     assert_eq!(renderer.layout_inputs.borrow().len(), 1); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
 
     let mut buf = Buffer::empty(area);
@@ -315,7 +315,7 @@ fn builtin_layout_cache_refreshes_when_input_rows_change_placement() {
     app.use_renderer(Rc::clone(&renderer) as Rc<dyn Renderer>);
     let before = crate::view::placement(&app)
         .expect("attached screen has a placement")
-        .regions;
+        .regions();
     assert_eq!(renderer.layout_inputs.borrow().len(), 1); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
 
     for _ in 0..3 {
@@ -323,7 +323,7 @@ fn builtin_layout_cache_refreshes_when_input_rows_change_placement() {
     }
     let after = crate::view::placement(&app)
         .expect("attached screen has a placement")
-        .regions;
+        .regions();
 
     assert_ne!(
         after.get(crate::layout::Region::InputBox),
@@ -429,7 +429,7 @@ fn the_conversation_has_no_header_and_a_blank_column_each_side() {
         })
         .expect("the reply row");
     let layout = app.chrome().layout().expect("a layout with the rail");
-    let rail = layout.rail.expect("a rail");
+    let rail = layout.rail().expect("a rail");
     let tint = buf
         .cell((rail.right().saturating_add(1), y))
         .map(|cell| cell.bg)
@@ -451,7 +451,7 @@ fn the_conversation_has_no_header_and_a_blank_column_each_side() {
     app.on_line(status(SESSION, "two"));
     app.on_line(status("s_bbbbbbbbbbbbbbbb", "two"));
     let layout = app.chrome().layout().expect("a layout with the rail");
-    let rail = layout.rail.expect("a rail");
+    let rail = layout.rail().expect("a rail");
     let (buf, _) = draw(&app, 160, 40);
     let y = (0..40)
         .find(|y| {
@@ -570,8 +570,8 @@ fn the_rail_and_panel_regions_take_the_panel_tint() {
     }
     let (buf, _) = draw(&app, 160, 40);
     let layout = app.chrome().layout().expect("a layout");
-    let panel = layout.panel.expect("a panel");
-    let rail = layout.rail.expect("a rail");
+    let panel = layout.panel().expect("a panel");
+    let rail = layout.rail().expect("a rail");
     let panel_tint = Role::Panel.color();
     for y in panel.top()..panel.bottom() {
         assert_eq!(buf[(panel.x, y)].bg, panel_tint, "panel edge row {y}");

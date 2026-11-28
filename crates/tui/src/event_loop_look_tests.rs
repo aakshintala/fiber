@@ -270,8 +270,8 @@ fn the_rail_and_panel_regions_paint_in_the_panel_tint() {
         }));
     }
     let layout = app.chrome().layout().expect("a layout");
-    let panel = layout.panel.expect("a panel");
-    let rail = layout.rail.expect("a rail");
+    let panel = layout.panel().expect("a panel");
+    let rail = layout.rail().expect("a rail");
     let mut screen = Screen::new(TestBackend::new(160, 40), 160, 40).expect("a screen");
     screen.set_look(look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")]));
     screen

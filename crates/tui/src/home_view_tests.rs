@@ -59,27 +59,15 @@ fn home_line_builders_preserve_padding_alignment_and_cut_boundaries() {
         plus: None,
     };
     let aligned = super::home_row_line(&row, 12);
-    assert_eq!(aligned[0].text, "left");
-    assert_eq!(aligned[1].text, "   ");
-    assert_eq!(aligned[2].text, "right");
+    assert_eq!(aligned.spans[0].content, "left");
+    assert_eq!(aligned.spans[1].content, "   ");
+    assert_eq!(aligned.spans[2].content, "right");
     let no_gap = super::home_row_line(&row, 9);
-    assert_eq!(
-        no_gap
-            .iter()
-            .map(|span| span.text.as_str())
-            .collect::<String>(),
-        "leftright"
-    );
-    assert_eq!(no_gap.len(), 2);
+    assert_eq!(no_gap.text, "leftright");
+    assert_eq!(no_gap.spans.len(), 2);
     let stop = super::ListRow { stop: true, ..row };
     let reserved = super::home_row_line(&stop, 12);
-    assert_eq!(
-        reserved
-            .iter()
-            .map(|span| span.text.as_str())
-            .collect::<String>(),
-        "left right"
-    );
+    assert_eq!(reserved.text, "left right");
 
     let spans = [
         ratatui::text::Span::raw("abc"),
@@ -90,7 +78,7 @@ fn home_line_builders_preserve_padding_alignment_and_cut_boundaries() {
     assert_eq!(
         exact_then_next
             .iter()
-            .map(|span| span.text.as_str())
+            .map(|span| span.content.as_ref())
             .collect::<Vec<_>>(),
         ["abc", "d"]
     );
@@ -98,14 +86,14 @@ fn home_line_builders_preserve_padding_alignment_and_cut_boundaries() {
     assert_eq!(
         partial
             .iter()
-            .map(|span| span.text.as_str())
+            .map(|span| span.content.as_ref())
             .collect::<Vec<_>>(),
         ["ab"]
     );
     let dropped = [ratatui::text::Span::raw(""), ratatui::text::Span::raw("x")];
     let kept = super::cut_home_spans(&dropped, 1);
     assert_eq!(kept.len(), 1);
-    assert_eq!(kept[0].text, "x");
+    assert_eq!(kept[0].content, "x");
 }
 
 #[test]

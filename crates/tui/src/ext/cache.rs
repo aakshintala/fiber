@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use super::anim::{AnimKey, effective_interval};
 use super::spans::{self, FittedLine};
-use super::{Decision, Failure, FailureKind, Input, LayoutDecision, LayoutInput, RawRect};
+use super::{Decision, Failure, FailureKind, Input, LayoutInput, RawRect};
 use crate::layout::{Region, RegionMap};
 use crate::mouse::Target;
 use crate::rows::Join;
@@ -358,7 +358,7 @@ impl Cache {
         extension: &str,
         half: Option<String>,
         input: &LayoutInput,
-        call: impl FnOnce() -> LayoutDecision,
+        call: impl FnOnce() -> Decision<Vec<(Region, RawRect)>>,
     ) -> Option<RegionMap> {
         let key = (
             page,
@@ -376,9 +376,9 @@ impl Cache {
         }
         crate::work::add(|work| work.renderer_calls += 1);
         match call() {
-            LayoutDecision::Draw {
+            Decision::Draw {
                 extension: actual,
-                regions,
+                lines: regions,
             } => {
                 if actual != extension {
                     return None;
@@ -401,13 +401,13 @@ impl Cache {
                     }
                 }
             }
-            LayoutDecision::Fail(failure) => {
+            Decision::Fail(failure) => {
                 if failure.extension == extension {
                     self.fail(key, failure);
                 }
                 None
             }
-            LayoutDecision::NotForSession { .. } => None,
+            Decision::NotForSession { .. } => None,
         }
     }
 

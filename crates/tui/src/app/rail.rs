@@ -256,7 +256,7 @@ impl App {
             let kept = self
                 .chrome
                 .drawn_layout()
-                .and_then(|layout| layout.rail)
+                .and_then(|layout| layout.rail())
                 .is_some_and(|rail| {
                     let drawn = rows(self, rail.width);
                     self.rail_state.focus.is_some_and(|focus| {
@@ -292,7 +292,7 @@ impl App {
         let Some(key) = self.rail_state.reveal else {
             return;
         };
-        let Some(rail) = self.chrome.drawn_layout().and_then(|layout| layout.rail) else {
+        let Some(rail) = self.chrome.drawn_layout().and_then(|layout| layout.rail()) else {
             return;
         };
         let rows = rows(self, rail.width);
@@ -388,7 +388,7 @@ impl App {
         if self
             .chrome
             .layout()
-            .and_then(|layout| layout.rail)
+            .and_then(|layout| layout.rail())
             .is_none()
         {
             return;
@@ -485,7 +485,7 @@ impl App {
             if self
                 .chrome
                 .layout()
-                .is_some_and(|layout| layout.rail.is_some())
+                .is_some_and(|layout| layout.rail().is_some())
             {
                 if let Some(key) = self.attached_card_key() {
                     self.set_rail_focus(Spot::Card(key));
@@ -651,7 +651,7 @@ impl App {
         let Some(layout) = self.chrome.layout() else {
             return Effect::None;
         };
-        if layout.rail.is_some() {
+        if layout.rail().is_some() {
             self.hide_rail();
             return Effect::None;
         }
@@ -925,7 +925,7 @@ impl App {
     /// wheel; down goes to the next card's top, up to the previous one's,
     /// both clamped to that end.
     pub(super) fn scroll_rail(&mut self, up: bool) {
-        let Some(rail) = self.chrome.drawn_layout().and_then(|layout| layout.rail) else {
+        let Some(rail) = self.chrome.drawn_layout().and_then(|layout| layout.rail()) else {
             return;
         };
         let rows = rows(self, rail.width);

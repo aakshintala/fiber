@@ -48,7 +48,7 @@ impl App {
     /// it.
     pub(crate) fn narrow_fit(&self) -> Option<Fit> {
         let layout = self.chrome.layout().filter(|layout| layout.narrow)?;
-        let width = layout.column.width;
+        let width = layout.column().width;
         let height = usize::from(self.screen.height());
         let widgets = crate::view::status_rows::widget(self, width).len();
         let delegates = crate::view::status_rows::delegates(self, width).len();

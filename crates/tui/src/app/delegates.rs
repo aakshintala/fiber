@@ -17,7 +17,11 @@ impl App {
     /// row as the panel's draw places them: the first on the rect's second
     /// row, after the panel's clamped scroll.
     pub(super) fn wheel_panel(&mut self, row: u16, up: bool) {
-        let Some(panel) = self.chrome().drawn_layout().and_then(|layout| layout.panel) else {
+        let Some(panel) = self
+            .chrome()
+            .drawn_layout()
+            .and_then(|layout| layout.panel())
+        else {
             return;
         };
         let (rows, span) = crate::view::panel::rows_and_delegates(self, panel.width);

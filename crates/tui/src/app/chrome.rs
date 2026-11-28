@@ -28,10 +28,8 @@ pub(crate) struct Chrome {
     panel_hidden: bool,
     /// ⌥R hid the rail: it stays hidden until shown.
     rail_hidden: bool,
-    /// The session screen's built-in split; `None` on home or below the floor.
+    /// The session screen's split and the placed rectangles for its latest frame.
     layout: Option<Layout>,
-    /// The shared six-region placement for the latest settled frame.
-    placement: Option<crate::view::Placement>,
     /// The floor line, while the screen is below the floor.
     floor: Option<String>,
 }
@@ -78,7 +76,7 @@ impl Chrome {
     ) -> bool {
         self.show_rail();
         Self::layout_for(width, height, home, false, self.panel_hidden)
-            .is_some_and(|layout| layout.rail.is_none() && layout.panel.is_some())
+            .is_some_and(|layout| layout.rail().is_none() && layout.panel().is_some())
     }
 
     /// Lays a `width` by `height` screen out. The rail is wanted unless
@@ -86,27 +84,21 @@ impl Chrome {
     fn lay_out(&mut self, width: u16, height: u16, home: HomeState) {
         self.floor = layout::floor_line(width, height);
         self.layout = Self::layout_for(width, height, home, self.rail_hidden, self.panel_hidden);
-        self.placement = None;
     }
 
-    /// The session screen's built-in split, before vertical placement.
+    /// The session screen's split and placed regions for the latest settled frame.
     pub(crate) fn layout(&self) -> Option<Layout> {
         self.layout
     }
 
-    /// The split with the latest placed rail, panel and conversation
-    /// geometry, retaining the terminal's grip and narrow decisions.
+    /// The split and placed region map for the latest settled frame.
     pub(crate) fn drawn_layout(&self) -> Option<Layout> {
-        let layout = self.layout?;
-        Some(
-            self.placement
-                .map_or(layout, |placement| placement.chrome(Some(layout))),
-        )
+        self.layout
     }
 
-    /// Stores the shared placement for drawing and hit-testing.
-    fn place(&mut self, placement: Option<crate::view::Placement>) {
-        self.placement = placement;
+    /// Stores the placed layout used for drawing and hit-testing.
+    fn place(&mut self, layout: Option<Layout>) {
+        self.layout = layout;
     }
 
     /// The one line a screen below the floor shows in place of
@@ -120,7 +112,7 @@ impl Chrome {
     /// the last column to the scroll bar.
     pub(crate) fn column_width(&self, screen: u16) -> u16 {
         self.drawn_layout()
-            .map_or(screen, |layout| layout.column.width)
+            .map_or(screen, |layout| layout.column().width)
     }
 
     /// The gutter the conversation's rows keep on their left: one blank
@@ -136,10 +128,12 @@ impl Chrome {
 
     /// Where the panel and the rail are drawn.
     pub(crate) fn regions(&self) -> Regions {
-        let layout = self.drawn_layout();
+        let regions = self
+            .layout
+            .map_or_else(crate::layout::RegionMap::default, Layout::regions);
         Regions {
-            panel: layout.and_then(|layout| layout.panel),
-            rail: layout.and_then(|layout| layout.rail),
+            panel: regions.get(crate::layout::Region::Panel),
+            rail: regions.get(crate::layout::Region::Rail),
         }
     }
 }

@@ -248,7 +248,7 @@ fn wide() -> super::Loop<TestBackend> {
         lp.app
             .chrome()
             .layout()
-            .and_then(|layout| layout.rail)
+            .and_then(|layout| layout.rail())
             .is_some(),
         "a rail"
     );
@@ -263,7 +263,7 @@ fn the_wheel_over_the_rail_scrolls_neither_conversation_nor_panel() {
         .app
         .chrome()
         .layout()
-        .and_then(|layout| layout.rail)
+        .and_then(|layout| layout.rail())
         .expect("a rail");
     feed(&mut lp, vec![wheel_down(rail.x + 5, rail.y + 10)]);
     assert_eq!(lp.app.top(), None);
@@ -277,7 +277,7 @@ fn the_wheel_over_the_panel_scrolls_only_the_panel() {
         .app
         .chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .expect("a panel");
     feed(&mut lp, vec![wheel_down(panel.x + 5, panel.y + 10)]);
     assert_eq!(lp.app.panel_state().scroll(), 3);
@@ -289,9 +289,9 @@ fn the_wheel_over_the_panel_scrolls_only_the_panel() {
 /// draw keeps for the conversation.
 fn conversation_rect(lp: &super::Loop<TestBackend>) -> (u16, u16, u16, u16) {
     let layout = lp.app.chrome().layout().expect("a layout");
-    let top = layout.column.y;
+    let top = layout.column().y;
     let height = u16::try_from(lp.app.conversation_height()).unwrap_or(u16::MAX);
-    (layout.column.x, layout.column.width, top, height)
+    (layout.column().x, layout.column().width, top, height)
 }
 
 #[test]
@@ -344,7 +344,7 @@ fn the_wheel_one_column_past_the_conversation_scrolls_nothing() {
         lp.app
             .chrome()
             .layout()
-            .is_some_and(|layout| layout.panel.is_none())
+            .is_some_and(|layout| layout.panel().is_none())
     );
     feed(&mut lp, vec![page_up()]);
     let scrolled = lp.app.top();

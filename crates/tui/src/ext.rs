@@ -181,15 +181,15 @@ pub struct Failure {
     pub message: String,
 }
 
-/// A render result carrying the actual extension's identity.
+/// A renderer result carrying the actual extension's identity and output.
 #[derive(Debug)]
-pub enum Decision {
-    /// Validatable lines from the selected extension.
+pub enum Decision<T = Vec<Vec<RawSpan>>> {
+    /// Validatable output from the selected extension.
     Draw {
         /// The extension that drew.
         extension: String,
-        /// Its lines.
-        lines: Vec<Vec<RawSpan>>,
+        /// The extension's payload: rendered lines or placed regions.
+        lines: T,
     },
     /// A defensive fallback when the session does not match.
     NotForSession {
@@ -206,29 +206,6 @@ pub enum Decision {
 
 /// One Lua-provided rectangle before the terminal validates and casts it.
 pub type RawRect = contract::LayoutRect;
-
-/// A layout renderer's map before the terminal validates it.
-#[derive(Debug)]
-pub enum LayoutDecision {
-    /// A region map from the selected extension.
-    Draw {
-        /// The extension that drew.
-        extension: String,
-        /// Region names and untrusted integer rectangles.
-        regions: Vec<(Region, RawRect)>,
-    },
-    /// A typed callback failure.
-    Fail(Failure),
-    /// A defensive fallback when the session does not match.
-    NotForSession {
-        /// The extension.
-        extension: String,
-        /// Its client version.
-        tui_version: String,
-        /// The observed session-half identity.
-        half: SessionVersion,
-    },
-}
 
 /// Builds terminal-thread renderers from current local files.
 pub trait Load: Send + Sync {
@@ -310,8 +287,8 @@ pub trait Renderer: std::fmt::Debug {
         _ctx: &SessionCtx,
         _input: &LayoutInput,
         _builtin: &dyn Fn(&LayoutInput) -> Vec<(Region, RawRect)>,
-    ) -> LayoutDecision {
-        LayoutDecision::NotForSession {
+    ) -> Decision<Vec<(Region, RawRect)>> {
+        Decision::NotForSession {
             extension: String::new(),
             tui_version: String::new(),
             half: SessionVersion::Unseen,

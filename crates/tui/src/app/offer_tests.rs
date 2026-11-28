@@ -942,7 +942,7 @@ fn wheel_over_panel_with_offer_open_keeps_the_panel() {
     let panel_x = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.panel)
+        .and_then(|layout| layout.panel())
         .map(|panel| panel.x.saturating_add(4))
         .expect("the panel draws");
     app.on_wheel(&wheel(panel_x, 5, true));

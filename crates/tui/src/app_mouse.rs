@@ -379,7 +379,7 @@ impl App {
         if self
             .chrome()
             .drawn_layout()
-            .and_then(|layout| layout.panel)
+            .and_then(|layout| layout.panel())
             .is_some_and(|panel| panel.contains(at))
         {
             self.wheel_panel(mouse.row, up);
@@ -396,7 +396,7 @@ impl App {
         let over_rail = self
             .chrome()
             .drawn_layout()
-            .and_then(|layout| layout.rail)
+            .and_then(|layout| layout.rail())
             .is_some_and(|rail| rail.contains(Position::new(mouse.col, mouse.row)));
         if over_rail {
             self.scroll_rail(up);
@@ -499,7 +499,7 @@ impl App {
                 || {
                     self.chrome()
                         .drawn_layout()
-                        .map_or(0, |layout| layout.column.y)
+                        .map_or(0, |layout| layout.column().y)
                 },
                 |placement| placement.conversation(self).y,
             );
@@ -535,7 +535,7 @@ impl App {
         }
         let height = self.conversation_area_height();
         let (left, width, top) = match self.chrome().layout() {
-            Some(layout) => (layout.column.x, layout.column.width, layout.column.y),
+            Some(layout) => (layout.column().x, layout.column().width, layout.column().y),
             None => (0, self.screen.width(), 0),
         };
         let in_column = usize::from(at.x) >= usize::from(left)

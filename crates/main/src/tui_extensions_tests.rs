@@ -2,7 +2,7 @@
 use super::*;
 use fakes::clock::FakeClock;
 use tui::ext::{
-    AnswerDisposition, HomeInput, KeyOutcome, LayoutDecision, LayoutInput, LedgerResult, RawRect,
+    AnswerDisposition, Decision, HomeInput, KeyOutcome, LayoutInput, LedgerResult, RawRect,
     RawSpan, TuiCommand, TurnCardState, TurnGroupState,
 };
 use tui::layout::Region;
@@ -133,7 +133,7 @@ fn layout_slot_reads_its_input_and_builtin_returns_a_region_map() {
             },
         ),
     ];
-    let LayoutDecision::Draw { regions, .. } =
+    let Decision::Draw { lines: regions, .. } =
         renderer.render_layout(&ctx(None), &input, &|_| built.clone())
     else {
         panic!("the compatible layout slot draws")
@@ -173,7 +173,7 @@ fn layout_slot_rejects_unknown_lua_region_names_as_failure() {
         )]
     });
     assert!(
-        matches!(decision, LayoutDecision::Fail(_)),
+        matches!(decision, Decision::Fail(_)),
         "unexpected decision: {decision:?}"
     );
 }

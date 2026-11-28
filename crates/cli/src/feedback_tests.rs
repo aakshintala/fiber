@@ -214,7 +214,7 @@ fn non_ascii_and_newlines_round_trip_through_the_link() {
     let description = "héllo wörld\nsecond line";
     let report = build_report(VERSION, PLATFORM, INSTALL, description, DOCTOR);
     let url = issue_link(&title(description), &report, description);
-    assert!(url.len() <= 2000);
+    assert!(url.len() <= 2000); // `docs/user/reporting.md`, "Where it goes": full-report links over 2,000 characters fall back to an attachment prompt.
     let (linked_title, linked_body) = linked(&url);
     assert_eq!(linked_title, "Feedback: héllo wörld");
     assert_eq!(linked_body, report);

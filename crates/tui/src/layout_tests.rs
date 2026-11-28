@@ -257,10 +257,10 @@ fn widths_follow_the_screen() {
         let layout = split(width, 30, &shares, &want);
         assert_eq!(
             (
-                cols(layout.rail),
+                cols(layout.rail()),
                 cols(layout.grip),
-                (layout.column.x, layout.column.width),
-                cols(layout.panel),
+                (layout.column().x, layout.column().width),
+                cols(layout.panel()),
                 layout.narrow,
             ),
             (rail, grip, column, panel, narrow),
@@ -272,7 +272,7 @@ fn widths_follow_the_screen() {
 #[test]
 fn every_region_spans_the_screens_rows() {
     let layout = split(400, 30, &DEFAULT, &BOTH);
-    for rect in [layout.rail, Some(layout.column), layout.panel]
+    for rect in [layout.rail(), Some(layout.column()), layout.panel]
         .into_iter()
         .flatten()
     {
@@ -331,11 +331,15 @@ fn regions_tile_the_screen_and_keep_the_conversations_minimum() {
     for width in 40..=400 {
         for want in wants {
             let layout = split(width, 30, &DEFAULT, &want);
-            let mut regions: Vec<Rect> =
-                [layout.rail, layout.grip, Some(layout.column), layout.panel]
-                    .into_iter()
-                    .flatten()
-                    .collect();
+            let mut regions: Vec<Rect> = [
+                layout.rail(),
+                layout.grip,
+                Some(layout.column()),
+                layout.panel,
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
             regions.sort_by_key(|rect| rect.x);
             let mut x = 0;
             for rect in &regions {
@@ -343,13 +347,13 @@ fn regions_tile_the_screen_and_keep_the_conversations_minimum() {
                 x = x.saturating_add(rect.width);
             }
             assert_eq!(x, width, "{width} columns, {want:?}");
-            if layout.rail.is_some() || layout.panel.is_some() {
+            if layout.rail().is_some() || layout.panel().is_some() {
                 assert!(
-                    layout.column.width >= CONVERSATION_MIN,
+                    layout.column().width >= CONVERSATION_MIN,
                     "{width} columns, {want:?}"
                 );
             }
-            assert!(layout.rail.is_none() || layout.grip.is_none());
+            assert!(layout.rail().is_none() || layout.grip.is_none());
         }
     }
 }
@@ -367,12 +371,12 @@ fn gripped() -> super::Layout {
 #[test]
 fn edge_at_finds_each_edge_and_nothing_beside_it() {
     let layout = drawn();
-    let rail = layout.rail.expect("a rail");
+    let rail = layout.rail().expect("a rail");
     let edge = rail.right().saturating_sub(1);
     assert_eq!(edge_at(&layout, edge), Some(super::Edge::Rail));
     assert_eq!(edge_at(&layout, edge.saturating_sub(1)), None);
     assert_eq!(edge_at(&layout, edge.saturating_add(1)), None);
-    let panel = layout.panel.expect("a panel");
+    let panel = layout.panel().expect("a panel");
     assert_eq!(edge_at(&layout, panel.x), Some(super::Edge::Panel));
     assert_eq!(edge_at(&layout, panel.x.saturating_sub(1)), None);
     assert_eq!(edge_at(&layout, panel.x.saturating_add(1)), None);
@@ -387,7 +391,7 @@ fn edge_at_finds_each_edge_and_nothing_beside_it() {
 #[test]
 fn edge_rect_is_the_edge_column_full_height() {
     let layout = drawn();
-    let rail = layout.rail.expect("a rail");
+    let rail = layout.rail().expect("a rail");
     assert_eq!(
         edge_rect(&layout, super::Edge::Rail),
         Some(Rect::new(
@@ -397,7 +401,7 @@ fn edge_rect_is_the_edge_column_full_height() {
             rail.height
         ))
     );
-    let panel = layout.panel.expect("a panel");
+    let panel = layout.panel().expect("a panel");
     assert_eq!(
         edge_rect(&layout, super::Edge::Panel),
         Some(Rect::new(panel.x, panel.y, 1, panel.height))
@@ -421,7 +425,7 @@ fn rail_drag_widths() {
     let plain = split(400, 40, &DEFAULT, &Want::default());
     assert_eq!(dragged(super::Edge::Rail, 60, 400, &plain), 48);
     let layout = split(160, 40, &DEFAULT, &BOTH);
-    assert_eq!(layout.panel.map(|panel| panel.width), Some(34));
+    assert_eq!(layout.panel().map(|panel| panel.width), Some(34));
     assert_eq!(dragged(super::Edge::Rail, 40, 160, &layout), 41);
     assert_eq!(dragged(super::Edge::Rail, 41, 160, &layout), 42);
     assert_eq!(dragged(super::Edge::Rail, 42, 160, &layout), 42);
@@ -440,7 +444,7 @@ fn grip_drag_widths() {
 #[test]
 fn panel_drag_widths() {
     let layout = split(160, 40, &DEFAULT, &BOTH);
-    let rail = layout.rail.expect("a rail");
+    let rail = layout.rail().expect("a rail");
     assert_eq!(rail.width, 24);
     assert_eq!(dragged(super::Edge::Panel, 140, 160, &layout), 30);
     assert_eq!(dragged(super::Edge::Panel, 129, 160, &layout), 31);

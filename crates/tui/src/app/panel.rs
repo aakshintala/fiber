@@ -1409,7 +1409,11 @@ impl App {
     /// grown screen or shrunk cards move on the first wheel; down clamps
     /// to that end, up saturates at the top.
     pub(super) fn scroll_panel(&mut self, up: bool) {
-        let Some(panel) = self.chrome().drawn_layout().and_then(|layout| layout.panel) else {
+        let Some(panel) = self
+            .chrome()
+            .drawn_layout()
+            .and_then(|layout| layout.panel())
+        else {
             return;
         };
         let rows = crate::view::panel::rows(self, panel.width);

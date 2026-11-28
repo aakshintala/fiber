@@ -62,22 +62,76 @@ pub(crate) struct Want {
     pub(crate) panel: bool,
 }
 
-/// The session screen's regions. They tile the screen's width with no
-/// overlap.
+/// The session screen's terminal geometry and its placed regions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Layout {
-    /// The rail, its last column the draggable edge.
+    /// The rail computed by [`split`], before any extension placement.
     pub(crate) rail: Option<Rect>,
-    /// The hidden rail's grip: column 0, while the rail is wanted and
-    /// not drawn.
+    /// The hidden rail's grip: column 0 while the rail is wanted and not drawn.
     pub(crate) grip: Option<Rect>,
-    /// The conversation column, whose first row is conversation.
-    pub(crate) column: Rect,
-    /// The panel, its first column the draggable edge.
+    /// The conversation column computed by [`split`].
+    pub(crate) split_column: Rect,
+    /// The panel computed by [`split`], before any extension placement.
     pub(crate) panel: Option<Rect>,
     /// The panel is wanted and the screen is too narrow for it: the narrow
     /// layout's rows take its place.
     pub(crate) narrow: bool,
+    /// Rectangles for the placed regions in this frame.
+    regions: RegionMap,
+}
+
+impl Layout {
+    /// A layout with the full column reserved for conversation.
+    pub(crate) fn bare(column: Rect) -> Self {
+        let mut regions = RegionMap::default();
+        regions.set(Region::Conversation, Some(column));
+        Self {
+            rail: None,
+            grip: None,
+            split_column: column,
+            panel: None,
+            narrow: false,
+            regions,
+        }
+    }
+
+    /// The full-height column derived from placed regions, or the terminal
+    /// split column when no column region is shown.
+    pub(crate) fn column(self) -> Rect {
+        let Some(column) = self.regions.shown().find_map(|(region, rect)| {
+            (!matches!(region, Region::Rail | Region::Panel)).then_some(rect)
+        }) else {
+            return self.split_column;
+        };
+        let height = self
+            .regions
+            .shown()
+            .map(|(_, rect)| rect.bottom())
+            .max()
+            .unwrap_or(0);
+        Rect::new(column.x, 0, column.width, height)
+    }
+
+    /// The placed rectangles for this layout.
+    pub(crate) fn regions(self) -> RegionMap {
+        self.regions
+    }
+
+    /// Replaces the region map while retaining terminal geometry.
+    pub(crate) fn with_regions(mut self, regions: RegionMap) -> Self {
+        self.regions = regions;
+        self
+    }
+
+    /// The rail's placed rectangle, if shown.
+    pub(crate) fn rail(self) -> Option<Rect> {
+        self.regions.get(Region::Rail)
+    }
+
+    /// The panel's placed rectangle, if shown.
+    pub(crate) fn panel(self) -> Option<Rect> {
+        self.regions.get(Region::Panel)
+    }
 }
 
 /// A built-in region the layout slot may place.
@@ -110,7 +164,7 @@ impl Region {
     ];
 
     /// The Lua and documentation name for this region.
-    pub const fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match [
             "rail",
             "conversation",
@@ -179,12 +233,12 @@ pub(crate) enum Edge {
 /// The edge in column `col` of `layout`, if any.
 pub(crate) fn edge_at(layout: &Layout, col: u16) -> Option<Edge> {
     if layout
-        .rail
+        .rail()
         .is_some_and(|rail| col == rail.right().saturating_sub(1))
     {
         return Some(Edge::Rail);
     }
-    if layout.panel.is_some_and(|panel| col == panel.x) {
+    if layout.panel().is_some_and(|panel| col == panel.x) {
         return Some(Edge::Panel);
     }
     if layout.grip.is_some_and(|grip| col == grip.x) {
@@ -198,10 +252,10 @@ pub(crate) fn edge_at(layout: &Layout, col: u16) -> Option<Edge> {
 pub(crate) fn edge_rect(layout: &Layout, edge: Edge) -> Option<Rect> {
     match edge {
         Edge::Rail => layout
-            .rail
+            .rail()
             .map(|rail| Rect::new(rail.right().saturating_sub(1), rail.y, 1, rail.height)),
         Edge::Panel => layout
-            .panel
+            .panel()
             .map(|panel| Rect::new(panel.x, panel.y, 1, panel.height)),
         Edge::Grip => layout.grip,
     }
@@ -219,7 +273,7 @@ pub(crate) fn edge_rect(layout: &Layout, edge: Edge) -> Option<Rect> {
 pub(crate) fn dragged(edge: Edge, col: u16, screen: u16, layout: &Layout) -> u16 {
     match edge {
         Edge::Rail => {
-            let panel = layout.panel.map_or(0, |panel| panel.width);
+            let panel = layout.panel().map_or(0, |panel| panel.width);
             col.saturating_add(1).min(RAIL_CEILING).min(
                 screen
                     .saturating_sub(CONVERSATION_MIN)
@@ -231,7 +285,7 @@ pub(crate) fn dragged(edge: Edge, col: u16, screen: u16, layout: &Layout) -> u16
             .min(RAIL_CEILING)
             .min(screen.saturating_sub(CONVERSATION_MIN)),
         Edge::Panel => {
-            let left = layout.rail.map_or_else(
+            let left = layout.rail().map_or_else(
                 || layout.grip.map_or(0, |grip| grip.width),
                 |rail| rail.width,
             );
@@ -290,12 +344,17 @@ pub(crate) fn split(width: u16, height: u16, shares: &Shares, want: &Want) -> La
         width.saturating_sub(left).saturating_sub(right),
         height,
     );
+    let mut regions = RegionMap::default();
+    regions.set(Region::Rail, rail);
+    regions.set(Region::Conversation, Some(column));
+    regions.set(Region::Panel, panel);
     Layout {
         rail,
         grip,
-        column,
+        split_column: column,
         panel,
         narrow: want.panel && !panel_shown,
+        regions,
     }
 }
 
@@ -314,9 +373,9 @@ pub fn session_columns(width: u16, height: u16) -> (u16, std::ops::Range<u16>) {
         panel: true,
     };
     let layout = split(width, height, &shares, &want);
-    let rail = layout.rail.map_or(0, |rail| rail.width);
-    let start = layout.column.x;
-    let end = start.saturating_add(layout.column.width);
+    let rail = layout.rail().map_or(0, |rail| rail.width);
+    let start = layout.column().x;
+    let end = start.saturating_add(layout.column().width);
     (rail, start..end)
 }
 

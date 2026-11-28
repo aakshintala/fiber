@@ -4,7 +4,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 
 use super::{FOCUS_STYLE, completions, lift_hover, logo};
 use crate::app::App;
@@ -361,75 +361,86 @@ fn list_rows(screen: &HomeScreen, wall: u64) -> Vec<ListRow> {
     rows
 }
 
+const EMPTY_HOME_LINES: [&str; 2] = [
+    "No sessions yet.",
+    "Type below and press Enter to start one.",
+];
+
+/// One horizontally centred empty-state line in its list width.
+fn empty_home_line(text: &str, width: u16) -> (u16, Vec<Span<'static>>) {
+    let x = width.saturating_sub(to_u16(crate::format::width(text))) / 2;
+    let mut spans = Vec::new();
+    if x != 0 {
+        spans.push(Span::raw(" ".repeat(usize::from(x))));
+    }
+    spans.push(Span::styled(
+        text.to_owned(),
+        Style::new().add_modifier(Modifier::DIM),
+    ));
+    (x, spans)
+}
+
 /// The home slot's built-in list lines, independent of the height of the
 /// window that later clips them.
 fn home_lines(screen: &HomeScreen, width: u16, wall: u64) -> Vec<Vec<crate::ext::RawSpan>> {
     if screen.empty {
-        return [
-            "No sessions yet.",
-            "Type below and press Enter to start one.",
-        ]
-        .into_iter()
-        .map(|text| {
-            let x = width.saturating_sub(to_u16(crate::format::width(text))) / 2;
-            let mut spans = Vec::new();
-            if x != 0 {
-                spans.push(crate::ext::RawSpan {
-                    text: " ".repeat(usize::from(x)),
-                    ..crate::ext::RawSpan::default()
-                });
-            }
-            spans.push(crate::ext::RawSpan {
-                text: text.to_owned(),
-                dim: true,
-                ..crate::ext::RawSpan::default()
-            });
-            spans
-        })
-        .collect();
+        return EMPTY_HOME_LINES
+            .into_iter()
+            .map(|text| {
+                let (_, spans) = empty_home_line(text, width);
+                crate::ext::spans::from_ratatui(&spans)
+            })
+            .collect();
     }
     list_rows(screen, wall)
         .iter()
-        .map(|row| home_row_line(row, width))
+        .map(|row| crate::ext::spans::from_ratatui(&home_row_line(row, width).spans))
         .collect()
 }
 
-/// The built-in list row's left and right spans, aligned and cut as drawn.
-fn home_row_line(row: &ListRow, width: u16) -> Vec<crate::ext::RawSpan> {
+struct BuiltHomeLine {
+    spans: Vec<Span<'static>>,
+    text: String,
+}
+
+/// The built-in list row's aligned and cut spans, and its copyable text.
+fn home_row_line(row: &ListRow, width: u16) -> BuiltHomeLine {
     let body = width.saturating_sub(if row.stop { 2 } else { 0 });
-    let right_width = to_u16(ratatui::text::Line::from(row.right.clone()).width()).min(body);
+    let right_width = to_u16(Line::from(row.right.clone()).width()).min(body);
     let left_width = body.saturating_sub(right_width);
     let mut spans = cut_home_spans(&row.left, left_width);
-    let left_used = spans
-        .iter()
-        .map(|span| crate::format::width(&span.text))
-        .sum::<usize>();
+    let left_text: String = spans.iter().map(|span| span.content.as_ref()).collect();
+    let left_used = crate::format::width(&left_text);
     let gap = usize::from(left_width).saturating_sub(left_used);
     if gap != 0 {
-        spans.push(crate::ext::RawSpan {
-            text: " ".repeat(gap),
-            ..crate::ext::RawSpan::default()
-        });
+        spans.push(Span::raw(" ".repeat(gap)));
     }
-    spans.extend(cut_home_spans(&row.right, right_width));
-    spans
+    let right = cut_home_spans(&row.right, right_width);
+    let right_text: String = right.iter().map(|span| span.content.as_ref()).collect();
+    let mut text = left_text;
+    if !right_text.is_empty() {
+        text.push_str(&" ".repeat(gap));
+        text.push_str(&right_text);
+    }
+    spans.extend(right);
+    BuiltHomeLine { spans, text }
 }
 
 /// The home row's spans, cut to `width` without losing their theme roles.
-fn cut_home_spans(spans: &[Span<'static>], width: u16) -> Vec<crate::ext::RawSpan> {
+fn cut_home_spans(spans: &[Span<'_>], width: u16) -> Vec<Span<'static>> {
     let mut remaining = usize::from(width);
     let mut kept = Vec::new();
-    for mut span in crate::ext::spans::from_ratatui(spans) {
+    for span in spans {
         if remaining == 0 {
             break;
         }
-        let source_width = crate::format::width(&span.text);
-        let text = cut(&span.text, remaining);
+        let source = span.content.to_string();
+        let source_width = crate::format::width(&source);
+        let text = cut(&source, remaining);
         let used = crate::format::width(&text);
         if !text.is_empty() {
-            span.text = text;
+            kept.push(Span::styled(text, span.style));
             remaining = remaining.saturating_sub(used);
-            kept.push(span);
         }
         if used < source_width {
             break;
@@ -482,20 +493,14 @@ fn draw_list(
         let y = placed
             .list_top
             .saturating_add(to_u16(capacity.saturating_sub(2) / 2));
-        for (i, text) in [
-            "No sessions yet.",
-            "Type below and press Enter to start one.",
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        for (i, text) in EMPTY_HOME_LINES.into_iter().enumerate() {
             let y = y.saturating_add(to_u16(i));
             if y < placed.list_end {
+                let (x, _) = empty_home_line(text, placed.width);
                 put(
                     buf,
                     area,
-                    area.x
-                        .saturating_add(area.width.saturating_sub(to_u16(width(text))) / 2),
+                    area.x.saturating_add(x),
                     y,
                     text,
                     area.width,
@@ -507,26 +512,12 @@ fn draw_list(
     for (at, row) in rows.iter().skip(start).take(capacity).enumerate() {
         let y = placed.list_top.saturating_add(to_u16(at));
         let body = placed.width.saturating_sub(if row.stop { 2 } else { 0 });
-        let right = ratatui::text::Line::from(row.right.clone());
-        let right_width = to_u16(right.width()).min(body);
-        let right_x = placed.x.saturating_add(body.saturating_sub(right_width));
-        let left = ratatui::text::Line::from(row.left.clone());
-        buf.set_line(placed.x, y, &left, body.saturating_sub(right_width));
-        buf.set_line(right_x, y, &right, right_width);
-        // A session row reads as one line: the left spans, then the
-        // right spans at their drawn offset. The ✕ is a button and the
+        let built = home_row_line(row, placed.width);
+        buf.set_line(placed.x, y, &Line::from(built.spans), body);
+        // A session row reads as one line. The ✕ is a button and the
         // focus bar a highlight; neither is copyable text.
         {
-            let left_shown = body.saturating_sub(right_width);
-            let left_text: String = row.left.iter().map(|span| span.content.as_ref()).collect();
-            let mut text = cut(&left_text, usize::from(left_shown));
-            let right_text: String = row.right.iter().map(|span| span.content.as_ref()).collect();
-            if !right_text.is_empty() {
-                let gap =
-                    usize::from(right_x.saturating_sub(placed.x)).saturating_sub(width(&text));
-                text.push_str(&" ".repeat(gap));
-                text.push_str(&cut(&right_text, usize::from(right_width)));
-            }
+            let text = built.text;
             if !text.is_empty() && !replacement {
                 let end = placed.x.saturating_add(to_u16(width(&text)));
                 app.note_surface(crate::app::NotedSurface {

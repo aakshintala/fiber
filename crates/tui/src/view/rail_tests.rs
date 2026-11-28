@@ -121,7 +121,7 @@ fn rail(app: &App) -> Buffer {
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.rail)
+        .and_then(|layout| layout.rail())
         .unwrap_or_else(|| panic!("a rail"));
     let area = Rect::new(0, 0, rect.width, rect.height);
     let mut buf = Buffer::empty(area);
@@ -1150,7 +1150,7 @@ fn hovered(app: &App, pointer: Option<(u16, u16)>) -> (Buffer, Vec<Target>) {
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.rail)
+        .and_then(|layout| layout.rail())
         .unwrap_or_else(|| panic!("a rail"));
     let area = Rect::new(0, 0, rect.width, rect.height);
     let mut buf = Buffer::empty(area);
@@ -1454,7 +1454,7 @@ fn session_card_with_n_waiting() {
     assert!(
         app.chrome()
             .layout()
-            .is_some_and(|layout| layout.rail.is_none())
+            .is_some_and(|layout| layout.rail().is_none())
     );
     assert!(
         targets
@@ -1471,7 +1471,7 @@ fn the_rail_region_is_on_the_background() {
     let rail = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.rail)
+        .and_then(|layout| layout.rail())
         .expect("a rail");
     // Below the cards the rail draws on the background (`docs/tui.md`,
     // "Themes"): no cell of its last row carries the idle card's tint,
@@ -1502,7 +1502,7 @@ fn no_color_drawn(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.rail)
+        .and_then(|layout| layout.rail())
         .unwrap_or_else(|| panic!("a rail"));
     let area = Rect::new(0, 0, rect.width, rect.height);
     let mut buf = Buffer::empty(area);
@@ -1526,7 +1526,7 @@ fn no_color_boxes_a_rail_card_and_narrows_its_text() {
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.rail)
+        .and_then(|layout| layout.rail())
         .expect("a rail");
     let card_w = rect.width.saturating_sub(1);
     // C's card: its top edge on row 13, four text rows, its bottom edge.
@@ -1615,7 +1615,7 @@ fn no_color_keeps_coloured_half_blocks_off_the_rail() {
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.rail)
+        .and_then(|layout| layout.rail())
         .expect("a rail");
     let area = Rect::new(0, 0, rect.width, rect.height);
     let mut buf = Buffer::empty(area);
@@ -1669,7 +1669,7 @@ fn drawn(app: &App) -> (Buffer, Vec<Target>) {
     let rect = app
         .chrome()
         .layout()
-        .and_then(|layout| layout.rail)
+        .and_then(|layout| layout.rail())
         .unwrap_or_else(|| panic!("a rail"));
     let area = Rect::new(0, 0, rect.width, rect.height);
     let mut buf = Buffer::empty(area);

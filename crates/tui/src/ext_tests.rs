@@ -1,9 +1,9 @@
 //! Tests for the seam types: the input key and the renderer handle.
 
 use super::{
-    AnswerDisposition, CallState, Failure, Handle, Input, LayoutDecision, LayoutInput,
-    LedgerResult, LedgerRow, Prompt, PromptImage, RawRect, RawSpan, Renderer, ReplyText, RowError,
-    ThinkingLine, TurnCallResult, TurnCard, TurnCardState, TurnEnded, TurnGroupState,
+    AnswerDisposition, CallState, Failure, Handle, Input, LayoutInput, LedgerResult, LedgerRow,
+    Prompt, PromptImage, RawRect, RawSpan, Renderer, ReplyText, RowError, ThinkingLine,
+    TurnCallResult, TurnCard, TurnCardState, TurnEnded, TurnGroupState,
 };
 use super::{Decision, Ext, FailureKind, SessionCtx, SlotSelection};
 use crate::layout::Region;
@@ -931,11 +931,11 @@ impl Renderer for SlotRenderer {
         _ctx: &SessionCtx,
         input: &LayoutInput,
         builtin: &dyn Fn(&LayoutInput) -> Vec<(Region, RawRect)>,
-    ) -> LayoutDecision {
+    ) -> Decision<Vec<(Region, RawRect)>> {
         self.layout_inputs.borrow_mut().push(input.clone());
-        LayoutDecision::Draw {
+        Decision::Draw {
             extension: self.name().into(),
-            regions: if self.layout_builtin.get() {
+            lines: if self.layout_builtin.get() {
                 builtin(input)
             } else {
                 self.layout.borrow().clone().unwrap_or_default()

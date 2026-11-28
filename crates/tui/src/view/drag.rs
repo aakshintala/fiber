@@ -39,22 +39,26 @@ pub(super) fn draw(app: &App, buf: &mut Buffer, pointer: Option<(u16, u16)>) {
     };
     // A grip below the floor has no share yet, so it draws no pill.
     let Some((name, columns)) = (match edge {
-        Edge::Rail => layout.rail.map(|rail| ("rail", rail.width)),
-        Edge::Panel => layout.panel.map(|panel| ("panel", panel.width)),
+        Edge::Rail => layout.rail().map(|rail| ("rail", rail.width)),
+        Edge::Panel => layout.panel().map(|panel| ("panel", panel.width)),
         Edge::Grip => None,
     }) else {
         return;
     };
     let pill = crate::format::cut(
         &pill_text(name, share, columns),
-        usize::from(layout.column.width.saturating_sub(2)),
+        usize::from(layout.column().width.saturating_sub(2)),
     );
     let wide = u16::try_from(crate::format::width(&pill)).unwrap_or(u16::MAX);
     // The rail pill starts one column in; the panel pill ends one short
     // of the column's right edge, so a cut pill keeps its end.
     let x = match edge {
-        Edge::Rail => layout.column.x.saturating_add(1),
-        Edge::Panel => layout.column.right().saturating_sub(1).saturating_sub(wide),
+        Edge::Rail => layout.column().x.saturating_add(1),
+        Edge::Panel => layout
+            .column()
+            .right()
+            .saturating_sub(1)
+            .saturating_sub(wide),
         Edge::Grip => return,
     };
     let y = rect.y.saturating_add(rect.height / 2);

@@ -11,8 +11,8 @@ use contract::clock::Clock;
 use extensions::{Span, TuiVm};
 use serde_json::{Value, json};
 use tui::ext::{
-    Decision, FailureKind, LayoutDecision, LayoutInput, Load, RawRect, Renderer, SessionCtx,
-    SessionVersion, SlotSelection,
+    Decision, FailureKind, LayoutInput, Load, RawRect, Renderer, SessionCtx, SessionVersion,
+    SlotSelection,
 };
 use tui::layout::Region;
 use tui::{CallState, Failure, RawSpan, RendererInput as Input};
@@ -871,16 +871,16 @@ impl Renderer for Composite {
         ctx: &SessionCtx,
         input: &LayoutInput,
         builtin: &dyn Fn(&LayoutInput) -> Vec<(Region, RawRect)>,
-    ) -> LayoutDecision {
+    ) -> Decision<Vec<(Region, RawRect)>> {
         let SlotSelection::Draw { extension } = self.fills_for(ctx, "layout") else {
-            return LayoutDecision::NotForSession {
+            return Decision::NotForSession {
                 extension: String::new(),
                 tui_version: String::new(),
                 half: SessionVersion::Unseen,
             };
         };
         let Some(candidate) = self.candidates.get(&extension) else {
-            return LayoutDecision::NotForSession {
+            return Decision::NotForSession {
                 extension,
                 tui_version: String::new(),
                 half: SessionVersion::Unseen,
@@ -905,15 +905,18 @@ impl Renderer for Composite {
                     .map(|(name, rect)| Region::from_name(&name).map(|region| (region, rect)))
                     .collect::<Option<Vec<_>>>();
                 match parsed {
-                    Some(regions) => LayoutDecision::Draw { extension, regions },
-                    None => LayoutDecision::Fail(Failure {
+                    Some(regions) => Decision::Draw {
+                        extension,
+                        lines: regions,
+                    },
+                    None => Decision::Fail(Failure {
                         kind: FailureKind::HookFailed,
                         extension,
                         message: "layout output names an unknown region".to_owned(),
                     }),
                 }
             }
-            Err(error) => LayoutDecision::Fail(Self::failure(candidate, extension, error)),
+            Err(error) => Decision::Fail(Self::failure(candidate, extension, error)),
         }
     }
     #[allow(

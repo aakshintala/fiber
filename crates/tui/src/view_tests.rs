@@ -22,25 +22,19 @@ const HEIGHT: u16 = 12;
 fn zero_height_regions_are_absent_from_placement() {
     let app = empty();
     let area = Rect::new(0, 0, 60, 0);
-    let split = crate::layout::Layout {
-        rail: None,
-        grip: None,
-        column: area,
-        panel: None,
-        narrow: false,
-    };
+    let split = crate::layout::Layout::bare(area);
 
     let placement = super::placement_from_split(&app, area, split);
 
     assert!(
         placement
-            .regions
+            .regions()
             .get(crate::layout::Region::Conversation)
             .is_none()
     );
     assert!(
         placement
-            .regions
+            .regions()
             .get(crate::layout::Region::InputBox)
             .is_none()
     );
