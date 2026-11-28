@@ -18,7 +18,9 @@ use crate::support;
 use crate::hub_start;
 
 use std::fs::{self, File};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
@@ -537,11 +539,88 @@ fn reap_served(served: hub_start::Served) {
 }
 
 /// Pairs a fresh client to the already-running hub as `box`.
+///
+/// `docs/permissions.md`, “Sessions on the sockets”, detects session callers
+/// through their process ancestors. The helper shell must be reaped before
+/// Fiber reaches the hub, so the child is reparented outside that tree; the
+/// stdin EOF gate enforces that order. `env_clear()` and `current_dir(a.workspace())`
+/// preserve the pairing setup settled by RULING-5043-3 (comment 7237158653).
+/// Pairing stays before `seed_hub_sessions` so it does not consume the
+/// deadline needed by session seeding, as RULING-5043-15 (comment 7238442647)
+/// requires.
 fn paired_client(a: &Setup, served: &hub_start::Served) -> Setup {
     let b = Setup::new();
-    let paired = headless(a, &["hub", "pair", "laptop"]);
-    assert_eq!(paired.status.code(), Some(0), "{:?}", text(&paired));
-    let code = String::from_utf8(paired.stdout).unwrap();
+    let root = a.root.path();
+    let stdout_path = root.join("pairing.stdout");
+    let stderr_path = root.join("pairing.stderr");
+    let status_path = root.join("pairing.status");
+    let fiber = a.fiber(&["hub", "pair", "laptop"]);
+    let program = fiber.get_program().to_os_string();
+    let args: Vec<_> = fiber.get_args().map(ToOwned::to_owned).collect();
+    let environment: Vec<_> = fiber
+        .get_envs()
+        .map(|(key, value)| (key.to_os_string(), value.map(ToOwned::to_owned)))
+        .collect();
+    let mut shell = Command::new("/bin/sh");
+    shell
+        .arg("-c")
+        .arg("exec 3<&0; out=$1; err=$2; status=$3; shift 3; ( cat <&3 >/dev/null; \"$@\" >\"$out\" 2>\"$err\"; result=$?; printf '%s\\n' \"$result\" >\"$status\" ) </dev/null >/dev/null 2>&1 &")
+        .arg("fiber-pairing")
+        .arg(&stdout_path)
+        .arg(&stderr_path)
+        .arg(&status_path)
+        .arg(program)
+        .args(args)
+        .env_clear()
+        .current_dir(a.workspace())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    for (key, value) in environment {
+        if let Some(value) = value {
+            shell.env(key, value);
+        } else {
+            shell.env_remove(key);
+        }
+    }
+    let mut intermediate = shell.spawn().unwrap();
+    let group = intermediate.id();
+    let watchdog = fakes::Watchdog::group(group);
+    let gate = intermediate.stdin.take().unwrap();
+    let (reaped_tx, reaped_rx) = mpsc::channel();
+    thread::spawn(move || reaped_tx.send(intermediate.wait()).unwrap_or(()));
+    match a.deadline.recv(&reaped_rx) {
+        Ok(Ok(status)) if status.success() => {}
+        Ok(Ok(status)) => {
+            fakes::kill_group(group, "KILL").unwrap();
+            drop(gate);
+            assert!(fakes::group_empties(group, a.deadline.cleanup_phase()));
+            panic!("pairing shell exited with {status}");
+        }
+        Ok(Err(error)) => {
+            fakes::kill_group(group, "KILL").unwrap();
+            drop(gate);
+            assert!(fakes::group_empties(group, a.deadline.cleanup_phase()));
+            panic!("could not reap pairing shell: {error}");
+        }
+        Err(_) => {
+            fakes::kill_group(group, "KILL").unwrap();
+            drop(gate);
+            expired(a.deadline, group, &reaped_rx, "pairing shell");
+        }
+    }
+    drop(gate);
+    if !fakes::group_empties(group, a.deadline.cleanup_phase()) {
+        fakes::kill_group(group, "KILL").unwrap();
+        assert!(fakes::group_empties(group, a.deadline.cleanup_phase()));
+        panic!("pairing process group did not empty");
+    }
+    watchdog.stand_down(a.deadline.cleanup_phase());
+    let status = fs::read_to_string(status_path).unwrap();
+    let stderr = fs::read_to_string(stderr_path).unwrap();
+    assert_eq!(status.trim().parse::<i32>().unwrap(), 0, "{stderr}");
+    let code = String::from_utf8(fs::read(stdout_path).unwrap()).unwrap();
     let address = format!("ws://127.0.0.1:{}", served.port);
     let input = b.root.path().join("pairing-input");
     fs::write(&input, format!("{}\n", code.trim())).unwrap();
@@ -559,8 +638,8 @@ fn continue_hub_skips_the_archived_latest() {
         fakes::ProviderServer::start(vec![text_reply("First."), text_reply("Second.")]).unwrap();
     installed_with(&a, &server);
     let served = installed_hub(&a);
-    let (_, latest) = seed_hub_sessions(&a);
     let b = paired_client(&a, &served);
+    let (_, latest) = seed_hub_sessions(&a);
     // Archive the latest through the listed hub: the client names the
     // session by full id, as `resume --hub` resolves it.
     let archived = headless(&b, &["sessions", "archive", "--hub", "box", &latest]);
