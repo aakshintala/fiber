@@ -31,6 +31,35 @@ fn ignore_result<T, E>(result: Result<T, E>) {
 const ABSENT: Duration = Duration::from_secs(1);
 
 #[test]
+fn turn_wait_predicate_only_waits_for_an_unstalled_blocked_turn() {
+    let blocked = TurnState {
+        current: 0,
+        running: true,
+        stalled: false,
+    };
+    assert!(blocked.waits(1), "an unstalled blocked turn waits");
+
+    let stalled = TurnState {
+        stalled: true,
+        ..blocked
+    };
+    assert!(!stalled.waits(1), "a stalled blocked turn does not wait");
+}
+
+#[test]
+fn responder_turn_expiry_stalls_the_gate() {
+    let turns = ResponderTurns::with_wait(Duration::from_millis(1));
+    {
+        let mut state = lock(&turns.state);
+        state.running = true;
+    }
+
+    assert!(!turns.enter(1), "an expired turn is not admitted");
+    let state = lock(&turns.state);
+    assert!(state.stalled, "expiry permanently stalls later turns");
+}
+
+#[test]
 fn a_dropped_connection_records_the_request_and_answers_nothing() {
     let server = ProviderServer::start([Response::drop_connection()]).unwrap();
     let addr = server.addr;

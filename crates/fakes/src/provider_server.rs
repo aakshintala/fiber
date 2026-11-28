@@ -243,31 +243,46 @@ impl TurnState {
         self.current != requested || self.running
     }
 
+    fn waits(&self, requested: u64) -> bool {
+        !self.stalled && self.blocked(requested)
+    }
+
     fn should_stall(&self, requested: u64, expired: bool) -> bool {
-        !self.stalled && self.blocked(requested) && expired
+        self.waits(requested) && expired
     }
 }
 
-#[derive(Default)]
 struct ResponderTurns {
     state: Mutex<TurnState>,
     changed: Condvar,
+    wait: Duration,
+}
+
+impl Default for ResponderTurns {
+    fn default() -> Self {
+        Self::with_wait(RESPONDER_TURN_WAIT)
+    }
 }
 
 impl ResponderTurns {
+    fn with_wait(wait: Duration) -> Self {
+        Self {
+            state: Mutex::new(TurnState::default()),
+            changed: Condvar::new(),
+            wait,
+        }
+    }
     #[allow(
         clippy::print_stderr,
         reason = "a stalled turn must report both the requested and holding turn"
     )]
     fn enter(&self, requested: u64) -> bool {
-        let deadline = Deadline::after(RESPONDER_TURN_WAIT);
+        let deadline = Deadline::after(self.wait);
         let mut state = lock(&self.state);
-        while !state.stalled && state.blocked(requested) {
+        while state.waits(requested) {
             let (next, _) = self
                 .changed
-                .wait_timeout_while(state, deadline.left(), |state| {
-                    !state.stalled && state.blocked(requested)
-                })
+                .wait_timeout_while(state, deadline.left(), |state| state.waits(requested))
                 .unwrap_or_else(PoisonError::into_inner);
             state = next;
             if state.should_stall(requested, deadline.left().is_zero()) {
