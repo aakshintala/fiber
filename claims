@@ -348,4 +348,4 @@ docs/testing.md	fiber-5041	plan	2026-11-28T16:16:00Z	roundhouse-7010-plus-1:/srv
 docs/testing/running.md	fiber-5041	plan	2026-11-28T16:16:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5041-archive-running-shell-flake	
 docs/workflow.md	fiber-5041	plan	2026-11-28T16:16:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5041-archive-running-shell-flake	
 docs/ci.md	fiber-5041	plan	2026-11-28T16:16:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5041-archive-running-shell-flake	
-crates/main/tests/commands/archive.rs:432-436	fiber-5041	plan	2026-11-28T16:54:30Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5041-archive-running-shell-flake	
+crates/main/tests/commands/archive.rs:432-436	fiber-5041	plan	2026-11-28T17:27:18Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5041-archive-running-shell-flake	
