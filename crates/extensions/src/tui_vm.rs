@@ -369,17 +369,7 @@ pub struct RenderOut {
 
 /// One raw region rectangle from the `layout` slot. The terminal checks
 /// these Lua integers against its dimensions before casting them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LayoutRect {
-    /// The left column.
-    pub x: i64,
-    /// The top row.
-    pub y: i64,
-    /// The width in cells.
-    pub width: i64,
-    /// The height in cells.
-    pub height: i64,
-}
+pub type LayoutRect = contract::LayoutRect;
 
 type LayoutRegions = Vec<(String, LayoutRect)>;
 type LayoutBuiltin<'a> = dyn Fn(&Value, u16) -> LayoutRegions + 'a;

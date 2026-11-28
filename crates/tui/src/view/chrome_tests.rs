@@ -102,13 +102,25 @@ fn placement_shares_split_geometry_and_vertical_regions() {
     let app = app(160, 40, false);
     let placement = super::super::placement(&app).expect("the attached screen has a placement");
     let regions = placement.regions;
-    assert_eq!(regions.rail, Some(Rect::new(0, 0, 24, 40)));
-    assert_eq!(regions.conversation, Some(Rect::new(24, 0, 102, 35)));
-    assert_eq!(placement.conversation, Rect::new(24, 0, 102, 35));
-    assert_eq!(regions.working_line, None);
-    assert_eq!(regions.steering_queue, None);
-    assert_eq!(regions.input_box, Some(Rect::new(24, 35, 102, 5)));
-    assert_eq!(regions.panel, Some(Rect::new(126, 0, 34, 40)));
+    assert_eq!(
+        regions.get(crate::layout::Region::Rail),
+        Some(Rect::new(0, 0, 24, 40))
+    );
+    assert_eq!(
+        regions.get(crate::layout::Region::Conversation),
+        Some(Rect::new(24, 0, 102, 35))
+    );
+    assert_eq!(placement.conversation(&app), Rect::new(24, 0, 102, 35));
+    assert_eq!(regions.get(crate::layout::Region::WorkingLine), None);
+    assert_eq!(regions.get(crate::layout::Region::SteeringQueue), None);
+    assert_eq!(
+        regions.get(crate::layout::Region::InputBox),
+        Some(Rect::new(24, 35, 102, 5))
+    );
+    assert_eq!(
+        regions.get(crate::layout::Region::Panel),
+        Some(Rect::new(126, 0, 34, 40))
+    );
 }
 
 #[test]
@@ -120,53 +132,22 @@ fn extension_layout_places_the_same_regions_that_chrome_draws() {
         &["layout"],
         SlotScript::Replace(Vec::new()),
     ));
-    *renderer.layout.borrow_mut() = Some(vec![
-        (
-            crate::layout::Region::Rail,
-            RawRect {
-                x: 0,
-                y: 0,
-                width: 20,
-                height: 40,
-            },
-        ),
-        (
-            crate::layout::Region::Conversation,
-            RawRect {
-                x: 30,
-                y: 0,
-                width: 100,
-                height: 35,
-            },
-        ),
-        (
-            crate::layout::Region::InputBox,
-            RawRect {
-                x: 30,
-                y: 35,
-                width: 100,
-                height: 5,
-            },
-        ),
-        (
-            crate::layout::Region::Panel,
-            RawRect {
-                x: 140,
-                y: 0,
-                width: 20,
-                height: 40,
-            },
-        ),
-    ]);
+    *renderer.layout.borrow_mut() = Some(crate::results_support::four_region_layout(35));
     app.use_renderer(renderer.clone() as Rc<dyn Renderer>);
 
     let placement = crate::view::placement(&app).expect("placed after install");
-    assert_eq!(placement.regions.rail, Some(Rect::new(0, 0, 20, 40)));
     assert_eq!(
-        placement.regions.conversation,
+        placement.regions.get(crate::layout::Region::Rail),
+        Some(Rect::new(0, 0, 20, 40))
+    );
+    assert_eq!(
+        placement.regions.get(crate::layout::Region::Conversation),
         Some(Rect::new(30, 0, 100, 35))
     );
-    assert_eq!(placement.regions.panel, Some(Rect::new(140, 0, 20, 40)));
+    assert_eq!(
+        placement.regions.get(crate::layout::Region::Panel),
+        Some(Rect::new(140, 0, 20, 40))
+    );
     assert_eq!(
         renderer.layout_inputs.borrow()[0].regions,
         [
@@ -218,9 +199,14 @@ fn placement_row_counts_ignore_the_previous_extension_column_width() {
     );
     let before = super::super::placement_from_split(&app, area, split);
     let builtin = before.regions;
-    let conversation = builtin.conversation.expect("conversation region");
+    let conversation = builtin
+        .get(crate::layout::Region::Conversation)
+        .expect("conversation region");
     let mut extension = builtin;
-    extension.conversation = Some(Rect::new(30, conversation.y, 30, conversation.height));
+    extension.set(
+        crate::layout::Region::Conversation,
+        Some(Rect::new(30, conversation.y, 30, conversation.height)),
+    );
     let layout = extension
         .shown()
         .map(|(region, rect)| {
@@ -339,8 +325,14 @@ fn builtin_layout_cache_refreshes_when_input_rows_change_placement() {
         .expect("attached screen has a placement")
         .regions;
 
-    assert_ne!(after.input_box, before.input_box);
-    assert_ne!(after.conversation, before.conversation);
+    assert_ne!(
+        after.get(crate::layout::Region::InputBox),
+        before.get(crate::layout::Region::InputBox)
+    );
+    assert_ne!(
+        after.get(crate::layout::Region::Conversation),
+        before.get(crate::layout::Region::Conversation)
+    );
     assert_eq!(renderer.layout_inputs.borrow().len(), 4); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
 }
 

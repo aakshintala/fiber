@@ -82,6 +82,7 @@ pub(crate) struct Layout {
 
 /// A built-in region the layout slot may place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(usize)]
 pub enum Region {
     /// The session rail.
     Rail,
@@ -110,13 +111,18 @@ impl Region {
 
     /// The Lua and documentation name for this region.
     pub const fn name(self) -> &'static str {
-        match self {
-            Self::Rail => "rail",
-            Self::Conversation => "conversation",
-            Self::WorkingLine => "working_line",
-            Self::SteeringQueue => "steering_queue",
-            Self::InputBox => "input_box",
-            Self::Panel => "panel",
+        match [
+            "rail",
+            "conversation",
+            "working_line",
+            "steering_queue",
+            "input_box",
+            "panel",
+        ]
+        .get(self as usize)
+        {
+            Some(name) => name,
+            None => "",
         }
     }
 
@@ -129,25 +135,13 @@ impl Region {
 /// Rectangles for the built-in regions shown in one frame.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct RegionMap {
-    pub(crate) rail: Option<Rect>,
-    pub(crate) conversation: Option<Rect>,
-    pub(crate) working_line: Option<Rect>,
-    pub(crate) steering_queue: Option<Rect>,
-    pub(crate) input_box: Option<Rect>,
-    pub(crate) panel: Option<Rect>,
+    rects: [Option<Rect>; Region::ALL.len()],
 }
 
 impl RegionMap {
     /// The rectangle for `region`, if it is shown.
     pub(crate) fn get(self, region: Region) -> Option<Rect> {
-        match region {
-            Region::Rail => self.rail,
-            Region::Conversation => self.conversation,
-            Region::WorkingLine => self.working_line,
-            Region::SteeringQueue => self.steering_queue,
-            Region::InputBox => self.input_box,
-            Region::Panel => self.panel,
-        }
+        self.rects.get(region as usize).copied().flatten()
     }
 
     /// The shown regions, in the layout input's stable order.
@@ -159,13 +153,8 @@ impl RegionMap {
 
     /// Sets `region` to `rect`, or removes it when `rect` is absent.
     pub(crate) fn set(&mut self, region: Region, rect: Option<Rect>) {
-        match region {
-            Region::Rail => self.rail = rect,
-            Region::Conversation => self.conversation = rect,
-            Region::WorkingLine => self.working_line = rect,
-            Region::SteeringQueue => self.steering_queue = rect,
-            Region::InputBox => self.input_box = rect,
-            Region::Panel => self.panel = rect,
+        if let Some(slot) = self.rects.get_mut(region as usize) {
+            *slot = rect;
         }
     }
 }

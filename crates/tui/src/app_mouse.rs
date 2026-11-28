@@ -501,7 +501,7 @@ impl App {
                         .drawn_layout()
                         .map_or(0, |layout| layout.column.y)
                 },
-                |placement| placement.conversation.y,
+                |placement| placement.conversation(self).y,
             );
             let header_rows =
                 crate::view::item::ITEM_HEADER_ROWS.min(self.conversation_area_height());
@@ -531,7 +531,7 @@ impl App {
     /// wheel over them is the item's, never the conversation's.
     fn over_conversation(&self, at: Position) -> bool {
         if let Some(placement) = crate::view::placement(self) {
-            return placement.conversation.contains(at);
+            return placement.conversation(self).contains(at);
         }
         let height = self.conversation_area_height();
         let (left, width, top) = match self.chrome().layout() {

@@ -98,28 +98,39 @@ pub(crate) const FOCUS_STYLE: Style = Style::new().add_modifier(Modifier::REVERS
 pub(crate) struct Placement {
     /// The six shown built-in regions.
     pub(crate) regions: crate::layout::RegionMap,
-    /// The conversation column, full screen height.
-    pub(crate) column: Rect,
-    /// The visible conversation text area, inside `regions.conversation`.
-    pub(crate) conversation: Rect,
 }
 
 impl Placement {
     /// Uses `regions` as the placed map, retaining the terminal's
     /// conversation-column height and internal narrow/grip decisions.
-    fn with_regions(mut self, app: &App, regions: crate::layout::RegionMap) -> Self {
-        let overlay = regions.conversation.map_or(0, |conversation| {
-            to_u16(
-                app.conversation_overlay_rows(conversation.width, usize::from(conversation.height)),
-            )
-        });
-        self.conversation = Self::conversation_body(regions, overlay);
-        if let Some(conversation) = regions.conversation {
-            self.column.x = conversation.x;
-            self.column.width = conversation.width;
-        }
+    fn with_regions(mut self, _app: &App, regions: crate::layout::RegionMap) -> Self {
         self.regions = regions;
         self
+    }
+
+    /// The full-height conversation column derived from the placed regions.
+    pub(crate) fn column(self) -> Rect {
+        let Some(conversation) = self.regions.get(crate::layout::Region::Conversation) else {
+            return Rect::default();
+        };
+        let height = self
+            .regions
+            .shown()
+            .map(|(_, rect)| rect.bottom())
+            .max()
+            .unwrap_or(0);
+        Rect::new(conversation.x, 0, conversation.width, height)
+    }
+
+    /// The visible conversation text area, after its bottom overlay.
+    pub(crate) fn conversation(self, app: &App) -> Rect {
+        let Some(conversation) = self.regions.get(crate::layout::Region::Conversation) else {
+            return Rect::default();
+        };
+        let overlay = to_u16(
+            app.conversation_overlay_rows(conversation.width, usize::from(conversation.height)),
+        );
+        Self::conversation_body(self.regions, overlay)
     }
 
     /// The horizontal chrome to draw and hit-test from this placement.
@@ -127,19 +138,19 @@ impl Placement {
         let mut layout = base.unwrap_or(crate::layout::Layout {
             rail: None,
             grip: None,
-            column: self.column,
+            column: self.column(),
             panel: None,
             narrow: false,
         });
-        layout.rail = self.regions.rail;
-        layout.panel = self.regions.panel;
-        layout.column = self.column;
+        layout.rail = self.regions.get(crate::layout::Region::Rail);
+        layout.panel = self.regions.get(crate::layout::Region::Panel);
+        layout.column = self.column();
         layout
     }
 
     /// The conversation region's visible rows, after its bottom overlay.
     fn conversation_body(regions: crate::layout::RegionMap, overlay: u16) -> Rect {
-        let Some(conversation) = regions.conversation else {
+        let Some(conversation) = regions.get(crate::layout::Region::Conversation) else {
             return Rect::default();
         };
         Rect::new(
@@ -227,20 +238,26 @@ fn placement_from_split(app: &App, area: Rect, split: crate::layout::Layout) -> 
     let steering_queue = take(&mut bottom, steering);
     let working_line = take(&mut bottom, working);
     let conversation = Rect::new(split.column.x, area.y, width, bottom.saturating_sub(area.y));
-    let map = crate::layout::RegionMap {
-        rail: split.rail,
-        conversation: (conversation.height > 0).then_some(conversation),
-        working_line: (working_line.height > 0).then_some(working_line),
-        steering_queue: (steering_queue.height > 0).then_some(steering_queue),
-        input_box: (input_box.height > 0).then_some(input_box),
-        panel: split.panel,
-    };
-    let overlay = app.conversation_overlay_rows(width, usize::from(conversation.height));
-    Placement {
-        regions: map,
-        column: split.column,
-        conversation: Placement::conversation_body(map, to_u16(overlay)),
-    }
+    let mut map = crate::layout::RegionMap::default();
+    map.set(crate::layout::Region::Rail, split.rail);
+    map.set(
+        crate::layout::Region::Conversation,
+        (conversation.height > 0).then_some(conversation),
+    );
+    map.set(
+        crate::layout::Region::WorkingLine,
+        (working_line.height > 0).then_some(working_line),
+    );
+    map.set(
+        crate::layout::Region::SteeringQueue,
+        (steering_queue.height > 0).then_some(steering_queue),
+    );
+    map.set(
+        crate::layout::Region::InputBox,
+        (input_box.height > 0).then_some(input_box),
+    );
+    map.set(crate::layout::Region::Panel, split.panel);
+    Placement { regions: map }
 }
 
 /// Paints the hover tint under `hover`'s target, then the focus style on
@@ -317,7 +334,7 @@ pub(crate) fn frame_of(app: &App, surface: Surface) -> Rect {
         .chrome()
         .drawn_layout()
         .map_or(screen, |layout| layout.column);
-    let conversation = placement(app).map(|placement| placement.conversation);
+    let conversation = placement(app).map(|placement| placement.conversation(app));
     let area = match (app.home_screen(), surface) {
         (_, Surface::DeleteQuestion) => column,
         (Some(home), Surface::Notice) if !swapped => notice_rows_area(app, &home, screen),
@@ -566,13 +583,16 @@ fn render_frame(
     }
     let area = layout.column;
     let mut targets = Vec::new();
-    if let Some(rect) = placement.regions.panel {
+    if let Some(rect) = placement.regions.get(crate::layout::Region::Panel) {
         panel::draw(app, rect, buf, &mut targets);
     }
-    if let Some(rect) = placement.regions.rail {
+    if let Some(rect) = placement.regions.get(crate::layout::Region::Rail) {
         rail::draw(app, rect, buf, pointer, &mut targets);
     }
-    let input_area = placement.regions.input_box.unwrap_or_default();
+    let input_area = placement
+        .regions
+        .get(crate::layout::Region::InputBox)
+        .unwrap_or_default();
     let mut box_top = input_area.bottom();
     if !input_area.is_empty() {
         let mut bottom = input_area.bottom();
@@ -585,17 +605,20 @@ fn render_frame(
     }
     // The steering queue and narrow-layout delegate rows share one
     // placement; the newest queue row is lowest.
-    if let Some(queue_area) = placement.regions.steering_queue {
+    if let Some(queue_area) = placement.regions.get(crate::layout::Region::SteeringQueue) {
         let mut bottom = queue_area.bottom();
         steering_queue::draw(app, queue_area, &mut bottom, buf, &mut targets);
         status_rows::draw_delegates(app, queue_area, buf, &mut bottom, &mut targets);
     }
-    if let Some(working_area) = placement.regions.working_line {
+    if let Some(working_area) = placement.regions.get(crate::layout::Region::WorkingLine) {
         let mut bottom = working_area.bottom();
         banner::draw(app, working_area, buf, &mut bottom);
         working_line::draw(app, working_area, buf, &mut bottom, &mut targets);
     }
-    let conversation_region = placement.regions.conversation.unwrap_or_default();
+    let conversation_region = placement
+        .regions
+        .get(crate::layout::Region::Conversation)
+        .unwrap_or_default();
     let mut bottom = conversation_region.bottom();
     // The notice rows, badge and hint sit at the bottom of the
     // conversation region, above its visible text rows.
@@ -885,7 +908,7 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
     // The approval takes the input-box region and its bottom; no status
     // line draws under it.
     let input_area = match placement {
-        Some(placement) => placement.regions.input_box?,
+        Some(placement) => placement.regions.get(crate::layout::Region::InputBox)?,
         None => area,
     };
     if let Some(panel) = app.panel_at(input_area.width) {
@@ -904,7 +927,7 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
             None
         } else {
             // The bar draws in the conversation, past the gutter.
-            let conversation = placement.map_or(area, |placement| placement.conversation);
+            let conversation = placement.map_or(area, |placement| placement.conversation(app));
             marks::bar_cursor(
                 &bar,
                 crate::layout::past_gutter(conversation, app.chrome().gutter()),
@@ -912,7 +935,7 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
         };
     }
     let input_area = match placement {
-        Some(placement) => placement.regions.input_box?,
+        Some(placement) => placement.regions.get(crate::layout::Region::InputBox)?,
         None => area,
     };
     let (below, col) = input_box::cursor_row(app, input_area.width, usize::from(input_area.height));

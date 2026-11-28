@@ -109,7 +109,7 @@ fn home_line_builders_preserve_padding_alignment_and_cut_boundaries() {
 }
 
 #[test]
-fn m3b_wide_grapheme_at_boundary_stops_later_spans() {
+fn wide_grapheme_at_boundary_stops_later_spans() {
     let spans = [
         ratatui::text::Span::raw("界"),
         ratatui::text::Span::raw("later"),
@@ -536,7 +536,7 @@ fn home_slot_replacement_keeps_scrolled_lines_aligned_with_targets() {
     let screen = app.home_screen().expect("home screen");
     let lines = super::home_lines(&screen, area.width, app.rail_state().wall());
     let rows = super::list_rows(&screen, app.rail_state().wall());
-    assert_eq!(lines.len(), rows.len());
+    assert_eq!(lines.len(), rows.len()); // `docs/tui.md`, "The slots", "Home": return the same number of lines as `builtin(input, width)`.
 
     let (window, max_scroll) = super::list_window(&app, &screen, area);
     assert!(max_scroll > 1, "fixture must scroll the list");

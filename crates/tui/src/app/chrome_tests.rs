@@ -3,8 +3,8 @@
 
 use super::super::{App, Effect, Target};
 use super::header;
+use crate::ext::Renderer;
 use crate::ext::tests::{SlotRenderer, SlotScript};
-use crate::ext::{RawRect, Renderer};
 use crate::home::Launch;
 use crate::keys::Key;
 use crate::link::Line;
@@ -185,44 +185,7 @@ fn relayout_records_extension_placed_rail_and_panel_regions() {
         &["layout"],
         SlotScript::Replace(Vec::new()),
     ));
-    *renderer.layout.borrow_mut() = Some(vec![
-        (
-            crate::layout::Region::Rail,
-            RawRect {
-                x: 0,
-                y: 0,
-                width: 20,
-                height: 40,
-            },
-        ),
-        (
-            crate::layout::Region::Conversation,
-            RawRect {
-                x: 30,
-                y: 0,
-                width: 100,
-                height: 28,
-            },
-        ),
-        (
-            crate::layout::Region::InputBox,
-            RawRect {
-                x: 30,
-                y: 35,
-                width: 100,
-                height: 5,
-            },
-        ),
-        (
-            crate::layout::Region::Panel,
-            RawRect {
-                x: 140,
-                y: 0,
-                width: 20,
-                height: 40,
-            },
-        ),
-    ]);
+    *renderer.layout.borrow_mut() = Some(crate::results_support::four_region_layout(28));
 
     app.use_renderer(renderer as Rc<dyn Renderer>);
 

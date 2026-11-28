@@ -890,17 +890,7 @@ impl Renderer for Composite {
         let built = |_: &Value, _width| {
             builtin(input)
                 .into_iter()
-                .map(|(region, rect)| {
-                    (
-                        region.name().to_owned(),
-                        extensions::LayoutRect {
-                            x: rect.x,
-                            y: rect.y,
-                            width: rect.width,
-                            height: rect.height,
-                        },
-                    )
-                })
+                .map(|(region, rect)| (region.name().to_owned(), rect))
                 .collect()
         };
         match candidate.vm.borrow_mut().call_layout(
@@ -912,19 +902,7 @@ impl Renderer for Composite {
             Ok(regions) => {
                 let parsed = regions
                     .into_iter()
-                    .map(|(name, rect)| {
-                        Region::from_name(&name).map(|region| {
-                            (
-                                region,
-                                RawRect {
-                                    x: rect.x,
-                                    y: rect.y,
-                                    width: rect.width,
-                                    height: rect.height,
-                                },
-                            )
-                        })
-                    })
+                    .map(|(name, rect)| Region::from_name(&name).map(|region| (region, rect)))
                     .collect::<Option<Vec<_>>>();
                 match parsed {
                     Some(regions) => LayoutDecision::Draw { extension, regions },

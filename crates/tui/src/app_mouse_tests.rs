@@ -6,7 +6,7 @@ use super::super::{App, Effect};
 use crate::app::panel::Spot;
 use crate::app::testkit::{self, SESSION, attached};
 use crate::ext::tests::{SlotRenderer, SlotScript};
-use crate::ext::{Decision, KeyOutcome, RawRect, Renderer, SessionCtx};
+use crate::ext::{Decision, KeyOutcome, Renderer, SessionCtx};
 use crate::home::Launch;
 use crate::keys::{Button, Mouse, MouseKind};
 use crate::mouse::{Pointer, Target as Hit, TargetId};
@@ -155,44 +155,7 @@ fn extension_layout_uses_its_conversation_rect_for_mouse_hit_testing() {
         &["layout"],
         SlotScript::Replace(Vec::new()),
     ));
-    *renderer.layout.borrow_mut() = Some(vec![
-        (
-            crate::layout::Region::Rail,
-            RawRect {
-                x: 0,
-                y: 0,
-                width: 20,
-                height: 40,
-            },
-        ),
-        (
-            crate::layout::Region::Conversation,
-            RawRect {
-                x: 30,
-                y: 0,
-                width: 100,
-                height: 35,
-            },
-        ),
-        (
-            crate::layout::Region::InputBox,
-            RawRect {
-                x: 30,
-                y: 35,
-                width: 100,
-                height: 5,
-            },
-        ),
-        (
-            crate::layout::Region::Panel,
-            RawRect {
-                x: 140,
-                y: 0,
-                width: 20,
-                height: 40,
-            },
-        ),
-    ]);
+    *renderer.layout.borrow_mut() = Some(crate::results_support::four_region_layout(35));
     app.use_renderer(renderer as Rc<dyn Renderer>);
 
     assert!(app.over_conversation(Position::new(31, 10)));

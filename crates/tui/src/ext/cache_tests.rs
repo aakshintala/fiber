@@ -96,7 +96,7 @@ fn failed_home_render_is_cached_by_its_projected_input() {
     };
     assert!(draw().is_none());
     assert!(draw().is_none());
-    assert_eq!(calls.get(), 1);
+    assert_eq!(calls.get(), 1); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
 }
 
 #[test]
@@ -151,9 +151,9 @@ fn layout_regions_counts_renderer_calls_only_on_cache_misses() {
 
     crate::work::take();
     assert!(draw().is_some());
-    assert_eq!(crate::work::take().renderer_calls, 1);
+    assert_eq!(crate::work::take().renderer_calls, 1); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
     assert!(draw().is_some());
-    assert_eq!(crate::work::take().renderer_calls, 0);
+    assert_eq!(crate::work::take().renderer_calls, 0); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
 }
 
 #[test]
@@ -172,19 +172,19 @@ fn dropping_a_page_removes_only_its_layout_cache_entry() {
     };
 
     assert!(draw(page(0)).is_some());
-    assert_eq!(calls.get(), 1);
+    assert_eq!(calls.get(), 1); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
     assert!(draw(page(1)).is_some());
-    assert_eq!(calls.get(), 2);
+    assert_eq!(calls.get(), 2); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
     assert!(draw(page(0)).is_some());
-    assert_eq!(calls.get(), 2);
+    assert_eq!(calls.get(), 2); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
     assert!(draw(page(1)).is_some());
-    assert_eq!(calls.get(), 2);
+    assert_eq!(calls.get(), 2); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
 
     cache.drop_page(page(0));
     assert!(draw(page(0)).is_some());
-    assert_eq!(calls.get(), 3);
+    assert_eq!(calls.get(), 3); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
     assert!(draw(page(1)).is_some());
-    assert_eq!(calls.get(), 3);
+    assert_eq!(calls.get(), 3); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
 }
 
 #[test]
@@ -243,7 +243,7 @@ fn invalid_layout_maps_fail_atomically_and_cache_the_failure() {
         };
         assert_eq!(draw(), None, "invalid map {index} must fall back whole");
         assert_eq!(draw(), None, "a cached failure still falls back whole");
-        assert_eq!(calls.get(), 1, "a cached failure does not call Lua again");
+        assert_eq!(calls.get(), 1, "a cached failure does not call Lua again"); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
         // `docs/tui.md`, "The slots": a failed extension produces one failure notice.
         assert_eq!(cache.take_failures().len(), 1);
         assert!(cache.take_failures().is_empty());
@@ -268,7 +268,7 @@ fn layout_regions_accepts_edge_touching_rectangles_on_each_axis() {
 }
 
 #[test]
-fn m3b_layout_rejects_rectangles_negative_on_both_axes() {
+fn layout_rejects_rectangles_negative_on_both_axes() {
     let cache = Cache::default();
     let input = layout_input(10, 5, &["conversation"], false);
     let result = cache.layout_regions(page(0), "test", None, &input, || LayoutDecision::Draw {
@@ -283,7 +283,7 @@ fn m3b_layout_rejects_rectangles_negative_on_both_axes() {
 }
 
 #[test]
-fn m3c_layout_rejects_negative_x_with_nonnegative_y() {
+fn layout_rejects_negative_x_with_nonnegative_y() {
     let cache = Cache::default();
     let input = layout_input(10, 5, &["conversation"], false);
     let result = cache.layout_regions(page(0), "test", None, &input, || LayoutDecision::Draw {
@@ -359,7 +359,7 @@ fn failed_layout_decision_is_cached_and_reported_once_for_builtin_fallback() {
 
     assert_eq!(draw(), None);
     assert_eq!(draw(), None);
-    assert_eq!(calls.get(), 1);
+    assert_eq!(calls.get(), 1); // `docs/tui.md`, "How a TUI extension runs": one call per cache miss or frame advance, none on a hit.
     // `docs/tui.md`, "The slots": a cached failure is noticed once.
     assert_eq!(cache.take_failures().len(), 1);
     assert!(cache.take_failures().is_empty());

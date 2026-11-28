@@ -205,17 +205,7 @@ pub enum Decision {
 }
 
 /// One Lua-provided rectangle before the terminal validates and casts it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RawRect {
-    /// The left column.
-    pub x: i64,
-    /// The top row.
-    pub y: i64,
-    /// The width in cells.
-    pub width: i64,
-    /// The height in cells.
-    pub height: i64,
-}
+pub type RawRect = contract::LayoutRect;
 
 /// A layout renderer's map before the terminal validates it.
 #[derive(Debug)]

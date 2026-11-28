@@ -1427,7 +1427,7 @@ impl App {
     /// below-conversation rows.
     pub(crate) fn conversation_area_height(&self) -> usize {
         if let Some(placement) = crate::view::placement(self) {
-            return usize::from(placement.conversation.height);
+            return usize::from(placement.conversation(self).height);
         }
         let below = self.below_rows();
         usize::from(self.screen.height()).saturating_sub(below + self.narrow_rows(below))
