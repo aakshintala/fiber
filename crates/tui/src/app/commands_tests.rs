@@ -1915,6 +1915,7 @@ fn feedback_success_keeps_a_draft_edited_while_the_write_ran() {
     ));
     app.draft.clear();
     app.draft.paste("a new thought");
+    app.on_feedback(Ok(feedback_done()));
     assert_eq!(app.draft(), "a new thought");
     let screen = screen_text(&app);
     assert!(screen.contains("a new thought"), "{screen}");
@@ -1966,6 +1967,7 @@ fn feedback_fallback_notice_tells_the_person_to_attach_the_file() {
         screen.contains("https://example.test/new?title=x"),
         "{screen}"
     );
+    // #4981 owns the display split; assert the full instruction once it lands.
     assert!(!screen.contains("attach the report file"), "{screen}");
 }
 

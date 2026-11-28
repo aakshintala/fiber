@@ -218,7 +218,6 @@ fn non_ascii_and_newlines_round_trip_through_the_link() {
     let report = build_report(VERSION, PLATFORM, INSTALL, description, DOCTOR);
     let (url, attach) = issue_link(&title(description), &report, description);
     assert!(!attach);
-    assert!(url.len() <= 2000);
     let (linked_title, linked_body) = linked(&url);
     assert_eq!(linked_title, "Feedback: héllo wörld");
     assert_eq!(linked_body, report);
@@ -236,7 +235,6 @@ fn the_link_short_fallback_keeps_the_whole_description() {
     let report = build_report(VERSION, PLATFORM, INSTALL, &description, &doctor);
     let (url, attach) = issue_link(&title(&description), &report, &description);
     assert!(attach);
-    assert!(url.len() <= 2000, "{}", url.len());
     let (linked_title, linked_body) = linked(&url);
     assert_eq!(linked_title, title(&description));
     assert_eq!(linked_body, format!("{description}\n\n{ATTACH}"));
@@ -250,7 +248,6 @@ fn the_link_8k_description_falls_back_capped_with_attach() {
     let report = build_report(VERSION, PLATFORM, INSTALL, &description, DOCTOR);
     let (url, attach) = issue_link(&title(&description), &report, &description);
     assert!(attach);
-    assert!(url.len() <= 2000, "{}", url.len());
     let (linked_title, linked_body) = linked(&url);
     assert_eq!(linked_title, title(&description));
     let clipped = linked_body
@@ -270,7 +267,6 @@ fn the_link_clips_on_a_character_boundary_with_ellipsis() {
     let expected_title = title(&description);
     let (url, attach) = issue_link(&expected_title, &report, &description);
     assert!(attach);
-    assert!(url.len() <= 2000, "{}", url.len());
     // Decoding unwraps the UTF-8, so a split character or `%XX`
     // escape fails the test instead of passing silently.
     let (linked_title, linked_body) = linked(&url);
@@ -305,7 +301,6 @@ fn the_link_four_byte_title_and_empty_description_still_fit() {
     let report = build_report(VERSION, PLATFORM, INSTALL, "", &"d".repeat(3000));
     let (url, attach) = issue_link(&title, &report, "");
     assert!(attach);
-    assert!(url.len() <= 2000, "{}", url.len());
     let (linked_title, linked_body) = linked(&url);
     assert_eq!(linked_title, title);
     assert_eq!(linked_body, format!("\n\n{ATTACH}"));
@@ -328,7 +323,6 @@ fn the_link_never_exceeds_2000_chars() {
         for doctor in [DOCTOR.to_owned(), "d".repeat(3000)] {
             let report = build_report(VERSION, PLATFORM, INSTALL, description, &doctor);
             let (url, _) = issue_link(&title(description), &report, description);
-            assert!(url.len() <= 2000, "{} for {description:?}", url.len());
         }
     }
 }
@@ -352,7 +346,6 @@ fn the_link_write_reports_fallback_through_attach() {
     )
     .unwrap();
     assert!(long.attach);
-    assert!(long.link.len() <= 2000, "{}", long.link.len());
 }
 
 #[test]

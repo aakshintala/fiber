@@ -211,7 +211,7 @@ pub struct FeedbackDone {
     pub path: PathBuf,
     /// The new-issue link carrying the report, or its description.
     pub link: String,
-    /// The instruction to attach the report, or empty for a full-report link.
+    /// True when the link carries the description fallback, so the person attaches the report file.
     pub attach: bool,
 }
 
