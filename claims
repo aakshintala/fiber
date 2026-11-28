@@ -872,3 +872,5 @@ crates/main/tests/support/pty.rs	fiber-3738	plan	2026-11-28T02:21:04Z	roundhouse
 crates/main/tests/support/mod.rs	fiber-3738	plan	2026-11-28T02:21:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-3738	
 crates/main/tests/support/hub_start.rs	fiber-3738	plan	2026-11-28T02:21:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-3738	
 crates/support/src/deadline.rs	fiber-3738	plan	2026-11-28T02:21:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-3738	
+crates/tui/src/app.rs	fiber-4584	plan	2026-11-28T02:41:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/event_loop.rs	fiber-4584	plan	2026-11-28T02:41:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
