@@ -317,7 +317,12 @@ fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<Hub>>>) -> Socket {
 }
 
 fn connect_detached_hub(setup: &Setup, hub: &Arc<Mutex<Option<support::DetachedHub>>>) -> Socket {
-    let (client, _) = support::connect_detached_hub(setup, hub);
+    let client = support::connect_detached_hub_with_serve(
+        setup,
+        hub,
+        setup.fiber_in_workspace(&["hub", "serve"]),
+        false,
+    );
     Socket::from(setup.deadline, client.write.into_inner().unwrap())
 }
 
@@ -490,7 +495,7 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
     let workspace = setup.workspace_text();
     let sessions = Watchdog::matching(&workspace);
     let hub = Arc::new(Mutex::new(None::<support::DetachedHub>));
-    let (client, _) = connect_detached_hub(&setup, &hub);
+    let client = connect_detached_hub(&setup, &hub);
     client.send(&subscribe_line("c_sub", &id));
     let replay = until_hub(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
@@ -518,7 +523,7 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
     );
 
     // A second client finds the session running and attaches.
-    let (second, _) = connect_detached_hub(&setup, &hub);
+    let second = connect_detached_hub(&setup, &hub);
     second.send(&subscribe_line("c_sub2", &id));
     until_hub(&second, "the second subscribe", |line| {
         acknowledges(line, "c_sub2")
