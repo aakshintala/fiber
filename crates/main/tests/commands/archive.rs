@@ -539,6 +539,15 @@ fn reap_served(served: hub_start::Served) {
 }
 
 /// Pairs a fresh client to the already-running hub as `box`.
+///
+/// `docs/permissions.md`, “Sessions on the sockets”, detects session callers
+/// through their process ancestors. The helper shell must be reaped before
+/// Fiber reaches the hub, so the child is reparented outside that tree; the
+/// stdin EOF gate enforces that order. `env_clear()` and `current_dir(a.workspace())`
+/// preserve the pairing setup settled by RULING-5043-3 (comment 7237158653).
+/// Pairing stays before `seed_hub_sessions` so it does not consume the
+/// deadline needed by session seeding, as RULING-5043-15 (comment 7238442647)
+/// requires.
 fn paired_client(a: &Setup, served: &hub_start::Served) -> Setup {
     let b = Setup::new();
     let root = a.root.path();
@@ -555,7 +564,7 @@ fn paired_client(a: &Setup, served: &hub_start::Served) -> Setup {
     let mut shell = Command::new("/bin/sh");
     shell
         .arg("-c")
-        .arg("out=$1; err=$2; status=$3; shift 3; ( \"$@\" >\"$out\" 2>\"$err\"; result=$?; printf '%s\\n' \"$result\" >\"$status\" ) </dev/null >/dev/null 2>&1 &")
+        .arg("exec 3<&0; out=$1; err=$2; status=$3; shift 3; ( cat <&3 >/dev/null; \"$@\" >\"$out\" 2>\"$err\"; result=$?; printf '%s\\n' \"$result\" >\"$status\" ) </dev/null >/dev/null 2>&1 &")
         .arg("fiber-pairing")
         .arg(&stdout_path)
         .arg(&stderr_path)
