@@ -38,19 +38,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use contract::commands::SubscribeLevel;
 use contract::diag::DebugLog;
 use contract::{CommandId, ErrorCode, HubEventKind, SessionId};
 use serde_json::{Map, Value};
 
 mod ack;
+mod delegate_tail;
 mod relays;
 
 use crate::connection::{Hub, Refused, lock, reject};
 use crate::retire::{AckOrder, Retire, report};
 
+pub(crate) use ack::Ack;
 #[cfg(test)]
 pub(crate) use ack::ack_parses;
-pub(crate) use ack::{Ack, acknowledgement};
+#[cfg(test)]
+pub(crate) use ack::acknowledgement;
 use ack::{Settled, Verdict, kept_has, muted, settle};
 pub(crate) use relays::Relays;
 
@@ -483,11 +487,7 @@ pub(crate) fn route(
     // credential check runs first, so a malformed subscribe gains no
     // accepted answer.
     let full_subscribe = stripped.get("command").and_then(Value::as_str) == Some("subscribe")
-        && stripped
-            .get("args")
-            .and_then(|args| args.get("level"))
-            .and_then(Value::as_str)
-            == Some("full");
+        && subscribe_level(&stripped) == Some(SubscribeLevel::Full);
     if full_subscribe {
         if let Err(refused) = startup_credential(&stripped) {
             crate::retire::refuse(
@@ -1072,21 +1072,20 @@ fn replay_fold(
     dir: &std::path::Path,
     workspace_gone: Option<&str>,
 ) {
-    let fold = match exited_fold(dir) {
-        Ok(fold) => fold,
-        Err(code) => {
-            crate::retire::refuse(
-                writer,
-                hub,
-                relays,
-                session,
-                id,
-                &code,
-                &format!("The log of session `{session}` cannot be replayed."),
-            );
-            return;
-        }
-    };
+    let fold_read = exited_fold(dir);
+    if let Some(code) = fold_read.error {
+        crate::retire::refuse(
+            writer,
+            hub,
+            relays,
+            session,
+            id,
+            &code,
+            &format!("The log of session `{session}` cannot be replayed."),
+        );
+        return;
+    }
+    let fold = fold_read.lines;
     let last = fold.last().and_then(|line| line.seq.map(|seq| seq.0));
     let mut result = Map::new();
     if let Some(last) = last {
@@ -1186,10 +1185,63 @@ fn replay_fold(
 }
 
 /// The durable lines of an exited delegate's log, root first: the fold a
-/// `full` subscribe replays. `NotFound` when the log vanished mid-route,
-/// `LogCorrupt` when its history cannot be read.
-fn exited_fold(dir: &std::path::Path) -> Result<Vec<contract::Envelope>, ErrorCode> {
-    let segments = log::history(dir).map_err(|error| match error {
+/// `full` subscribe replays. Keep lines before a read failure so an opening
+/// relay can forward that prefix before it closes an incomplete stream.
+struct ExitedFold {
+    lines: Vec<contract::Envelope>,
+    error: Option<ErrorCode>,
+}
+
+/// Reads the durable fold of an exited session, root first. A failed
+/// segment retains every whole line read before the failure, while `error`
+/// keeps ordinary full-subscribe replay fail-closed.
+fn exited_fold(dir: &std::path::Path) -> ExitedFold {
+    let segments = match log::history(dir) {
+        Ok(segments) => segments,
+        Err(error) => {
+            return ExitedFold {
+                lines: Vec::new(),
+                error: Some(exited_fold_error(error)),
+            };
+        }
+    };
+    let mut fold = Vec::new();
+    for segment in &segments {
+        match segment.lines(0) {
+            Ok(lines) => fold.extend(lines),
+            Err(_) => {
+                let mut lines = match log::lines(&segment.dir) {
+                    Ok(lines) => lines,
+                    Err(_) => {
+                        return ExitedFold {
+                            lines: fold,
+                            error: Some(ErrorCode::LogCorrupt),
+                        };
+                    }
+                };
+                let mut line_number = 0_u64;
+                while let Some(Ok(line)) = lines.next() {
+                    fold.push(line);
+                    if segment.to.is_some_and(|to| to.0 == line_number) {
+                        break;
+                    }
+                    line_number = line_number.saturating_add(1);
+                }
+                return ExitedFold {
+                    lines: fold,
+                    error: Some(ErrorCode::LogCorrupt),
+                };
+            }
+        }
+    }
+    ExitedFold {
+        error: fold.is_empty().then_some(ErrorCode::LogCorrupt),
+        lines: fold,
+    }
+}
+
+fn exited_fold_error(error: log::Error) -> ErrorCode {
+    match error {
         log::Error::NotFound(_) => ErrorCode::SessionNotFound,
         // Only an append meets `Ended`; a history is read.
         log::Error::Ended { .. } => ErrorCode::Closing,
@@ -1201,18 +1253,7 @@ fn exited_fold(dir: &std::path::Path) -> Result<Vec<contract::Envelope>, ErrorCo
         | log::Error::Unreadable { .. }
         | log::Error::Encode(_)
         | log::Error::Io { .. } => ErrorCode::LogCorrupt,
-    })?;
-    let mut fold = Vec::new();
-    for segment in &segments {
-        match segment.lines(0) {
-            Ok(lines) => fold.extend(lines),
-            Err(_) => return Err(ErrorCode::LogCorrupt),
-        }
     }
-    if fold.is_empty() {
-        return Err(ErrorCode::LogCorrupt);
-    }
-    Ok(fold)
 }
 
 /// A hub-answered `history` page holds at most as many lines as the
@@ -1725,13 +1766,7 @@ fn attach_inner_with_spawner(
             return AttachOutcome::Stale;
         }
         lock(&replayed).push(minted.clone());
-        if reopen
-            && line
-                .get("args")
-                .and_then(|args| args.get("level"))
-                .and_then(Value::as_str)
-                == Some("full")
-        {
+        if reopen && subscribe_level(line) == Some(SubscribeLevel::Full) {
             reopening = Some(minted.clone());
         }
         replayed_id = Some(minted);
@@ -1953,6 +1988,8 @@ fn relay(
     // disconnects first fails its forward, and its dead connection
     // follows nothing.
     let mut ended = false;
+    let mut accepted_full_last_seq = None;
+    let mut last_forwarded_seq = None;
     loop {
         #[cfg(test)]
         if let Some(before_read) = lock(&order.before_read).take() {
@@ -1966,7 +2003,7 @@ fn relay(
             Ok(Some(mut buf)) => {
                 // The forwarded line keeps its one trailing line feed.
                 buf.push(b'\n');
-                let mut ack = acknowledgement(&buf);
+                let (mut ack, seq) = ack::acknowledgement_and_seq(&buf);
                 let replayed_ack = muted(ack.as_ref(), &replayed);
                 #[cfg(test)]
                 {
@@ -1975,6 +2012,13 @@ fn relay(
                     }
                 }
                 if replayed_ack {
+                    if let Some(ack) = ack.as_ref() {
+                        accepted_full_last_seq = if ack.verdict == Verdict::Accepted {
+                            ack.last_seq
+                        } else {
+                            None
+                        };
+                    }
                     if let Some(ack) = ack.as_ref()
                         && reopen.as_deref() == Some(ack.id.as_str())
                     {
@@ -2124,6 +2168,12 @@ fn relay(
                         });
                     }
                     Some(Settled::Subscribed(line)) => {
+                        let full = subscribe_level(&line) == Some(SubscribeLevel::Full);
+                        accepted_full_last_seq = if full {
+                            ack.as_ref().and_then(|ack| ack.last_seq)
+                        } else {
+                            None
+                        };
                         #[cfg(test)]
                         {
                             if let Some(before) = lock(&hub.before_accepted).take() {
@@ -2148,6 +2198,9 @@ fn relay(
                 {
                     break;
                 }
+                if let Some(seq) = seq {
+                    last_forwarded_seq = Some(seq);
+                }
                 // An exiting relay passes its queue on once the
                 // acknowledgement ahead of it reached the client, so the
                 // replacement never answers a command first. A dead relay
@@ -2159,7 +2212,31 @@ fn relay(
             }
         }
     }
-    crate::closed::on_end(session, ended && !exiting, hub, writer, relays, &gone);
+    let mut failed_tail = false;
+    if ended && !gone.load(Ordering::SeqCst) {
+        match delegate_tail::replay_delegate_tail(
+            session,
+            accepted_full_last_seq,
+            last_forwarded_seq,
+            hub,
+            writer,
+        ) {
+            delegate_tail::DelegateTail::Incomplete => {
+                delegate_tail::close_failed_delegate_tail(session, hub, writer, relays);
+                failed_tail = true;
+            }
+            delegate_tail::DelegateTail::WriteFailed => ended = false,
+            delegate_tail::DelegateTail::NotNeeded | delegate_tail::DelegateTail::Replayed => {}
+        }
+    }
+    crate::closed::on_end(
+        session,
+        ended && !exiting && !failed_tail,
+        hub,
+        writer,
+        relays,
+        &gone,
+    );
     // A loop that broke on a failed `forward` did not see the session
     // close: the client is gone.
     let client_gone = gone.load(Ordering::SeqCst) || !ended;
@@ -2204,6 +2281,13 @@ pub(crate) fn relay_slot(entries: &[Relay], session: &str, epoch: u64) -> Option
     entries
         .iter()
         .position(|entry| entry.session == session && entry.epoch == epoch)
+}
+
+fn subscribe_level(line: &Map<String, Value>) -> Option<SubscribeLevel> {
+    let args =
+        serde_json::from_value::<contract::commands::SubscribeArgs>(line.get("args")?.clone())
+            .ok()?;
+    Some(args.level)
 }
 
 /// `line` as one JSON line.
