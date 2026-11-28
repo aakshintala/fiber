@@ -707,7 +707,7 @@ not stop the publish.
 
 ## Toolchain
 
-`rust-toolchain.toml` pins the exact Rust version, 1.99.1. Local builds and
+`rust-toolchain.toml` pins the exact Rust version, 1.100.0. Local builds and
 CI read the same file, and it is the only version Fiber supports
 (`docs/dependencies.md`, "Toolchain").
 
