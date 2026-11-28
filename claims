@@ -336,3 +336,8 @@ crates/main/tests/support/mod.rs	fiber-5038	plan	2026-11-28T07:49:29Z	Amoghs-Mac
 crates/main/tests/tool_calls/driver_shell_sent.rs	fiber-5038	plan	2026-11-28T07:49:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/commands/archive.rs	fiber-5043	plan	2026-11-28T08:15:36Z	roundhouse-7010-plus-1:/home/aakshintala	
 crates/main/tests/extension_host/extension_state_resume.rs	fiber-5038	plan	2026-11-28T10:10:15Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/hub_daemon/main.rs	fiber-5038	grant	2026-11-28T10:12:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5038-detached-hub-tidy	
+crates/main/tests/tool_calls/main.rs	fiber-5038	grant	2026-11-28T10:12:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5038-detached-hub-tidy	
+crates/main/tests/extension_host/main.rs	fiber-5038	grant	2026-11-28T10:12:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5038-detached-hub-tidy	
+crates/main/tests/screen_looks/main.rs	fiber-5038	grant	2026-11-28T10:12:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5038-detached-hub-tidy	
+docs/workflow.md	fiber-5038	grant	2026-11-28T10:12:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5038-detached-hub-tidy	
