@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/settings_view_tests.rs
+expression: screen(&settings)
+---
+ Repository extensions  /settings                                    Esc returns
+› nested
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+extensions
+↑↓ move · → open · ← up · Enter pick · Esc cancel

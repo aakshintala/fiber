@@ -49,6 +49,8 @@ fn ctx_h(fake: &Fake, height: usize) -> Ctx<'_> {
     Ctx {
         seam: fake,
         workspace: Path::new("/w"),
+        canonical_workspace: None,
+        home: None,
         height,
         width: 80,
         usage: None,

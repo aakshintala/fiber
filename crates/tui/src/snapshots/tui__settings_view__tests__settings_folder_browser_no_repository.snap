@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/settings_view_tests.rs
+expression: screen(&settings)
+---
+ Repository extensions  /settings                                    Esc returns
+› + Add
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+No repository to pick folders from.
+Enter edit · Delete remove · ⌥↑⌥↓ move · Esc back

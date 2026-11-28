@@ -1227,16 +1227,21 @@ install still running.
       - Rows: one per entry, in order, then a last row "+ Add". An empty
         list shows only "+ Add".
       - For a list of paths, Enter on "+ Add" opens a folder browser:
-        the sandbox lists start in the home directory and
-        `repository_extensions` in the repository, and cannot leave it.
-        ↑↓ move, → opens the focused folder, ← goes up, and Enter picks
-        the focused folder. Only folders that exist are shown. Enter on an
-        entry opens the browser at that entry.
+        the sandbox lists start in the home directory but are not bounded
+        by it; `repository_extensions` starts in the repository and cannot
+        leave it. ↑↓ move, → opens the focused folder, ← goes up, and Enter
+        picks the focused folder. Only folders that exist are shown. Enter on
+        an entry opens the browser at that entry. With no home folder, the
+        sandbox lists' browser doesn't open, and with no repository the
+        `repository_extensions` browser doesn't. In either case the row says
+        so.
       - For `hub.allowed_origins`, Enter on "+ Add" opens a field with
         "https://fiber.example.ts.net" dim in it as the example, and Enter
-        on an entry opens a field holding its text. The field refuses
-        anything but a scheme `http` or `https`, a host and an optional
-        port, with the error under it, before it saves. Esc cancels.
+        on an entry opens a field holding its text. The field accepts an origin
+        only as a browser sends it: `http://` or `https://`, a lowercase host,
+        and an optional port other than the scheme's default, with nothing
+        after it. Anything else is refused, with the error under it, before it
+        saves. Esc cancels.
       - Delete removes the focused entry. ⌥↑ and ⌥↓ move it one place.
       - A `repository_extensions` entry shows its `path` as its text, then
         `[x] required` or `[ ] required`. Space flips `required`. A new

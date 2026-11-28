@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/settings_view_tests.rs
+expression: screen(&settings)
+---
+ Allowed origins  /settings                                          Esc returns
+› https://bad.example/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Write the origin as a browser sends it, such as
+https://fiber.example.ts.net:8443: lowercase, and no path or default port.
+Enter save · Esc cancel

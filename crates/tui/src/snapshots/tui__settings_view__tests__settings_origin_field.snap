@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/settings_view_tests.rs
+expression: screen(&settings)
+---
+ Allowed origins  /settings                                          Esc returns
+› https://fiber.example.ts.net
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Enter save · Esc cancel

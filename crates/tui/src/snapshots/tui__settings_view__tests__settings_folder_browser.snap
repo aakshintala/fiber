@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/settings_view_tests.rs
+expression: screen
+---
+ Sandbox writable paths  /settings                                   Esc returns
+› .hidden
+  alpha
+  zeta
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+home
+↑↓ move · → open · ← up · Enter pick · Esc cancel

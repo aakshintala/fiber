@@ -5,6 +5,7 @@
 //! value already comes from, and when a written key applies
 //! (`docs/configuration.md`, "When Fiber reads configuration").
 
+use std::net::Ipv6Addr;
 use std::path::{Path, PathBuf};
 
 use contract::settings::{SettingControl, SettingsMetadata, SettingsTab};
@@ -286,6 +287,8 @@ pub(crate) enum Act {
 pub(crate) struct Ctx<'a> {
     pub(crate) seam: &'a dyn Configure,
     pub(crate) workspace: &'a Path,
+    pub(crate) canonical_workspace: Option<PathBuf>,
+    pub(crate) home: Option<PathBuf>,
     pub(crate) height: usize,
     pub(crate) width: usize,
     pub(crate) usage: Option<u64>,
@@ -435,9 +438,20 @@ struct Page {
     layer: Layer,
     /// Whether the entries are `{path, required}` objects.
     objects: bool,
+    /// Whether entries are validated browser origins.
+    origins: bool,
     entries: Vec<Value>,
     list: List,
     field: Option<PageField>,
+}
+
+/// A canonical directory browser for one entry in a settings path list.
+#[derive(Debug)]
+struct Browser {
+    path: PathBuf,
+    root: Option<PathBuf>,
+    at: Option<usize>,
+    list: List,
 }
 
 /// What the view shows below its header.
@@ -517,6 +531,7 @@ pub(crate) struct Settings {
     list: List,
     mode: Mode,
     page: Option<Page>,
+    browser: Option<Browser>,
     /// The entry `tui.theme`, resolved once when the view opened: a
     /// cancel of the theme choices restores this, whatever a preview
     /// queued since.
@@ -543,6 +558,7 @@ impl Settings {
             list: List::gutter(),
             mode: Mode::Rows,
             page: None,
+            browser: None,
             entry_theme: ThemeSetting::Follow,
             said: Vec::new(),
             request: None,
@@ -1044,6 +1060,10 @@ fn is_run(row: &SettingRow) -> bool {
 impl Settings {
     /// Handles one key.
     pub(crate) fn key(&mut self, key: &Key, ctx: &Ctx<'_>) -> Act {
+        if self.browser.is_some() {
+            self.browser_key(key, ctx);
+            return Act::Stay;
+        }
         if self.page.is_some() {
             self.page_key(key, ctx);
             return Act::Stay;
@@ -1238,6 +1258,15 @@ impl Settings {
     /// the list page swallow the wheel, so it never retargets what they
     /// edit.
     pub(crate) fn wheel(&mut self, up: bool, ctx: &Ctx<'_>) -> Act {
+        if self.browser.is_some() {
+            if let Some(browser) = &mut self.browser {
+                let children = browser_children(&browser.path, browser.root.as_deref());
+                browser
+                    .list
+                    .wheel(up, children.len(), ctx.height.saturating_sub(5), 3);
+            }
+            return Act::Stay;
+        }
         let shown = self.shown(ctx);
         if let Some(page) = &mut self.page {
             if page.field.is_none() {
@@ -1285,6 +1314,10 @@ impl Settings {
     /// Handles one editing key: the field's, while one is open; else ←→
     /// move between tabs and Delete resets the focused value.
     pub(crate) fn edit_key(&mut self, edit: Edit, ctx: &Ctx<'_>) -> Act {
+        if self.browser.is_some() {
+            self.browser_edit(edit, ctx);
+            return Act::Stay;
+        }
         if let Some(page) = &mut self.page {
             if let Some(field) = &mut page.field {
                 edit_draft(&mut field.draft, edit);
@@ -1581,6 +1614,7 @@ impl Settings {
                     label: row.presentation.label.clone(),
                     layer,
                     objects: row.control == SettingControl::RepositoryExtensions,
+                    origins: row.key == "hub.allowed_origins",
                     entries,
                     list: List::gutter(),
                     field: None,
@@ -1697,6 +1731,20 @@ impl Settings {
             .unwrap_or(from);
         if to == from {
             return Act::Stay;
+        }
+        if row.key == "hub.allowed_origins" {
+            let values = serde_json::from_str::<Vec<Value>>(original).unwrap_or_default();
+            if let Some(invalid) = values.iter().find_map(|value| {
+                value
+                    .as_str()
+                    .filter(|origin| !valid_origin(origin))
+                    .or_else(|| value.as_str().is_none().then_some("<non-string value>"))
+            }) {
+                self.said = vec![format!(
+                    "Cannot move invalid origin {invalid:?} to another layer."
+                )];
+                return Act::Stay;
+            }
         }
         if let Err(error) = ctx.seam.set(ctx.workspace, to, &row.key, original) {
             self.said = vec![error.message];
@@ -2001,8 +2049,184 @@ fn next_choice(choices: &[String], current: Option<&str>) -> Option<String> {
 // The list sub-page.
 
 impl Settings {
+    /// Opens the folder browser for the selected path entry or the final
+    /// "+ Add" row. Missing roots leave the list open with its explanation.
+    fn open_browser(&mut self, ctx: &Ctx<'_>, at: usize) {
+        let Some(page) = self.page.as_ref() else {
+            return;
+        };
+        let repository = page.key == "repository_extensions";
+        let root = if repository {
+            ctx.canonical_workspace.clone()
+        } else {
+            ctx.home.clone()
+        };
+        let Some(root) = root else {
+            self.said = vec![if repository {
+                "No repository to pick folders from.".to_owned()
+            } else {
+                "No home folder to pick folders from.".to_owned()
+            }];
+            return;
+        };
+        let entry = page.entries.get(at).map(entry_path);
+        let start = entry
+            .as_deref()
+            .map(|entry| nearest_directory(entry, &root, repository))
+            .unwrap_or_else(|| root.clone());
+        self.browser = Some(Browser {
+            path: start,
+            root: repository.then_some(root),
+            at: (at < page.entries.len()).then_some(at),
+            list: List::gutter(),
+        });
+        self.said.clear();
+    }
+
+    fn browser_key(&mut self, key: &Key, ctx: &Ctx<'_>) {
+        if *key == Key::Esc {
+            self.browser = None;
+            return;
+        }
+        let Some(browser) = self.browser.as_mut() else {
+            return;
+        };
+        if *key == Key::Enter {
+            let children = browser_children(&browser.path, browser.root.as_deref());
+            let Some(path) = children.get(browser.list.selected()).cloned() else {
+                return;
+            };
+            let Some(page) = self.page.as_ref() else {
+                return;
+            };
+            let mut candidate = page.entries.clone();
+            match browser.at.and_then(|at| candidate.get_mut(at)) {
+                Some(entry) => set_path(entry, &path.to_string_lossy()),
+                None => candidate.push(new_entry(page.objects, &path.to_string_lossy())),
+            }
+            let focus = browser.at.unwrap_or(candidate.len().saturating_sub(1));
+            if self.page_commit(candidate, ctx) {
+                self.browser = None;
+                self.page_select(focus, ctx);
+            }
+            return;
+        }
+        let children = browser_children(&browser.path, browser.root.as_deref());
+        if browser
+            .list
+            .key(key, children.len(), ctx.height.saturating_sub(6))
+        {
+            self.said.clear();
+        }
+    }
+
+    fn browser_edit(&mut self, edit: Edit, _ctx: &Ctx<'_>) {
+        let Some(browser) = self.browser.as_mut() else {
+            return;
+        };
+        if edit == Edit::Right {
+            let children = browser_children(&browser.path, browser.root.as_deref());
+            if let Some(path) = children.get(browser.list.selected()) {
+                browser.path = path.clone();
+                browser.list = List::gutter();
+            }
+        } else if edit == Edit::Left {
+            if browser.root.as_deref() == Some(browser.path.as_path()) {
+                return;
+            }
+            if let Some(parent) = browser.path.parent() {
+                let parent = fs_canonical(parent);
+                if let Some(parent) = parent.filter(|path| {
+                    browser
+                        .root
+                        .as_deref()
+                        .is_none_or(|root| path.starts_with(root))
+                }) {
+                    browser.path = parent;
+                    browser.list = List::gutter();
+                }
+            }
+        }
+    }
+
+    fn browser_frame(&self, browser: &Browser, width: usize, height: usize) -> Frame {
+        let children = browser_children(&browser.path, browser.root.as_deref());
+        let rows: Vec<Vec<(String, Option<Spot>, Ink)>> = children
+            .iter()
+            .map(|path| {
+                vec![(
+                    text::cut(
+                        &path.file_name().unwrap_or_default().to_string_lossy(),
+                        width.saturating_sub(GUTTER),
+                        "…",
+                    ),
+                    None,
+                    Ink::Plain,
+                )]
+            })
+            .collect();
+        let below = vec![
+            browser
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| browser.path.display().to_string()),
+        ];
+        let (footer, spans) = footer(&[
+            ("↑↓", " move · "),
+            ("→", " open · "),
+            ("←", " up · "),
+            ("Enter", " pick · "),
+            ("Esc", " cancel"),
+        ]);
+        let mut list = browser.list;
+        list.select(
+            browser.list.selected(),
+            rows.len(),
+            height.saturating_sub(4),
+        );
+        Frame {
+            joins: Vec::new(),
+            title: self
+                .page
+                .as_ref()
+                .map_or_else(|| "Folders".to_owned(), |page| page.label.clone()),
+            command: "/settings".to_owned(),
+            rows,
+            list,
+            gutter_mark: Style::new()
+                .fg(Role::Accent.color())
+                .add_modifier(Modifier::BOLD),
+            below,
+            field: None,
+            footer,
+            chrome: Some(Chrome {
+                top: Vec::new(),
+                draft: None,
+                footer: spans,
+            }),
+        }
+    }
+
     /// A key on the list sub-page.
     fn page_key(&mut self, key: &Key, ctx: &Ctx<'_>) {
+        if self.browser.is_some() {
+            self.browser_key(key, ctx);
+            return;
+        }
+        if self.page.as_ref().is_some_and(|page| {
+            matches!(
+                page.key.as_str(),
+                "sandbox.allow_write" | "sandbox.deny_read" | "repository_extensions"
+            ) && page.field.is_none()
+                && *key == Key::Enter
+        }) {
+            let at = self.page.as_ref().map(|page| page.list.selected());
+            if let Some(at) = at {
+                self.open_browser(ctx, at);
+            }
+            return;
+        }
         let shown = self.shown(ctx);
         let Some(page) = self.page.as_mut() else {
             return;
@@ -2026,6 +2250,10 @@ impl Settings {
             self.page = None;
             self.said.clear();
         } else if key.is_enter_or_space()
+            && (!matches!(
+                page.key.as_str(),
+                "sandbox.allow_write" | "sandbox.deny_read" | "repository_extensions"
+            ) || *key == Key::Enter)
             && (!page.objects || *key == Key::Enter || at == page.entries.len())
         {
             let entry = page.entries.get(at);
@@ -2086,6 +2314,10 @@ impl Settings {
         let typed = field.draft.expand();
         let mut candidate = page.entries.clone();
         let at = field.at;
+        if page.origins && !valid_origin(&typed) {
+            self.said = crate::format::wrap(ORIGIN_GUIDANCE, ctx.width);
+            return;
+        }
         match at.and_then(|at| candidate.get_mut(at)) {
             Some(entry) => set_path(entry, &typed),
             None => candidate.push(new_entry(page.objects, &typed)),
@@ -2212,6 +2444,9 @@ impl Settings {
         usage: Option<u64>,
         suffix_width: usize,
     ) -> Frame {
+        if let Some(browser) = &self.browser {
+            return self.browser_frame(browser, width, height);
+        }
         if let Some(page) = &self.page {
             return self.page_frame(page, width, height);
         }
@@ -2526,7 +2761,13 @@ impl Settings {
             .collect();
         let add_row = page.entries.len();
         rows.push(if editing.is_some_and(|field| field.at.is_none()) {
-            Vec::new()
+            if page.origins
+                && editing.is_some_and(|field| field.at.is_none() && field.draft.is_empty())
+            {
+                vec![("https://fiber.example.ts.net".to_owned(), None, Ink::Muted)]
+            } else {
+                Vec::new()
+            }
         } else {
             vec![("+ Add".to_owned(), None, Ink::Plain)]
         });
@@ -2574,6 +2815,196 @@ impl Settings {
             }),
         }
     }
+}
+
+fn fs_canonical(path: &Path) -> Option<PathBuf> {
+    std::fs::canonicalize(path)
+        .ok()
+        .filter(|path| path.is_absolute())
+}
+
+fn nearest_directory(entry: &str, root: &Path, bounded: bool) -> PathBuf {
+    let root = fs_canonical(root).unwrap_or_else(|| root.to_path_buf());
+    let candidate = Path::new(entry);
+    let mut current = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        root.join(candidate)
+    };
+    loop {
+        if let Some(canonical) = fs_canonical(&current)
+            && canonical.is_dir()
+            && (!bounded || canonical.starts_with(&root))
+        {
+            return canonical;
+        }
+        if !current.pop() {
+            break;
+        }
+    }
+    root
+}
+
+fn browser_children(path: &Path, root: Option<&Path>) -> Vec<PathBuf> {
+    let Some(current) = fs_canonical(path).filter(|path| path.is_dir()) else {
+        return Vec::new();
+    };
+    if root.is_some_and(|root| !current.starts_with(root)) {
+        return Vec::new();
+    }
+    let mut children: Vec<PathBuf> = std::fs::read_dir(&current)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter_map(|path| fs_canonical(&path))
+        .filter(|path| path.is_dir() && root.is_none_or(|root| path.starts_with(root)))
+        .collect();
+    children.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
+    children
+}
+
+const ORIGIN_GUIDANCE: &str = "Write the origin as a browser sends it, such as https://fiber.example.ts.net:8443: lowercase, and no path or default port.";
+
+/// Whether `text` is exactly an origin serialized by a browser.
+fn valid_origin(text: &str) -> bool {
+    let Some((scheme, authority)) = text.split_once("://") else {
+        return false;
+    };
+    let default_port = match scheme {
+        "http" => 80,
+        "https" => 443,
+        _ => return false,
+    };
+    if authority.is_empty()
+        || authority
+            .bytes()
+            .any(|byte| matches!(byte, b'/' | b'?' | b'#' | b'@'))
+    {
+        return false;
+    }
+
+    let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
+        let Some((literal, suffix)) = rest.split_once(']') else {
+            return false;
+        };
+        if !valid_ipv6_literal(literal) {
+            return false;
+        }
+        if suffix.is_empty() {
+            (None, None)
+        } else if let Some(port) = suffix.strip_prefix(':') {
+            (None, Some(port))
+        } else {
+            return false;
+        }
+    } else {
+        let (host, port) = match authority.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        };
+        if !valid_origin_host(host) {
+            return false;
+        }
+        (Some(host), port)
+    };
+    let _ = host;
+    match port {
+        None => true,
+        Some(port) => {
+            if port.is_empty()
+                || (port.len() > 1 && port.starts_with('0'))
+                || !port.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return false;
+            }
+            let Ok(port) = port.parse::<u16>() else {
+                return false;
+            };
+            port != 0 && u32::from(port) != default_port
+        }
+    }
+}
+
+fn valid_origin_host(host: &str) -> bool {
+    if host.is_empty() || !host.is_ascii() || host.ends_with('.') {
+        return false;
+    }
+    let labels: Vec<&str> = host.split('.').collect();
+    if labels.iter().any(|label| {
+        label.is_empty()
+            || !label.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-_".contains(&byte)
+            })
+    }) {
+        return false;
+    }
+    let Some(last) = labels.last() else {
+        return false;
+    };
+    if last.bytes().all(|byte| byte.is_ascii_digit())
+        || last.starts_with("0x")
+        || last.starts_with("0X")
+    {
+        return canonical_ipv4(host);
+    }
+    true
+}
+
+fn canonical_ipv4(host: &str) -> bool {
+    let octets: Vec<&str> = host.split('.').collect();
+    octets.len() == 4
+        && octets.iter().all(|octet| {
+            !octet.is_empty()
+                && !(octet.len() > 1 && octet.starts_with('0'))
+                && octet.bytes().all(|byte| byte.is_ascii_digit())
+                && octet
+                    .parse::<u8>()
+                    .is_ok_and(|value| value.to_string() == *octet)
+        })
+}
+
+fn valid_ipv6_literal(literal: &str) -> bool {
+    literal
+        .parse::<Ipv6Addr>()
+        .is_ok_and(|address| ipv6_serialized(address) == literal)
+}
+
+fn ipv6_serialized(address: Ipv6Addr) -> String {
+    let segments = address.segments();
+    let mut best_start = 8;
+    let mut best_len = 0;
+    let mut at = 0;
+    while let Some(segment) = segments.get(at).copied() {
+        if segment != 0 {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while segments.get(at).is_some_and(|segment| *segment == 0) {
+            at += 1;
+        }
+        let len = at - start;
+        if len >= 2 && len > best_len {
+            best_start = start;
+            best_len = len;
+        }
+    }
+    let mut out = String::new();
+    let mut index = 0;
+    while let Some(segment) = segments.get(index).copied() {
+        if index == best_start {
+            out.push_str("::");
+            index += best_len;
+            continue;
+        }
+        if !out.is_empty() && !out.ends_with(':') {
+            out.push(':');
+        }
+        out.push_str(&format!("{segment:x}"));
+        index += 1;
+    }
+    out
 }
 
 /// A JSON number as a count, or `None` when the text is no number.
