@@ -18,10 +18,9 @@
 use crate::support;
 
 use std::path::Path;
-use std::process::Output;
 
 use fakes::{ProviderServer, Response, fingerprint};
-use support::{Run, Setup, is_status, run_to_exit};
+use support::{Run, Setup, run_from, run_to_exit};
 
 /// The probe's recorded call to `get_weather`, a tool this session lacks.
 const CALL: &[u8] = include_bytes!("../../../../research/vertex-probe/raw/gemini-tool.sse");
@@ -37,22 +36,6 @@ const GEMINI_BAD_TOKEN: &str = r#"{"error":{"code":401,"message":"Request had in
 
 /// The package's endpoint origin, which the copy points at the fake server.
 const ORIGIN: &str = "https://aiplatform.googleapis.com";
-
-/// Parses `fiber ask` stdout into a run: one JSON value per line, without
-/// `session_status` lines, which an observer thread writes.
-fn run_from(output: Output) -> Run {
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let lines = stdout
-        .lines()
-        .filter(|l| !is_status(l))
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    Run {
-        code: output.status.code(),
-        lines,
-        stderr: String::from_utf8(output.stderr).unwrap(),
-    }
-}
 
 /// Runs `fiber` with `args` and the extra environment `env` to its exit
 /// under the test's deadline.

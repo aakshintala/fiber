@@ -21,25 +21,9 @@ use std::sync::{Arc, Mutex};
 use fakes::{ProviderServer, Request, Response, fingerprint};
 use serde_json::{Value, json};
 use support::{
-    HELLO_KINDS, HubProc, Run, SessionGuard, Setup, connect_hub, hello, is_status, recv_answer,
+    HELLO_KINDS, HubProc, Run, SessionGuard, Setup, connect_hub, hello, recv_answer, run_from,
     run_to_exit, subscribe, until, until_after, write_json,
 };
-
-/// Parses `fiber ask` stdout into a run: one JSON value per line, without
-/// `session_status` lines, which an observer thread writes.
-fn run_from(output: Output) -> Run {
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let lines = stdout
-        .lines()
-        .filter(|l| !is_status(l))
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    Run {
-        code: output.status.code(),
-        lines,
-        stderr: String::from_utf8(output.stderr).unwrap(),
-    }
-}
 
 impl Run {
     fn text_completed(&self) -> &str {
