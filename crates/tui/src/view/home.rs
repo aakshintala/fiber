@@ -4,7 +4,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 
 use super::{FOCUS_STYLE, completions, lift_hover, logo};
 use crate::app::App;
@@ -30,6 +30,62 @@ const PLACEHOLDER: &str = "› /? for shortcuts";
 /// The draft rows the box shows: at least 2, at most 8.
 const MIN_BOX: usize = 2;
 const MAX_BOX: usize = 8;
+
+type HomeFootPart = (Option<Span<'static>>, Line<'static>, bool);
+
+fn foot_separator_width(separator: Option<&Span<'static>>) -> usize {
+    separator.map_or(0, |separator| width(separator.content.as_ref()))
+}
+
+fn home_foot_width(parts: &[&HomeFootPart]) -> usize {
+    let mut width = 0;
+    for (index, part) in parts.iter().enumerate() {
+        if index > 0 {
+            width += foot_separator_width(part.0.as_ref());
+        }
+        width += part.1.width();
+    }
+    width
+}
+
+fn home_foot_line(parts: &[&HomeFootPart]) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (index, part) in parts.iter().enumerate() {
+        if index > 0
+            && let Some(separator) = part.0.as_ref()
+        {
+            spans.push(separator.clone());
+        }
+        spans.extend(part.1.spans.iter().cloned());
+    }
+    Line::from(spans)
+}
+
+fn fit_home_foot(parts: &[HomeFootPart], max_width: u16) -> Line<'static> {
+    let mandatory: Vec<&HomeFootPart> = parts.iter().filter(|part| part.2).collect();
+    let mandatory_width = home_foot_width(&mandatory);
+    let mandatory_separator_width = mandatory
+        .first()
+        .map_or(0, |part| foot_separator_width(part.0.as_ref()));
+    let mut retained = Vec::new();
+    let mut retained_width = 0;
+    for part in parts.iter().filter(|part| !part.2) {
+        let separator_width = if retained.is_empty() {
+            0
+        } else {
+            foot_separator_width(part.0.as_ref())
+        };
+        let next_width = retained_width + separator_width + part.1.width();
+        if next_width + mandatory_width + mandatory_separator_width <= usize::from(max_width) {
+            retained.push(part);
+            retained_width = next_width;
+        } else {
+            break;
+        }
+    }
+    retained.extend(mandatory.iter().copied());
+    home_foot_line(&retained)
+}
 
 /// Where home's rows draw.
 struct Placed {
@@ -852,8 +908,17 @@ pub(super) fn render(
     token_targets(app, area, &placed, &mut targets);
     let mut bottom = placed.foot;
     crate::view::banner::draw(app, area, buf, &mut bottom);
-    // The foot hint sits on the last row, centred, cut to the width.
-    let foot = &screen.foot;
+    // At 80 columns, keep the mandatory tail and whole leading parts; below it,
+    // preserve the original left-cut path.
+    let trimmed_foot = if area.width >= 80 {
+        screen
+            .foot_parts
+            .as_ref()
+            .map(|parts| fit_home_foot(parts, area.width))
+    } else {
+        None
+    };
+    let foot = trimmed_foot.as_ref().unwrap_or(&screen.foot);
     if placed.foot >= area.y {
         let at = if foot.width() <= usize::from(area.width) {
             area.x

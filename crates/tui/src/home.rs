@@ -330,6 +330,9 @@ pub(crate) struct HomeScreen {
     /// The foot hint, or the quit hint while Ctrl+C is armed: each
     /// key bold, its label and every joiner dim.
     pub(crate) foot: Line<'static>,
+    /// Ordered Home hint parts: separator, styled key and label, and mandatory status.
+    /// `None` leaves an armed Ctrl+C quit hint outside width trimming.
+    pub(crate) foot_parts: Option<Vec<(Option<ratatui::text::Span<'static>>, Line<'static>, bool)>>,
     /// The delete question, unwrapped: the frame wraps its head naming
     /// the session and everything `--cascade` adds, and its body
     /// scrolls past the frame.

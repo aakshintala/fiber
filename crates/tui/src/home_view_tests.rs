@@ -1447,12 +1447,17 @@ fn the_box_sits_on_the_last_rows_above_the_foot() {
                 .unwrap()
                 .starts_with('▄')
         );
+        let expected_foot = if width == 80 {
+            "F1 the key map · Ctrl+C twice to quit"
+        } else {
+            "Enter opens the focused session"
+        };
         assert!(
             frame
                 .lines()
                 .nth(usize::from(height - 1))
                 .unwrap()
-                .contains("Enter opens the focused session")
+                .contains(expected_foot)
         );
     }
 }
@@ -4302,10 +4307,12 @@ fn the_reconnect_banner_draws_over_home() {
     down.next_retry();
     let shown = screen(&down, 80, 24);
     assert!(shown.contains("Connection lost · reconnecting"), "{shown}");
-    // The foot hint stays on the last row; at 80 columns only its
-    // start shows.
+    // The foot hint stays on the last row; at 80 columns its mandatory tail shows.
     let last = shown.lines().last().unwrap_or_default();
-    assert!(last.contains("Enter opens the focused session"), "{shown}");
+    assert!(
+        last.contains("F1 the key map · Ctrl+C twice to quit"),
+        "{shown}"
+    );
 }
 
 /// A recents-only picker still parks the cursor in the draft; with the
