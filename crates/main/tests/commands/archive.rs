@@ -452,10 +452,8 @@ fn archive_refuses_a_running_session_without_appending() {
                             format!("unavailable (read session entry: {error})")
                         })?;
                         let path = entry.path().join("events.jsonl");
-                        if path.is_file() {
-                            if found.replace(path).is_some() {
-                                return Err("unavailable (multiple session logs)".to_owned());
-                            }
+                        if path.is_file() && found.replace(path).is_some() {
+                            return Err("unavailable (multiple session logs)".to_owned());
                         }
                     }
                     found.ok_or_else(|| "unavailable (no session log)".to_owned())
