@@ -576,6 +576,16 @@ fn clicking_a_typed_completion_chooses_it_when_connected() {
 
 #[test]
 fn stale_or_disconnected_completion_clicks_do_nothing() {
+    let mut disconnected = home_with(80, 24, launch());
+    open(&mut disconnected);
+    let sent = type_path(&mut disconnected, "/a");
+    answer(&mut disconnected, &sent[0].0, &["a1", "a2"], "/");
+    assert_eq!(focused(&disconnected), Some("a1".to_owned()));
+    let other_completion = rendered_completion_target(&disconnected, "a2");
+    disconnected.outbox.link = crate::app::outbox::Link::Down;
+    assert_eq!(disconnected.on_click(other_completion), Effect::None);
+    assert_eq!(focused(&disconnected), Some("a1".to_owned()));
+
     let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/a");
