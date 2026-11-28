@@ -1519,11 +1519,13 @@ fn the_foot_draws_bold_keys_dim_labels_centred_and_cut() {
     let mandatory = "F1 the key map · Ctrl+C twice to quit";
     assert_fitted(80, mandatory, &["F1", "Ctrl+C"]);
     assert_fitted(81, mandatory, &["F1", "Ctrl+C"]);
+    // `docs/tui.md`, "Home": parts drop from the end of the named order, whole parts only.
     assert_fitted(
         120,
         "Enter opens the focused session, or starts one from the box · ↑↓ move · F1 the key map · Ctrl+C twice to quit",
         &["Enter", "↑↓", "F1", "Ctrl+C"],
     );
+    // `docs/tui.md`, "Home": parts drop from the end of the named order, whole parts only.
     assert_fitted(
         200,
         "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit",
