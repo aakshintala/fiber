@@ -492,8 +492,7 @@ fn a_hub_that_never_says_hello_fails_the_connect_wait() {
     // Accepts connections in the kernel's backlog and never speaks.
     let _silent = std::os::unix::net::UnixListener::bind(run.join("hub")).unwrap();
     let hub = Arc::new(Mutex::new(None));
-    const WAIT: std::time::Duration = std::time::Duration::from_millis(500);
-    connect_hub_within(&setup, &hub, WAIT);
+    connect_hub_within(&setup, &hub, std::time::Duration::from_millis(500));
 }
 
 #[test]

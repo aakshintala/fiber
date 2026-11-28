@@ -1001,6 +1001,9 @@ impl DetachedHub {
         let mut shell = Command::new("/bin/sh");
         shell
             .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .arg("-c")
             .arg("\"$@\" & echo $! > \"$0\"")
             .arg(&pidfile)
@@ -1021,6 +1024,8 @@ impl DetachedHub {
             .spawn()
             .unwrap_or_else(|error| panic!("could not start detached hub shell: {error}"));
         let group = child.id();
+        let _ = child.stdout.take();
+        let _ = child.stderr.take();
         let watchdog = Watchdog::group(group);
         let (done, exited) = mpsc::channel();
         thread::spawn(move || done.send(child.wait()).unwrap_or(()));

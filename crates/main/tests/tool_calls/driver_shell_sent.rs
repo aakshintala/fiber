@@ -23,8 +23,8 @@ use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
     Running, SessionGuard, Setup, Socket, close_session, close_subscribed_session,
-    connect_detached_hub, connect_hub, expired, function_call, hello, recv_answer, session_dir,
-    start_session, stream, subscribe_direct, until, until_after, until_replayed,
+    connect_detached_hub, expired, function_call, hello, recv_answer, session_dir, start_session,
+    stream, subscribe_direct, until, until_after, until_replayed,
 };
 
 #[track_caller]
@@ -237,7 +237,7 @@ fn end_of(line: &Value, id: &str) -> bool {
 /// An idle session after its first turn, with a client subscribed to it.
 struct Idle {
     _server: ProviderServer,
-    hub: Arc<Mutex<Option<support::HubProc>>>,
+    hub: Arc<Mutex<Option<support::DetachedHub>>>,
     session: String,
     direct: Socket,
     guard: SessionGuard,
@@ -249,7 +249,7 @@ fn idle_session(setup: &Setup) -> Idle {
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let hub = Arc::new(Mutex::new(None));
-    let (client, _) = connect_hub(setup, &hub);
+    let (client, _) = connect_detached_hub(setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start_session(&client, &workspace, "first");
@@ -504,18 +504,18 @@ fn user_texts(server: &ProviderServer) -> Vec<Vec<String>> {
 #[track_caller]
 fn finish(
     setup: &Setup,
-    hub: &Arc<Mutex<Option<support::HubProc>>>,
+    hub: &Arc<Mutex<Option<support::DetachedHub>>>,
     session: &str,
     direct: Socket,
     guard: SessionGuard,
 ) {
     drop(direct);
-    let hub = hub.lock().unwrap().take().expect("the starter ran");
-    hub.kill_and_wait();
-    let closer = Socket::connect(setup.deadline, &setup.session_socket(session));
-    close_session(&closer);
-    drop(closer);
-    guard.wait_gone();
+    support::finish_detached(guard, || {
+        hub.lock().unwrap().take().expect("the starter ran").stop();
+        let closer = Socket::connect(setup.deadline, &setup.session_socket(session));
+        close_session(&closer);
+        drop(closer);
+    });
 }
 
 #[test]

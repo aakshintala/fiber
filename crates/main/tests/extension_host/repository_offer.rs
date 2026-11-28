@@ -847,28 +847,29 @@ fn end_through_hub(
     id: &str,
     guard: SessionGuard,
 ) {
-    hub.lock().unwrap().take().expect("the starter ran").stop();
-    let direct = Socket::connect(setup.deadline, &setup.session_socket(id));
-    close_session(&direct);
-    drop(direct);
-    guard.wait_gone();
+    support::finish_detached(guard, || {
+        hub.lock().unwrap().take().expect("the starter ran").stop();
+        let direct = Socket::connect(setup.deadline, &setup.session_socket(id));
+        close_session(&direct);
+        drop(direct);
+    });
 }
 
-/// As `end_through_hub`, for a start-only case that keeps the ordinary hub
-/// child and its exit status.
+/// As `end_through_hub`, for a start-only case whose cleanup proves the
+/// detached process group is empty.
 #[track_caller]
 fn end_through_hub_proc(
     setup: &Setup,
-    hub: &Arc<Mutex<Option<HubProc>>>,
+    hub: &Arc<Mutex<Option<DetachedHub>>>,
     id: &str,
     guard: SessionGuard,
 ) {
-    let hub = hub.lock().unwrap().take().expect("the starter ran");
-    assert!(!hub.kill_and_wait().success(), "SIGKILL ends the hub");
-    let direct = Socket::connect(setup.deadline, &setup.session_socket(id));
-    close_session(&direct);
-    drop(direct);
-    guard.wait_gone();
+    support::finish_detached(guard, || {
+        hub.lock().unwrap().take().expect("the starter ran").stop();
+        let direct = Socket::connect(setup.deadline, &setup.session_socket(id));
+        close_session(&direct);
+        drop(direct);
+    });
 }
 
 #[test]
@@ -913,8 +914,8 @@ fn a_start_with_content_that_never_subscribes_runs_unattended() {
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     declare_db(&setup, &json!({}));
-    let hub = Arc::new(Mutex::new(None));
-    let (client, _) = connect_hub(&setup, &hub);
+    let hub = Arc::new(Mutex::new(None::<DetachedHub>));
+    let (client, _) = connect_detached_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let id = start_session(&client, &workspace, "hi");
