@@ -429,11 +429,105 @@ fn archive_refuses_a_running_session_without_appending() {
     let mut run = Run::spawn(&setup, COLS, ROWS, &[], &[]);
     run.ready();
     run.write(b"run it\r");
-    run.wait_screen("the running shell job", |grid| {
-        grid.rows
-            .iter()
-            .any(|row| row.contains("Jobs") && row.contains("1 running"))
-    });
+    run.wait_screen_leading(
+        "the running shell job",
+        |grid| {
+            grid.rows
+                .iter()
+                .any(|row| row.contains("Jobs") && row.contains("1 running"))
+        },
+        || {
+            let mut report = String::from("running-shell diagnostic:\n");
+            let events = fs::canonicalize(setup.workspace())
+                .map(|workspace| log::sessions_dir(&setup.home(), &worktree::project(&workspace)))
+                .map_err(|error| format!("unavailable (canonicalize workspace: {error})"))
+                .and_then(|directory| {
+                    fs::read_dir(directory)
+                        .map_err(|error| format!("unavailable (read sessions directory: {error})"))
+                })
+                .and_then(|entries| {
+                    let mut found = None;
+                    for entry in entries {
+                        let entry = entry.map_err(|error| {
+                            format!("unavailable (read session entry: {error})")
+                        })?;
+                        let path = entry.path().join("events.jsonl");
+                        if path.is_file() {
+                            if found.replace(path).is_some() {
+                                return Err("unavailable (multiple session logs)".to_owned());
+                            }
+                        }
+                    }
+                    found.ok_or_else(|| "unavailable (no session log)".to_owned())
+                })
+                .and_then(|path| {
+                    fs::read(&path)
+                        .map(|bytes| (path, bytes))
+                        .map_err(|error| format!("unavailable (read events.jsonl: {error})"))
+                });
+            match events {
+                Ok((_, bytes)) => {
+                    let lines: Vec<Value> = bytes
+                        .split(|byte| *byte == b'\n')
+                        .filter(|line| !line.is_empty())
+                        .filter_map(|line| serde_json::from_slice(line).ok())
+                        .collect();
+                    let omitted = lines.len().saturating_sub(50);
+                    report.push_str(&format!(
+                        "events.jsonl: {} bytes, {} events, {omitted} earlier omitted\n",
+                        bytes.len(),
+                        lines.len()
+                    ));
+                    for event in lines.iter().skip(omitted) {
+                        report.push_str(&format!(
+                            "event kind={} turn_id={} tool_call_id={} job_id={}\n",
+                            event
+                                .get("kind")
+                                .and_then(Value::as_str)
+                                .unwrap_or("unavailable"),
+                            event
+                                .get("turn_id")
+                                .map(Value::to_string)
+                                .unwrap_or_else(|| "unavailable".into()),
+                            event
+                                .get("action_id")
+                                .map(Value::to_string)
+                                .unwrap_or_else(|| "unavailable".into()),
+                            event
+                                .pointer("/payload/job_id")
+                                .map(Value::to_string)
+                                .unwrap_or_else(|| "unavailable".into()),
+                        ));
+                    }
+                }
+                Err(error) => report.push_str(&format!("events.jsonl: {error}\n")),
+            }
+            for (index, request) in server.requests().iter().enumerate() {
+                let parsed = serde_json::from_slice::<Value>(&request.body);
+                let (tools, branch) = match parsed {
+                    Ok(body) => {
+                        let tools = body.get("tools").and_then(Value::as_array).map_or_else(
+                            || "unavailable".to_owned(),
+                            |tools| tools.len().to_string(),
+                        );
+                        let branch = if body
+                            .get("tools")
+                            .and_then(Value::as_array)
+                            .is_none_or(Vec::is_empty)
+                        {
+                            "allow"
+                        } else {
+                            "running-shell reply"
+                        };
+                        (tools, branch)
+                    }
+                    Err(_) => ("unavailable".to_owned(), "unavailable"),
+                };
+                report.push_str(&format!("request {index}: tools={tools}, reply={branch}\n"));
+            }
+            report
+        },
+    );
     let id = only_session(&setup);
     let log = sessions_dir(&setup).join(&id).join("events.jsonl");
     // The "1 running" screen above is the readiness signal: the shell job
