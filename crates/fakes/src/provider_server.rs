@@ -238,6 +238,16 @@ struct TurnState {
     stalled: bool,
 }
 
+impl TurnState {
+    fn blocked(&self, requested: u64) -> bool {
+        self.current != requested || self.running
+    }
+
+    fn should_stall(&self, requested: u64, expired: bool) -> bool {
+        !self.stalled && self.blocked(requested) && expired
+    }
+}
+
 #[derive(Default)]
 struct ResponderTurns {
     state: Mutex<TurnState>,
@@ -252,18 +262,15 @@ impl ResponderTurns {
     fn enter(&self, requested: u64) -> bool {
         let deadline = Deadline::after(RESPONDER_TURN_WAIT);
         let mut state = lock(&self.state);
-        while !state.stalled && (state.current != requested || state.running) {
+        while !state.stalled && state.blocked(requested) {
             let (next, _) = self
                 .changed
                 .wait_timeout_while(state, deadline.left(), |state| {
-                    !state.stalled && (state.current != requested || state.running)
+                    !state.stalled && state.blocked(requested)
                 })
                 .unwrap_or_else(PoisonError::into_inner);
             state = next;
-            if !state.stalled
-                && (state.current != requested || state.running)
-                && deadline.left().is_zero()
-            {
+            if state.should_stall(requested, deadline.left().is_zero()) {
                 state.stalled = true;
                 eprintln!(
                     "provider responder turn timed out: requested={requested} current={}",
@@ -830,6 +837,72 @@ pub(crate) fn fingerprint_query(target: &str) -> String {
         })
         .collect();
     format!("{path}?{}", query.join("&"))
+}
+
+/// The derived wait includes the full test wait, server shutdown and margin.
+#[cfg(test)]
+#[test]
+fn responder_turn_wait_budget_is_waits_plus_shutdown_and_margin() {
+    assert_eq!(
+        RESPONDER_TURN_WAIT,
+        crate::deadline::WAITS + crate::http_server::SHUTDOWN_WITHIN + Duration::from_secs(8)
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn turn_state_waits_for_earlier_turn_but_not_for_matching_idle_turn() {
+    let earlier_idle = TurnState {
+        current: 3,
+        running: false,
+        stalled: false,
+    };
+    assert!(earlier_idle.blocked(4));
+    assert!(earlier_idle.blocked(2));
+    let matching_idle = TurnState {
+        current: 3,
+        running: false,
+        stalled: false,
+    };
+    assert!(!matching_idle.blocked(3));
+    let matching_running = TurnState {
+        current: 3,
+        running: true,
+        stalled: false,
+    };
+    assert!(matching_running.blocked(3));
+}
+
+#[cfg(test)]
+#[test]
+fn turn_state_stalls_only_when_expired_and_blocked() {
+    let waiting_for_earlier = TurnState {
+        current: 3,
+        running: false,
+        stalled: false,
+    };
+    assert!(!waiting_for_earlier.should_stall(4, false));
+    assert!(waiting_for_earlier.should_stall(4, true));
+    assert!(!waiting_for_earlier.should_stall(2, false));
+    let matching_running = TurnState {
+        current: 3,
+        running: true,
+        stalled: false,
+    };
+    assert!(!matching_running.should_stall(3, false));
+    assert!(matching_running.should_stall(3, true));
+    let already_stalled = TurnState {
+        current: 3,
+        running: false,
+        stalled: true,
+    };
+    assert!(!already_stalled.should_stall(4, true));
+    let matching_idle = TurnState {
+        current: 3,
+        running: false,
+        stalled: false,
+    };
+    assert!(!matching_idle.should_stall(3, true));
 }
 
 #[cfg(test)]

@@ -1080,6 +1080,7 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
                 marked_tx.send(()).is_ok(),
                 "the test awaits the delegate marker"
             );
+            return text_reply("d-two-done");
         }
         stream(&[function_call(
             "call_hold",
@@ -1246,6 +1247,7 @@ fn nested_delegate_message_accepted_while_shell_steers_refused() {
                 marked_tx.send(()).is_ok(),
                 "the test awaits the grandchild marker"
             );
+            return text_reply("g-two-done");
         }
         stream(&[function_call(
             "call_hold",
