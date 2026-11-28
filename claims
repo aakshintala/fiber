@@ -341,11 +341,3 @@ crates/main/tests/tool_calls/main.rs	fiber-5038	grant	2026-11-28T10:12:51Z	round
 crates/main/tests/extension_host/main.rs	fiber-5038	grant	2026-11-28T10:12:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5038-detached-hub-tidy	
 crates/main/tests/screen_looks/main.rs	fiber-5038	grant	2026-11-28T10:12:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5038-detached-hub-tidy	
 docs/workflow.md	fiber-5038	grant	2026-11-28T10:12:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5038-detached-hub-tidy	
-crates/main/tests/support/pty.rs	fiber-5041	plan	2026-11-28T16:16:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5041-archive-running-shell-flake	
-crates/fakes/src/provider_server.rs	fiber-5041	plan	2026-11-28T16:16:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5041-archive-running-shell-flake	
-crates/hub/src/archive_tests.rs	fiber-5041	plan	2026-11-28T16:16:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5041-archive-running-shell-flake	
-docs/testing.md	fiber-5041	plan	2026-11-28T16:16:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5041-archive-running-shell-flake	
-docs/testing/running.md	fiber-5041	plan	2026-11-28T16:16:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5041-archive-running-shell-flake	
-docs/workflow.md	fiber-5041	plan	2026-11-28T16:16:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5041-archive-running-shell-flake	
-docs/ci.md	fiber-5041	plan	2026-11-28T16:16:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5041-archive-running-shell-flake	
-crates/main/tests/commands/archive.rs:432-436	fiber-5041	plan	2026-11-28T17:27:18Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fiber-5041-archive-running-shell-flake	
