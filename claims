@@ -784,4 +784,3 @@ crates/tui/src/feedback_tests.rs:48-49	fiber-4976	plan	2026-11-28T02:54:42Z	Amog
 docs/tui.md:2613-2613	fiber-4976	plan	2026-11-28T02:54:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/fiber-4976-feedback-draft-and-link	
 crates/main/tests/tool_calls/mcp_view.rs	fiber-4379	plan	2026-11-28T03:05:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/credential_signals.rs	fiber-5001	plan	2026-11-28T03:08:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/providers/model_picker_keys.rs	fiber-4942	plan	2026-11-28T03:12:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
