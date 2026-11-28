@@ -438,8 +438,8 @@ fn archive_refuses_a_running_session_without_appending() {
         },
         || {
             let mut report = String::from("running-shell diagnostic:\n");
-            let events = fs::canonicalize(setup.workspace())
-                .map(|workspace| log::sessions_dir(&setup.home(), &worktree::project(&workspace)))
+            let session_log = fs::canonicalize(setup.workspace())
+                .map(|workspace| sessions_dir_in(&setup, &workspace))
                 .map_err(|error| format!("unavailable (canonicalize workspace: {error})"))
                 .and_then(|directory| {
                     fs::read_dir(directory)
@@ -463,7 +463,7 @@ fn archive_refuses_a_running_session_without_appending() {
                         .map(|bytes| (path, bytes))
                         .map_err(|error| format!("unavailable (read events.jsonl: {error})"))
                 });
-            match events {
+            match session_log {
                 Ok((_, bytes)) => {
                     let lines: Vec<Value> = bytes
                         .split(|byte| *byte == b'\n')
@@ -478,7 +478,7 @@ fn archive_refuses_a_running_session_without_appending() {
                     ));
                     for event in lines.iter().skip(omitted) {
                         report.push_str(&format!(
-                            "event kind={} turn_id={} tool_call_id={} job_id={}\n",
+                            "event kind={} turn_id={} action_id={} job_id={}\n",
                             event
                                 .get("kind")
                                 .and_then(Value::as_str)
@@ -502,24 +502,17 @@ fn archive_refuses_a_running_session_without_appending() {
             }
             for (index, request) in server.requests().iter().enumerate() {
                 let parsed = serde_json::from_slice::<Value>(&request.body);
-                let (tools, branch) = match parsed {
-                    Ok(body) => {
-                        let tools = body.get("tools").and_then(Value::as_array).map_or_else(
-                            || "unavailable".to_owned(),
-                            |tools| tools.len().to_string(),
-                        );
-                        let branch = if body
-                            .get("tools")
-                            .and_then(Value::as_array)
-                            .is_none_or(Vec::is_empty)
-                        {
-                            "allow"
-                        } else {
-                            "running-shell reply"
-                        };
-                        (tools, branch)
-                    }
-                    Err(_) => ("unavailable".to_owned(), "unavailable"),
+                let tools = parsed
+                    .as_ref()
+                    .ok()
+                    .and_then(|body| body.get("tools"))
+                    .and_then(Value::as_array)
+                    .map_or_else(|| "unavailable".to_owned(), |tools| tools.len().to_string());
+                let body = String::from_utf8_lossy(&request.body);
+                let branch = if !body.contains("\"tools\":[") || body.contains("\"tools\":[]") {
+                    "allow"
+                } else {
+                    "running-shell reply"
                 };
                 report.push_str(&format!("request {index}: tools={tools}, reply={branch}\n"));
             }
