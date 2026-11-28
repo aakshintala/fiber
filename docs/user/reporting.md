@@ -22,7 +22,7 @@ The report holds at most the newest 500 hub lines, 2,000 session lines and 20 fr
 
 ## Where it goes
 
-The report is written to `fiber-feedback-<time>.md` in the current directory, and the command prints its path with the issue link. When the full-report link would exceed 2,000 characters, Fiber keeps its title and asks you to attach the report file instead. The terminal prints both as a notice ([Slash commands](../tui.md#slash-commands)).
+The report is written to `fiber-feedback-<time>.md` in the current directory, and the command prints its path with the issue link. The terminal prints both as a notice ([Slash commands](../tui.md#slash-commands)).
 
 ## Exit code
 
