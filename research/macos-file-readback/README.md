@@ -22,12 +22,4 @@ The source order provides no read-before-copy window in this path: the provider 
 
 ## Diagnosis and limits
 
-Taken together, the independent `os error 5` failures on writes, reads and copy-related work, their concentration in the same short interval, and the synchronous copy-before-parse source sequence point to a transient runner temporary-filesystem I/O fault—not a Fiber read-before-copy ordering defect. The available log cannot identify the underlying storage component or a more specific physical cause. No retry, deadline change or speculative Fiber behavior change is justified by this evidence.
-
-## Sources
-
-- [Tests (macos-26) job log](https://github.com/aakshintala/fiber/actions/runs/43748474387)
-- `crates/main/tests/support/mod.rs` (`Setup::provider`, `install_with_retry`)
-- `crates/extensions/src/install.rs` (`place`, `copy`)
-- `crates/extensions/src/manage.rs` (`Plan::commit`, `commit_run`)
-- [Issue #4934: evidence and diagnosis requested](https://github.com/aakshintala/fiber/issues/4934)
+Taken together, the independent `os error 5` failures on writes, reads and copy-related work, their concentration in the same short interval, and the synchronous copy-before-parse source sequence point to a transient runner temporary-filesystem I/O fault—not a Fiber read-before-copy ordering defect. No retry, deadline change or speculative Fiber behavior change is justified by this evidence.
