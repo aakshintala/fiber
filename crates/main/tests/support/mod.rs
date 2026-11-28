@@ -1081,16 +1081,20 @@ impl DetachedHub {
             )
         });
         let grace = cleanup.within(cleanup.left() / 4);
-        if !wait_for_group_exit(self.group, grace) {
-            // If KILL does not remove the group, assert_group_exits reports
-            // the live members after the cleanup deadline.
+        if !fakes::group_empties(self.group, grace) {
+            // If KILL does not remove the group, report the live members
+            // after the cleanup deadline.
             fakes::kill_group(self.group, "KILL").unwrap_or_else(|error| {
                 panic!(
                     "could not send KILL to detached hub group {}: {error}",
                     self.group
                 )
             });
-            assert_group_exits(self.group, cleanup);
+            assert!(
+                fakes::group_empties(self.group, cleanup),
+                "process group {} still has a live member at the cleanup deadline",
+                self.group
+            );
         }
         if let Some(watchdog) = self.watchdog.take() {
             watchdog.stand_down(cleanup);
@@ -1103,29 +1107,6 @@ impl Drop for DetachedHub {
     fn drop(&mut self) {
         self.stop();
     }
-}
-
-fn wait_for_group_exit(group: u32, deadline: Deadline) -> bool {
-    loop {
-        if !group_has_live_members(group) {
-            return true;
-        }
-        if deadline.left().is_zero() {
-            return false;
-        }
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "poll pause while checking whether the process group has exited"
-        )]
-        thread::park_timeout(Duration::from_millis(10));
-    }
-}
-
-fn assert_group_exits(group: u32, deadline: Deadline) {
-    assert!(
-        wait_for_group_exit(group, deadline),
-        "process group {group} still has a live member at the cleanup deadline"
-    );
 }
 
 #[cfg(target_os = "linux")]
@@ -2103,7 +2084,7 @@ pub(crate) fn connect_hub_within(
         HubConnect {
             serve,
             wait,
-            bound: Deadline::after(wait), // ruling: #4954
+            bound: setup.deadline.within(wait),
             name: "hub",
             stretched: true,
             start: HubProc::spawn_command,
