@@ -52,6 +52,13 @@ run, without changing the exit status. Neither case sends a signal. An
 orphan that is neither is still invisible on macOS: it is caught by the
 test's own cleanup above, not the scan.
 
+Run the suite from a shell outside any Fiber session. Inside one, such as
+through a session's shell tool, a test that starts `fiber` and sends a
+session `prompt` is refused with `from_session`, because the test's client
+and the session it starts both descend from that session's process
+(`docs/permissions.md`, "Sessions on the sockets"). The refusal says nothing
+about the code under test.
+
 The completion tests need bash, zsh and fish on PATH, on Linux and macOS: they never skip at runtime for a missing shell, so a machine without one fails them.
 
 A test that runs a command, directly or through a scripted tool call, uses
