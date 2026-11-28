@@ -985,7 +985,7 @@ impl HubProc {
 /// shares the test process's session ancestry after the shell exits.
 pub(crate) struct DetachedHub {
     pub(crate) group: u32,
-    hub_pid: u32,
+    pub(crate) hub_pid: u32,
     deadline: Deadline,
     watchdog: Option<Watchdog>,
     stopped: bool,
@@ -1009,10 +1009,6 @@ impl DetachedHub {
             .arg(&pidfile)
             .arg(serve.get_program())
             .args(serve.get_args())
-            .env_clear()
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
             .process_group(0);
         if let Some(dir) = serve.get_current_dir() {
             shell.current_dir(dir);
@@ -1124,7 +1120,8 @@ fn wait_for_group_exit(group: u32, deadline: Deadline) -> bool {
             return false;
         }
         let (_never, wait) = mpsc::channel::<()>();
-        // The empty channel's timeout is the expected end of this probe slice.
+        // Kernel process exit has no notification fd here, so the bounded
+        // pause avoids a busy loop while polling the group state.
         match deadline.within(Duration::from_millis(10)).recv(&wait) {
             Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -1142,7 +1139,7 @@ fn assert_group_exits(group: u32, deadline: Deadline) {
 }
 
 #[cfg(target_os = "linux")]
-fn group_has_live_members(group: u32) -> bool {
+pub(crate) fn group_has_live_members(group: u32) -> bool {
     fs::read_dir("/proc")
         .unwrap_or_else(|error| panic!("could not scan /proc for process group {group}: {error}"))
         .filter_map(Result::ok)
@@ -1156,14 +1153,14 @@ fn group_has_live_members(group: u32) -> bool {
                         .1
                         .split_whitespace()
                         .collect::<Vec<_>>();
-                    Some(fields.get(0)? != &"Z" && fields.get(2)?.parse::<u32>().ok()? == group)
+                    Some(fields.first()? != &"Z" && fields.get(2)?.parse::<u32>().ok()? == group)
                 })
                 .unwrap_or(false)
         })
 }
 
 #[cfg(target_os = "macos")]
-fn group_has_live_members(group: u32) -> bool {
+pub(crate) fn group_has_live_members(group: u32) -> bool {
     fakes::group_alive(group)
 }
 
@@ -1942,7 +1939,7 @@ fn hub_start_report(setup: &Setup, hub: &Mutex<Option<HubProc>>) -> String {
 }
 
 /// Reports whether a detached hub's process group still has a live member.
-fn detached_hub_start_report(hub: &Mutex<Option<DetachedHub>>) -> String {
+pub(crate) fn detached_hub_start_report(hub: &Mutex<Option<DetachedHub>>) -> String {
     match hub
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1964,49 +1961,80 @@ pub(crate) fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<HubProc>>>) -> (
     connect_hub_within(setup, hub, setup.deadline.left())
 }
 
+/// Connects to a hub through `doors::hub::connect`, starting `fiber hub
+/// serve` when none runs. `start` owns the hub-specific spawn operation;
+/// `report` describes the hub if startup or the handshake fails.
+#[track_caller]
+pub(crate) fn connect_hub_started<T: Send + 'static>(
+    setup: &Setup,
+    hub: &Arc<Mutex<Option<T>>>,
+    mut serve: Command,
+    wait: Duration,
+    bound: Deadline,
+    name: &str,
+    stretched: bool,
+    mut start: impl FnMut(Deadline, &mut Command) -> T + Send + 'static,
+    report: impl Fn(&Setup, &Mutex<Option<T>>) -> String,
+) -> (Socket, Value) {
+    let slot = Arc::clone(hub);
+    let deadline = setup.deadline;
+    let home = setup.home();
+    let (done, connected) = mpsc::channel();
+    thread::spawn(move || {
+        let mut spawn = move || {
+            *slot.lock().unwrap() = Some(start(deadline, &mut serve));
+            Ok(())
+        };
+        let result = if stretched {
+            let clock = StretchedClock {
+                anchor: SystemClock.now(),
+                scale: u32::try_from(wait.as_millis() / doors::hub::CONNECT_DEADLINE.as_millis())
+                    .unwrap_or(1)
+                    .max(1),
+            };
+            doors::hub::connect(&home, &mut spawn, &clock)
+        } else {
+            doors::hub::connect(&home, &mut spawn, &SystemClock)
+        };
+        done.send(result).unwrap();
+    });
+    let connected = match bound.recv(&connected) {
+        Ok(Ok(connected)) => connected,
+        Ok(Err(error)) => panic!(
+            "hub connect failed with {error} waiting for the {name} to start and say hub_hello: the hub {}",
+            report(setup, hub)
+        ),
+        Err(mpsc::RecvTimeoutError::Timeout) => panic!(
+            "waited {wait:?} for the {name} to start and say hub_hello: the hub {}",
+            report(setup, hub)
+        ),
+        Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
+            "the {name} connect thread ended without a result: the hub {}",
+            report(setup, hub)
+        ),
+    };
+    let hello = serde_json::to_value(&connected.1).unwrap();
+    (Socket::from(deadline, connected.0), hello)
+}
+
 /// Connects to a hub whose parent shell is reaped as soon as it starts the hub.
 #[track_caller]
 pub(crate) fn connect_detached_hub(
     setup: &Setup,
     hub: &Arc<Mutex<Option<DetachedHub>>>,
 ) -> (Socket, Value) {
-    let slot = Arc::clone(hub);
-    let deadline = setup.deadline;
-    let mut serve = setup.fiber(&["hub", "serve"]);
-    let home = setup.home();
-    let wait = setup.deadline.left();
-    let (done, connected) = mpsc::channel();
-    thread::spawn(move || {
-        let mut start = move || {
-            *slot.lock().unwrap() = Some(DetachedHub::spawn_command(deadline, &mut serve));
-            Ok(())
-        };
-        let clock = StretchedClock {
-            anchor: SystemClock.now(),
-            scale: u32::try_from(wait.as_millis() / doors::hub::CONNECT_DEADLINE.as_millis())
-                .unwrap_or(1)
-                .max(1),
-        };
-        done.send(doors::hub::connect(&home, &mut start, &clock))
-            .unwrap();
-    });
-    let connected = match deadline.recv(&connected) {
-        Ok(Ok(connected)) => connected,
-        Ok(Err(error)) => panic!(
-            "hub connect failed with {error} waiting for the detached hub to start and say hub_hello: the hub {}",
-            detached_hub_start_report(hub)
-        ),
-        Err(mpsc::RecvTimeoutError::Timeout) => panic!(
-            "waited {wait:?} for the detached hub to start and say hub_hello: the hub {}",
-            detached_hub_start_report(hub)
-        ),
-        Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
-            "the detached hub connect thread ended without a result: the hub {}",
-            detached_hub_start_report(hub)
-        ),
-    };
-    let hello = serde_json::to_value(&connected.1).unwrap();
-    (Socket::from(deadline, connected.0), hello)
+    let serve = setup.fiber(&["hub", "serve"]);
+    connect_hub_started(
+        setup,
+        hub,
+        serve,
+        setup.deadline.left(),
+        setup.deadline,
+        "detached hub",
+        true,
+        DetachedHub::spawn_command,
+        |_, hub| detached_hub_start_report(hub),
+    )
 }
 
 /// The process clock running `scale` times slower, so the product's 5 s
@@ -2053,42 +2081,18 @@ pub(crate) fn connect_hub_within(
     hub: &Arc<Mutex<Option<HubProc>>>,
     wait: Duration,
 ) -> (Socket, Value) {
-    let slot = Arc::clone(hub);
-    let deadline = setup.deadline;
-    let mut serve = setup.fiber(&["hub", "serve"]);
-    let home = setup.home();
-    let (done, connected) = mpsc::channel();
-    thread::spawn(move || {
-        let mut start = move || {
-            *slot.lock().unwrap() = Some(HubProc::spawn_command(deadline, &mut serve));
-            Ok(())
-        };
-        let clock = StretchedClock {
-            anchor: SystemClock.now(),
-            scale: u32::try_from(wait.as_millis() / doors::hub::CONNECT_DEADLINE.as_millis())
-                .unwrap_or(1)
-                .max(1),
-        };
-        done.send(doors::hub::connect(&home, &mut start, &clock))
-            .unwrap();
-    });
-    let connected = match Deadline::after(wait).recv(&connected) {
-        Ok(Ok(connected)) => connected,
-        Ok(Err(error)) => panic!(
-            "hub connect failed with {error} waiting for the hub to start and say hub_hello: the hub {}",
-            hub_start_report(setup, hub)
-        ),
-        Err(mpsc::RecvTimeoutError::Timeout) => panic!(
-            "waited {wait:?} for the hub to start and say hub_hello: the hub {}",
-            hub_start_report(setup, hub)
-        ),
-        Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
-            "the hub connect thread ended without a result: the hub {}",
-            hub_start_report(setup, hub)
-        ),
-    };
-    let hello = serde_json::to_value(&connected.1).unwrap();
-    (Socket::from(deadline, connected.0), hello)
+    let serve = setup.fiber(&["hub", "serve"]);
+    connect_hub_started(
+        setup,
+        hub,
+        serve,
+        wait,
+        Deadline::after(wait),
+        "hub",
+        true,
+        HubProc::spawn_command,
+        |setup, hub| hub_start_report(setup, hub),
+    )
 }
 
 impl Socket {

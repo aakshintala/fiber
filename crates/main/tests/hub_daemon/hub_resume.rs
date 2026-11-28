@@ -156,15 +156,19 @@ impl Setup {
     }
 }
 
+enum HubProcess {
+    Child(Option<Child>),
+    Detached(support::DetachedHub),
+}
+
 /// A hub the test started, and every session process it starts: each
 /// carries the workspace path on its command line. Dropping it kills the
 /// hub's group and every process holding the path; the watchdogs do the
 /// same if the test process dies.
 struct Hub {
-    child: Option<Child>,
+    process: HubProcess,
     group: u32,
     watchdog: Option<Watchdog>,
-    detached: Option<support::DetachedHub>,
     sessions: Option<Watchdog>,
     workspace: String,
     deadline: Deadline,
@@ -180,10 +184,9 @@ impl Hub {
         let _ = child.stdout.take();
         let _ = child.stderr.take();
         Self {
-            child: Some(child),
+            process: HubProcess::Child(Some(child)),
             group,
             watchdog: Some(Watchdog::group(group)),
-            detached: None,
             sessions: Some(sessions),
             workspace,
             deadline,
@@ -193,11 +196,11 @@ impl Hub {
     fn spawn_detached_command(deadline: Deadline, serve: &mut Command, workspace: String) -> Self {
         let sessions = Watchdog::matching(&workspace);
         let detached = support::DetachedHub::spawn_command(deadline, serve);
+        let group = detached.group;
         Self {
-            child: None,
-            group: detached.group,
+            process: HubProcess::Detached(detached),
+            group,
             watchdog: None,
-            detached: Some(detached),
             sessions: Some(sessions),
             workspace,
             deadline,
@@ -208,29 +211,35 @@ impl Hub {
     /// path to exit on its own.
     #[track_caller]
     fn finish(mut self) {
-        if let Some(mut detached) = self.detached.take() {
-            detached.stop();
-        } else {
-            fakes::kill_group(self.group, "KILL").unwrap();
-            if let Some(mut child) = self.child.take() {
-                let (done, finished) = mpsc::channel();
-                thread::spawn(move || done.send(child.wait().is_ok()).unwrap_or(()));
-                match self.deadline.recv(&finished) {
-                    Ok(_) => {}
-                    Err(_) => support::expired(
-                        self.deadline,
-                        self.group,
-                        &finished,
-                        "the killed hub to exit",
-                    ),
+        match &mut self.process {
+            HubProcess::Detached(detached) => detached.stop(),
+            HubProcess::Child(child) => {
+                fakes::kill_group(self.group, "KILL").unwrap();
+                if let Some(mut child) = child.take() {
+                    let (done, finished) = mpsc::channel();
+                    thread::spawn(move || done.send(child.wait().is_ok()).unwrap_or(()));
+                    match self.deadline.recv(&finished) {
+                        Ok(_) => {}
+                        Err(_) => support::expired(
+                            self.deadline,
+                            self.group,
+                            &finished,
+                            "the killed hub to exit",
+                        ),
+                    }
+                }
+                if let Some(watchdog) = self.watchdog.take() {
+                    watchdog.stand_down(self.deadline.cleanup_phase());
                 }
             }
         }
         fakes::try_matching_exits(&self.workspace, self.deadline).unwrap_or_else(|err| {
             panic!("waited until the deadline for every session to exit: {err}")
         });
-        if let Some(watchdog) = self.watchdog.take() {
-            watchdog.stand_down(self.deadline.cleanup_phase());
+        if matches!(&self.process, HubProcess::Child(_)) {
+            if let Some(watchdog) = self.watchdog.take() {
+                watchdog.stand_down(self.deadline.cleanup_phase());
+            }
         }
         if let Some(watchdog) = self.sessions.take() {
             watchdog.stand_down(self.deadline.cleanup_phase());
@@ -243,23 +252,24 @@ impl Drop for Hub {
     /// thread until the cleanup deadline: a drop never blocks past it and
     /// never panics.
     fn drop(&mut self) {
-        if self.detached.is_none() {
-            drop(fakes::kill_group(self.group, "KILL"));
+        match &mut self.process {
+            HubProcess::Detached(_) => {}
+            HubProcess::Child(child) => {
+                drop(fakes::kill_group(self.group, "KILL"));
+                if let Some(mut child) = child.take() {
+                    let (done, reaped) = mpsc::channel();
+                    match thread::Builder::new().spawn(move || match done.send(child.wait()) {
+                        Ok(()) | Err(_) => {}
+                    }) {
+                        Ok(_) | Err(_) => {}
+                    }
+                    match self.deadline.cleanup_phase().recv(&reaped) {
+                        Ok(_) | Err(_) => {}
+                    }
+                }
+            }
         }
         support::kill_matching_detached(&self.workspace);
-        if let Some(mut child) = self.child.take() {
-            let (done, reaped) = mpsc::channel();
-            // A thread that cannot start drops `done`, so the receive below
-            // returns at once.
-            match thread::Builder::new().spawn(move || match done.send(child.wait()) {
-                Ok(()) | Err(_) => {}
-            }) {
-                Ok(_) | Err(_) => {}
-            }
-            match self.deadline.cleanup_phase().recv(&reaped) {
-                Ok(_) | Err(_) => {}
-            }
-        }
     }
 }
 

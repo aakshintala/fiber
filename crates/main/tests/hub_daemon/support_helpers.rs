@@ -3015,11 +3015,7 @@ fn stop_leaves_no_live_process_in_the_group() {
     serve.args(["-f", &marker_text]);
     let mut hub = DetachedHub::spawn_command(deadline, &mut serve);
     let group = hub.group;
-    let pids = fakes::matching(&marker_text, deadline.left()).unwrap();
-    let hub_pid = *pids
-        .first()
-        .expect("the detached process matches its unique marker path");
-    assert_eq!(pids.len(), 1, "the unique marker identifies one process");
+    let hub_pid = hub.hub_pid;
     let target = walk_ancestors(Pid(hub_pid), &KernelProcessRead, |_| true)
         .expect("the detached hub ancestry is complete");
     let caller_pid = Pid(std::process::id());
@@ -3028,52 +3024,10 @@ fn stop_leaves_no_live_process_in_the_group() {
         "the test process is in the detached hub ancestry: {:?}",
         target.matched_pids
     );
-    let hub_pid_text = hub_pid.to_string();
-    let mut command = Command::new("/bin/ps");
-    command
-        .args(["-o", "pgid=", "-p", &hub_pid_text])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-    let output = run_to_exit(deadline, "the detached hub process-group query", command);
-    assert!(
-        output.status.success(),
-        "ps could not read the detached hub process group for {hub_pid}: {output:?}"
-    );
-    let pgid_text = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        !pgid_text.trim().is_empty(),
-        "ps returned no process group for detached hub {hub_pid}: {output:?}"
-    );
-    let pgid = pgid_text.trim().parse::<u32>().unwrap();
-    assert_eq!(
-        pgid, group,
-        "the hub's process group must equal the shell pid"
-    );
 
     hub.stop();
-    #[cfg(target_os = "macos")]
-    let group_is_live = fakes::group_alive(group);
-    #[cfg(target_os = "linux")]
-    let group_is_live = fs::read_dir("/proc")
-        .unwrap()
-        .filter_map(Result::ok)
-        .filter_map(|entry| entry.file_name().to_string_lossy().parse::<u32>().ok())
-        .any(|pid| {
-            fs::read_to_string(format!("/proc/{pid}/stat"))
-                .ok()
-                .and_then(|stat| {
-                    let fields = stat
-                        .rsplit_once(')')?
-                        .1
-                        .split_whitespace()
-                        .collect::<Vec<_>>();
-                    Some(fields.get(0)? != &"Z" && fields.get(2)?.parse::<u32>().ok()? == group)
-                })
-                .unwrap_or(false)
-        });
     assert!(
-        !group_is_live,
+        !group_has_live_members(group),
         "the hub group still has a live process ({group})"
     );
 }

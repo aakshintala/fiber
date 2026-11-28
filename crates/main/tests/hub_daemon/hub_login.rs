@@ -22,7 +22,7 @@ use fakes::{OauthReply, OauthServer, ProviderServer, Response};
 use serde_json::{Value, json};
 use support::*;
 
-fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<DetachedHub>>>) -> Socket {
+fn connect_detached_hub(setup: &Setup, hub: &Arc<Mutex<Option<DetachedHub>>>) -> Socket {
     let slot = hub.clone();
     let deadline = setup.deadline;
     let mut serve = setup.fiber(&["hub", "serve"]);
@@ -242,7 +242,7 @@ fn an_attached_full_client_receives_the_mid_session_login_url() {
     oauth.hold();
     install(&setup, &server, &oauth, None);
     let hub = Arc::new(Mutex::new(None));
-    let client = connect_hub(&setup, &hub);
+    let client = connect_detached_hub(&setup, &hub);
     feed(&client);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
@@ -268,7 +268,7 @@ fn a_session_with_only_summary_clients_refuses_login_before_any_poll() {
     let oauth = OauthServer::start(vec![OauthReply::pending()]);
     install(&setup, &server, &oauth, None);
     let hub = Arc::new(Mutex::new(None));
-    let client = connect_hub(&setup, &hub);
+    let client = connect_detached_hub(&setup, &hub);
     feed(&client);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
@@ -341,7 +341,7 @@ fn callback_attempt(port: u16, deadline: Deadline) -> bool {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     install(&setup, &server, &oauth, Some(port));
     let hub = Arc::new(Mutex::new(None));
-    let client = connect_hub(&setup, &hub);
+    let client = connect_detached_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start(&client, &workspace, false);
@@ -363,7 +363,7 @@ fn callback_attempt(port: u16, deadline: Deadline) -> bool {
         std::thread::yield_now();
     }
     drop(client);
-    let other = connect_hub(&setup, &hub);
+    let other = connect_detached_hub(&setup, &hub);
     feed(&other);
     let sub = subscribe_as(&other, "c_other", &session);
     until(&other, "only the replacement client counts", |line| {
@@ -411,7 +411,7 @@ fn a_resumed_session_installs_live_attendance_and_login_notices() {
     let oauth = OauthServer::start(vec![OauthReply::token("resumed", "refresh", 3600)]);
     install(&setup, &server, &oauth, None);
     let hub = Arc::new(Mutex::new(None));
-    let client = connect_hub(&setup, &hub);
+    let client = connect_detached_hub(&setup, &hub);
     feed(&client);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
@@ -422,7 +422,7 @@ fn a_resumed_session_installs_live_attendance_and_login_notices() {
     let closed = close(&client, &session, "c_close_first", Some(&sub));
     left_after_close(&client, &session, &closed);
     drop(client);
-    let client = connect_hub(&setup, &hub);
+    let client = connect_detached_hub(&setup, &hub);
     oauth.hold();
     let resumed = subscribe_as(&client, "c_resumed", &session);
     // A status after the fold proves the old turn has been replayed.
