@@ -1517,7 +1517,9 @@ fn the_foot_draws_bold_keys_dim_labels_centred_and_cut() {
 
     // At and just above the guarantee, only the mandatory tail fits.
     let mandatory = "F1 the key map · Ctrl+C twice to quit";
+    // `docs/tui.md`, "Home": parts drop from the end of the named order, whole parts only.
     assert_fitted(80, mandatory, &["F1", "Ctrl+C"]);
+    // `docs/tui.md`, "Home": parts drop from the end of the named order, whole parts only.
     assert_fitted(81, mandatory, &["F1", "Ctrl+C"]);
     // `docs/tui.md`, "Home": parts drop from the end of the named order, whole parts only.
     assert_fitted(
