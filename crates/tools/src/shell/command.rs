@@ -91,6 +91,16 @@ pub(super) fn spawn_stdin(policy: MovePolicy) -> contract::keeper::HostStdin {
     }
 }
 
+/// The `FIBER_SESSION_ID` pair for a session (`docs/invocation.md`, "A
+/// session's environment"): every command a session's tools run gets the
+/// session id, replacing any inherited value. `None` yields nothing, never
+/// an empty variable.
+pub(super) fn session_id_pair(
+    session_id: Option<&contract::SessionId>,
+) -> Option<(String, String)> {
+    session_id.map(|id| ("FIBER_SESSION_ID".into(), id.0.clone()))
+}
+
 /// Why the command moved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MoveReason {
@@ -454,52 +464,6 @@ fn require_confined_marker(
 
 #[allow(
     clippy::too_many_arguments,
-    reason = "spawn, the deadline, the move policy, the spill, the sandbox and the injected probe are one call"
-)]
-#[cfg(test)]
-fn execute_inner(
-    program: &Path,
-    command: &str,
-    workdir: &Path,
-    timeout: Option<Duration>,
-    clock: &dyn Clock,
-    cancel: &dyn Cancel,
-    emit: &dyn Emit,
-    policy: MovePolicy,
-    jobs: Option<&dyn Jobs>,
-    spill: Option<SpillConfig>,
-    matches: Option<&Path>,
-    sandbox_settings: &super::sandbox::Settings,
-    sandbox_workspace: &Path,
-    protection: Option<&ProtectedPaths>,
-    alive: fn(u32) -> bool,
-    ps: &Path,
-    install: fn(&mut super::sandbox::Prepared) -> Result<(), i32>,
-) -> Result<Ran, std::io::Error> {
-    execute_inner_with_session(
-        program,
-        command,
-        workdir,
-        timeout,
-        clock,
-        cancel,
-        emit,
-        policy,
-        jobs,
-        spill,
-        matches,
-        sandbox_settings,
-        sandbox_workspace,
-        protection,
-        None,
-        alive,
-        ps,
-        install,
-    )
-}
-
-#[allow(
-    clippy::too_many_arguments,
     reason = "injected spawn probes keep the execution boundary testable"
 )]
 pub(super) fn execute_inner_with_session(
@@ -590,9 +554,7 @@ pub(super) fn execute_inner_with_session(
                     )]
                 })
                 .unwrap_or_default();
-            if let Some(id) = session_id {
-                env.push(("FIBER_SESSION_ID".into(), id.0.clone()));
-            }
+            env.extend(session_id_pair(session_id));
             env
         },
         stdin: spawn_stdin(policy),
@@ -920,9 +882,7 @@ fn execute_confined_with_session(
     if let Some(path) = matches {
         cmd.env(crate::search::matches::MATCHES_ENV, path);
     }
-    if let Some(id) = session_id {
-        cmd.env("FIBER_SESSION_ID", id.0.clone());
-    }
+    cmd.envs(session_id_pair(session_id));
     support::group::detach(&mut cmd, tty);
     if !emit.starting() {
         return Ok(Ran::Declined);

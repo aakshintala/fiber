@@ -870,7 +870,7 @@ impl Shell {
             (Some(_), _) | (None, _) => None,
         };
         let execute = |host| {
-            hosted::execute_with_session(
+            hosted::execute(
                 host,
                 program,
                 &command,

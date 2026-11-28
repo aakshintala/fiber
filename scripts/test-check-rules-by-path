@@ -8,26 +8,54 @@ top=$PWD
 
 fail() { echo "test-check-rules-by-path: $1" >&2; exit 1; }
 
+# Keep the gate's resource refusal distinct from an ordinary self-test failure.
+run_check() {
+  code=0
+  (cd "$2" && "${@:3}") >"$1" 2>&1 || code=$?
+  if [ "$code" -eq 75 ]; then
+    cat "$1" >&2
+    exit 75
+  fi
+  return "$code"
+}
+
 work=$(mktemp -d)
 trap 'git worktree remove --force "${proto_wt-}" 2>/dev/null || true; git worktree remove --force "${example_wt-}" 2>/dev/null || true; rm -rf "$work" "${proto_parent-}" "${example_parent-}"' EXIT
 
+# A nested preflight refusal must escape the self-test as a refusal.
+if [ "${RULES_BY_PATH_REFUSAL_PROBE-}" = 1 ]; then
+  code=0
+  if ! run_check "$work/nested-refusal" "$top" env \
+    CHECK_RESOURCES_DF_AVAIL_KIB=0 \
+    PATH="$top/xtask/tests/check_resources:$PATH" TMPDIR="$work" \
+    scripts/check --rules-by-path --base HEAD; then
+    cat "$work/nested-refusal" >&2
+    fail "forced nested preflight refusal failed"
+  fi
+  exit 0
+fi
+code=0
+RULES_BY_PATH_REFUSAL_PROBE=1 bash "$top/scripts/test-check-rules-by-path" >"$work/refusal-probe" 2>&1 || code=$?
+[ "$code" -eq 75 ] || fail "forced nested refusal exited $code, not 75"
+grep -q "not started:" "$work/refusal-probe" || fail "forced nested refusal text was lost"
+
 # A flag conflict prints usage and exits 2, like any unknown flag.
 code=0
-scripts/check --rules-by-path --platform-only >"$work/usage" 2>&1 || code=$?
+run_check "$work/usage" "$top" scripts/check --rules-by-path --platform-only || code=$?
 [ "$code" -eq 2 ] || fail "--rules-by-path --platform-only exited $code, not 2"
 grep -q -- "--rules-by-path" "$work/usage" || fail "usage text names no --rules-by-path"
 code=0
-scripts/check --rules-by-path --shared-only >"$work/conflict" 2>&1 || code=$?
+run_check "$work/conflict" "$top" scripts/check --rules-by-path --shared-only || code=$?
 [ "$code" -eq 2 ] || fail "--rules-by-path --shared-only exited $code, not 2"
 
 # An unknown flag still exits 2.
 code=0
-scripts/check --bogus >"$work/bogus" 2>&1 || code=$?
+run_check "$work/bogus" "$top" scripts/check --bogus || code=$?
 [ "$code" -eq 2 ] || fail "--bogus exited $code, not 2"
 
 # An invalid base fails closed: non-zero exit, no PASS line.
 code=0
-scripts/check --rules-by-path --base nonexistent-base >"$work/closed" 2>&1 || code=$?
+run_check "$work/closed" "$top" scripts/check --rules-by-path --base nonexistent-base || code=$?
 [ "$code" -ne 0 ] || fail "invalid base passed"
 grep -q "scripts/check: PASS" "$work/closed" && fail "invalid base printed PASS"
 
@@ -88,7 +116,8 @@ exit 0
 STUB
 chmod +x "$work/example-bin/cargo"
 export CARGO_CALLS="$work/calls" CARGO_TARGET_DIR="$work/example-target"
-if ! (cd "$example_wt" && PATH="$work/example-bin:$PATH" bash "$top/scripts/check" --rules-by-path --base HEAD >"$work/example-check" 2>&1); then
+if ! run_check "$work/example-check" "$example_wt" env PATH="$work/example-bin:$PATH" \
+  bash "$top/scripts/check" --rules-by-path --base HEAD; then
   cat "$work/example-check" >&2
   fail "selected log jig ran without its plain example build"
 fi
@@ -103,7 +132,8 @@ grep -q '^build -q -p fakes --example process-extension$' "$work/calls" || fail 
 # and narrowed test without requiring an example artifact.
 : >"$work/no-examples-calls"
 export CARGO_CALLS="$work/no-examples-calls"
-if ! (cd "$example_wt" && PATH="$work/example-bin:$PATH" NO_EXAMPLES=1 bash "$top/scripts/check" --rules-by-path --base HEAD >"$work/no-examples-check" 2>&1); then
+if ! run_check "$work/no-examples-check" "$example_wt" env PATH="$work/example-bin:$PATH" \
+  NO_EXAMPLES=1 bash "$top/scripts/check" --rules-by-path --base HEAD; then
   cat "$work/no-examples-check" >&2
   fail "selected package with no examples failed its narrowed run"
 fi
@@ -175,7 +205,8 @@ exit 0
 STUB
 chmod +x "$work/bin/cargo"
 code=0
-(cd "$proto_wt" && PATH="$work/bin:$PATH" CARGO_TARGET_DIR="$top/target" bash "$top/scripts/check" --rules-by-path --base HEAD >"$work/proto" 2>&1) || code=$?
+run_check "$work/proto" "$proto_wt" env PATH="$work/bin:$PATH" \
+  CARGO_TARGET_DIR="$top/target" bash "$top/scripts/check" --rules-by-path --base HEAD || code=$?
 [ "$code" -eq 0 ] || { cat "$work/proto" >&2; fail "prototype-only scripts/check exited $code, not 0"; }
 grep -q "== tui-prototype" "$work/proto" || { cat "$work/proto" >&2; fail "prototype-only diff printed no '== tui-prototype'"; }
 

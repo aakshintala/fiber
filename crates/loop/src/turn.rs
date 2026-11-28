@@ -20,15 +20,25 @@ impl Loop {
     /// gone, then, while jobs still run, the ending notice and their ends
     /// (`docs/invocation.md`, "Lifecycle"; `docs/tools.md`, "Background jobs").
     pub fn run(mut self) -> crate::Ran {
-        let status = status::spawn(&self);
-        self.status_tap = status.as_ref().map(status::Status::tap);
-        let result = loop {
-            match self.turn() {
-                Ok(Some(_)) => {}
-                Ok(None) => break Ok(()),
-                Err(e) => break Err(e),
+        let mut status = None;
+        let result = (|| {
+            status = status::spawn(&self);
+            self.status_tap = status.as_ref().map(status::Status::tap);
+            let staged = std::mem::take(&mut self.staged_orphans);
+            self.mark_orphans(staged.settled)?;
+            for (session, lines) in staged.backfill {
+                for line in lines {
+                    self.copy_usage(&session, line)?;
+                }
             }
-        };
+            self.resumed_label(staged.settings)?;
+            loop {
+                match self.turn()? {
+                    Some(_) => {}
+                    None => return Ok(()),
+                }
+            }
+        })();
         let result = result.and_then(|()| self.write_last_settled());
         let result = self.settled(result);
         // `fiber_exited` is the last line a process writes: no status

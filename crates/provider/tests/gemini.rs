@@ -42,6 +42,23 @@ use harness::{gemini_completed as completed_reply, gemini_sse as stream, run, se
 const REFERENCE: &str = "gemini/gemini-3.1-flash-lite";
 
 #[test]
+fn a_corrected_empty_properties_schema_selects_validated_mode() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut req = request();
+    req.tools = vec![harness::lua_empty_tool()];
+    run(Gemini::new(endpoint(&server)).call(&req)).0.unwrap();
+    let body = sent_body(&server, 0);
+    assert_eq!(
+        body["tools"][0]["functionDeclarations"][0]["parametersJsonSchema"]["properties"],
+        json!({})
+    );
+    assert_eq!(
+        body["toolConfig"]["functionCallingConfig"]["mode"],
+        "VALIDATED"
+    );
+}
+
+#[test]
 fn tool_search_results_send_the_same_bytes_as_successful_text_results() {
     let server = ProviderServer::start(vec![
         completed_reply(),

@@ -15,7 +15,9 @@ use std::thread;
 use std::time::Duration;
 
 use contract::events::CacheLifetime;
-use contract::provider::{CallError, Delta, Input, Media, ModelCall, ModelRequest, Reply};
+use contract::provider::{
+    CallError, Delta, Input, Media, ModelCall, ModelRequest, Reply, ToolDefinition,
+};
 use fakes::{Deadline, ProviderServer, Response};
 use provider::Endpoint;
 use serde_json::{Value, json};
@@ -39,6 +41,21 @@ pub(crate) fn request() -> ModelRequest {
         }])
         .into(),
         media: Default::default(),
+    }
+}
+
+pub(crate) fn lua_empty_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "lua_empty".into(),
+        description: "No arguments.".into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+        }),
+        deferred: false,
+        hosted: None,
     }
 }
 

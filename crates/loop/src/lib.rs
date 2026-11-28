@@ -243,6 +243,9 @@ pub struct Loop {
     /// the end-of-turn check, or taken in the drain that is about to apply
     /// them.
     pub(crate) queued: VecDeque<jobs::Queued>,
+    /// The session's staged orphan results, computed while resuming and
+    /// written on the first run step after builder-installed hooks exist.
+    pub(crate) staged_orphans: jobs::StagedTail,
     /// The steering queue the door and this loop share
     /// (`docs/architecture.md`, "One inbox"): a reader admits into it
     /// at once, and this loop reconciles each delivery against it at the
@@ -772,6 +775,7 @@ impl Loop {
             reviewer_key: format!("{session_id}:reviewer"),
             notes_key: format!("{session_id}:notes"),
             queued: VecDeque::new(),
+            staged_orphans: jobs::StagedTail::default(),
             steering: Arc::new(steering::Queue::new()),
             call_turns: BTreeMap::new(),
             closing: false,

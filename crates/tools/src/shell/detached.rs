@@ -153,9 +153,7 @@ pub(super) fn launch_with_session(
     let err = log.try_clone()?;
     cmd.stdout(log).stderr(err);
     scrub_env(&mut cmd);
-    if let Some(id) = session_id {
-        cmd.env("FIBER_SESSION_ID", id.0.clone());
-    }
+    cmd.envs(super::command::session_id_pair(session_id));
     support::group::detach(&mut cmd, false);
     let child = match cmd.spawn() {
         Ok(child) => child,
