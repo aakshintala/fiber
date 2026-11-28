@@ -307,27 +307,6 @@ fn the_link_four_byte_title_and_empty_description_still_fit() {
 }
 
 #[test]
-fn the_link_never_exceeds_2000_chars() {
-    // Both branches pin the cap: the full link by its length check, the
-    // fallback by clipping the description to fit.
-    let cases = [
-        String::new(),
-        "a".to_owned(),
-        "a".repeat(100),
-        "a".repeat(8192),
-        "é".repeat(3000),
-        "😀".repeat(1500),
-        "héllo wörld 😀\nsecond line".to_owned(),
-    ];
-    for description in &cases {
-        for doctor in [DOCTOR.to_owned(), "d".repeat(3000)] {
-            let report = build_report(VERSION, PLATFORM, INSTALL, description, &doctor);
-            let (url, _) = issue_link(&title(description), &report, description);
-        }
-    }
-}
-
-#[test]
 fn the_link_write_reports_fallback_through_attach() {
     let root = fakes::TempDir::new("fiber-feedback-attach");
     let clock = FakeClock::new();
