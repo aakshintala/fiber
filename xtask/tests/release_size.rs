@@ -170,15 +170,17 @@ fn a_base_that_builds_is_built_and_compared() {
 
     // The base build follows release-size's head build. A later head paging
     // build must link its own crate marker, not a stale marker from the base.
-    let head_target = repo.dir.path().join("target").display().to_string();
-    repo.paging_jig(&[("FAKE_CARGO_REUSE_TARGET", &head_target)]);
+    let repo_root = fs::canonicalize(repo.dir.path()).unwrap();
+    let head_target = repo_root.join("target").display().to_string();
+    let reuse_target = repo.dir.path().join("target").display().to_string();
+    repo.paging_jig(&[("FAKE_CARGO_REUSE_TARGET", &reuse_target)]);
     let head = repo.short("HEAD");
     assert_eq!(
         fs::read_to_string(repo.temp.path().join("release/head/paging")).unwrap(),
         format!("built at {head}; linked crate from {head}\n")
     );
     let invocations = fs::read_to_string(repo.temp.path().join("cargo-targets")).unwrap();
-    let base_target = repo.dir.path().join("target/base").display().to_string();
+    let base_target = repo_root.join("target/base").display().to_string();
     let observed: std::collections::BTreeSet<_> = invocations
         .lines()
         .map(|line| {

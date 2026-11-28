@@ -152,35 +152,7 @@ fn status(exit: &Exit) -> ExitStatus {
     clippy::too_many_arguments,
     reason = "the hosted spawn shares the ordinary execution inputs"
 )]
-#[cfg(test)]
 pub(super) fn execute(
-    host: Arc<dyn CommandHost>,
-    program: &Path,
-    command: &str,
-    workdir: &Path,
-    timeout: Option<Duration>,
-    clock: &dyn Clock,
-    cancel: &dyn Cancel,
-    emit: &dyn Emit,
-    policy: MovePolicy,
-    jobs: Option<&dyn Jobs>,
-    spill: Option<Config>,
-    matches: Option<&Path>,
-    settings: &super::sandbox::Settings,
-    workspace: &Path,
-    protection: Option<&ProtectedPaths>,
-) -> io::Result<Ran> {
-    execute_with_session(
-        host, program, command, workdir, timeout, clock, cancel, emit, policy, jobs, spill,
-        matches, settings, workspace, protection, None,
-    )
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the hosted spawn shares the ordinary execution inputs"
-)]
-pub(super) fn execute_with_session(
     host: Arc<dyn CommandHost>,
     program: &Path,
     command: &str,
@@ -218,9 +190,7 @@ pub(super) fn execute_with_session(
                     )]
                 })
                 .unwrap_or_default();
-            if let Some(id) = session_id {
-                env.push(("FIBER_SESSION_ID".into(), id.0.clone()));
-            }
+            env.extend(command::session_id_pair(session_id));
             env
         },
         stdin: command::spawn_stdin(policy),
