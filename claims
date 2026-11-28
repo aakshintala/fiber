@@ -624,3 +624,9 @@ crates/main/tests/tool_calls/mcp_view.rs	fiber-4379	plan	2026-11-28T03:05:18Z	Am
 crates/main/tests/providers/credential_signals.rs	fiber-5001	plan	2026-11-28T03:08:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/support/mod.rs	fiber-4934	plan	2026-11-28T03:29:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/databricks.rs	fiber-4901	plan	2026-11-28T03:56:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+research/macos-file-readback/README.md	fiber-4934	plan	2026-11-28T03:55:42Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4934-macos-file-readback	
+crates/extensions/src/install.rs	fiber-4934	plan	2026-11-28T03:55:42Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4934-macos-file-readback	
+crates/extensions/src/manage.rs	fiber-4934	plan	2026-11-28T03:55:42Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4934-macos-file-readback	
+crates/extensions/src/install_tests.rs	fiber-4934	plan	2026-11-28T03:55:42Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4934-macos-file-readback	
+crates/extensions/tests/providers_planned.rs	fiber-4934	plan	2026-11-28T03:55:42Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4934-macos-file-readback	
+crates/cli/src/extension.rs	fiber-4934	plan	2026-11-28T03:55:42Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4934-macos-file-readback	
