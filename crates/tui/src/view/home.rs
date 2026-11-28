@@ -4,7 +4,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 
 use super::{FOCUS_STYLE, completions, lift_hover, logo};
 use crate::app::App;
@@ -12,7 +12,7 @@ use crate::app::Surface;
 use crate::completion_rows::Rows;
 use crate::format::{cut, width, wrap};
 use crate::graphics::logo::{COLS, ROWS, Shown};
-use crate::home::{HomeScreen, ListLine, Spot};
+use crate::home::{Foot, HomeFootPart, HomeScreen, ListLine, Spot};
 use crate::mouse::{self, Target, TargetId};
 use crate::text::to_u16;
 use crate::theme::{Role, style};
@@ -30,6 +30,38 @@ const PLACEHOLDER: &str = "› /? for shortcuts";
 /// The draft rows the box shows: at least 2, at most 8.
 const MIN_BOX: usize = 2;
 const MAX_BOX: usize = 8;
+
+fn home_foot_width(parts: &[&HomeFootPart]) -> usize {
+    let mut total = 0;
+    for (index, part) in parts.iter().enumerate() {
+        if index > 0 {
+            total += width(" · ");
+        }
+        total += part.line.width();
+    }
+    total
+}
+
+fn fit_home_foot(parts: &[HomeFootPart], max_width: u16) -> Line<'static> {
+    let mandatory: Vec<&HomeFootPart> = parts.iter().filter(|part| part.mandatory).collect();
+    let mandatory_width = home_foot_width(&mandatory);
+    let mut retained: Vec<HomeFootPart> = Vec::new();
+    let mut retained_width = 0;
+    for part in parts.iter().filter(|part| !part.mandatory) {
+        let separator_width = usize::from(!retained.is_empty()) * width(" · ");
+        let next_width = retained_width + separator_width + part.line.width();
+        let mandatory_separator_width =
+            usize::from(!retained.is_empty() || !mandatory.is_empty()) * width(" · ");
+        if next_width + mandatory_width + mandatory_separator_width <= usize::from(max_width) {
+            retained.push(part.clone());
+            retained_width = next_width;
+        } else {
+            break;
+        }
+    }
+    retained.extend(mandatory.into_iter().cloned());
+    crate::home::home_foot(&retained)
+}
 
 /// Where home's rows draw.
 struct Placed {
@@ -852,8 +884,18 @@ pub(super) fn render(
     token_targets(app, area, &placed, &mut targets);
     let mut bottom = placed.foot;
     crate::view::banner::draw(app, area, buf, &mut bottom);
-    // The foot hint sits on the last row, centred, cut to the width.
-    let foot = &screen.foot;
+    // At 80 columns, keep the mandatory tail and whole leading parts; below it,
+    // preserve the original left-cut path.
+    let trimmed_foot = if area.width >= 80 {
+        match &screen.foot {
+            Foot::Parts { parts, .. } => Some(fit_home_foot(parts, area.width)),
+            Foot::Text(_) => None,
+        }
+    } else {
+        None
+    };
+    let fallback_foot = screen.foot.line();
+    let foot = trimmed_foot.as_ref().unwrap_or(&fallback_foot);
     if placed.foot >= area.y {
         let at = if foot.width() <= usize::from(area.width) {
             area.x

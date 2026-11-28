@@ -197,10 +197,26 @@ fn hint_back(spans: &mut Vec<Span<'static>>, esc: Option<&str>) {
     ));
 }
 
-/// The foot hint with its keys bold: each action by its first bound
-/// key, leaving an unbound action's part out with its joiner. The
-/// project jump shows its doc wording while the row holds a key.
-fn home_foot(
+use crate::home::{Foot, HomeFootPart};
+
+/// Adds one complete hint part, retaining its separator as a styled span.
+fn push_home_foot_part(
+    parts: &mut Vec<HomeFootPart>,
+    line: ratatui::text::Line<'static>,
+    mandatory: bool,
+) {
+    parts.push(HomeFootPart { line, mandatory });
+}
+
+/// Adds one complete key and label, with its separator stored separately.
+fn push_home_foot_key(parts: &mut Vec<HomeFootPart>, key: &str, label: &str, mandatory: bool) {
+    let mut spans = Vec::new();
+    hint_key(&mut spans, key, label);
+    push_home_foot_part(parts, ratatui::text::Line::from(spans), mandatory);
+}
+
+/// Ordered Home hint parts, from the open action to the mandatory quit tail.
+fn home_foot_parts(
     open: Option<String>,
     project: Option<String>,
     delete: Option<String>,
@@ -208,37 +224,41 @@ fn home_foot(
     key_map: Option<String>,
     back: bool,
     esc: Option<String>,
-) -> ratatui::text::Line<'static> {
-    let mut spans = Vec::new();
+) -> Vec<HomeFootPart> {
+    let mut parts = Vec::new();
     if let Some(label) = open {
-        hint_key(
-            &mut spans,
+        push_home_foot_key(
+            &mut parts,
             &label,
             "opens the focused session, or starts one from the box",
+            false,
         );
     }
-    hint_key(&mut spans, "↑↓", "move");
+    push_home_foot_key(&mut parts, "↑↓", "move", false);
     if project.is_some() {
-        hint_key(&mut spans, "Shift+↑↓", "project");
+        push_home_foot_key(&mut parts, "Shift+↑↓", "project", false);
     }
     if back {
+        let mut spans = Vec::new();
         hint_back(&mut spans, esc.as_deref());
+        push_home_foot_part(&mut parts, ratatui::text::Line::from(spans), false);
     }
     if let Some(label) = delete {
-        hint_key(
-            &mut spans,
+        push_home_foot_key(
+            &mut parts,
             &label,
             "stops a live one, deletes an exited one",
+            false,
         );
     }
     if let Some(label) = archive {
-        hint_key(&mut spans, &label, "archives an exited one");
+        push_home_foot_key(&mut parts, &label, "archives an exited one", false);
     }
     if let Some(label) = key_map {
-        hint_key(&mut spans, &label, "the key map");
+        push_home_foot_key(&mut parts, &label, "the key map", true);
     }
-    hint_key(&mut spans, "Ctrl+C", "twice to quit");
-    ratatui::text::Line::from(spans)
+    push_home_foot_key(&mut parts, "Ctrl+C", "twice to quit", true);
+    parts
 }
 
 impl App {
@@ -566,10 +586,10 @@ impl App {
                 .collect(),
             spend: (live_count > 0).then(|| format!("{} live", crate::format::money(spend))),
         };
-        let foot = if self.hint() {
-            ratatui::text::Line::from(self.hint_text())
+        let foot_parts = if self.hint() {
+            None
         } else {
-            home_foot(
+            Some(home_foot_parts(
                 self.keys().first_label("open_focused"),
                 self.keys().first_label("focus_project"),
                 self.keys().first_label("delete_session"),
@@ -577,7 +597,13 @@ impl App {
                 self.keys().first_label("key_map"),
                 self.came_from_live(),
                 self.keys().first_label("close_or_interrupt"),
-            )
+            ))
+        };
+        let foot = if let Some(parts) = foot_parts {
+            let line = crate::home::home_foot(&parts);
+            Foot::Parts { line, parts }
+        } else {
+            Foot::Text(ratatui::text::Line::from(self.hint_text()))
         };
         Some(HomeScreen {
             header,

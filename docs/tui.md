@@ -69,6 +69,8 @@ its own. From the top:
    the new worktree switch, the model and thinking chips and "Enter starts a
    session".
 
+At widths of at least 80 columns, the F1 key-map part stays visible when that action is bound. The Ctrl+C quit part always stays visible. If F1 is unbound, only the quit part is mandatory. The other parts appear in this droppable order: open, move, project, back, delete, archive. If they do not all fit, Fiber drops them from the end of that order, removing whole parts only. At widths of at least 80 columns, it never cuts a part mid-word or adds an ellipsis.
+
 A key hint sits at the foot: "Enter opens the focused session, or starts one from the box · ↑↓ move · Shift+↑↓ project · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit". Each key shows bold and the rest dim; Enter, Delete, Backspace and Esc name their action's first bound key, leaving an unbound action's part out, while Ctrl+C cannot be rebound so its hint stays fixed. "→ or Esc back to the session" joins it after "↑↓ move", only when home was entered from a session whose row is still live. The key goes back to that session when the box is empty, nothing is open and no notice is up; Esc also goes back with a chip focused, while → then moves between the chips. A session that exited or closed hides the hint and leaves both keys untaken; with the link down or a `start` in flight the keys are taken as a no-op and the hint stays. Until the first prompt, the input box's
 placeholder says "/? for shortcuts". Typing a prompt and pressing Enter asks
 the hub to start a session in the chosen workspace, and the screen switches to
