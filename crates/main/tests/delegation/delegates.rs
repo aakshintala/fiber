@@ -8722,11 +8722,13 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
         ])
     })
     .unwrap();
-    // The early pair answers once its gate drops; the late pair holds
-    // until its own gate drops, announcing each arrival first. The
-    // responder runs under its server's lock, so the first late arrival
-    // announces while the other late child still runs, queued behind that
-    // lock; the wait below reads the arrival as arrival, never as parked.
+    // Responders run one at a time in request order, without the server's
+    // state lock. The first late callback waits on gate.recv(); it has no
+    // separate deadline because this test owns release_late, which its
+    // WAITS-bounded flow drops explicitly or on unwind after child shutdown
+    // (bounded by SHUTDOWN_WITHIN). The other late child queues for its turn;
+    // RESPONDER_TURN_WAIT is derived as WAITS + SHUTDOWN_WITHIN + 8 seconds,
+    // not queued behind the state lock.
     let child_early = ProviderServer::start_responding(move |_: &Request| {
         // Held until the test drops the early sender: no deadline of
         // its own. The grid waits below bound the test, and the dropped
