@@ -555,7 +555,7 @@ fn paired_client(a: &Setup, served: &hub_start::Served) -> Setup {
     let mut shell = Command::new("/bin/sh");
     shell
         .arg("-c")
-        .arg("out=$1; err=$2; status=$3; shift 3; ( cat <&3; \"$@\" >\"$out\" 2>\"$err\"; result=$?; printf '%s\\n' \"$result\" >\"$status\" ) </dev/null >/dev/null 2>&1 &")
+        .arg("out=$1; err=$2; status=$3; shift 3; ( \"$@\" >\"$out\" 2>\"$err\"; result=$?; printf '%s\\n' \"$result\" >\"$status\" ) </dev/null >/dev/null 2>&1 &")
         .arg("fiber-pairing")
         .arg(&stdout_path)
         .arg(&stderr_path)
@@ -629,8 +629,8 @@ fn continue_hub_skips_the_archived_latest() {
         fakes::ProviderServer::start(vec![text_reply("First."), text_reply("Second.")]).unwrap();
     installed_with(&a, &server);
     let served = installed_hub(&a);
-    let (_, latest) = seed_hub_sessions(&a);
     let b = paired_client(&a, &served);
+    let (_, latest) = seed_hub_sessions(&a);
     // Archive the latest through the listed hub: the client names the
     // session by full id, as `resume --hub` resolves it.
     let archived = headless(&b, &["sessions", "archive", "--hub", "box", &latest]);
