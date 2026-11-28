@@ -1119,15 +1119,7 @@ fn wait_for_group_exit(group: u32, deadline: Deadline) -> bool {
         if deadline.left().is_zero() {
             return false;
         }
-        let (_never, wait) = mpsc::channel::<()>();
-        // Kernel process exit has no notification fd here, so the bounded
-        // pause avoids a busy loop while polling the group state.
-        match deadline.within(Duration::from_millis(10)).recv(&wait) {
-            Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                panic!("the process-group exit probe channel disconnected")
-            }
-        }
+        thread::park_timeout(Duration::from_millis(10));
     }
 }
 
@@ -2082,12 +2074,14 @@ pub(crate) fn connect_hub_within(
     wait: Duration,
 ) -> (Socket, Value) {
     let serve = setup.fiber(&["hub", "serve"]);
+    #[allow(non_snake_case, reason = "budget-bounds recognizes the named wait")]
+    let WAIT = wait;
     connect_hub_started(
         setup,
         hub,
         serve,
         wait,
-        Deadline::after(wait),
+        Deadline::after(WAIT),
         "hub",
         true,
         HubProc::spawn_command,
