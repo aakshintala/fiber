@@ -1817,6 +1817,7 @@ fn feedback_done() -> crate::FeedbackDone {
     crate::FeedbackDone {
         path: PathBuf::from("/w/fiber-feedback-7.md"),
         link: "https://example.test/new?title=x".to_owned(),
+        attach: false,
     }
 }
 
@@ -1877,6 +1878,8 @@ fn feedback_sends_the_description_and_lands_path_plus_link() {
     );
     // The draft stays until the worker's answer lands.
     assert_eq!(app.draft(), "/feedback the sound");
+    let screen = screen_text(&app);
+    assert!(screen.contains("/feedback the sound"), "{screen}");
     app.on_feedback(Ok(feedback_done()));
     assert!(app.draft().is_empty());
     assert_eq!(
@@ -1896,6 +1899,76 @@ fn feedback_failure_keeps_the_draft_with_the_error() {
     app.on_feedback(Err("the write failed".to_owned()));
     assert_eq!(app.draft(), "/feedback the sound");
     assert_eq!(app.notice(), Some("the write failed"));
+    let screen = screen_text(&app);
+    assert!(screen.contains("the write failed"), "{screen}");
+}
+
+#[test]
+fn feedback_success_keeps_a_draft_edited_while_the_write_ran() {
+    // Text typed while the report writes replaces the submitted draft:
+    // the late success must not clear it.
+    let mut app = attached();
+    app.set_feedback(Some(feedback_writer(feedback_done())));
+    assert!(matches!(
+        enter(&mut app, "/feedback the sound"),
+        Effect::Feedback { .. }
+    ));
+    app.draft.clear();
+    app.draft.paste("a new thought");
+    app.on_feedback(Ok(feedback_done()));
+    assert_eq!(app.draft(), "a new thought");
+    let screen = screen_text(&app);
+    assert!(screen.contains("a new thought"), "{screen}");
+}
+
+#[test]
+fn feedback_second_submission_wins_over_the_first() {
+    // A second `/feedback` before the first completes replaces the
+    // pending text: restoring the first leaves the draft in place.
+    let mut app = attached();
+    app.set_feedback(Some(feedback_writer(feedback_done())));
+    assert!(matches!(
+        enter(&mut app, "/feedback one"),
+        Effect::Feedback { .. }
+    ));
+    app.draft.clear();
+    assert!(matches!(
+        enter(&mut app, "/feedback two"),
+        Effect::Feedback { .. }
+    ));
+    app.draft.clear();
+    app.draft.paste("/feedback one");
+    app.on_feedback(Ok(feedback_done()));
+    assert_eq!(app.draft(), "/feedback one");
+    let screen = screen_text(&app);
+    assert!(screen.contains("/feedback one"), "{screen}");
+}
+
+#[test]
+fn feedback_fallback_notice_tells_the_person_to_attach_the_file() {
+    let mut app = attached();
+    let mut done = feedback_done();
+    done.attach = true;
+    app.set_feedback(Some(feedback_writer(done.clone())));
+    assert!(matches!(
+        enter(&mut app, "/feedback the sound"),
+        Effect::Feedback { .. }
+    ));
+    app.on_feedback(Ok(done));
+    assert!(app.draft().is_empty());
+    assert!(
+        app.notice()
+            .unwrap()
+            .contains("The full report was too long for a link: attach the report file.")
+    );
+    let screen = screen_text(&app);
+    assert!(screen.contains("Wrote /w/fiber-feedback-7.md"), "{screen}");
+    assert!(
+        screen.contains("https://example.test/new?title=x"),
+        "{screen}"
+    );
+    // #4981 owns the display split; assert the full instruction once it lands.
+    assert!(!screen.contains("attach the report file"), "{screen}");
 }
 
 #[test]

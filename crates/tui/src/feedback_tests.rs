@@ -46,6 +46,7 @@ fn done() -> crate::FeedbackDone {
     crate::FeedbackDone {
         path: PathBuf::from("/w/fiber-feedback-7.md"),
         link: "https://example.test/new?title=x".to_owned(),
+        attach: false,
     }
 }
 

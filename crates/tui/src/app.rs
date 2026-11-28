@@ -279,6 +279,10 @@ pub(crate) struct App {
     /// the launch's.
     home: home::Home,
     draft: Draft,
+    /// The last `/feedback` submission's full draft text, while its
+    /// report write is pending: completion clears the draft only when it
+    /// still holds this text, so text typed meanwhile survives.
+    feedback_submitted: Option<String>,
     /// The one clipboard image read at a time, and its ticket.
     paste: paste::Paste,
     phase: Phase,
@@ -482,6 +486,7 @@ impl App {
             installed_floor: None,
             home: home::Home::new(seed),
             draft: Draft::default(),
+            feedback_submitted: None,
             paste: paste::Paste::default(),
             phase: Phase::Starting,
             outbox: outbox::Outbox::default(),

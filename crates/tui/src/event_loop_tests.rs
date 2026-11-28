@@ -3945,6 +3945,7 @@ fn feedback_hands_the_screen_ring_to_the_writer() {
     let done = crate::FeedbackDone {
         path: PathBuf::from("/w/fiber-feedback-7.md"),
         link: "https://example.test/new?title=x".to_owned(),
+        attach: false,
     };
     let (tx, rx) = mpsc::channel();
     let writer: crate::WriteFeedback = Arc::new(
