@@ -623,3 +623,4 @@ crates/main/tests/tool_calls/tools.rs:1275-1275	fiber-4954	plan	2026-11-28T02:45
 crates/main/tests/tool_calls/mcp_view.rs	fiber-4379	plan	2026-11-28T03:05:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/credential_signals.rs	fiber-5001	plan	2026-11-28T03:08:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/databricks.rs	fiber-4901	plan	2026-11-28T03:56:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+research/macos-file-readback/README.md	fiber-4934	plan	2026-11-28T03:57:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4934-macos-file-readback	
