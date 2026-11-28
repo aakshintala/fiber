@@ -22,28 +22,14 @@ use fakes::{OauthReply, OauthServer, ProviderServer, Response};
 use serde_json::{Value, json};
 use support::*;
 
-fn connect_detached_hub(setup: &Setup, hub: &Arc<Mutex<Option<DetachedHub>>>) -> Socket {
-    let slot = hub.clone();
-    let deadline = setup.deadline;
+fn browser_hub_command(setup: &Setup) -> std::process::Command {
     let mut serve = setup.fiber(&["hub", "serve"]);
     let mut paths = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/browser")];
     paths.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     ));
     serve.env("PATH", std::env::join_paths(paths).unwrap());
-    let home = setup.home();
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut start = move || {
-            *slot.lock().unwrap() = Some(DetachedHub::spawn_command(deadline, &mut serve));
-            Ok(())
-        };
-        tx.send(doors::hub::connect(&home, &mut start, &SystemClock))
-            .unwrap_or(());
-    });
-    let (stream, hello) = deadline.recv(&rx).expect("hub connected").unwrap();
-    assert_eq!(serde_json::to_value(hello).unwrap()["kind"], "hub_hello");
-    Socket::from(deadline, stream)
+    serve
 }
 
 fn provider() -> ProviderServer {
@@ -242,7 +228,8 @@ fn an_attached_full_client_receives_the_mid_session_login_url() {
     oauth.hold();
     install(&setup, &server, &oauth, None);
     let hub = Arc::new(Mutex::new(None));
-    let client = connect_detached_hub(&setup, &hub);
+    let client =
+        support::connect_detached_hub_with_serve(&setup, &hub, browser_hub_command(&setup), false);
     feed(&client);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
@@ -268,7 +255,8 @@ fn a_session_with_only_summary_clients_refuses_login_before_any_poll() {
     let oauth = OauthServer::start(vec![OauthReply::pending()]);
     install(&setup, &server, &oauth, None);
     let hub = Arc::new(Mutex::new(None));
-    let client = connect_detached_hub(&setup, &hub);
+    let client =
+        support::connect_detached_hub_with_serve(&setup, &hub, browser_hub_command(&setup), false);
     feed(&client);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
@@ -341,7 +329,8 @@ fn callback_attempt(port: u16, deadline: Deadline) -> bool {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     install(&setup, &server, &oauth, Some(port));
     let hub = Arc::new(Mutex::new(None));
-    let client = connect_detached_hub(&setup, &hub);
+    let client =
+        support::connect_detached_hub_with_serve(&setup, &hub, browser_hub_command(&setup), false);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start(&client, &workspace, false);
@@ -363,7 +352,8 @@ fn callback_attempt(port: u16, deadline: Deadline) -> bool {
         std::thread::yield_now();
     }
     drop(client);
-    let other = connect_detached_hub(&setup, &hub);
+    let other =
+        support::connect_detached_hub_with_serve(&setup, &hub, browser_hub_command(&setup), false);
     feed(&other);
     let sub = subscribe_as(&other, "c_other", &session);
     until(&other, "only the replacement client counts", |line| {
@@ -411,7 +401,8 @@ fn a_resumed_session_installs_live_attendance_and_login_notices() {
     let oauth = OauthServer::start(vec![OauthReply::token("resumed", "refresh", 3600)]);
     install(&setup, &server, &oauth, None);
     let hub = Arc::new(Mutex::new(None));
-    let client = connect_detached_hub(&setup, &hub);
+    let client =
+        support::connect_detached_hub_with_serve(&setup, &hub, browser_hub_command(&setup), false);
     feed(&client);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
@@ -422,7 +413,8 @@ fn a_resumed_session_installs_live_attendance_and_login_notices() {
     let closed = close(&client, &session, "c_close_first", Some(&sub));
     left_after_close(&client, &session, &closed);
     drop(client);
-    let client = connect_detached_hub(&setup, &hub);
+    let client =
+        support::connect_detached_hub_with_serve(&setup, &hub, browser_hub_command(&setup), false);
     oauth.hold();
     let resumed = subscribe_as(&client, "c_resumed", &session);
     // A status after the fold proves the old turn has been replayed.

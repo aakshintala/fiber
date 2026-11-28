@@ -139,27 +139,6 @@ fn connect_detached_hub_with_shell(
     client
 }
 
-/// Ends the test's session, detached hub and every session in the guarded
-/// workspace after the close has been accepted.
-#[track_caller]
-fn finish_detached(
-    hub: &Arc<Mutex<Option<DetachedHub>>>,
-    guard: SessionGuard,
-    client: Socket,
-    session: &str,
-    since: &Subscribed,
-) {
-    client.send(&format!(
-        "{{\"id\":\"c_close\",\"session_id\":\"{session}\",\"command\":\"close\"}}"
-    ));
-    until_after(&client, since, "fiber_exited", |line| {
-        line["kind"] == "fiber_exited"
-    });
-    drop(client);
-    hub.lock().unwrap().take().expect("the hub ran").stop();
-    guard.wait_gone();
-}
-
 /// The log of session `id`, wherever its project is.
 fn session_log(setup: &Setup, id: &str) -> Vec<Value> {
     let projects = setup.home().join("projects");
@@ -311,7 +290,16 @@ fn a_session_runs_with_the_login_shell_capture() {
         }
         thread::yield_now();
     }
-    finish_detached(&hub, guard, client, &session, &sub);
+    client.send(&format!(
+        "{{\"id\":\"c_close\",\"session_id\":\"{session}\",\"command\":\"close\"}}"
+    ));
+    until_after(&client, &sub, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    drop(client);
+    support::finish_detached(guard, || {
+        hub.lock().unwrap().take().expect("the hub ran").stop();
+    });
 }
 
 #[test]

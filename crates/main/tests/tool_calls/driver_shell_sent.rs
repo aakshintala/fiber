@@ -518,21 +518,6 @@ fn finish(
     guard.wait_gone();
 }
 
-fn finish_detached(
-    setup: &Setup,
-    hub: &Arc<Mutex<Option<support::DetachedHub>>>,
-    session: &str,
-    direct: Socket,
-    guard: SessionGuard,
-) {
-    drop(direct);
-    hub.lock().unwrap().take().expect("the starter ran").stop();
-    let closer = Socket::connect(setup.deadline, &setup.session_socket(session));
-    close_session(&closer);
-    drop(closer);
-    guard.wait_gone();
-}
-
 #[test]
 fn driver_shell_sent_joins_the_next_turn() {
     let setup = Setup::new();
@@ -578,7 +563,13 @@ fn driver_shell_sent_joins_the_next_turn() {
         texts[1].iter().any(|text| text.contains("MARK")),
         "the next turn reads the shell: {texts:?}"
     );
-    finish_detached(&setup, &hub, &session, direct, guard);
+    drop(direct);
+    support::finish_detached(guard, || {
+        hub.lock().unwrap().take().expect("the starter ran").stop();
+        let closer = Socket::connect(setup.deadline, &setup.session_socket(&session));
+        close_session(&closer);
+        drop(closer);
+    });
 }
 
 #[test]

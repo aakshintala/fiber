@@ -337,20 +337,6 @@ fn finish(
     guard.wait_gone();
 }
 
-#[track_caller]
-fn finish_detached(
-    hub: Arc<Mutex<Option<support::DetachedHub>>>,
-    client: Socket,
-    guard: SessionGuard,
-    sessions: &[&str],
-    subs: &[&support::Subscribed],
-) {
-    close_all(&client, sessions, subs);
-    drop(client);
-    hub.lock().unwrap().take().unwrap().stop();
-    guard.wait_gone();
-}
-
 /// A `delegate_spawn` call for `model`: the parent's first reply.
 fn spawn_call(model: &str) -> Value {
     function_call(
@@ -876,13 +862,11 @@ fn steer_to_a_hub_started_session_is_allowed() {
         }),
     );
     assert_eq!(answer["kind"], "command_accepted", "{answer}");
-    finish_detached(
-        hub,
-        client,
-        guard,
-        &[&first, &second],
-        &[&first_sub, &second_sub],
-    );
+    close_all(&client, &[&first, &second], &[&first_sub, &second_sub]);
+    drop(client);
+    support::finish_detached(guard, move || {
+        hub.lock().unwrap().take().unwrap().stop();
+    });
 }
 
 #[test]
@@ -949,13 +933,11 @@ fn question_reply_to_a_hub_started_session_is_allowed() {
         request_id.as_str(),
         "{resolved:?}"
     );
-    finish_detached(
-        hub,
-        client,
-        guard,
-        &[&first, &second],
-        &[&first_sub, &second_sub],
-    );
+    close_all(&client, &[&first, &second], &[&first_sub, &second_sub]);
+    drop(client);
+    support::finish_detached(guard, move || {
+        hub.lock().unwrap().take().unwrap().stop();
+    });
 }
 
 #[test]

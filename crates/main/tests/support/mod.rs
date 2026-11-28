@@ -996,12 +996,8 @@ impl DetachedHub {
     /// recording the hub pid. The shell backgrounds the command without job
     /// control, keeping it in the shell's group, then is reaped here.
     pub(crate) fn spawn_command(deadline: Deadline, serve: &mut Command) -> Self {
-        static NEXT_PIDFILE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let pidfile = std::env::temp_dir().join(format!(
-            "fiber-detached-hub-{}-{}.pid",
-            std::process::id(),
-            NEXT_PIDFILE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
+        let pidfile_dir = fakes::TempDir::under(&std::env::temp_dir(), "fiber-detached-hub");
+        let pidfile = pidfile_dir.path().join("hub.pid");
         let mut shell = Command::new("/bin/sh");
         shell
             .env_clear()
@@ -1054,9 +1050,6 @@ impl DetachedHub {
             .trim()
             .parse::<u32>()
             .unwrap_or_else(|error| panic!("invalid detached hub pidfile {pidfile:?}: {error}"));
-        fs::remove_file(&pidfile).unwrap_or_else(|error| {
-            panic!("could not remove detached hub pidfile {pidfile:?}: {error}")
-        });
         assert!(hub_pid > 1, "detached hub pid {hub_pid} is not signalable");
         assert_eq!(
             process_group_id(hub_pid),
@@ -1120,6 +1113,10 @@ fn wait_for_group_exit(group: u32, deadline: Deadline) -> bool {
         if deadline.left().is_zero() {
             return false;
         }
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "poll pause while checking whether the process group has exited"
+        )]
         thread::park_timeout(Duration::from_millis(10));
     }
 }
@@ -1158,30 +1155,8 @@ pub(crate) fn group_has_live_members(group: u32) -> bool {
 }
 
 fn process_group_id(pid: u32) -> u32 {
-    #[cfg(target_os = "macos")]
-    {
-        let output = Command::new("/bin/ps")
-            .args(["-o", "pgid=", "-p", &pid.to_string()])
-            .output()
-            .expect("ps reports the detached hub's process group");
-        String::from_utf8(output.stdout)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap()
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
-        stat.rsplit_once(')')
-            .unwrap()
-            .1
-            .split_whitespace()
-            .nth(2)
-            .unwrap()
-            .parse()
-            .unwrap()
-    }
+    let pid = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap()).unwrap();
+    u32::try_from(rustix::process::getpgid(Some(pid)).unwrap().as_raw_pid()).unwrap()
 }
 
 /// `fiber ask` with its stdout kept drained and its stderr kept for a failure.
@@ -2039,6 +2014,28 @@ pub(crate) fn connect_detached_hub(
     hub: &Arc<Mutex<Option<DetachedHub>>>,
 ) -> (Socket, Value) {
     let serve = setup.fiber(&["hub", "serve"]);
+    connect_detached_hub_started(setup, hub, serve, true)
+}
+
+/// Connects to a detached hub using a caller-configured `serve` command.
+#[track_caller]
+pub(crate) fn connect_detached_hub_with_serve(
+    setup: &Setup,
+    hub: &Arc<Mutex<Option<DetachedHub>>>,
+    serve: Command,
+    stretched: bool,
+) -> Socket {
+    let (client, hello) = connect_detached_hub_started(setup, hub, serve, stretched);
+    assert_eq!(hello["kind"], "hub_hello");
+    client
+}
+
+fn connect_detached_hub_started(
+    setup: &Setup,
+    hub: &Arc<Mutex<Option<DetachedHub>>>,
+    serve: Command,
+    stretched: bool,
+) -> (Socket, Value) {
     connect_hub_started(
         setup,
         hub,
@@ -2047,7 +2044,7 @@ pub(crate) fn connect_detached_hub(
             wait: setup.deadline.left(),
             bound: setup.deadline,
             name: "detached hub",
-            stretched: true,
+            stretched,
             start: DetachedHub::spawn_command,
             report: detached_hub_start_report,
             marker: std::marker::PhantomData,
@@ -2100,15 +2097,13 @@ pub(crate) fn connect_hub_within(
     wait: Duration,
 ) -> (Socket, Value) {
     let serve = setup.fiber(&["hub", "serve"]);
-    #[allow(non_snake_case, reason = "budget-bounds recognizes the named wait")]
-    let WAIT = wait;
     connect_hub_started(
         setup,
         hub,
         HubConnect {
             serve,
             wait,
-            bound: Deadline::after(WAIT),
+            bound: Deadline::after(wait), // ruling: #4954
             name: "hub",
             stretched: true,
             start: HubProc::spawn_command,
@@ -2174,6 +2169,14 @@ impl Socket {
         self.pump = Some(Mutex::new(pump));
         self
     }
+}
+
+pub(crate) fn finish_detached<F>(guard: SessionGuard, stop: F)
+where
+    F: FnOnce(),
+{
+    stop();
+    guard.wait_gone();
 }
 
 /// Guards every session the hub starts in `workspace`: each carries the

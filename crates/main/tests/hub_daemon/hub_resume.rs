@@ -156,17 +156,12 @@ impl Setup {
     }
 }
 
-enum HubProcess {
-    Child(Option<Child>),
-    Detached(support::DetachedHub),
-}
-
 /// A hub the test started, and every session process it starts: each
 /// carries the workspace path on its command line. Dropping it kills the
 /// hub's group and every process holding the path; the watchdogs do the
 /// same if the test process dies.
 struct Hub {
-    process: HubProcess,
+    child: Option<Child>,
     group: u32,
     watchdog: Option<Watchdog>,
     sessions: Option<Watchdog>,
@@ -184,23 +179,9 @@ impl Hub {
         let _ = child.stdout.take();
         let _ = child.stderr.take();
         Self {
-            process: HubProcess::Child(Some(child)),
+            child: Some(child),
             group,
             watchdog: Some(Watchdog::group(group)),
-            sessions: Some(sessions),
-            workspace,
-            deadline,
-        }
-    }
-
-    fn spawn_detached_command(deadline: Deadline, serve: &mut Command, workspace: String) -> Self {
-        let sessions = Watchdog::matching(&workspace);
-        let detached = support::DetachedHub::spawn_command(deadline, serve);
-        let group = detached.group;
-        Self {
-            process: HubProcess::Detached(detached),
-            group,
-            watchdog: None,
             sessions: Some(sessions),
             workspace,
             deadline,
@@ -211,34 +192,24 @@ impl Hub {
     /// path to exit on its own.
     #[track_caller]
     fn finish(mut self) {
-        match &mut self.process {
-            HubProcess::Detached(detached) => detached.stop(),
-            HubProcess::Child(child) => {
-                fakes::kill_group(self.group, "KILL").unwrap();
-                if let Some(mut child) = child.take() {
-                    let (done, finished) = mpsc::channel();
-                    thread::spawn(move || done.send(child.wait().is_ok()).unwrap_or(()));
-                    match self.deadline.recv(&finished) {
-                        Ok(_) => {}
-                        Err(_) => support::expired(
-                            self.deadline,
-                            self.group,
-                            &finished,
-                            "the killed hub to exit",
-                        ),
-                    }
-                }
-                if let Some(watchdog) = self.watchdog.take() {
-                    watchdog.stand_down(self.deadline.cleanup_phase());
-                }
+        fakes::kill_group(self.group, "KILL").unwrap();
+        if let Some(mut child) = self.child.take() {
+            let (done, finished) = mpsc::channel();
+            thread::spawn(move || done.send(child.wait().is_ok()).unwrap_or(()));
+            match self.deadline.recv(&finished) {
+                Ok(_) => {}
+                Err(_) => support::expired(
+                    self.deadline,
+                    self.group,
+                    &finished,
+                    "the killed hub to exit",
+                ),
             }
         }
         fakes::try_matching_exits(&self.workspace, self.deadline).unwrap_or_else(|err| {
             panic!("waited until the deadline for every session to exit: {err}")
         });
-        if matches!(&self.process, HubProcess::Child(_))
-            && let Some(watchdog) = self.watchdog.take()
-        {
+        if let Some(watchdog) = self.watchdog.take() {
             watchdog.stand_down(self.deadline.cleanup_phase());
         }
         if let Some(watchdog) = self.sessions.take() {
@@ -252,21 +223,16 @@ impl Drop for Hub {
     /// thread until the cleanup deadline: a drop never blocks past it and
     /// never panics.
     fn drop(&mut self) {
-        match &mut self.process {
-            HubProcess::Detached(_) => {}
-            HubProcess::Child(child) => {
-                drop(fakes::kill_group(self.group, "KILL"));
-                if let Some(mut child) = child.take() {
-                    let (done, reaped) = mpsc::channel();
-                    match thread::Builder::new().spawn(move || match done.send(child.wait()) {
-                        Ok(()) | Err(_) => {}
-                    }) {
-                        Ok(_) | Err(_) => {}
-                    }
-                    match self.deadline.cleanup_phase().recv(&reaped) {
-                        Ok(_) | Err(_) => {}
-                    }
-                }
+        drop(fakes::kill_group(self.group, "KILL"));
+        if let Some(mut child) = self.child.take() {
+            let (done, reaped) = mpsc::channel();
+            match thread::Builder::new().spawn(move || match done.send(child.wait()) {
+                Ok(()) | Err(_) => {}
+            }) {
+                Ok(_) | Err(_) => {}
+            }
+            match self.deadline.cleanup_phase().recv(&reaped) {
+                Ok(_) | Err(_) => {}
             }
         }
         support::kill_matching_detached(&self.workspace);
@@ -333,15 +299,6 @@ fn until_hub(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) 
 /// [`Deadline`]; the serve command, workspace and home are built first.
 #[track_caller]
 fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<Hub>>>) -> Socket {
-    connect_hub_with(setup, hub, false)
-}
-
-fn connect_detached_hub(setup: &Setup, hub: &Arc<Mutex<Option<Hub>>>) -> Socket {
-    connect_hub_with(setup, hub, true)
-}
-
-#[track_caller]
-fn connect_hub_with(setup: &Setup, hub: &Arc<Mutex<Option<Hub>>>, detached: bool) -> Socket {
     let slot = Arc::clone(hub);
     let deadline = setup.deadline;
     let mut serve = setup.fiber_in_workspace(&["hub", "serve"]);
@@ -349,17 +306,19 @@ fn connect_hub_with(setup: &Setup, hub: &Arc<Mutex<Option<Hub>>>, detached: bool
     let home = setup.home();
     let connected = support::bounded(deadline, "the hub to start and say hub_hello", move || {
         let mut start = move || {
-            *slot.lock().unwrap() = Some(if detached {
-                Hub::spawn_detached_command(deadline, &mut serve, workspace.clone())
-            } else {
-                Hub::spawn_command(deadline, &mut serve, workspace.clone())
-            });
+            *slot.lock().unwrap() =
+                Some(Hub::spawn_command(deadline, &mut serve, workspace.clone()));
             Ok(())
         };
         doors::hub::connect(&home, &mut start, &SystemClock)
     });
     let (stream, _hello) = connected.unwrap();
     Socket::from(deadline, stream)
+}
+
+fn connect_detached_hub(setup: &Setup, hub: &Arc<Mutex<Option<support::DetachedHub>>>) -> Socket {
+    let (client, _) = support::connect_detached_hub(setup, hub);
+    Socket::from(setup.deadline, client.write.into_inner().unwrap())
 }
 
 fn command(id: &str, session: &str, command: &str, args: Value) -> Value {
@@ -528,8 +487,10 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
     assert_eq!(code, Some(0));
     let id = lines[0]["session_id"].as_str().unwrap().to_owned();
 
-    let hub = Arc::new(Mutex::new(None));
-    let client = connect_detached_hub(&setup, &hub);
+    let workspace = setup.workspace_text();
+    let sessions = Watchdog::matching(&workspace);
+    let hub = Arc::new(Mutex::new(None::<support::DetachedHub>));
+    let (client, _) = connect_detached_hub(&setup, &hub);
     client.send(&subscribe_line("c_sub", &id));
     let replay = until_hub(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
@@ -557,7 +518,7 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
     );
 
     // A second client finds the session running and attaches.
-    let second = connect_hub(&setup, &hub);
+    let (second, _) = connect_detached_hub(&setup, &hub);
     second.send(&subscribe_line("c_sub2", &id));
     until_hub(&second, "the second subscribe", |line| {
         acknowledges(line, "c_sub2")
@@ -583,7 +544,10 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
         "{log}"
     );
     assert!(!log.contains(&setup.workspace_text()), "{log}");
-    hub.lock().unwrap().take().expect("the hub ran").finish();
+    hub.lock().unwrap().take().expect("the hub ran").stop();
+    fakes::try_matching_exits(&workspace, setup.deadline)
+        .unwrap_or_else(|err| panic!("waited until the deadline for every session to exit: {err}"));
+    sessions.stand_down(setup.deadline.cleanup_phase());
 }
 
 #[test]
