@@ -15,7 +15,7 @@ use crate::support;
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use fakes::{ProviderServer, Watchdog};
@@ -69,44 +69,8 @@ fn success_body(other_home: &Path) -> String {
     )
 }
 
-/// The check-run nonce `connect_hub` gives the hub when the run has
-/// none, so the nonce assertion bites outside `scripts/check` too.
+/// A stable nonce makes the assertion bite outside `scripts/check` too.
 const TEST_NONCE: &str = "hub-environment-test";
-
-/// Connects to the hub, starting `fiber hub serve` with `HUB_ONLY` set
-/// and `shell` as `$SHELL` when given. Outside `scripts/check` the hub
-/// gets a nonce of its own, so the nonce assertion bites there too. The
-/// starter records the hub for the caller to kill and wait.
-#[track_caller]
-fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<HubProc>>>, shell: Option<&Path>) -> Socket {
-    let slot = Arc::clone(hub);
-    let deadline = setup.deadline;
-    let mut serve = setup.fiber(&["hub", "serve"]);
-    serve.env("HUB_ONLY", "1");
-    if fakes::check_run().is_none() {
-        serve.env("FIBER_CHECK_RUN", TEST_NONCE);
-    }
-    if let Some(shell) = shell {
-        serve.env("SHELL", shell);
-    }
-    let home = setup.home();
-    let (done, connected) = mpsc::channel();
-    thread::spawn(move || {
-        let mut start = move || {
-            *slot.lock().unwrap() = Some(HubProc::spawn_command(deadline, &mut serve));
-            Ok(())
-        };
-        done.send(doors::hub::connect(&home, &mut start, &SystemClock))
-            .unwrap();
-    });
-    let connected = match deadline.recv(&connected) {
-        Ok(connected) => connected.unwrap(),
-        Err(_) => panic!("waited for the hub to start and say hub_hello"),
-    };
-    let hello = serde_json::to_value(&connected.1).unwrap();
-    assert_eq!(hello["kind"], "hub_hello");
-    Socket::from(deadline, connected.0)
-}
 
 fn connect_detached_hub_with_shell(
     setup: &Setup,
@@ -120,6 +84,8 @@ fn connect_detached_hub_with_shell(
     }
     if let Some(shell) = shell {
         serve.env("SHELL", shell);
+    } else {
+        serve.env_remove("SHELL");
     }
     let (client, hello) = connect_hub_started(
         setup,
@@ -182,7 +148,7 @@ fn names_of(variables: &Value) -> Vec<String> {
 /// workspace: the close is accepted, which proves a relayed command still
 /// reaches the session, then everything is reaped.
 fn finish(
-    hub: &Arc<Mutex<Option<HubProc>>>,
+    hub: &Arc<Mutex<Option<DetachedHub>>>,
     guard: SessionGuard,
     client: Socket,
     session: &str,
@@ -195,12 +161,9 @@ fn finish(
         line["kind"] == "fiber_exited"
     });
     drop(client);
-    hub.lock()
-        .unwrap()
-        .take()
-        .expect("the hub ran")
-        .kill_and_wait();
-    guard.wait_gone();
+    support::finish_detached(guard, || {
+        hub.lock().unwrap().take().expect("the hub ran").stop();
+    });
 }
 
 #[test]
@@ -308,8 +271,8 @@ fn a_session_runs_with_the_inherited_environment_when_the_capture_fails() {
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let fake = FakeShell::new("exit 1\n");
-    let hub = Arc::new(Mutex::new(None));
-    let client = connect_hub(&setup, &hub, Some(&fake.shell));
+    let hub = Arc::new(Mutex::new(None::<DetachedHub>));
+    let client = connect_detached_hub_with_shell(&setup, &hub, Some(&fake.shell));
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start_session(&client, &workspace, PROMPT);
@@ -351,8 +314,8 @@ fn a_session_without_a_shell_runs_with_the_inherited_environment() {
         ),
     )
     .unwrap();
-    let hub = Arc::new(Mutex::new(None));
-    let client = connect_hub(&setup, &hub, None);
+    let hub = Arc::new(Mutex::new(None::<DetachedHub>));
+    let client = connect_detached_hub_with_shell(&setup, &hub, None);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start_session(&client, &workspace, PROMPT);
@@ -368,8 +331,7 @@ fn a_session_without_a_shell_runs_with_the_inherited_environment() {
         .as_str()
         .expect("the call's output text");
     let printed: Vec<&str> = output.lines().collect();
-    // The run's nonce when one is there, else the one `connect_hub`
-    // gave the hub: the assertion bites either way.
+    // The run's nonce when one is there, else the fixture's stable nonce.
     let nonce = match fakes::check_run() {
         Some((_, value)) => value.to_string_lossy().into_owned(),
         None => TEST_NONCE.to_owned(),
@@ -444,8 +406,8 @@ fn hub_refresh_rebuilds_the_environment_for_new_sessions() {
     setup.provider(&server);
     let other_home = setup.root.path().join("other-home");
     let fake = FakeShell::new(&mark_body(&other_home, "REFRESH_MARK_ONE"));
-    let hub = Arc::new(Mutex::new(None));
-    let client = connect_hub(&setup, &hub, Some(&fake.shell));
+    let hub = Arc::new(Mutex::new(None::<DetachedHub>));
+    let client = connect_detached_hub_with_shell(&setup, &hub, Some(&fake.shell));
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     // The first session runs with the first capture.

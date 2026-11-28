@@ -188,8 +188,8 @@ impl Hub {
         }
     }
 
-    /// Kills the hub, then waits for every session holding the workspace
-    /// path to exit on its own.
+    /// Kills the hub and waits for every matching session to exit before
+    /// standing down the group watchdog, so session processes remain guarded.
     #[track_caller]
     fn finish(mut self) {
         fakes::kill_group(self.group, "KILL").unwrap();

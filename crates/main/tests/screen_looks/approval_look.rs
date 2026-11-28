@@ -594,9 +594,8 @@ fn hub_start_failure_reports_status_and_log_tail() {
     // The connect's five-second bind wait spans ten seconds here, three
     // short of this wait, so its `did not bind` error arrives before this
     // wait's own timeout.
-    const WAIT: Duration = Duration::from_secs(13);
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        connect_hub_within(&setup, &hub, WAIT)
+        connect_hub_within(&setup, &hub, Duration::from_secs(13))
     }));
     let message = failed
         .err()
