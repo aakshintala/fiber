@@ -496,3 +496,4 @@ docs/workflow.md	fiber-4901	plan	2026-11-28T05:16:04Z	roundhouse-7010-plus-1:/ho
 crates/main/tests/providers/credential_signals.rs	fiber-5001	plan	2026-11-28T06:04:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/tool_calls/tools.rs	fiber-4856	plan	2026-11-28T06:09:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/model_picker_keys.rs	fiber-4942	plan	2026-11-28T06:15:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/home_view_tests.rs	fiber-5042	plan	2026-11-28T07:45:31Z	roundhouse-7010-plus-1:/home/aakshintala	
