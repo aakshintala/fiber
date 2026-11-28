@@ -163,7 +163,7 @@ fn a_model_call_through_an_open_session_fetches_lua_quota() {
     .unwrap();
     configure(&setup, "test/m1");
     let hub = Arc::new(Mutex::new(None));
-    let (client, _) = connect_hub(&setup, &hub);
+    let (client, _) = connect_detached_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start_session(&client, &workspace, "hi");
@@ -224,8 +224,8 @@ fn a_model_call_through_an_open_session_fetches_lua_quota() {
     assert_eq!(quota["data"]["status"], 200);
     drop(client);
     // SIGKILL the hub: the session keeps running on its own socket.
-    let hub = hub.lock().unwrap().take().expect("the starter ran");
-    hub.kill_and_wait();
+    let mut hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.stop();
     let direct = Socket::connect(setup.deadline, &setup.session_socket(&session));
     close_session(&direct);
     drop(direct);
@@ -248,7 +248,7 @@ fn quota_record_wait_proves_the_parked_fetch_ended() {
     .unwrap();
     configure(&setup, "test/m1");
     let hub = Arc::new(Mutex::new(None));
-    let (client, _) = connect_hub(&setup, &hub);
+    let (client, _) = connect_detached_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start_session(&client, &workspace, "hi");
@@ -309,8 +309,8 @@ fn quota_record_wait_proves_the_parked_fetch_ended() {
     assert_eq!(quota["data"]["status"], 200);
     drop(client);
     // SIGKILL the hub: the session keeps running on its own socket.
-    let hub = hub.lock().unwrap().take().expect("the starter ran");
-    hub.kill_and_wait();
+    let mut hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.stop();
     let direct = Socket::connect(setup.deadline, &setup.session_socket(&session));
     close_session(&direct);
     drop(direct);
@@ -336,7 +336,7 @@ fn a_hot_window_notices_rearms_and_notices_again_across_resumes() {
     fs::write(setup.home().join("credentials/test/work"), "test-key").unwrap();
     configure(&setup, "test/m1");
     let hub = Arc::new(Mutex::new(None));
-    let (client, _) = connect_hub(&setup, &hub);
+    let (client, _) = connect_detached_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let mut guard = Some(SessionGuard::arm(setup.deadline, &workspace));
     let session = start_session(&client, &workspace, "hi");
@@ -487,7 +487,7 @@ fn a_hot_window_notices_rearms_and_notices_again_across_resumes() {
         assert_eq!(actual, expected_quota);
     }
     drop(client);
-    hub.lock().unwrap().take().unwrap().kill_and_wait();
+    hub.lock().unwrap().take().unwrap().stop();
 }
 
 /// The conversation's person rows, ignoring the scroll-gutter marks: a

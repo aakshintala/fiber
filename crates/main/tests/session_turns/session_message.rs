@@ -186,7 +186,7 @@ fn a_fiber_ask_session_messages_a_hub_started_session_and_a_fiber_ask_target_is_
     .unwrap();
     install(&setup, &server);
     let hub = Arc::new(Mutex::new(None));
-    let (main, _) = support::connect_hub(&setup, &hub);
+    let (main, _) = support::connect_detached_hub(&setup, &hub);
     // The hub starts T, which answers its prompt and goes idle.
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let t_id = support::start_session(&main, &workspace, t_prompt);
@@ -326,9 +326,8 @@ fn a_fiber_ask_session_messages_a_hub_started_session_and_a_fiber_ask_target_is_
     b_watchdog.stand_down(deadline.cleanup_phase());
     let t_closer = Socket::connect(deadline, &setup.session_socket(&t_id));
     support::close_session(&t_closer);
-    let hub = hub.lock().unwrap().take().expect("the hub started");
-    hub.kill("TERM");
-    hub.wait();
+    let mut hub = hub.lock().unwrap().take().expect("the hub started");
+    hub.stop();
 }
 
 #[test]
@@ -368,7 +367,7 @@ fn a_hub_started_session_messages_itself_and_takes_it_as_steering_at_its_next_st
     // The server holds every response until `start` answers with T's id.
     server.hold();
     let hub = Arc::new(Mutex::new(None));
-    let (main, _) = support::connect_hub(&setup, &hub);
+    let (main, _) = support::connect_detached_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let t_id = support::start_session(&main, &workspace, prompt);
     *own.lock().unwrap() = Some(t_id.clone());
@@ -445,9 +444,8 @@ fn a_hub_started_session_messages_itself_and_takes_it_as_steering_at_its_next_st
     );
     let t_closer = Socket::connect(deadline, &setup.session_socket(&t_id));
     support::close_session(&t_closer);
-    let hub = hub.lock().unwrap().take().expect("the hub started");
-    hub.kill("TERM");
-    hub.wait();
+    let mut hub = hub.lock().unwrap().take().expect("the hub started");
+    hub.stop();
 }
 
 /// The fixture gatekeeper extension: driver messages pass, a session

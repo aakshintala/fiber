@@ -289,18 +289,11 @@ fn start_hub_and_session(
     (hub, client, guard, session, sub)
 }
 
-#[track_caller]
-fn finish(
-    hub: Arc<Mutex<Option<HubProc>>>,
-    client: Socket,
-    guard: SessionGuard,
-    sessions: &[&str],
-    subs: &[&support::Subscribed],
-) {
+fn close_all(client: &Socket, sessions: &[&str], subs: &[&support::Subscribed]) {
     for (n, session) in sessions.iter().enumerate() {
         let id = format!("c_close_{n}");
         client.send(&json!({"id": id, "session_id": session, "command": "close"}).to_string());
-        let closed = recv_answer(&client, &id, "the close acknowledgement");
+        let closed = recv_answer(client, &id, "the close acknowledgement");
         assert_eq!(closed["kind"], "command_accepted", "{closed}");
     }
     // Wait for every session to exit before killing the hub: a close the
@@ -312,7 +305,7 @@ fn finish(
     // One bound per session: a line the fold replayed for its own session
     // never ends the wait, mirroring [`until_after`]'s skip rule, which
     // takes a single subscription and cannot cover every session here.
-    support::until(&client, "the sessions exited", |line| {
+    support::until(client, "the sessions exited", |line| {
         let replayed = line.get("seq").and_then(Value::as_u64).is_some_and(|seq| {
             subs.iter().any(|sub| {
                 sub.session.as_deref() == line.get("session_id").and_then(Value::as_str)
@@ -328,6 +321,17 @@ fn finish(
         }
         remaining.is_empty()
     });
+}
+
+#[track_caller]
+fn finish(
+    hub: Arc<Mutex<Option<HubProc>>>,
+    client: Socket,
+    guard: SessionGuard,
+    sessions: &[&str],
+    subs: &[&support::Subscribed],
+) {
+    close_all(&client, sessions, subs);
     drop(client);
     hub.lock().unwrap().take().unwrap().kill_and_wait();
     guard.wait_gone();
@@ -836,8 +840,8 @@ fn steer_to_a_hub_started_session_is_allowed() {
     let probe = write_probe(&setup);
     let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
     setup.provider(&server);
-    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
-    let (client, _) = connect_hub(&setup, &hub);
+    let hub: Arc<Mutex<Option<support::DetachedHub>>> = Arc::new(Mutex::new(None));
+    let (client, _) = support::connect_detached_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let first = start_session(&client, &workspace, "first");
@@ -858,13 +862,11 @@ fn steer_to_a_hub_started_session_is_allowed() {
         }),
     );
     assert_eq!(answer["kind"], "command_accepted", "{answer}");
-    finish(
-        hub,
-        client,
-        guard,
-        &[&first, &second],
-        &[&first_sub, &second_sub],
-    );
+    close_all(&client, &[&first, &second], &[&first_sub, &second_sub]);
+    drop(client);
+    support::finish_detached(guard, move || {
+        hub.lock().unwrap().take().unwrap().stop();
+    });
 }
 
 #[test]
@@ -894,8 +896,8 @@ fn question_reply_to_a_hub_started_session_is_allowed() {
     let probe = write_probe(&setup);
     let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
     setup.provider(&server);
-    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
-    let (client, _) = connect_hub(&setup, &hub);
+    let hub: Arc<Mutex<Option<support::DetachedHub>>> = Arc::new(Mutex::new(None));
+    let (client, _) = support::connect_detached_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let first = start_session(&client, &workspace, "first");
@@ -931,13 +933,11 @@ fn question_reply_to_a_hub_started_session_is_allowed() {
         request_id.as_str(),
         "{resolved:?}"
     );
-    finish(
-        hub,
-        client,
-        guard,
-        &[&first, &second],
-        &[&first_sub, &second_sub],
-    );
+    close_all(&client, &[&first, &second], &[&first_sub, &second_sub]);
+    drop(client);
+    support::finish_detached(guard, move || {
+        hub.lock().unwrap().take().unwrap().stop();
+    });
 }
 
 #[test]

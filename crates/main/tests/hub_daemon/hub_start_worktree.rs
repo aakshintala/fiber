@@ -23,9 +23,9 @@ use std::sync::{Arc, Mutex};
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::{
-    Deadline, HubProc, SessionGuard, Setup, Socket, assert_one_continued_log, complete_lines,
-    connect_hub, function_call, git, recv_answer, run_to_exit, session_dir, stream, subscribe,
-    until, until_after,
+    Deadline, DetachedHub, SessionGuard, Setup, Socket, assert_one_continued_log, complete_lines,
+    connect_detached_hub, function_call, git, recv_answer, run_to_exit, session_dir, stream,
+    subscribe, until, until_after,
 };
 
 /// The verbatim count rules the multiset calls cite
@@ -61,8 +61,8 @@ fn hub_start_with_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
     init_repo(setup.deadline, &setup.workspace());
     let workspace = workspace_text(&setup);
 
-    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
-    let (client, _) = connect_hub(&setup, &hub);
+    let hub: Arc<Mutex<Option<DetachedHub>>> = Arc::new(Mutex::new(None));
+    let (client, _) = connect_detached_hub(&setup, &hub);
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     client.send(
         &json!({
@@ -148,11 +148,7 @@ fn hub_start_with_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
         "no fiber/ branch remains"
     );
     drop(client);
-    hub.lock()
-        .unwrap()
-        .take()
-        .expect("the hub ran")
-        .kill_and_wait();
+    hub.lock().unwrap().take().expect("the hub ran").stop();
 }
 
 /// What the first `ask --worktree` run recorded on its `session_started`.
@@ -300,8 +296,8 @@ fn a_hub_resume_makes_a_removed_worktree_again_and_keeps_it_when_dirty() {
 
     let head = commit_again(setup.deadline, &setup.workspace(), "second.txt");
 
-    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
-    let (client, _) = connect_hub(&setup, &hub);
+    let hub: Arc<Mutex<Option<DetachedHub>>> = Arc::new(Mutex::new(None));
+    let (client, _) = connect_detached_hub(&setup, &hub);
     let repo_guard = SessionGuard::arm(setup.deadline, &first.repository);
     let sub = subscribe(&client, &first.id);
     let mut stream = until_resumed(&client, "the resumed fiber_started");
@@ -398,11 +394,7 @@ fn a_hub_resume_makes_a_removed_worktree_again_and_keeps_it_when_dirty() {
         "{log}"
     );
     drop(client);
-    hub.lock()
-        .unwrap()
-        .take()
-        .expect("the hub ran")
-        .kill_and_wait();
+    hub.lock().unwrap().take().expect("the hub ran").stop();
 }
 
 #[test]
@@ -418,8 +410,8 @@ fn a_hub_resume_removes_a_clean_recreated_worktree_at_the_end() {
     assert!(!first.path.exists());
     let head = commit_again(setup.deadline, &setup.workspace(), "second.txt");
 
-    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
-    let (client, _) = connect_hub(&setup, &hub);
+    let hub: Arc<Mutex<Option<DetachedHub>>> = Arc::new(Mutex::new(None));
+    let (client, _) = connect_detached_hub(&setup, &hub);
     let repo_guard = SessionGuard::arm(setup.deadline, &first.repository);
     let sub = subscribe(&client, &first.id);
     let mut stream = until_resumed(&client, "the resumed fiber_started");
@@ -473,11 +465,7 @@ fn a_hub_resume_removes_a_clean_recreated_worktree_at_the_end() {
     );
     assert!(!lock_of(&first.path).exists());
     drop(client);
-    hub.lock()
-        .unwrap()
-        .take()
-        .expect("the hub ran")
-        .kill_and_wait();
+    hub.lock().unwrap().take().expect("the hub ran").stop();
 }
 
 #[test]
@@ -505,8 +493,8 @@ fn a_hub_resume_of_a_kept_worktree_runs_in_it_and_never_removes_it() {
     assert_ne!(base, head);
     let (_, first_line) = session_log(&setup, &first.id);
 
-    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
-    let (client, _) = connect_hub(&setup, &hub);
+    let hub: Arc<Mutex<Option<DetachedHub>>> = Arc::new(Mutex::new(None));
+    let (client, _) = connect_detached_hub(&setup, &hub);
     let path_text = first.path.to_string_lossy().into_owned();
     let path_guard = SessionGuard::arm(setup.deadline, &path_text);
     let sub = subscribe(&client, &first.id);
@@ -590,11 +578,7 @@ fn a_hub_resume_of_a_kept_worktree_runs_in_it_and_never_removes_it() {
     );
     assert_eq!(now_first, first_line);
     drop(client);
-    hub.lock()
-        .unwrap()
-        .take()
-        .expect("the hub ran")
-        .kill_and_wait();
+    hub.lock().unwrap().take().expect("the hub ran").stop();
 }
 
 #[test]
@@ -616,8 +600,8 @@ fn a_full_subscribe_with_a_gone_worktree_repository_replays_the_fold_and_changes
         setup.workspace().join(".git-moved"),
     )
     .unwrap();
-    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
-    let (client, _) = connect_hub(&setup, &hub);
+    let hub: Arc<Mutex<Option<DetachedHub>>> = Arc::new(Mutex::new(None));
+    let (client, _) = connect_detached_hub(&setup, &hub);
     let repo_guard = SessionGuard::arm(setup.deadline, &first.repository);
     // The recorded worktree is gone and its repository is gone too, so
     // the workspace cannot be made again: a `full` subscribe replays the
@@ -742,9 +726,5 @@ fn a_full_subscribe_with_a_gone_worktree_repository_replays_the_fold_and_changes
         "{log}"
     );
     drop(client);
-    hub.lock()
-        .unwrap()
-        .take()
-        .expect("the hub ran")
-        .kill_and_wait();
+    hub.lock().unwrap().take().expect("the hub ran").stop();
 }

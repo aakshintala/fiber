@@ -23,9 +23,9 @@ use std::thread;
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, HubProc, KillGroup, PIXEL, PIXEL_BASE64, SENT, SessionGuard, Setup, StdoutRun,
-    TOOL_NAMES, connect_hub, function_call, git, hello, holds_marker, is_status, read_kinds,
-    spawn_watched, stream, subscribe_as, text_reply, tool_names, until,
+    Deadline, DetachedHub, KillGroup, PIXEL, PIXEL_BASE64, SENT, SessionGuard, Setup, StdoutRun,
+    TOOL_NAMES, connect_detached_hub, function_call, git, hello, holds_marker, is_status,
+    read_kinds, spawn_watched, stream, subscribe_as, text_reply, tool_names, until,
 };
 
 impl Setup {
@@ -1170,8 +1170,8 @@ fn a_rewound_session_shell_child_receives_the_new_session_id() {
     setup.provider_with_defaults(&server);
     with_reviewer(&setup);
 
-    let hub = Arc::new(Mutex::new(None::<HubProc>));
-    let (client, greeting) = connect_hub(&setup, &hub);
+    let hub = Arc::new(Mutex::new(None::<DetachedHub>));
+    let (client, greeting) = connect_detached_hub(&setup, &hub);
     assert_eq!(greeting["kind"], "hub_hello");
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
@@ -1272,7 +1272,7 @@ fn a_rewound_session_shell_child_receives_the_new_session_id() {
     });
     guard.wait_gone();
     drop(client);
-    hub.lock().unwrap().take().unwrap().kill_and_wait();
+    hub.lock().unwrap().take().unwrap().stop();
 }
 
 #[test]

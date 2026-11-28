@@ -30,9 +30,9 @@ use fakes::Client;
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, HubProc, SessionGuard, Setup, Socket, close_session, connect_hub, function_call,
-    hello, outputs_sent, run_to_exit, session_dir, start_session, stream, subscribe, until,
-    write_json,
+    Deadline, DetachedHub, HubProc, SessionGuard, Setup, Socket, close_session,
+    connect_detached_hub, connect_hub, function_call, hello, outputs_sent, run_to_exit,
+    session_dir, start_session, stream, subscribe, until, write_json,
 };
 
 /// Declares the MCP server `db` in the workspace's repository file: a
@@ -843,6 +843,22 @@ fn a_session_that_exits_on_its_first_offer_raises_it_again_on_resume() {
 #[track_caller]
 fn end_through_hub(
     setup: &Setup,
+    hub: &Arc<Mutex<Option<DetachedHub>>>,
+    id: &str,
+    guard: SessionGuard,
+) {
+    hub.lock().unwrap().take().expect("the starter ran").stop();
+    let direct = Socket::connect(setup.deadline, &setup.session_socket(id));
+    close_session(&direct);
+    drop(direct);
+    guard.wait_gone();
+}
+
+/// As `end_through_hub`, for a start-only case that keeps the ordinary hub
+/// child and its exit status.
+#[track_caller]
+fn end_through_hub_proc(
+    setup: &Setup,
     hub: &Arc<Mutex<Option<HubProc>>>,
     id: &str,
     guard: SessionGuard,
@@ -862,7 +878,7 @@ fn a_client_that_starts_with_content_through_the_hub_is_offered_the_code() {
     setup.provider(&server);
     declare_db(&setup, &json!({}));
     let hub = Arc::new(Mutex::new(None));
-    let (client, _) = connect_hub(&setup, &hub);
+    let (client, _) = connect_detached_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let id = start_session(&client, &workspace, "hi");
@@ -932,5 +948,5 @@ fn a_start_with_content_that_never_subscribes_runs_unattended() {
             "{kind} in {durable:?}"
         );
     }
-    end_through_hub(&setup, &hub, &id, guard);
+    end_through_hub_proc(&setup, &hub, &id, guard);
 }
