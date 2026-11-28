@@ -701,3 +701,5 @@ crates/main/tests/tool_calls/tools.rs:1173-1174	fiber-4954	plan	2026-11-28T04:18
 crates/main/tests/tool_calls/tools.rs:1275-1275	fiber-4954	plan	2026-11-28T04:18:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4954-outer-session-tests	
 docs/testing.md:258-258	fiber-4954	plan	2026-11-28T04:18:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/4954-outer-session-tests	
 scripts/leak-scan	fiber-4843	plan	2026-11-28T04:28:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/session_turns/from_session.rs	fiber-4843	plan	2026-11-28T04:37:05Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4843-leak-scan-unattributed	
+scripts/check	fiber-4843	plan	2026-11-28T04:37:05Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/4843-leak-scan-unattributed	
