@@ -739,3 +739,4 @@ docs/testing/running.md	fiber-4901	plan	2026-11-28T05:16:04Z	roundhouse-7010-plu
 docs/ci.md	fiber-4901	plan	2026-11-28T05:16:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/workflow.md	fiber-4901	plan	2026-11-28T05:16:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/providers/credential_signals.rs	fiber-5001	plan	2026-11-28T06:04:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/tool_calls/tools.rs	fiber-4856	plan	2026-11-28T06:09:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
