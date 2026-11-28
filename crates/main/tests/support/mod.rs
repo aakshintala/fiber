@@ -1004,6 +1004,7 @@ impl DetachedHub {
         ));
         let mut shell = Command::new("/bin/sh");
         shell
+            .env_clear()
             .arg("-c")
             .arg("\"$@\" & echo $! > \"$0\"")
             .arg(&pidfile)
